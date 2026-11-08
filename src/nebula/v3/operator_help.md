@@ -416,14 +416,16 @@ Keywords: host capacity, CPU load, memory, I/O pressure, Butler, telemetry
 Sources: src/nebula/v3/host_load.py, src/nebula/v3/provider_scheduler.py, src/nebula/v3/harnesses.py, src/nebula/v3/missions.py
 
 Settings → Setup → Host pressure controls new starts for providers, harnesses
-and missions. CPU use, memory use (1 minus available ratio), load average divided
-by effective CPU capacity, and Linux I/O PSI `some avg10` each default to 80%.
+and missions. CPU use, memory use (1 minus available ratio), runnable tasks
+divided by effective CPU capacity, and Core-cgroup I/O PSI `some avg10` each default to 80%.
 Any available reading at or above its saved threshold queues new work. Falling
 below every threshold permits admission; there are no lower recovery thresholds.
 Running work continues. Unknown metrics do not count as pressure.
 
-I/O PSI is the recent share of time with at least one task stalled on I/O; it is
-not disk utilization. Pressure-queued work holds no provider or background slot.
+Core I/O PSI is the recent share of time with at least one Core-cgroup task
+stalled on I/O; it is not disk utilization. Host load average and host I/O PSI
+remain read-only telemetry and do not defer Core starts. Pressure-queued work
+holds no provider or background slot.
 Provider capacity can still queue work below 80%; its reason is distinct from
 host pressure. Defaults are 60 provider slots and 58 background slots, reserving
 two for direct chats. Explicit environment overrides remain authoritative.

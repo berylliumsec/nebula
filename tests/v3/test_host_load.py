@@ -5,6 +5,7 @@ from tests.v3.async_test_support import (
 import asyncio
 from contextlib import suppress
 from dataclasses import replace
+from pathlib import Path
 import threading
 import time
 
@@ -111,12 +112,49 @@ def test_memory_pressure_uses_tighter_host_or_container_limit(tmp_path, monkeypa
     assert not monitor.sample().busy
 
 
-def test_host_average_is_divided_by_effective_capacity(tmp_path, monkeypatch):
-    monitor, _, _, _ = _os_fixture(tmp_path, monkeypatch)
+def test_host_average_is_telemetry_and_runnable_tasks_are_admission(
+    tmp_path, monkeypatch
+):
+    monitor, proc, _, clock = _os_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (2, 2, 2))
-    assert monitor.sample().load_average_ratio == 4.0
-    assert monitor.sample().cpu_ratio is None
-    assert monitor.sample().busy
+    (proc / "stat").write_text(
+        "cpu 100 0 100 800 0 0 0 0 0 0\nprocs_running 0\nprocs_blocked 27\n"
+    )
+    sample = monitor.sample()
+    assert sample.load_average_ratio == 4.0
+    assert sample.runnable_ratio == 0
+    assert not sample.busy
+    clock[0] += 1
+    (proc / "stat").write_text(
+        "cpu 200 0 200 1600 0 0 0 0 0 0\nprocs_running 7\nprocs_blocked 27\n"
+    )
+    assert monitor.sample().pressure_metric == "load"
+
+
+def test_backup_disk_pressure_does_not_hold_admission(tmp_path, monkeypatch):
+    monitor, proc, cg, _ = _os_fixture(tmp_path, monkeypatch)
+    (proc / "pressure").mkdir()
+    (proc / "pressure/io").write_text(
+        "some avg10=91.00 avg60=88.00 avg300=80.00 total=1\n"
+    )
+    (proc / "stat").write_text(
+        "cpu 100 0 100 800 0 0 0 0 0 0\nprocs_running 0\nprocs_blocked 27\n"
+    )
+    monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (30, 30, 30))
+    (cg / "io.pressure").write_text("some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")
+    sample = monitor.sample()
+    assert sample.host_io_pressure_ratio == 0.91
+    assert sample.load_average_ratio == 60.0
+    assert sample.io_pressure_ratio == 0
+    assert not sample.busy
+
+
+def test_default_io_pressure_uses_core_cgroup(tmp_path):
+    proc = tmp_path / "proc"
+    (proc / "self").mkdir(parents=True)
+    (proc / "self/cgroup").write_text("0::/mercury/agents/core\n")
+    monitor = HostLoadMonitor(proc=proc)
+    assert monitor._io_cgroup == Path("/sys/fs/cgroup/mercury/agents/core")
 
 
 def test_missing_optional_measurements_do_not_strand_work(tmp_path, monkeypatch):
@@ -493,6 +531,9 @@ def test_idle_cpu_io_wait_is_not_cpu_saturation(tmp_path, monkeypatch):
     monitor, proc, cg, clock = _os_fixture(tmp_path, monkeypatch)
     (proc / "pressure").mkdir()
     (proc / "pressure/io").write_text(
+        "some avg10=10.00 avg60=20.00 avg300=10.00 total=123\n"
+    )
+    (cg / "io.pressure").write_text(
         "some avg10=90.00 avg60=20.00 avg300=10.00 total=123\n"
     )
     (proc / "stat").write_text("cpu 100 0 100 800 0 0 0 0 0 0\n")
@@ -504,6 +545,7 @@ def test_idle_cpu_io_wait_is_not_cpu_saturation(tmp_path, monkeypatch):
     sample = monitor.sample()
     assert sample.cpu_ratio == pytest.approx(0.01)
     assert sample.io_pressure_ratio == 0.9
+    assert sample.host_io_pressure_ratio == 0.1
     assert sample.load_average_ratio == 0.2
     assert sample.pressure_metric == "io"
     assert sample.busy

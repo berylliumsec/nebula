@@ -27,7 +27,7 @@ def test_each_available_metric_at_boundary(metric, value, busy):
     fields = {
         "cpu": "cpu_ratio",
         "memory": "memory_available_ratio",
-        "load": "load_average_ratio",
+        "load": "runnable_ratio",
         "io": "io_pressure_ratio",
     }
     snapshot = HostLoadSnapshot(time.monotonic(), 8, None, None, False, None, True)

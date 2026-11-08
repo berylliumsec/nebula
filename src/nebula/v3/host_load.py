@@ -39,6 +39,8 @@ class HostLoadSnapshot:
     io_pressure_ratio: float | None = None
 
     pressure_metric: str | None = None
+    runnable_ratio: float | None = None
+    host_io_pressure_ratio: float | None = None
 
     def readings(self) -> dict[str, float | None]:
         return {
@@ -46,7 +48,7 @@ class HostLoadSnapshot:
             "memory": None
             if self.memory_available_ratio is None
             else 1 - self.memory_available_ratio,
-            "load": self.load_average_ratio,
+            "load": self.runnable_ratio,
             "io": self.io_pressure_ratio,
         }
 
@@ -54,8 +56,8 @@ class HostLoadSnapshot:
         labels = {
             "cpu": "CPU use",
             "memory": "memory use",
-            "load": "load average",
-            "io": "I/O stalls",
+            "load": "runnable tasks",
+            "io": "Core I/O stalls",
         }
         for metric, value in self.readings().items():
             limit = getattr(thresholds, metric)
@@ -89,7 +91,7 @@ class HostLoadMonitor:
         *,
         interval: float = 1.0,
         proc: Path = Path("/proc"),
-        cgroup: Path = Path("/sys/fs/cgroup"),
+        cgroup: Path | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if interval <= 0:
@@ -97,7 +99,7 @@ class HostLoadMonitor:
         self.interval, self.proc, self.cgroup, self.clock = (
             interval,
             proc,
-            cgroup,
+            cgroup or Path("/sys/fs/cgroup"),
             clock,
         )
         self._cached: HostLoadSnapshot | None = None
@@ -105,6 +107,34 @@ class HostLoadMonitor:
         self._previous_cpu: tuple[float, float] | None = None
         self.thresholds = HostPressureThresholds()
         self._previous_host_cpu: tuple[float, float] | None = None
+        self._io_cgroup = cgroup if cgroup is not None else self._own_cgroup(proc)
+
+    @classmethod
+    def _own_cgroup(cls, proc: Path) -> Path | None:
+        membership = cls._text(proc / "self/cgroup")
+        if not membership:
+            return None
+        for line in membership.splitlines():
+            if not line.startswith("0::/"):
+                continue
+            parts = Path(line[3:]).parts
+            if not parts or parts == ("/",) or ".." in parts:
+                return None
+            return Path("/sys/fs/cgroup").joinpath(*parts[1:])
+        return None
+
+    def _io_psi(self, path: Path) -> float | None:
+        pressure = self._text(path)
+        if not pressure:
+            return None
+        try:
+            fields = dict(
+                item.split("=") for item in pressure.splitlines()[0].split()[1:]
+            )
+            value = float(fields["avg10"]) / 100
+            return value if math.isfinite(value) and value >= 0 else None
+        except (ValueError, KeyError, IndexError):
+            return None
 
     def cached(self) -> HostLoadSnapshot | None:
         value = self._cached
@@ -138,6 +168,7 @@ class HostLoadMonitor:
             except (AttributeError, OSError):
                 # diagnostic-expected: affinity is optional outside Linux.
                 pass
+            host_capacity = capacity
             quota = self._text(self.cgroup / "cpu.max")
             if quota:
                 parts = quota.split()
@@ -169,7 +200,8 @@ class HostLoadMonitor:
                 except (KeyError, ValueError):
                     # diagnostic-expected: cgroup CPU accounting unavailable.
                     pass
-            # Linux load includes uninterruptible I/O waits; never call it CPU use.
+            # Host load includes unrelated uninterruptible I/O waits. Report it,
+            # but admit on runnable tasks instead.
             average = None
             try:
                 average = os.getloadavg()[0] / capacity
@@ -177,6 +209,7 @@ class HostLoadMonitor:
                 # diagnostic-expected: load average unavailable on this platform.
                 pass
             stat = self._text(self.proc / "stat")
+            runnable_ratio = None
             if stat:
                 try:
                     cpu_fields = [
@@ -195,25 +228,20 @@ class HostLoadMonitor:
                 except (ValueError, IndexError):
                     # diagnostic-expected: optional host CPU accounting unavailable.
                     pass
-            io_ratio = None
-            for path in (self.proc / "pressure/io", self.cgroup / "io.pressure"):
-                pressure = self._text(path)
-                if pressure:
-                    try:
-                        fields = dict(
-                            item.split("=")
-                            for item in pressure.splitlines()[0].split()[1:]
-                        )
-                        io_value = float(fields["avg10"]) / 100
-                        if math.isfinite(io_value) and io_value >= 0:
-                            io_ratio = (
-                                io_value
-                                if io_ratio is None
-                                else max(io_ratio, io_value)
-                            )
-                    except (ValueError, KeyError, IndexError):
-                        # diagnostic-expected: optional I/O pressure unavailable.
-                        pass
+                for line in stat.splitlines():
+                    if line.startswith("procs_running "):
+                        try:
+                            runnable_ratio = float(line.split()[1]) / host_capacity
+                        except (ValueError, IndexError, ZeroDivisionError):
+                            # diagnostic-expected: optional runnable count unavailable.
+                            pass
+                        break
+            io_ratio = (
+                self._io_psi(self._io_cgroup / "io.pressure")
+                if self._io_cgroup is not None
+                else None
+            )
+            host_io_ratio = self._io_psi(self.proc / "pressure/io")
             memory: float | None = None
             info = self._text(self.proc / "meminfo")
             if info:
@@ -247,9 +275,14 @@ class HostLoadMonitor:
                 memory,
                 False,
                 None,
-                any(value is not None for value in (ratio, memory, average, io_ratio)),
+                any(
+                    value is not None
+                    for value in (ratio, memory, runnable_ratio, io_ratio)
+                ),
                 average,
                 io_ratio,
+                runnable_ratio=runnable_ratio,
+                host_io_pressure_ratio=host_io_ratio,
             ).evaluate(self.thresholds)
             return self._cached
 
