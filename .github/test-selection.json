@@ -1,7 +1,7 @@
 {
-  "change_digest": "bff8050b6011d69631f3fa242b6c74353f9474932696d1e962229662de894d09",
+  "change_digest": "a6075455dc9419b405fa34eb4c8265474ef8730341adc815390baa2611ccd993",
   "reviewed_by": "Codex; independent runtime foundation review",
-  "reason": "First additive storage change in the non-disruptive deployment sequence: independent SQL connections contend for ownership, reject stale/expired writes, deduplicate submissions, preserve command order and uncertain outcomes, and replay retained stream batches. The existing async database cases cover bootstrap, rollback, cancellation and bounded pool behavior around the new migration.",
+  "reason": "First additive storage change in the non-disruptive deployment sequence: independent SQL connections contend for ownership, reject stale/expired writes, deduplicate submissions, preserve command order and uncertain outcomes, and replay retained stream batches. The existing async database cases cover bootstrap, rollback, cancellation and bounded pool behavior around the new migration. The inherited diagnostic-audit blocker is repaired by restoring an expected-parser-failure comment only; no metric behavior changed and no additional tests are needed for that comment.",
   "exclusions": "No public API, execution lifecycle, UI, desktop, provider or harness integration changes. Frontend, native, Playwright and production-LAN journeys are not applicable to this internal foundation and remain required for the later integration changes. These tests do not establish non-disruptive deployment continuity. No full suites.",
   "expected_tests": {
     "python": 61,

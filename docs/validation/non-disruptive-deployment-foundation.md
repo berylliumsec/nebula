@@ -47,9 +47,11 @@ Additional checks:
 - Independent review: no remaining confirmed defect in this foundation; reviewed
   locks, clock checks, receipt uniqueness, uncertainty handling, atomic writes,
   stream sequence/retention and migration/model alignment.
-- Repository diagnostic audit: **blocked** by the existing unclassified
-  `except` handler in `src/nebula/v3/host_load.py:136`. That file is unchanged
-  from the base. No audit suppression or unrelated runtime change was added.
+- Repository diagnostic audit: passed after restoring the expected-failure
+  classification lost when `_io_psi` was extracted in `cc647fe3`. Independent
+  diagnosis confirmed that the audit reads source and the optional metric parser
+  still correctly returns unknown for malformed data. Only the explanatory
+  comment changed; runtime behavior is unchanged.
 
 ## Acceptance still outstanding
 

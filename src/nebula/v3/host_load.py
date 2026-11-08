@@ -134,6 +134,7 @@ class HostLoadMonitor:
             value = float(fields["avg10"]) / 100
             return value if math.isfinite(value) and value >= 0 else None
         except (ValueError, KeyError, IndexError):
+            # diagnostic-expected: optional I/O pressure data malformed or incomplete.
             return None
 
     def cached(self) -> HostLoadSnapshot | None:
