@@ -1,5 +1,6 @@
 """Disposable production-UI Core with inert provider and controlled host pressure."""
 
+import asyncio
 import hashlib
 from dataclasses import replace
 import os
@@ -94,104 +95,120 @@ class InertProvider(ModelProvider):
         )
 
 
-with tempfile.TemporaryDirectory(prefix="nebula-host-admission-") as directory:
-    root = Path(directory)
-    store = NebulaStore(root / "core.db")
-    store.create(
-        ProviderProfile(
-            id="capacity-provider",
-            name="Synthetic provider",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            capability_verifications={
-                "model-a": ProviderCapabilityVerification(
-                    model="model-a",
-                    status=ProviderVerificationStatus.FAILED,
-                    failure_detail="Synthetic text-only provider has no tool calls",
+async def main():
+    with tempfile.TemporaryDirectory(prefix="nebula-host-admission-") as directory:
+        root = Path(directory)
+        store = NebulaStore(root / "core.db")
+        await store.create(
+            ProviderProfile(
+                id="capacity-provider",
+                name="Synthetic provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                capability_verifications={
+                    "model-a": ProviderCapabilityVerification(
+                        model="model-a",
+                        status=ProviderVerificationStatus.FAILED,
+                        failure_detail="Synthetic text-only provider has no tool calls",
+                    )
+                },
+                metadata={"default_model": "model-a"},
+            )
+        )
+        profiles = [
+            "model-desktop",
+            "model-compact",
+            *[
+                f"model-{engine}-{width}"
+                for width in (320, 390, 430)
+                for engine in ("chromium", "webkit")
+            ],
+        ]
+        for profile in profiles:
+            workspace = root / profile
+            workspace.mkdir()
+            project = await store.create(
+                Engagement(
+                    id="capacity-" + profile,
+                    name="Synthetic host capacity",
+                    workspace_path=str(workspace),
                 )
-            },
-            metadata={"default_model": "model-a"},
-        )
-    )
-    profiles = [
-        "model-desktop",
-        "model-compact",
-        *[
-            f"model-{engine}-{width}"
-            for width in (320, 390, 430)
-            for engine in ("chromium", "webkit")
-        ],
-    ]
-    for profile in profiles:
-        workspace = root / profile
-        workspace.mkdir()
-        project = store.create(
-            Engagement(
-                id="capacity-" + profile,
-                name="Synthetic host capacity",
-                workspace_path=str(workspace),
             )
-        )
-        store.create(
-            ChatSession(
-                id="chat-" + profile,
-                engagement_id=project.id,
-                title="Host capacity check",
-                provider_profile_id="capacity-provider",
-                model="model-a",
-                metadata={"include_knowledge": False, "planning_enabled": False},
+            await store.create(
+                ChatSession(
+                    id="chat-" + profile,
+                    engagement_id=project.id,
+                    title="Host capacity check",
+                    provider_profile_id="capacity-provider",
+                    model="model-a",
+                    metadata={"include_knowledge": False, "planning_enabled": False},
+                )
             )
+        provider = InertProvider("capacity-provider")
+        api_module.provider_from_profile = lambda _: provider
+        chat_module.provider_from_profile = lambda _: provider
+        monitor = ManualMonitor()
+        bundle = Path(__file__).resolve().parents[2] / "ui" / "dist"
+        digest = hashlib.sha256()
+        for file in sorted(bundle.rglob("*")):
+            if file.is_file():
+                digest.update(
+                    str(file.relative_to(bundle)).encode() + b"\0" + file.read_bytes()
+                )
+        app = create_app(
+            store,
+            artifact_store=ArtifactStore(root / "artifacts"),
+            credential_store=CredentialStore(keyring_backend=Keyring()),
+            auth_token="host-load-test-token",
+            execution_data_root=root,
+            host_load_gate=HostLoadGate(monitor),
+            static_dir=bundle,
+            allow_insecure_device_pairing=True,
         )
-    provider = InertProvider("capacity-provider")
-    api_module.provider_from_profile = lambda _: provider
-    chat_module.provider_from_profile = lambda _: provider
-    monitor = ManualMonitor()
-    bundle = Path(__file__).resolve().parents[2] / "ui" / "dist"
-    digest = hashlib.sha256()
-    for file in sorted(bundle.rglob("*")):
-        if file.is_file():
-            digest.update(
-                str(file.relative_to(bundle)).encode() + b"\0" + file.read_bytes()
+
+        # Fixture controls must precede Core's final catch-all static mount.
+        workspace_mount = app.router.routes.pop()
+        assert getattr(workspace_mount, "name", None) == "workspace"
+
+        @app.post("/__host_fixture/load")
+        async def set_pressure(request: Request):
+            if request.headers.get("Authorization") != "Bearer host-load-test-token":
+                raise HTTPException(401)
+            body = await request.json()
+            if body.get("busy") is True:
+                fresh = ManualMonitor()
+                monitor.value = fresh.value
+            else:
+                monitor.recover()
+            if body.get("io"):
+                monitor.value = replace(
+                    monitor.value,
+                    cpu_ratio=0.1,
+                    busy=True,
+                    reason="Waiting for host I/O capacity",
+                    io_pressure_ratio=0.6,
+                    load_average_ratio=2.0,
+                )
+            if body.get("reset_calls"):
+                provider.calls = 0
+            return {
+                "busy": monitor.value.busy,
+                "calls": provider.calls,
+                "bundle_sha256": digest.hexdigest(),
+            }
+
+        app.router.routes.append(workspace_mount)
+
+        await uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host="0.0.0.0",
+                port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19480")),
+                access_log=False,
             )
-    app = create_app(
-        store,
-        artifact_store=ArtifactStore(root / "artifacts"),
-        credential_store=CredentialStore(keyring_backend=Keyring()),
-        auth_token="host-load-test-token",
-        execution_data_root=root,
-        host_load_gate=HostLoadGate(monitor),
-        static_dir=bundle,
-        allow_insecure_device_pairing=True,
-    )
+        ).serve()
 
-    # Fixture controls must precede Core's final catch-all static mount.
-    workspace_mount = app.router.routes.pop()
-    assert getattr(workspace_mount, "name", None) == "workspace"
 
-    @app.post("/__host_fixture/load")
-    async def set_pressure(request: Request):
-        if request.headers.get("Authorization") != "Bearer host-load-test-token":
-            raise HTTPException(401)
-        body = await request.json()
-        if body.get("busy") is True:
-            fresh = ManualMonitor()
-            monitor.value = fresh.value
-        else:
-            monitor.recover()
-        if body.get("reset_calls"):
-            provider.calls = 0
-        return {
-            "busy": monitor.value.busy,
-            "calls": provider.calls,
-            "bundle_sha256": digest.hexdigest(),
-        }
-
-    app.router.routes.append(workspace_mount)
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19480")),
-        access_log=False,
-    )
+if __name__ == "__main__":
+    asyncio.run(main())

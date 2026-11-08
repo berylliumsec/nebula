@@ -25,6 +25,9 @@ class HostLoadSnapshot:
     reason: str | None
     measurements_available: bool
 
+    load_average_ratio: float | None = None
+    io_pressure_ratio: float | None = None
+
     def public(self) -> dict[str, object]:
         result = asdict(self)
         result.pop("sampled_at")
@@ -57,6 +60,7 @@ class HostLoadMonitor:
         self._lock = threading.Lock()
         self._previous_cpu: tuple[float, float] | None = None
         self._busy = False
+        self._previous_host_cpu: tuple[float, float] | None = None
 
     def cached(self) -> HostLoadSnapshot | None:
         value = self._cached
@@ -121,13 +125,49 @@ class HostLoadMonitor:
                 except (KeyError, ValueError):
                     # diagnostic-expected: cgroup CPU accounting unavailable.
                     pass
+            # Linux load includes uninterruptible I/O waits; never call it CPU use.
+            average = None
             try:
-                # Host pressure is normalized by host CPUs, not container quota.
                 average = os.getloadavg()[0] / max(1, os.cpu_count() or 1)
-                ratio = average if ratio is None else max(ratio, average)
             except (AttributeError, OSError):
                 # diagnostic-expected: load average unavailable on this platform.
                 pass
+            stat = self._text(self.proc / "stat")
+            if stat:
+                try:
+                    cpu_fields = [
+                        float(value) for value in stat.splitlines()[0].split()[1:9]
+                    ]
+                    total = sum(cpu_fields)
+                    idle = cpu_fields[3] + cpu_fields[4]  # idle plus iowait
+                    if self._previous_host_cpu is not None:
+                        old_total, old_idle = self._previous_host_cpu
+                        if total > old_total and idle >= old_idle:
+                            host_ratio = 1 - (idle - old_idle) / (total - old_total)
+                            ratio = (
+                                host_ratio if ratio is None else max(ratio, host_ratio)
+                            )
+                    self._previous_host_cpu = (total, idle)
+                except (ValueError, IndexError):
+                    # diagnostic-expected: optional host CPU accounting unavailable.
+                    pass
+            io_ratio = None
+            for path in (self.proc / "pressure/io", self.cgroup / "io.pressure"):
+                pressure = self._text(path)
+                if pressure:
+                    try:
+                        fields = dict(
+                            item.split("=")
+                            for item in pressure.splitlines()[0].split()[1:]
+                        )
+                        value = float(fields["avg10"]) / 100
+                        if math.isfinite(value) and value >= 0:
+                            io_ratio = (
+                                value if io_ratio is None else max(io_ratio, value)
+                            )
+                    except (ValueError, KeyError, IndexError):
+                        # diagnostic-expected: optional I/O pressure unavailable.
+                        pass
             memory: float | None = None
             info = self._text(self.proc / "meminfo")
             if info:
@@ -156,7 +196,13 @@ class HostLoadMonitor:
                 memory = None
             cpu_busy = ratio is not None and ratio >= (0.75 if self._busy else 0.90)
             memory_busy = memory is not None and memory < (0.15 if self._busy else 0.08)
-            self._busy = cpu_busy or memory_busy
+            load_busy = average is not None and average >= (
+                0.75 if self._busy else 0.90
+            )
+            io_busy = io_ratio is not None and io_ratio >= (
+                0.10 if self._busy else 0.20
+            )
+            self._busy = cpu_busy or memory_busy or load_busy or io_busy
             self._cached = HostLoadSnapshot(
                 now,
                 capacity,
@@ -167,8 +213,14 @@ class HostLoadMonitor:
                 if memory_busy
                 else "Waiting for host CPU capacity"
                 if cpu_busy
+                else "Waiting for host I/O capacity"
+                if io_busy
+                else "Waiting for host load capacity"
+                if load_busy
                 else None,
-                ratio is not None or memory is not None,
+                any(value is not None for value in (ratio, memory, average, io_ratio)),
+                average,
+                io_ratio,
             )
             return self._cached
 
@@ -181,7 +233,8 @@ class HostLoadGate:
         self._refresh: asyncio.Task[HostLoadSnapshot] | None = None
         self._epoch: float | None = None
         self._starts = 0
-        self._waiters: deque[object] = deque()
+        self._waiters: deque[tuple[object, bool]] = deque()
+        self._last_pressure_start = float("-inf")
 
     async def snapshot(self) -> HostLoadSnapshot:
         cached = self.monitor.cached()
@@ -203,19 +256,23 @@ class HostLoadGate:
         return await asyncio.shield(self._refresh)
 
     async def wait(
-        self, on_deferred: Callable[[str | None], Awaitable[None]] | None = None
+        self,
+        on_deferred: Callable[[str | None], Awaitable[None]] | None = None,
+        *,
+        direct: bool = False,
     ) -> None:
         ticket = object()
-        self._waiters.append(ticket)
+        self._waiters.append((ticket, direct))
         try:
-            await self._wait(ticket, on_deferred)
+            await self._wait(ticket, on_deferred, direct)
         finally:
-            self._waiters.remove(ticket)
+            self._waiters.remove((ticket, direct))
 
     async def _wait(
         self,
         ticket: object,
         on_deferred: Callable[[str | None], Awaitable[None]] | None,
+        direct: bool,
     ) -> None:
         reason: str | None = None
         while True:
@@ -223,12 +280,33 @@ class HostLoadGate:
             if snapshot.sampled_at != self._epoch:
                 self._epoch, self._starts = snapshot.sampled_at, 0
             budget = max(1, min(16, math.ceil(snapshot.cpu_capacity * 2)))
+            headroom = (
+                snapshot.cpu_ratio is not None
+                and snapshot.cpu_ratio < 0.75
+                and snapshot.memory_available_ratio is not None
+                and snapshot.memory_available_ratio >= 0.15
+                and snapshot.reason
+                in {"Waiting for host I/O capacity", "Waiting for host load capacity"}
+            )
+            # Skip ineligible background waiters only during pressure. FIFO resumes
+            # across all lanes after recovery; no waiter is removed or recreated.
+            eligible = next(
+                (
+                    item
+                    for item, lane in self._waiters
+                    if not snapshot.busy or (lane and headroom)
+                ),
+                None,
+            )
+            pressure_ready = snapshot.sampled_at - self._last_pressure_start >= 1.0
             if (
-                not snapshot.busy
+                (not snapshot.busy or (direct and headroom and pressure_ready))
                 and self._starts < budget
-                and self._waiters[0] is ticket
+                and eligible is ticket
             ):
                 self._starts += 1
+                if snapshot.busy:
+                    self._last_pressure_start = snapshot.sampled_at
                 if reason is not None and on_deferred is not None:
                     await on_deferred(None)
                 return

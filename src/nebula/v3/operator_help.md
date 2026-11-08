@@ -416,7 +416,12 @@ Keywords: host capacity, CPU load, memory, queued chat, deferred job, Butler, ad
 Sources: src/nebula/v3/host_load.py, src/nebula/v3/provider_scheduler.py, src/nebula/v3/harnesses.py, src/nebula/v3/missions.py
 
 New chat responses and missions, including jobs created by Butler, wait when
-host CPU or available memory is under pressure. Core samples lightweight OS
+host CPU or available memory is under pressure. CPU use is measured separately
+from Linux load average and I/O pressure. Under I/O or scheduler pressure,
+background starts wait; direct chats have a shared allowance of one start per
+second only with measured CPU below 75% and available memory at least 15%.
+The queue reports CPU, memory, I/O or host load as the actual reason.
+Core samples lightweight OS
 counters at most once per second and shares calibration across runtimes. CPU
 quota and memory limits are considered where available. Hysteresis and a shared
 start budget prevent repeated bursts. Existing jobs continue.
@@ -424,7 +429,8 @@ start budget prevent repeated bursts. Existing jobs continue.
 Queued work is saved and starts automatically after recovery; it can be cancelled
 while waiting. Butler discovers `nebula.work.host_load` for a fresh authenticated
 `/api/v1/host-load` read. Scheduled Nebula-wide Butler also has
-`nebula.global.host_load`. The result includes CPU capacity and pressure,
+`nebula.global.host_load`. The result includes measured CPU capacity and use, load_average_ratio,
+io_pressure_ratio,
 available-memory ratio, busy reason, measurement availability and sample age.
 Each invocation rereads Core; Core still shares its one-second sampler cache.
 The existing `nebula.settings.api_schema` and `nebula.settings.api_request` route

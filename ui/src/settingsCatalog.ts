@@ -238,7 +238,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",
-    keywords: ["setup", "terminal", "terminal TUI", "full-screen chat", "live agent progress", "nebula-chat", "core", "remote core", "connection", "readiness", "kali", "host load", "host-load", "CPU", "memory", "capacity", "fresh host load", "sample age", "deferred jobs", "queued chats", "CPU budget", "per host", "automatic", "custom CPU limit", "applied quota", "enable background PDF workers", "disable workers", "Linux CPU affinity", "draining", "worker activation", "nebula.work.host_load", "nebula.global.host_load", "nebula.work.host_cpu_budget", "nebula.global.host_cpu_budget"],
+    keywords: ["setup", "terminal", "terminal TUI", "full-screen chat", "live agent progress", "nebula-chat", "core", "remote core", "connection", "readiness", "kali", "host load", "host-load", "CPU", "memory", "capacity", "fresh host load", "I/O pressure", "load average", "direct chat allowance", "sample age", "deferred jobs", "queued chats", "CPU budget", "per host", "automatic", "custom CPU limit", "applied quota", "enable background PDF workers", "disable workers", "Linux CPU affinity", "draining", "worker activation", "nebula.work.host_load", "nebula.global.host_load", "nebula.work.host_cpu_budget", "nebula.global.host_cpu_budget"],
   },
 ];
 

@@ -114,7 +114,8 @@ def test_memory_pressure_uses_tighter_host_or_container_limit(tmp_path, monkeypa
 def test_host_average_is_not_divided_by_container_quota(tmp_path, monkeypatch):
     monitor, _, _, _ = _os_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (2, 2, 2))
-    assert monitor.sample().cpu_ratio == 0.25
+    assert monitor.sample().load_average_ratio == 0.25
+    assert monitor.sample().cpu_ratio is None
     assert not monitor.sample().busy
 
 
@@ -340,10 +341,9 @@ async def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cance
                     base_url="http://core.test/api/v1",
                 ) as anonymous:
                     assert (await anonymous.get("/host-load")).status_code == 401
-                assert (
-                    work.catalog("project")["host_admission"]["calibration"]["busy"]
-                    is True
-                )
+                assert (await work.catalog("project"))["host_admission"]["calibration"][
+                    "busy"
+                ] is True
                 gateway = SettingsAssistantApi(app, "synthetic-host-token")
                 assert (
                     gateway.schema(path="host-load", method="GET")["path"]
@@ -488,6 +488,84 @@ async def test_mission_uses_same_calibration_without_interrupting_active_work(tm
             await service.shutdown()
 
     (await exercise())
+
+
+@pytest.mark.parametrize(
+    "cpu,memory,admitted",
+    [(0.1, 0.5, True), (0.95, 0.5, False), (0.1, 0.05, False), (None, 0.5, False)],
+)
+async def test_pressure_allowance_requires_measured_headroom(cpu, memory, admitted):
+    monitor = ManualMonitor()
+    monitor.value = replace(
+        monitor.value,
+        cpu_ratio=cpu,
+        memory_available_ratio=memory,
+        reason="Waiting for host I/O capacity",
+        io_pressure_ratio=0.6,
+    )
+    gate = HostLoadGate(monitor)
+    task = asyncio.create_task(gate.wait(direct=True))
+    await asyncio.sleep(0.03)
+    assert task.done() is admitted
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert not gate._waiters
+
+
+async def test_io_allowance_is_rate_limited_skips_background_and_recovers_fifo():
+    monitor = ManualMonitor()
+    monitor.value = replace(
+        monitor.value,
+        cpu_ratio=0.1,
+        reason="Waiting for host I/O capacity",
+        io_pressure_ratio=0.6,
+    )
+    gate = HostLoadGate(monitor)
+    started = []
+
+    async def start(name, direct):
+        await gate.wait(direct=direct)
+        started.append(name)
+
+    tasks = [
+        asyncio.create_task(start("background", False)),
+        asyncio.create_task(start("first", True)),
+        asyncio.create_task(start("cancel", True)),
+        asyncio.create_task(start("second", True)),
+    ]
+    await asyncio.sleep(0.04)
+    assert started == ["first"]
+    tasks[2].cancel()
+    monitor.value = replace(monitor.value, sampled_at=monitor.value.sampled_at + 0.5)
+    await asyncio.sleep(0.03)
+    assert started == ["first"]
+    monitor.value = replace(monitor.value, sampled_at=monitor.value.sampled_at + 0.5)
+    await asyncio.sleep(0.03)
+    assert started == ["first", "second"]
+    monitor.recover()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    assert started == ["first", "second", "background"]
+    assert not gate._waiters
+
+
+def test_idle_cpu_io_wait_is_not_cpu_saturation(tmp_path, monkeypatch):
+    monitor, proc, cg, clock = _os_fixture(tmp_path, monkeypatch)
+    (proc / "pressure").mkdir()
+    (proc / "pressure/io").write_text(
+        "some avg10=60.00 avg60=20.00 avg300=10.00 total=123\n"
+    )
+    (proc / "stat").write_text("cpu 100 0 100 800 0 0 0 0 0 0\n")
+    monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (16, 16, 16))
+    monitor.sample()
+    clock[0] += 1
+    (cg / "cpu.stat").write_text("usage_usec 5000\n")
+    (proc / "stat").write_text("cpu 100 0 100 1600 200 0 0 0 0 0\n")
+    sample = monitor.sample()
+    assert sample.cpu_ratio == pytest.approx(0.01)
+    assert sample.io_pressure_ratio == 0.6
+    assert sample.load_average_ratio == 2
+    assert sample.reason == "Waiting for host I/O capacity"
+    assert sample.busy
 
 
 pytestmark = pytest.mark.anyio
