@@ -2841,9 +2841,7 @@ def create_app(
     )
     app.state.host_cpu_budget = host_cpus
     app.state.report_cpu_executor = report_cpu_executor
-    provider_chat.provider_scheduler.host_load = host_load
-    harness_runtime.host_load = host_load
-    missions.host_load = host_load
+    # Host pressure remains observable, but it does not defer chat or mission work.
     app.state.host_load = host_load
     app.state.openrouter_credit_observer = openrouter_credit_observer
     app.state.harness_quota_observer = harness_quota_observer
