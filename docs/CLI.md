@@ -34,9 +34,14 @@ selectable slash commands in nebula-chat, type `/` at the start of the composer.
 The command list follows the current conversation. Keep typing to filter it,
 use Up/Down and Enter to run a selection,
 or Tab to insert it without running. When no command list is open, Tab focuses
-the transcript for scrolling. Ctrl-C clears unsent text. Press it again within
-four seconds to stop a supported selected turn; typing or submitting a new draft
-resets the sequence. In a full-screen menu, Ctrl-C closes the menu.
+the transcript for scrolling. In the composer, Up recalls the most recent message
+you sent in this conversation; keep pressing Up for older messages, or Down to
+return to your unsent draft. Up still moves within a multiline draft until its
+first line, and editing a recalled message starts a new draft. Recall uses the
+already loaded chat history and does not request another Core read. Ctrl-C clears
+unsent text. Press it again within four seconds to stop a supported selected
+turn; typing or submitting a new draft resets the sequence. In a full-screen
+menu, Ctrl-C closes the menu.
 The view updates as Core accepts, queues, and works on a turn, before the first
 answer text arrives. Progress and requests for action stay visible during input.
 The activity strip and header animate while connecting, opening a project or

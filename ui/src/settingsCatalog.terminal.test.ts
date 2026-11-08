@@ -17,4 +17,6 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   expect(pairing).toContain("/snapshot");
   expect(pairing).toContain("project notes");
   expect(pairing).toContain("/notes");
+  expect(pairing).toContain("up arrow message recall");
+  expect(pairing).toContain("last sent message");
 });
