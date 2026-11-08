@@ -113,6 +113,14 @@ async def test_authenticated_settings_and_effective_startup_limits(
         catalog = await app.state.control_assistant_work.catalog("project")
         assert "nebula.work.host_pressure" in catalog["actions"]
         assert catalog["host_admission"]["settings_route"] == "/api/v1/host-pressure"
+        from nebula.v3.settings_assistant_tools import catalog as settings_catalog
+
+        discovered = settings_catalog()
+        assert any(item["id"] == "host-pressure" for item in discovered["settings"])
+        assert (
+            "nebula.work.host_pressure"
+            in discovered["capability_families"][0]["operations"]
+        )
         gateway = SettingsAssistantApi(app, "synthetic-pressure-token")
         assert (
             gateway.schema(path="host-pressure", method="PUT")["path"]
@@ -208,13 +216,14 @@ async def test_capacity_wait_rechecks_pressure_and_releases_slots(tmp_path):
         config=ProviderSchedulerConfig(provider_limit=1, background_limit=1),
     )
     turns = []
-    for _ in range(2):
+    for index in range(2):
         turn = await store.create(
             ChatTurn(
                 engagement_id=project.id,
                 session_id=session.id,
                 provider_profile_id=profile.id,
                 model="model-a",
+                capacity_lane="background" if index else "direct",
                 status=ChatTurnStatus.QUEUED,
                 queued_at=utc_now(),
             )
@@ -235,7 +244,6 @@ async def test_capacity_wait_rechecks_pressure_and_releases_slots(tmp_path):
         ).admission_reason == "Waiting for provider capacity"
         monitor.value = replace(monitor.value, cpu_ratio=0.9)
         assert scheduler.admitted(turns[0].id)
-        await first.release(turns[0].id)
         for _ in range(100):
             if "host pressure" in (
                 (await store.get(ChatTurn, turns[1].id)).admission_reason or ""
@@ -243,7 +251,9 @@ async def test_capacity_wait_rechecks_pressure_and_releases_slots(tmp_path):
                 break
             await asyncio.sleep(0.01)
         assert not pending.done()
-        assert scheduler._provider._value == 1
+        assert scheduler._provider._value == 0
+        assert scheduler._background._value == 1
+        await first.release(turns[0].id)
         assert (
             "host pressure" in (await store.get(ChatTurn, turns[1].id)).admission_reason
         )

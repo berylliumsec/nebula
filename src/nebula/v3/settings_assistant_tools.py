@@ -55,6 +55,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("devices", "Paired devices", "device-pairing-settings"),
     ("release", "Release and updates", "release-settings-group"),
     ("diagnostics", "Diagnostics and logging", "diagnostics-settings"),
+    ("host-pressure", "Host pressure admission", "setup-settings"),
     ("setup", "Terminal and Core setup", "setup-settings"),
 )
 
@@ -287,12 +288,15 @@ def catalog() -> dict[str, Any]:
                 "id": "host-capacity",
                 "discover_with": "nebula.capabilities.search",
                 "operations": [
+                    "nebula.work.host_pressure",
+                    "nebula.global.host_pressure",
                     "nebula.work.host_load",
                     "nebula.global.host_load",
                     "nebula.work.host_cpu_budget",
                     "nebula.global.host_cpu_budget",
                 ],
                 "effect": "Read /api/v1/host-load through Core authentication on every invocation. Report CPU and available-memory pressure, busy reason, measurement availability and sample age from Core's shared one-second sampler; global host_load is for scheduled Nebula-wide Butler.",
+                "pressure_configuration": "Settings → Setup → Host pressure uses authenticated GET/PUT /api/v1/host-pressure with fresh host_id, expected_revision and thresholds {cpu,memory,load,io}. All default to 0.8. Read back saved/effective thresholds, current readings and limiting metric; edits apply live, running work continues, and I/O PSI is task-stall time rather than disk utilization.",
                 "configuration": "Settings → Setup → CPU budget enables one host-wide PDF worker pool on Linux. GET/PUT /api/v1/host-cpu-budget uses fresh host_id/expected_revision, cpu_limit=null for Automatic or whole worker CPUs, and enabled only for an explicit activation/disable request; omission preserves state. Automatic uses roughly half capacity with minimum one and maximum four workers. Verify executor_state=running plus apply_state=applied and observed count/affinity; a saved/pending policy is not running. Resize/disable drains accepted work; disabled requires zero workers. Retry failed activation by saving or disable for standard PDF export. External chat/tool/LLM/GPU execution and external quota backends are outside activation.",
             },
             {
