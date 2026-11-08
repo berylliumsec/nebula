@@ -232,6 +232,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "performance", "bottlenecks", "latency", "SQL timing", "worker queue", "event loop", "PostgreSQL", "SQLite", "database migration", "migrate-to-postgresql", "public incidents", "Core health", "sensitive detail", "reveal detail", "copy detail", "remediation", "recovery action", "log level"],
   },
   {
+    id: "settings.host-pressure",
+    label: "Host pressure admission",
+    description: "Set live CPU, memory, load and I/O stall thresholds for new starts, and read effective concurrency",
+    category: "Setup",
+    scope: "Workspace",
+    target: "setup-settings",
+    keywords: ["host pressure", "threshold", "CPU", "memory", "load average", "I/O PSI", "some avg10", "80%", "queued", "admission", "nebula.work.host_pressure", "nebula.global.host_pressure"],
+  },
+  {
     id: "settings.setup",
     label: "Terminal and Core setup",
     description: "Choose a verified runtime, enable background PDF workers with this host's CPU budget, or inspect host pressure telemetry",

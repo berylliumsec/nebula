@@ -20,6 +20,7 @@ import { RuntimeUsagePanel } from "../components/RuntimeUsagePanel";
 import { PostToolAssistantSettings } from "../components/PostToolAssistantSettings";
 import { ButlerInstructionsSettings } from "../components/ButlerInstructionsSettings";
 import { ButlerCheckIntervalSettings } from "../components/ButlerCheckIntervalSettings";
+import {HostPressureSettings} from "../components/HostPressureSettings";
 import { HostCpuBudgetSettings } from "../components/HostCpuBudgetSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
@@ -821,6 +822,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <section className="settings-section setup-overview" id="setup-settings">
         <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
         <HostCpuBudgetSettings api={api} previewMode={previewMode} />
+        <HostPressureSettings api={api} previewMode={previewMode} />
         {isTauriRuntime() && <section className="panel setup-card core-connection-settings" aria-labelledby="core-connection-title">
           <header><span className={`status-dot ${coreConnection?.mode === "remote" ? "healthy" : "warning"}`} /><div><small>UI shell connection</small><h3 id="core-connection-title">{coreConnection?.mode === "remote" ? "Remote Core selected" : "Supervised local Core"}</h3></div></header>
           <p>{coreConnection?.mode === "remote" ? `${coreConnection.endpoint ?? "Remote endpoint"} · this UI shell sends projects, terminals, chats, missions, events, and WebSockets to that Core.` : "This UI shell starts and uses its bundled local Core."}</p>

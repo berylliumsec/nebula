@@ -53,6 +53,7 @@ async def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_pat
             )
             documents = index._product_collection.get()["documents"]
             assert any("nebula.work.host_load" in text for text in documents)
+            assert any("nebula.work.host_pressure" in text for text in documents)
     finally:
         (await store.database.dispose())
 

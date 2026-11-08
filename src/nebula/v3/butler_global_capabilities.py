@@ -345,6 +345,9 @@ class ButlerGlobalActions:
     async def host_load(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self.work.host_load((await self._case()).engagement_id, {})
 
+    async def host_pressure(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.work.host_pressure((await self._case()).engagement_id, {})
+
     async def host_cpu_budget(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self.work.host_cpu_budget((await self._case()).engagement_id, {})
 
@@ -816,6 +819,13 @@ class ButlerGlobalActions:
                 {"type": "object", "additionalProperties": False, "properties": {}},
                 RiskClass.LOCAL_READ,
                 self.host_cpu_budget,
+            ),
+            (
+                "nebula.global.host_pressure",
+                "Read live saved/effective host pressure thresholds, wait cause and effective concurrency. Settings API PUT /api/v1/host-pressure applies revision-checked thresholds live; I/O PSI reports task stall time, not disk utilization.",
+                {"type": "object", "additionalProperties": False, "properties": {}},
+                RiskClass.LOCAL_READ,
+                self.host_pressure,
             ),
             (
                 "nebula.global.host_load",

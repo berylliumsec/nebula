@@ -415,21 +415,25 @@ Keywords: host capacity, CPU load, memory, I/O pressure, Butler, telemetry
 
 Sources: src/nebula/v3/host_load.py, src/nebula/v3/provider_scheduler.py, src/nebula/v3/harnesses.py, src/nebula/v3/missions.py
 
-Host CPU use, available memory, Linux load average and I/O pressure remain
-observable, but host pressure no longer defers provider, harness or mission
-starts. Ordinary runtime concurrency, authorization and lifecycle controls
-still apply. Core samples lightweight OS counters at most once per second.
+Settings → Setup → Host pressure controls new starts for providers, harnesses
+and missions. CPU use, memory use (1 minus available ratio), load average divided
+by effective CPU capacity, and Linux I/O PSI `some avg10` each default to 80%.
+Any available reading at or above its saved threshold queues new work. Falling
+below every threshold permits admission; there are no lower recovery thresholds.
+Running work continues. Unknown metrics do not count as pressure.
 
-Butler discovers `nebula.work.host_load` for a fresh authenticated
-`/api/v1/host-load` read. Scheduled Nebula-wide Butler also has
-`nebula.global.host_load`. The result includes measured CPU capacity and use, load_average_ratio,
-io_pressure_ratio,
-available-memory ratio, busy reason, measurement availability and sample age.
-Each invocation rereads Core; Core still shares its one-second sampler cache.
-The existing `nebula.settings.api_schema` and `nebula.settings.api_request` route
-remains available, and `nebula.work.catalog` names the direct read operation.
-A saved or queued chat is not proof its runtime started.
-Missing optional counters remain unknown and do not permanently strand work.
+I/O PSI is the recent share of time with at least one task stalled on I/O; it is
+not disk utilization. Pressure-queued work holds no provider or background slot.
+Provider capacity can still queue work below 80%; its reason is distinct from
+host pressure. Defaults are 60 provider slots and 58 background slots, reserving
+two for direct chats. Explicit environment overrides remain authoritative.
+
+Butler reads `nebula.work.host_pressure` or `nebula.global.host_pressure` and
+uses `nebula.settings.api_request` GET/PUT `/api/v1/host-pressure`. Use fresh
+`host_id`, `expected_revision` and `thresholds` with `cpu`, `memory`, `load`, `io`
+ratios greater than zero and up to one. Read back saved and effective thresholds,
+current readings, waiting metric and effective concurrency. Saves apply live and
+persist across restarts. `nebula.work.host_load` remains a current telemetry read.
 
 Settings → Setup → CPU budget saves one policy on the connected Core host,
 shared across its projects and browsers. Enable background PDF workers starts

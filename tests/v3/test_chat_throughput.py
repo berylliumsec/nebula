@@ -611,7 +611,11 @@ async def test_startup_restores_a_resume_the_previous_core_never_admitted(tmp_pa
         await service.shutdown()
 
         restarted = ChatService(store, worker_id="restarted")
-        restarted.prepare_resume = lambda _turn_id: prepared  # type: ignore[method-assign]
+
+        async def restored_preparation(_turn_id):
+            return prepared
+
+        restarted.prepare_resume = restored_preparation  # type: ignore[method-assign]
         prepared.turn = await store.get(ChatTurn, turn_id)
         prepared.execution_claim_id = None
         await restarted.startup()

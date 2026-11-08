@@ -2881,12 +2881,8 @@ async def test_harness_gateway_catalog_awaits_core_tool_components(tmp_path):
 
     async def chat_components(**kwargs):
         calls.append(kwargs["engagement_id"])
-        scope = ScopePolicy(
-            id=f"scope:{engagement.id}", engagement_id=engagement.id
-        )
-        return restrict_tool_components(
-            notes_components(store, scope, tmp_path), []
-        )
+        scope = ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+        return restrict_tool_components(notes_components(store, scope, tmp_path), [])
 
     runtime.bind_tool_platform(
         SimpleNamespace(store=store, chat_components=chat_components)

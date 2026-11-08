@@ -84,16 +84,21 @@ def _bounded_env(name: str, default: int, *, maximum: int = 32) -> int:
 
 @dataclass(frozen=True)
 class ProviderSchedulerConfig:
-    provider_limit: int = 6
-    background_limit: int = 4
+    provider_limit: int = 60
+    background_limit: int = 58
     per_turn_tool_limit: int = 4
     global_tool_limit: int = 8
 
     @classmethod
     def from_environment(cls) -> "ProviderSchedulerConfig":
+        provider_limit = _bounded_env("NEBULA_PROVIDER_CONCURRENCY", 60, maximum=64)
         config = cls(
-            provider_limit=_bounded_env("NEBULA_PROVIDER_CONCURRENCY", 6, maximum=64),
-            background_limit=_bounded_env("NEBULA_BACKGROUND_CONCURRENCY", 4, maximum=64),
+            provider_limit=provider_limit,
+            background_limit=_bounded_env(
+                "NEBULA_BACKGROUND_CONCURRENCY",
+                min(58, max(1, provider_limit - 2)),
+                maximum=64,
+            ),
             per_turn_tool_limit=_bounded_env("NEBULA_TURN_TOOL_CONCURRENCY", 4),
             global_tool_limit=_bounded_env("NEBULA_GLOBAL_TOOL_CONCURRENCY", 8),
         )
@@ -148,7 +153,7 @@ class ProviderAdmission:
 
 
 class ProviderScheduler:
-    """Six provider slots with four shared by background work."""
+    """Provider capacity with two slots reserved for direct work by default."""
 
     def __init__(
         self,
@@ -176,7 +181,7 @@ class ProviderScheduler:
         self._host_reasons: dict[str, str] = {}
 
     def queue_detail(self, turn_id: str) -> str:
-        return self._host_reasons.get(turn_id, "Waiting for Core capacity")
+        return self._host_reasons.get(turn_id, "Waiting for provider capacity")
 
     def _invalidate_positions(self) -> None:
         self._positions_until = 0.0
@@ -204,33 +209,91 @@ class ProviderScheduler:
                 row.lease_expires_at = None
         self._invalidate_positions()
 
+    async def _wait_for_capacity(
+        self, turn: ChatTurn, deferred
+    ) -> ProviderAdmission | None:
+        async def acquire() -> ProviderAdmission:
+            performance = self.store.database.performance
+            background = False
+            try:
+                if turn.capacity_lane == "background":
+                    if self._background.locked():
+                        await deferred("Waiting for provider background capacity")
+                    with performance.span("provider.capacity.background"):
+                        await self._background.acquire()
+                    background = True
+                if self._provider.locked():
+                    await deferred("Waiting for provider capacity")
+                with performance.span("provider.capacity.shared"):
+                    await self._provider.acquire()
+            except BaseException:
+                if background:
+                    self._background.release()
+                raise
+            return ProviderAdmission(self, turn.capacity_lane)
+
+        if self.host_load is None or turn.status != ChatTurnStatus.QUEUED:
+            return await acquire()
+        # Retain the semaphore waiter across healthy samples for FIFO ordering.
+        # When pressure rises, abort it and release any partial acquisition.
+        task = create_diagnostic_task(
+            acquire(),
+            feature="chat",
+            event_code="chat.provider_capacity",
+            failure_message="Provider capacity acquisition failed.",
+            name=f"nebula-provider-capacity-{turn.id}",
+        )
+
+        async def discard() -> None:
+            if not task.done():
+                task.cancel()
+            result = (await asyncio.gather(task, return_exceptions=True))[0]
+            if isinstance(result, ProviderAdmission):
+                await result.release(turn.id)
+
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=self.host_load.monitor.interval)
+                if not task.done() and (await self.host_load.snapshot()).busy:
+                    await finish_cleanup(discard())
+                    return None
+            return await task
+        except BaseException:
+            await finish_cleanup(discard())
+            raise
+
     async def admit(self, turn_id: str) -> ProviderAdmission:
         turn = await self.store.get(ChatTurn, turn_id)
         lane = turn.capacity_lane
         performance = self.store.database.performance
-        if lane == "background":
-            with performance.span("provider.capacity.background"):
-                await self._background.acquire()
-        try:
-            with performance.span("provider.capacity.shared"):
-                await self._provider.acquire()
-        except BaseException:
-            if lane == "background":
-                self._background.release()
-            raise
-        admission = ProviderAdmission(self, lane)
-        try:
-            if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
+        admission: ProviderAdmission | None = None
 
-                async def deferred(reason: str | None) -> None:
-                    if reason is None:
-                        self._host_reasons.pop(turn_id, None)
-                    else:
-                        self._host_reasons[turn_id] = reason
-                    await save_host_wait(self.store, ChatTurn, turn_id, reason)
+        async def deferred(reason: str | None) -> None:
+            if reason is None:
+                self._host_reasons.pop(turn_id, None)
+            else:
+                self._host_reasons[turn_id] = reason
+            await save_host_wait(self.store, ChatTurn, turn_id, reason)
 
-                with performance.span("provider.host_load_wait"):
-                    await self.host_load.wait(deferred, direct=lane == "direct")
+        try:
+            while True:
+                if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
+                    with performance.span("provider.host_load_wait"):
+                        await self.host_load.wait(deferred)
+                latest = await self.store.get(ChatTurn, turn_id)
+                if latest.status == ChatTurnStatus.CANCELLED:
+                    raise asyncio.CancelledError
+                admission = await self._wait_for_capacity(turn, deferred)
+                if admission is None:
+                    continue
+                # Pressure can change while provider capacity is occupied. Release
+                # both slots before returning to a pressure wait.
+                if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
+                    if (await self.host_load.snapshot()).busy:
+                        await admission.release(turn_id)
+                        admission = None
+                        continue
+                break
             latest = await self.store.get(ChatTurn, turn_id)
             if latest.status == ChatTurnStatus.CANCELLED:
                 raise asyncio.CancelledError
@@ -269,7 +332,8 @@ class ProviderScheduler:
             self._host_reasons.pop(turn_id, None)
             # This also handles a commit followed by cancelled connection
             # cleanup, when no token has reached the parent yet.
-            await admission.release(turn_id)
+            if admission is not None:
+                await admission.release(turn_id)
             raise
 
     async def _complete(self, turn_id: str, lease_owner: str) -> None:

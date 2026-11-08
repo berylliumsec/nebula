@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import {BUTLER_INTERVAL_CHANGED_EVENT} from "../api/butlerInstructions";
+import {HOST_PRESSURE_CHANGED} from "../api/hostPressure";
 import {HOST_CPU_BUDGET_CHANGED} from "../api/hostCpuBudget";
 import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 import { ApiError } from "../api/client";
@@ -1820,6 +1821,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "butler_interval_refresh") {
       window.dispatchEvent(new Event(BUTLER_INTERVAL_CHANGED_EVENT));
       return "Core confirmed the Butler check interval. Its Settings control has been asked to refresh.";
+    }
+    if (action.kind === "host_pressure_refresh") {
+      window.dispatchEvent(new Event(HOST_PRESSURE_CHANGED));
+      return "Core confirmed the host pressure thresholds. Settings will refresh their saved and effective values.";
     }
     if (action.kind === "host_cpu_budget_refresh") {
       window.dispatchEvent(new Event(HOST_CPU_BUDGET_CHANGED));
