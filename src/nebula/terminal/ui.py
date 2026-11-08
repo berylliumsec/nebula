@@ -33,6 +33,35 @@ class InterruptedPrompt(CancelledInput):
     """Ctrl-C at the main composer, distinct from closing a menu."""
 
 
+def toggle_selection(
+    items: list[dict[str, Any]], chosen: list[str], row: dict[str, Any]
+) -> str:
+    """Toggle a menu row in place and explain unavailable or limited choices."""
+    identifier = row["id"]
+    if identifier in chosen:
+        chosen.remove(identifier)
+        return ""
+    if row.get("disabled"):
+        return str(row.get("disabled_reason") or "Unavailable on Core.")
+    group = row.get("selection_group")
+    limit = row.get("selection_group_limit")
+    if group and isinstance(limit, int):
+        members = [
+            item["id"]
+            for item in items
+            if item.get("selection_group") == group and item["id"] in chosen
+        ]
+        if len(members) >= limit:
+            if limit != 1:
+                return f"Choose up to {limit} {group} skills."
+            for prior in members:
+                chosen.remove(prior)
+            chosen.append(identifier)
+            return "Only one installed harness skill can be invoked per turn; replaced the previous one."
+    chosen.append(identifier)
+    return ""
+
+
 COMMANDS = {
     "draft": "Review a previous submission retained in memory",
     "core": "Switch paired Core",
@@ -49,7 +78,8 @@ COMMANDS = {
     "results": "Read saved results",
     "model": "Select a model and runtime",
     "settings": "Change next-turn Assistant settings",
-    "skills": "Choose a skill for one turn",
+    "skills": "Choose up to eight project skills and one installed skill for one turn",
+    "mcp": "Select MCP servers for this conversation",
     "goal": "Create or manage this conversation's goal",
     "agents": "Inspect agents and delegated work",
     "approvals": "Review pending actions",
@@ -315,24 +345,25 @@ class TerminalUI:
     async def multiple(
         self, title: str, items: list[dict[str, Any]], selected: list[str]
     ) -> list[str]:
-        chosen = list(selected)
+        chosen = list(dict.fromkeys(selected))
         while True:
             options = [
                 {
                     **item,
-                    "name": ("[x] " if item["id"] in chosen else "[ ] ") + item["name"],
+                    "label": ("[x] " if item["id"] in chosen else "[ ] ")
+                    + str(item.get("label") or item["name"]),
                 }
                 for item in items
             ]
             item = await self.choose(
-                title, [{"id": "__done", "name": "Done"}, *options]
+                f"{title} · {len(chosen)} selected",
+                [{"id": "__done", "name": "Done · save selection"}, *options],
             )
             if item["id"] == "__done":
                 return chosen
-            if item["id"] in chosen:
-                chosen.remove(item["id"])
-            else:
-                chosen.append(item["id"])
+            notice = toggle_selection(items, chosen, item)
+            if notice:
+                self.say(notice)
 
     def help(self) -> None:
         for name, detail in COMMANDS.items():

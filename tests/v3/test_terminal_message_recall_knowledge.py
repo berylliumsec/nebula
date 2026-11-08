@@ -1,4 +1,4 @@
-"""The settings assistant can explain terminal message recall."""
+"""The settings assistant can explain terminal composer and picker controls."""
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ def test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core(
     assert "Up" in content
     assert "Down" in content
     assert "draft" in content
+    picker = search_product_knowledge(
+        "/skills /goal skills /mcp select several skills and MCP servers"
+    )
+    picker_content = " ".join(str(row["text"]) for row in picker)
+    assert "/skills" in picker_content
+    assert "/goal skills" in picker_content
+    assert "/mcp" in picker_content
 
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     synced = index.sync_product_knowledge()

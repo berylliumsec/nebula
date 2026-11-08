@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import pytest
 from prompt_toolkit.utils import get_cwidth
 
 from nebula.terminal.shell import Shell
@@ -88,9 +89,7 @@ def test_tui_recalls_only_this_chats_sent_messages_and_restores_the_draft() -> N
         assert ui._recall_index is None
 
         ui._recall_previous()
-        ui.show_history(
-            [{"role": "user", "content": "latest message", "metadata": {}}]
-        )
+        ui.show_history([{"role": "user", "content": "latest message", "metadata": {}}])
         assert ui.composer.buffer.document == original
 
         ui._recall_previous()
@@ -99,9 +98,7 @@ def test_tui_recalls_only_this_chats_sent_messages_and_restores_the_draft() -> N
         assert not ui._can_recall_down()
 
         ui.submission("sent but not yet saved")
-        ui.show_history(
-            [{"role": "user", "content": "latest message", "metadata": {}}]
-        )
+        ui.show_history([{"role": "user", "content": "latest message", "metadata": {}}])
         ui._recall_previous()
         assert ui.composer.text == "sent but not yet saved"
         ui.show_history(
@@ -574,6 +571,37 @@ def test_tui_searches_and_selects_a_menu_without_opaque_ids() -> None:
         assert [item["id"] for item in ui._matching_items()] == ["id-b"]
         ui._menu_select()
         assert (await choice)["id"] == "id-b"
+
+    asyncio.run(run())
+
+
+def test_tui_multi_picker_keeps_checked_items_visible_until_save_or_cancel() -> None:
+    async def run() -> None:
+        ui = TuiUI()
+        items = [
+            {"id": "one", "name": "One"},
+            {"id": "two", "name": "Two"},
+        ]
+        task = asyncio.create_task(ui.multiple("Skills", items, ["one"]))
+        await asyncio.sleep(0)
+        assert "1 selected · One" in ui._menu_text()
+        assert "[x] One" in ui._menu_text()
+        ui._menu_move(2)
+        ui._menu_select()
+        assert not task.done()
+        assert "2 selected · One, Two" in ui._menu_text()
+        assert "[x] Two" in ui._menu_text()
+        ui._menu_commit()
+        assert await task == ["one", "two"]
+
+        task = asyncio.create_task(ui.multiple("Skills", items, ["one"]))
+        await asyncio.sleep(0)
+        ui._menu_move(2)
+        ui._menu_select()
+        ui._cancel_modal()
+        with pytest.raises(CancelledInput):
+            await task
+        assert ui._picker is None
 
     asyncio.run(run())
 
