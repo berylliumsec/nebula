@@ -1,26 +1,18 @@
 {
-  "change_digest": "037f6a435cfe7886fa72ac146a3156f91816535e9af544ff1b231810c36f4e3d",
+  "change_digest": "ea2ead15278e3ba833025cfc3aa385a5e335b262199c5b1d2ecb8ece66722038",
   "reviewed_by": "Codex",
-  "reason": "Separate measured CPU and I/O pressure; verify bounded direct admission, background throttling, durable cancellation/recovery and operator-visible reasons. Verify bundled guidance and Chroma source digest. Run only the real-Core host-load journey in eight permanent browser profiles, with a production bundle and an asserted non-loopback LAN origin; retain loopback only for pairing creation.",
-  "exclusions": "Only host admission and its existing operator journey change. No unrelated Python suites, native code, frontend component behavior or other browser journeys. Python 3.12 only; physical devices unavailable.",
+  "reason": "User explicitly directed no tests for this harness hotfix and deployment. The source change awaits an async chat tool catalog before combining tool components; the focused regression is included but intentionally unrun.",
+  "exclusions": "All Python, frontend, native, Playwright, browser, and LAN validation is excluded by the user's latest explicit no-tests instruction. This is an unvalidated release exception.",
   "expected_tests": {
-    "python": 24,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_host_load.py",
-    "tests/v3/test_performance.py::test_provider_admission_wait_records_cancellation_without_leaking_capacity",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_fresh_butler_host_load_reads",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:host-load-admission"
-  ],
+  "playwright": [],
   "python_versions": [
     "3.12"
   ],
