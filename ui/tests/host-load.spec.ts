@@ -2,6 +2,7 @@ import {expect, test} from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 test("host capacity defers, survives reload, recovers once and cancels saved work", async ({page, request}, info) => {
+  expect(new URL(String(info.project.use.baseURL)).hostname).not.toMatch(/^(localhost$|127\.|\[?::1\]?$)/);
   const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
   const headers = {Authorization: "Bearer host-load-test-token"};
   const pressure = async (busy: boolean, reset_calls = false) => {
@@ -39,6 +40,12 @@ test("host capacity defers, survives reload, recovers once and cancels saved wor
   await page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true}).click();
   await expect(page.locator(".chat-composer").getByRole("button", {name: "Send message", exact: true})).toBeVisible();
   expect((await pressure(false)).calls).toBe(1);
+  await expect.poll(async () => (await (await request.get(`${origin}/api/v1/chat/sessions/${chat}/pending-turn`, {headers})).json())).toBeNull();
+  const io = await request.post(`${origin}/__host_fixture/load`, {headers, data: {io: true}});
+  expect(io.ok()).toBeTruthy();
+  await composer.fill("Direct chat with idle CPU and I/O pressure");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect.poll(async () => (await (await request.post(`${origin}/__host_fixture/load`, {headers, data: {io: true}})).json()).calls).toBe(2);
   await expect.poll(async () => (await (await request.get(`${origin}/api/v1/chat/sessions/${chat}/pending-turn`, {headers})).json())).toBeNull();
   await info.attach("candidate-build", {body: JSON.stringify({origin: info.project.use.baseURL, bundleSha256: fixture.bundle_sha256, profile: info.project.name, viewport: page.viewportSize(), assets: await page.locator("script[src]").evaluateAll(nodes => nodes.map(node => node.getAttribute("src")))}), contentType: "application/json"});
 });

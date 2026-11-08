@@ -392,7 +392,12 @@ async def test_provider_admission_wait_records_cancellation_without_leaking_capa
     async def scenario():
         admission = await scheduler.admit(turns[0].id)
         waiting = asyncio.create_task(scheduler.admit(turns[1].id))
-        await asyncio.sleep(0)
+        # Wait for the asynchronous store read to reach the capacity wait.
+        for _ in range(200):
+            if scheduler._background._waiters:
+                break
+            await asyncio.sleep(0.005)
+        assert scheduler._background._waiters
         assert not waiting.done()
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):

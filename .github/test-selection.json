@@ -1,30 +1,26 @@
 {
-  "change_digest": "e855a8f1e0ff830fb08640189df6ddafe632bd45d76e1ea54ac381e8b21c2cf3",
-  "reviewed_by": "Codex; reviewed next-turn skill request contracts, goal snapshot selection, MCP catalog scope and pagination, full-screen and plain pickers, paired Core terminal fixture, and product guidance",
-  "reason": "Focused Python cases cover checked multi-selection and cancellation, Core-managed and native skill request boundaries, stale-skill removal, MCP project filtering and saved readback, retained goal skills, and one authenticated TLS LAN TUI journey with synthetic provider and project data. Product guidance and client packaging remain selected because the help source and terminal package changed.",
-  "exclusions": "The implementation changes the Python terminal client and its documentation/catalog keywords. Browser UI, responsive layout, native code, and web routes are unchanged; Playwright and native test layers do not apply. The older broad terminal journey also enters an unrelated harness interaction path, which timed out after Core accepted its turn on both this branch and clean origin/main; the focused paired-Core journey covers the changed skill and MCP paths. Python 3.12 is the supported client runtime. No unrelated suites are selected.",
+  "change_digest": "037f6a435cfe7886fa72ac146a3156f91816535e9af544ff1b231810c36f4e3d",
+  "reviewed_by": "Codex",
+  "reason": "Separate measured CPU and I/O pressure; verify bounded direct admission, background throttling, durable cancellation/recovery and operator-visible reasons. Verify bundled guidance and Chroma source digest. Run only the real-Core host-load journey in eight permanent browser profiles, with a production bundle and an asserted non-loopback LAN origin; retain loopback only for pairing creation.",
+  "exclusions": "Only host admission and its existing operator journey change. No unrelated Python suites, native code, frontend component behavior or other browser journeys. Python 3.12 only; physical devices unavailable.",
   "expected_tests": {
-    "python": 9,
-    "frontend": 1,
+    "python": 24,
+    "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/test_terminal_shell.py::test_skill_selection_is_discovered_by_name_on_core",
-    "tests/test_terminal_shell.py::test_skill_multi_selection_is_one_turn_and_harness_native_limit_is_visible",
-    "tests/test_terminal_shell.py::test_skill_picker_can_remove_a_selection_missing_from_core",
-    "tests/test_terminal_shell.py::test_mcp_picker_pages_filters_and_saves_only_selected_project_servers",
-    "tests/test_terminal_shell.py::test_settings_menu_refreshes_core_between_changes_and_exits_on_done",
-    "tests/test_terminal_tui.py::test_tui_multi_picker_keeps_checked_items_visible_until_save_or_cancel",
-    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
-    "tests/v3/test_terminal_message_recall_knowledge.py::test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core",
-    "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies"
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_performance.py::test_provider_admission_wait_records_cancellation_without_leaking_capacity",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_fresh_butler_host_load_reads",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.terminal.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:host-load-admission"
+  ],
   "python_versions": [
     "3.12"
   ],

@@ -230,7 +230,7 @@ class ProviderScheduler:
                     await save_host_wait(self.store, ChatTurn, turn_id, reason)
 
                 with performance.span("provider.host_load_wait"):
-                    await self.host_load.wait(deferred)
+                    await self.host_load.wait(deferred, direct=lane == "direct")
             latest = await self.store.get(ChatTurn, turn_id)
             if latest.status == ChatTurnStatus.CANCELLED:
                 raise asyncio.CancelledError
