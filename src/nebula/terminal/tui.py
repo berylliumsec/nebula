@@ -57,6 +57,7 @@ TRANSCRIPT_WRAP_MARGIN = 1
 TRANSCRIPT_READING_MAX_WIDTH = 136
 REPEATED_REQUEST_MIN_LENGTH = 100
 INTERRUPT_REPEAT_SECONDS = 4.0
+RECALL_LIMIT = 100
 
 
 def activity_label(state: str | None) -> str:
@@ -167,6 +168,11 @@ class TuiUI(TerminalUI):
         self._chats: list[dict[str, Any]] = []
         self._chat_activity: dict[str, str] | None = None
         self._entries: list[tuple[str, str]] = []
+        self._message_history: list[str] = []
+        self._local_submissions: list[str] = []
+        self._recall_index: int | None = None
+        self._recall_draft: Document | None = None
+        self._applying_recall = False
         self._transcript_line_styles: list[str] = []
         self._activity: list[str] = []
         self._notice = ""
@@ -214,6 +220,14 @@ class TuiUI(TerminalUI):
         def newline(_event: Any) -> None:
             self.composer.buffer.insert_text("\n")
 
+        @composer_keys.add("up", filter=Condition(self._can_recall_up))
+        def recall_previous(_event: Any) -> None:
+            self._recall_previous()
+
+        @composer_keys.add("down", filter=Condition(self._can_recall_down))
+        def recall_next(_event: Any) -> None:
+            self._recall_next()
+
         self.composer = TextArea(
             multiline=True,
             wrap_lines=True,
@@ -223,7 +237,7 @@ class TuiUI(TerminalUI):
             style="class:composer",
         )
         self.composer.control.key_bindings = composer_keys
-        self.composer.buffer.on_text_changed += lambda _buffer: self._disarm_interrupt()
+        self.composer.buffer.on_text_changed += lambda _buffer: self._composer_changed()
         self.transcript = TextArea(
             read_only=True,
             focusable=True,
@@ -389,7 +403,9 @@ class TuiUI(TerminalUI):
             full_screen=True,
             # Let the terminal select and copy chat text with a normal drag.
             # Pickers retain mouse reporting for their own controls.
-            mouse_support=Condition(lambda: self._mode not in {"main", "snapshot", "notes"}),
+            mouse_support=Condition(
+                lambda: self._mode not in {"main", "snapshot", "notes"}
+            ),
             style=Style.from_dict(
                 {}
                 if "NO_COLOR" in os.environ
@@ -816,15 +832,21 @@ class TuiUI(TerminalUI):
                 " Project Notes    ↑↓ Select    Tab Edit    ^N New    ^S Save    ^R Refresh    D Delete    Esc Chat",
                 width - 1,
             )
+        if self._mode == "main" and self._recall_index is not None:
+            return _edge(
+                f" Recalled message {self._recall_index + 1}/{len(self._message_history)}"
+                "    ↑ Older    ↓ Newer or draft    Enter Send",
+                width - 1,
+            )
         source = "Render" if self._source_view else "Source"
         if width < 60:
-            hint = " F1 Help  F3 Chats  ^C Clear/Stop"
+            hint = " F1 Help  F3 Chats  ↑ Recall  ^C Clear/Stop"
         elif width < 110:
-            hint = f" F1 Help  F2 Projects  F3 Chats  F11 Snapshot  ^C Clear/Stop  F10 {source}"
+            hint = f" F1 Help  F2 Projects  F3 Chats  ↑ Recall  F11 Snapshot  ^C Clear/Stop  F10 {source}"
         else:
             hint = (
                 " F1 Help    F2 Projects    F3 Chats    F8 Approvals"
-                f"    F10 {source}    F11 Snapshot    Tab Read    ^C Clear/Stop    ^D Quit"
+                f"    F10 {source}    F11 Snapshot    ↑ Recall    Tab Read    ^C Clear/Stop    ^D Quit"
             )
         return _edge(hint, width - 1)
 
@@ -833,6 +855,9 @@ class TuiUI(TerminalUI):
     ) -> None:
         self.set_identity(project, session)
         self._entries.clear()
+        self._message_history.clear()
+        self._local_submissions.clear()
+        self._reset_recall()
         self._activity.clear()
         self._notice = ""
         self._streaming = False
@@ -852,6 +877,9 @@ class TuiUI(TerminalUI):
         self._chat_activity = None
         self._context = "Choose a project"
         self._entries.clear()
+        self._message_history.clear()
+        self._local_submissions.clear()
+        self._reset_recall()
         self._activity.clear()
         self._notice = ""
         self._streaming = False
@@ -999,9 +1027,14 @@ class TuiUI(TerminalUI):
         self.clear_loading()
         self._streaming = not queued
         self.set_turn_phase("queued" if queued else "sending")
-        self._entries.append(
-            ("You · queued" if queued else "You · sending", terminal_text(text))
-        )
+        clean = terminal_text(text)
+        if clean.strip():
+            self._local_submissions = (
+                self._local_submissions + [clean]
+            )[-RECALL_LIMIT:]
+            self._message_history = (self._message_history + [clean])[-RECALL_LIMIT:]
+        self._reset_recall()
+        self._entries.append(("You · queued" if queued else "You · sending", clean))
         self._prune_entries()
         self._notice = ""
         self._schedule_render()
@@ -1025,11 +1058,19 @@ class TuiUI(TerminalUI):
     def show_history(self, rows: list[dict[str, Any]], *, older: bool = False) -> None:
         from .state import visible_message
 
+        if self._recall_index is not None:
+            draft = self._recall_draft or Document("")
+            self._reset_recall()
+            self._show_recalled(draft)
         saved: list[tuple[str, str]] = []
+        saved_inputs: list[str] = []
         for row in rows:
             if not visible_message(row):
                 continue
-            content = terminal_text(row.get("content") or "")
+            input_text = terminal_text(row.get("content") or "")
+            if row["role"] == "user" and input_text.strip():
+                saved_inputs.append(input_text)
+            content = input_text
             for block in row.get("content_blocks") or []:
                 if block.get("type") == "image":
                     content += (
@@ -1042,7 +1083,26 @@ class TuiUI(TerminalUI):
             saved.append(("You" if row["role"] == "user" else "Assistant", content))
         if older:
             self._entries = saved + self._entries
+            self._message_history = (saved_inputs + self._message_history)[
+                -RECALL_LIMIT:
+            ]
         else:
+            overlap = next(
+                (
+                    count
+                    for count in range(
+                        min(len(saved_inputs), len(self._local_submissions)),
+                        0,
+                        -1,
+                    )
+                    if saved_inputs[-count:] == self._local_submissions[:count]
+                ),
+                0,
+            )
+            self._local_submissions = self._local_submissions[overlap:]
+            self._message_history = (
+                saved_inputs + self._local_submissions
+            )[-RECALL_LIMIT:]
             live = next(
                 (entry for entry in reversed(self._entries) if entry[0] == "Assistant"),
                 None,
@@ -1060,6 +1120,67 @@ class TuiUI(TerminalUI):
         self._render()
         if older:
             self.transcript.buffer.cursor_position = 0
+
+    def _reset_recall(self) -> None:
+        self._recall_index = None
+        self._recall_draft = None
+
+    def _composer_changed(self) -> None:
+        self._disarm_interrupt()
+        if not self._applying_recall and self._recall_index is not None:
+            self._reset_recall()
+            self._invalidate()
+
+    def _can_recall_up(self) -> bool:
+        buffer = self.composer.buffer
+        return (
+            self._mode == "main"
+            and bool(self._message_history)
+            and buffer.complete_state is None
+            and (
+                self._recall_index is not None
+                or buffer.document.cursor_position_row == 0
+            )
+        )
+
+    def _can_recall_down(self) -> bool:
+        return (
+            self._mode == "main"
+            and self._recall_index is not None
+            and self.composer.buffer.complete_state is None
+        )
+
+    def _show_recalled(self, document: Document) -> None:
+        self._applying_recall = True
+        try:
+            self.composer.buffer.set_document(document)
+        finally:
+            self._applying_recall = False
+        self._invalidate()
+
+    def _recall_previous(self) -> None:
+        if not self._can_recall_up():
+            return
+        if self._recall_index is None:
+            self._recall_draft = self.composer.buffer.document
+            self._recall_index = len(self._message_history) - 1
+        else:
+            self._recall_index = max(0, self._recall_index - 1)
+        text = self._message_history[self._recall_index]
+        self._show_recalled(Document(text, cursor_position=len(text)))
+
+    def _recall_next(self) -> None:
+        if not self._can_recall_down():
+            return
+        assert self._recall_index is not None
+        if self._recall_index == len(self._message_history) - 1:
+            draft = self._recall_draft or Document("")
+            self._reset_recall()
+            self._show_recalled(draft)
+            return
+        self._recall_index += 1
+        text = self._message_history[self._recall_index]
+        self._show_recalled(Document(text, cursor_position=len(text)))
 
     def take_preserved_draft(self) -> str:
         value, self._preserved_draft = self._preserved_draft, ""
@@ -1109,7 +1230,11 @@ class TuiUI(TerminalUI):
         ):
             return
         self._disarm_interrupt()
-        self._preserved_draft = self.composer.text
+        self._preserved_draft = (
+            self._recall_draft.text
+            if self._recall_index is not None and self._recall_draft is not None
+            else self.composer.text
+        )
         self.composer.text = ""
         self.begin_loading(f"Running /{name}…")
         self._main_future.set_result("/" + name)

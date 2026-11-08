@@ -52,6 +52,79 @@ def test_tui_ctrl_c_clears_draft_before_interrupting_and_resets_on_typing(
     asyncio.run(run())
 
 
+def test_tui_recalls_only_this_chats_sent_messages_and_restores_the_draft() -> None:
+    async def run() -> None:
+        ui = TuiUI()
+        project = {"id": "project", "name": "Project"}
+        ui.open_view(project, {"id": "first", "title": "First"})
+        ui.show_history(
+            [
+                {"role": "user", "content": "older message", "metadata": {}},
+                {"role": "assistant", "content": "not recalled", "metadata": {}},
+                {
+                    "role": "user",
+                    "content": "replaced message",
+                    "metadata": {"replaced_at": "2026-11-07T00:00:00Z"},
+                },
+                {"role": "user", "content": "latest message", "metadata": {}},
+            ]
+        )
+        ui._main_future = asyncio.get_running_loop().create_future()
+        ui.composer.text = "draft first line\ndraft second line"
+        ui.composer.buffer.cursor_position = len(ui.composer.text)
+        assert not ui._can_recall_up()  # Up still moves within a multiline draft.
+        ui.composer.buffer.cursor_position = 0
+        original = ui.composer.buffer.document
+
+        ui._recall_previous()
+        assert ui.composer.text == "latest message"
+        assert "Recalled message 2/2" in ui._footer_text()
+        ui._recall_previous()
+        assert ui.composer.text == "older message"
+        ui._recall_next()
+        assert ui.composer.text == "latest message"
+        ui._recall_next()
+        assert ui.composer.buffer.document == original
+        assert ui._recall_index is None
+
+        ui._recall_previous()
+        ui.show_history(
+            [{"role": "user", "content": "latest message", "metadata": {}}]
+        )
+        assert ui.composer.buffer.document == original
+
+        ui._recall_previous()
+        ui.composer.buffer.insert_text(" edited")
+        assert ui._recall_index is None
+        assert not ui._can_recall_down()
+
+        ui.submission("sent but not yet saved")
+        ui.show_history(
+            [{"role": "user", "content": "latest message", "metadata": {}}]
+        )
+        ui._recall_previous()
+        assert ui.composer.text == "sent but not yet saved"
+        ui.show_history(
+            [
+                {"role": "user", "content": "latest message", "metadata": {}},
+                {"role": "user", "content": "sent but not yet saved", "metadata": {}},
+            ]
+        )
+        assert ui._message_history == ["latest message", "sent but not yet saved"]
+
+        ui.open_view(project, {"id": "second", "title": "Second"})
+        assert ui._message_history == []
+        ui.show_history([{"role": "user", "content": "other chat", "metadata": {}}])
+        ui._recall_previous()
+        assert ui.composer.text == "other chat"
+        ui.composer.text = "draft to preserve"
+        ui._recall_previous()
+        ui._shortcut("chats")
+        assert ui.take_preserved_draft() == "draft to preserve"
+
+    asyncio.run(run())
+
+
 def test_tui_keeps_progress_visible_and_replaces_chat_history() -> None:
     async def run() -> None:
         ui = TuiUI()

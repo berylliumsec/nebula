@@ -1,17 +1,18 @@
 {
-  "change_digest": "8ce64d84a23f49430d1e7db2a08d92f761b4be65e58718cabfa53c28b933f249",
-  "reviewed_by": "Codex; reviewed the paired full-screen Notes journey, package boundary, and product guidance",
-  "reason": "One disposable paired TLS LAN Core PTY test covers normal and narrow terminal layouts, creating a note, Core readback, concurrent-edit conflict preservation and recovery, and guarded deletion. A product knowledge test covers Notes discovery and Chroma source sync. A wheel test covers inclusion without backend modules. The settings catalog test covers /notes discoverability.",
-  "exclusions": "The feature is a Python terminal panel using existing Core APIs; no browser component, browser route, CSS, native module, or web user journey changed. Playwright desktop/mobile and native tests are inapplicable. No broad Core or terminal suite is needed; Python 3.12 only.",
+  "change_digest": "446e8cf3aad6950499299f7a36f64b05d3f5dfbdb82efe5b0a2d487ff9000c9e",
+  "reviewed_by": "Codex; reviewed the full-screen composer, selected-chat history, disposable paired Core PTY journey, package boundary, and product guidance",
+  "reason": "A focused TUI test covers sent-message recall, multiline movement, draft restoration, delayed Core history, and chat switching. A paired TLS LAN Core PTY test covers keyboard behavior, Core persistence, and reconnect. A product knowledge test covers guidance search and Chroma source sync. The existing wheel test covers client-only packaging, and the settings catalog test covers discovery.",
+  "exclusions": "The change is confined to the Python terminal composer and its guidance. Browser UI, browser routes, CSS, native code, and web journeys are unchanged, so Playwright desktop/mobile and native tests are inapplicable. No broad Core or terminal suite is needed; Python 3.12 only.",
   "expected_tests": {
-    "python": 3,
+    "python": 4,
     "frontend": 1,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_terminal_notes_core.py",
-    "tests/v3/test_terminal_notes_knowledge.py",
+    "tests/test_terminal_tui.py::test_tui_recalls_only_this_chats_sent_messages_and_restores_the_draft",
+    "tests/v3/test_terminal_message_recall_core.py",
+    "tests/v3/test_terminal_message_recall_knowledge.py",
     "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies"
   ],
   "frontend": [
