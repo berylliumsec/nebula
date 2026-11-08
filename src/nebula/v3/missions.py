@@ -965,6 +965,8 @@ class MissionService:
 
     async def _execute(self, queued: AgentRun, provider: ModelProvider) -> None:
         try:
+            if self.host_load is None:
+                await save_host_wait(self.store, AgentRun, queued.id, None)
             if self.host_load is not None:
 
                 async def deferred(reason: str | None) -> None:

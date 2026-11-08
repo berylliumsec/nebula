@@ -1,8 +1,8 @@
 {
-  "change_digest": "ea2ead15278e3ba833025cfc3aa385a5e335b262199c5b1d2ecb8ece66722038",
+  "change_digest": "ebcd875373fe6808db8445e4c24ab84e2d831417be869051d7b1d7ae6ca35761",
   "reviewed_by": "Codex",
-  "reason": "User explicitly directed no tests for this harness hotfix and deployment. The source change awaits an async chat tool catalog before combining tool components; the focused regression is included but intentionally unrun.",
-  "exclusions": "All Python, frontend, native, Playwright, browser, and LAN validation is excluded by the user's latest explicit no-tests instruction. This is an unvalidated release exception.",
+  "reason": "Operator explicitly requested removal of host-load admission and no tests for this deployment. The production gate bindings are removed for provider, harness, and mission starts; read-only telemetry remains.",
+  "exclusions": "All test and LAN validation layers are excluded by the explicit no-tests instruction. Build identity and live health/readback will be verified, but the workflow is untested.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
