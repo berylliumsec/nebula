@@ -409,25 +409,18 @@ another article, such as importing a complete Nebula 2 engagement, using one act
 Terminal per Project, uploading knowledge documents, or exporting an
 integrity-manifested record.
 
-## host-capacity | Automatic host capacity
+## host-capacity | Host pressure telemetry
 
-Keywords: host capacity, CPU load, memory, queued chat, deferred job, Butler, admission
+Keywords: host capacity, CPU load, memory, I/O pressure, Butler, telemetry
 
 Sources: src/nebula/v3/host_load.py, src/nebula/v3/provider_scheduler.py, src/nebula/v3/harnesses.py, src/nebula/v3/missions.py
 
-New chat responses and missions, including jobs created by Butler, wait when
-host CPU or available memory is under pressure. CPU use is measured separately
-from Linux load average and I/O pressure. Under I/O or scheduler pressure,
-background starts wait; direct chats have a shared allowance of one start per
-second only with measured CPU below 75% and available memory at least 15%.
-The queue reports CPU, memory, I/O or host load as the actual reason.
-Core samples lightweight OS
-counters at most once per second and shares calibration across runtimes. CPU
-quota and memory limits are considered where available. Hysteresis and a shared
-start budget prevent repeated bursts. Existing jobs continue.
+Host CPU use, available memory, Linux load average and I/O pressure remain
+observable, but host pressure no longer defers provider, harness or mission
+starts. Ordinary runtime concurrency, authorization and lifecycle controls
+still apply. Core samples lightweight OS counters at most once per second.
 
-Queued work is saved and starts automatically after recovery; it can be cancelled
-while waiting. Butler discovers `nebula.work.host_load` for a fresh authenticated
+Butler discovers `nebula.work.host_load` for a fresh authenticated
 `/api/v1/host-load` read. Scheduled Nebula-wide Butler also has
 `nebula.global.host_load`. The result includes measured CPU capacity and use, load_average_ratio,
 io_pressure_ratio,
