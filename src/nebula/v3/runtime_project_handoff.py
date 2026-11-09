@@ -14,6 +14,7 @@ from .database import (
     ProjectHandoffRow,
     ProviderTurnQueueRow,
     RuntimeResourceRow,
+    RuntimeRecoveryRow,
 )
 from .deployments import checkpoint_digest
 from .deployment_protocol import ResourceSnapshot
@@ -107,24 +108,66 @@ async def project_sql_checkpoint(session, project_id):
 
 async def restored_checkpoint(coordinator, lease):
     async with coordinator.coordination.fenced(lease) as session:
+        recovery = await session.scalar(
+            select(RuntimeRecoveryRow)
+            .where(
+                RuntimeRecoveryRow.project_id == lease.project_id,
+                RuntimeRecoveryRow.target_runtime_id == lease.runtime_id,
+                RuntimeRecoveryRow.target_fencing_token == lease.fencing_token,
+                RuntimeRecoveryRow.phase.in_(("held", "prepared")),
+            )
+            .limit(1)
+        )
+        recovery_id = recovery.operation_id if recovery else None
         handoff = await session.get(ProjectHandoffRow, lease.project_id)
-        if handoff is None or handoff.phase != "transferred":
+        if recovery_id is not None:
+            pass
+        elif handoff is None or handoff.phase != "transferred":
             return None
-        if (
+        elif (
             handoff.target_runtime_id != lease.runtime_id
             or handoff.checkpoint.get("format") != CHECKPOINT_FORMAT
         ):
             raise CoordinationConflict(
                 "This runtime cannot restore the project's checkpoint"
             )
-        if (
+        elif (
             await project_sql_checkpoint(session, lease.project_id)
             != handoff.checkpoint
         ):
             raise CoordinationConflict(
                 "Project state changed before restoration; keep queued work held for reconciliation"
             )
-        return checkpoint_digest(handoff.checkpoint)
+        if recovery_id is None:
+            return checkpoint_digest(handoff.checkpoint)
+    return await coordinator.prepare_recovery(lease, operation_id=recovery_id)
+
+
+async def activation_allowed(coordinator, lease):
+    """A prepared application starts producers only after durable release."""
+    async with coordinator.coordination.fenced(lease) as session:
+        recovery = await session.scalar(
+            select(RuntimeRecoveryRow)
+            .where(
+                RuntimeRecoveryRow.project_id == lease.project_id,
+                RuntimeRecoveryRow.target_runtime_id == lease.runtime_id,
+                RuntimeRecoveryRow.target_fencing_token == lease.fencing_token,
+            )
+            .order_by(RuntimeRecoveryRow.created_at_ms.desc())
+            .limit(1)
+        )
+        if recovery is not None and recovery.phase != "verified":
+            raise CoordinationConflict("Project recovery has not been verified")
+        handoff = await session.get(ProjectHandoffRow, lease.project_id)
+        if (
+            handoff is None
+            or handoff.phase != "verified"
+            or handoff.admission_held
+            or handoff.target_runtime_id != lease.runtime_id
+        ):
+            raise CoordinationConflict(
+                "Project restoration has not been verified; queued work remains held"
+            )
 
 
 class ProjectHandoffAgent:

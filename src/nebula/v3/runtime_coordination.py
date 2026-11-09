@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
     Database,
+    DeploymentHostRow,
     EntityRow,
     ProjectOwnershipRow,
     RunEventRow,
@@ -233,6 +234,9 @@ class RuntimeCoordination:
     ) -> int:
         # Admission and retirement share the process-row lock. A readiness
         # snapshot alone could admit an owner after shutdown saw an empty worker.
+        host = await session.get(DeploymentHostRow, "host")
+        if host is not None and host.shutdown_requested:
+            raise LeaseLost("the host has fenced new work for coordinated shutdown")
         process = await session.get(
             RuntimeProcessRow,
             runtime_id,
@@ -374,6 +378,11 @@ class RuntimeCoordination:
                         "idempotency key already accepted with a different payload"
                     )
                 return _receipt(existing)
+            host = await session.get(DeploymentHostRow, "host")
+            if host is not None and host.shutdown_requested:
+                raise CoordinationConflict(
+                    "the host is draining for coordinated shutdown"
+                )
             await self._ensure_project(session, project_id)
             sequence = await session.scalar(
                 update(ProjectOwnershipRow)
@@ -521,7 +530,8 @@ class RuntimeCoordination:
         *,
         batch_key: str,
         events: Sequence[tuple[str, dict[str, Any]]],
-        apply: Callable[[AsyncSession, list[StreamFrame]], Awaitable[None]] | None = None,
+        apply: Callable[[AsyncSession, list[StreamFrame]], Awaitable[None]]
+        | None = None,
     ) -> list[StreamFrame]:
         """Persist one batch before publication, using existing event retention."""
         _identifier(batch_key, "batch_key")

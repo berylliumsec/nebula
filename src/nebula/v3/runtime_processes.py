@@ -66,6 +66,14 @@ class WorkerBootstrap(NebulaModel):
         return frame
 
 
+class MigrationBootstrap(NebulaModel):
+    release_root: str
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    database: str = Field(repr=False)
+    expected_schema: int
+    expected_head: str
+
+
 def read_worker_bootstrap(source: BinaryIO) -> WorkerBootstrap:
     raw = source.readline(64 * 1024 + 1)
     try:
@@ -260,6 +268,7 @@ class RuntimeProcessHost:
             self.lock.acquire()
             try:
                 await self.coordinator.database.initialize()
+                await self.coordinator.resume_after_shutdown()
                 marker = self.root / "process-origin.json"
                 if not marker.exists():
                     sockets = Path(tempfile.mkdtemp(prefix="nebula-ipc-", dir="/tmp"))
@@ -327,6 +336,66 @@ class RuntimeProcessHost:
             return RuntimeRpcClient(
                 row.endpoint, self.credentials.read(row.credential_reference)
             )
+
+    async def migrate(self, version: str, *, expected_revision: int) -> dict:
+        """Run only an accepted release's migrator while this host owns admission."""
+        async with self._launch:
+            if self.closed or self.lock.descriptor is None:
+                raise CoordinationConflict(
+                    "migration requires the active supervisor lock"
+                )
+            plan = await self.coordinator.migration_preflight(
+                version, expected_revision=expected_revision
+            )
+            async with self.coordinator.database.session() as session:
+                release = await session.get(RuntimeReleaseRow, version)
+                if release is None:
+                    raise CoordinationConflict("stage the migration release first")
+                bundle, digest = Path(release.install_path), release.manifest_sha256
+            manifest = await asyncio.to_thread(
+                ReleaseStore.verify, bundle, expected_manifest_sha256=digest
+            )
+            if manifest.migration_head == plan["current_head"]:
+                return {**plan, "state": "current"}
+            bootstrap = MigrationBootstrap(
+                release_root=str(bundle),
+                manifest_sha256=digest,
+                database=self.coordinator.database.url,
+                expected_schema=plan["schema"],
+                expected_head=plan["current_head"],
+            )
+            child = await asyncio.create_subprocess_exec(
+                str(bundle / manifest.core_executable),
+                "runtime-migrate",
+                "--bootstrap-stdin",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+                env=detached_worker_environment(bundle),
+            )
+
+            # A cancelled request does not interrupt a migration halfway. The
+            # operation ledger records uncertainty until authoritative readback.
+            async def complete():
+                output, _errors = await child.communicate(
+                    bootstrap.model_dump_json().encode() + b"\n"
+                )
+                if child.returncode or len(output) > 64 * 1024:
+                    raise CoordinationConflict(
+                        "The accepted migration did not confirm completion; inspect current schema before retrying"
+                    )
+                result = json.loads(output.splitlines()[-1])
+                observed = await self.coordinator.migration_preflight(
+                    version, expected_revision=None
+                )
+                if observed["current_head"] != manifest.migration_head:
+                    raise CoordinationConflict(
+                        "Migration completion differs from the database head"
+                    )
+                return {**observed, "state": "migrated", "migration": result}
+
+            return await finish_cleanup(complete())
 
     async def spawn(
         self, version: str, role: Literal["api", "execution"], *, timeout: float = 20
@@ -535,6 +604,21 @@ class RuntimeProcessHost:
                 await asyncio.to_thread(child.wait, timeout=5)
             await self.coordinator.retired(identity)
             return identity
+
+    async def shutdown(self, *, expected_revision: int) -> dict:
+        async with self._launch:
+            if self.closed or self.lock.descriptor is None:
+                raise CoordinationConflict(
+                    "shutdown requires the active supervisor lock"
+                )
+            runtimes = await self.coordinator.begin_shutdown(
+                expected_revision=expected_revision
+            )
+        stopped = []
+        for runtime_id in runtimes:
+            await self.retire(runtime_id)
+            stopped.append(runtime_id)
+        return {"state": "stopped", "retired_runtime_ids": stopped}
 
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -84,6 +84,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             if HANDOFF_FEATURE in context.manifest.features
             else None
         )
+        recovery = await context.coordinator.recovery_status(lease.project_id)
         app = create_execution_kernel(
             store,
             artifact_store=artifacts,
@@ -106,13 +107,29 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             else None,
         )
         if HANDOFF_FEATURE in context.manifest.features:
+            app.state.runtime_recovery_operation_id = (
+                recovery["operation_id"]
+                if recovery and recovery["lease"] == asdict(lease)
+                else None
+            )
             app.state.control_assistant_work.chat.restoring_handoff = (
                 restore_digest is not None
             )
             app.state.runtime_handoff = ProjectHandoffAgent(
                 context, lease, app, restored_digest=restore_digest
             )
-        async with app.router.lifespan_context(app):
+        async with AsyncExitStack() as lifetime:
+
+            async def activate():
+                await lifetime.enter_async_context(app.router.lifespan_context(app))
+
+            # Restoration is prepared without starting schedulers, recovery
+            # scans, callbacks or goal producers. The host first commits the
+            # matching checkpoint verification, then explicitly activates it.
+            if restore_digest is not None:
+                app.state.runtime_activate = activate
+            else:
+                await activate()
             yield app
     finally:
         if knowledge is not None:
@@ -120,6 +137,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
         await finish_cleanup(client.close())
         await finish_cleanup(store.event_history.close())
         await finish_cleanup(database.dispose())
+        context.restore_cleanup_completed = True
 
 
 class ProjectExecution:
@@ -142,8 +160,14 @@ class ProjectExecution:
         self._stop = asyncio.Event()
         self._close_task: asyncio.Task | None = None
         self.restored_checkpoint_digest = None
+        self.recovery_operation_id = None
+        self._activate = asyncio.Event()
+        self.activation_started = False
+        self.cleanup_complete = False
         context.rpc.register("execution.attach/v1", self.attach)
         context.rpc.register("execution.status/v1", self.status)
+        context.rpc.register("execution.activate/v1", self.activate)
+        context.rpc.register("execution.relinquish/v1", self.relinquish)
 
     async def status(self, payload):
         if payload:
@@ -153,7 +177,44 @@ class ProjectExecution:
             "state": self.state,
             "lease": asdict(self.lease) if self.lease is not None else None,
             "restored_checkpoint_digest": self.restored_checkpoint_digest,
+            "recovery_operation_id": self.recovery_operation_id,
+            "activation_started": self.activation_started,
+            "cleanup_complete": self.cleanup_complete,
         }
+
+    async def relinquish(self, payload):
+        if payload:
+            raise RuntimeIpcError(
+                "Failed restoration relinquishment accepts no arguments"
+            )
+        async with self._lock:
+            if (
+                self.state != "failed"
+                or self.lease is None
+                or self.activation_started
+                or not self.cleanup_complete
+            ):
+                raise RuntimeIpcError(
+                    "Only a failed, unactivated and cleaned restoration may relinquish"
+                )
+            await self.context.coordinator.relinquish_failed_restoration(self.lease)
+            self.state, self.closed = "fenced", True
+            self._stop.set()
+            return await self.status({})
+
+    async def activate(self, payload):
+        if payload:
+            raise RuntimeIpcError("Execution activation accepts no arguments")
+        async with self._lock:
+            if self.state == "ready":
+                return await self.status({})
+            if self.state != "prepared" or self.lease is None:
+                raise RuntimeIpcError("The project has not prepared its restoration")
+            from .runtime_project_handoff import activation_allowed
+
+            await activation_allowed(self.context.coordinator, self.lease)
+            self._activate.set()
+            return await self.status({})
 
     async def attach(self, payload):
         try:
@@ -184,17 +245,57 @@ class ProjectExecution:
 
     async def _lifetime(self, lease):
         tasks: list[asyncio.Task] = []
+        self.context.restore_cleanup_completed = False
         try:
             with execution_context(lease):
                 async with self.application_factory(self.context, lease) as app:
                     async with self.context.coordinator.coordination.fenced(lease):
                         pass
-                    self.application, self.state = app, "ready"
+                    self.application = app
                     handoff_agent = getattr(
                         getattr(app, "state", None), "runtime_handoff", None
                     )
                     if handoff_agent is not None:
                         self.restored_checkpoint_digest = handoff_agent.restored_digest
+                    self.recovery_operation_id = getattr(
+                        getattr(app, "state", None),
+                        "runtime_recovery_operation_id",
+                        None,
+                    )
+                    deferred = getattr(
+                        getattr(app, "state", None), "runtime_activate", None
+                    )
+                    if deferred is not None:
+                        self.state = "prepared"
+                        activate_wait = asyncio.create_task(self._activate.wait())
+                        stop_wait = asyncio.create_task(self._stop.wait())
+                        try:
+                            while (
+                                not self._activate.is_set() and not self._stop.is_set()
+                            ):
+                                await asyncio.wait(
+                                    [activate_wait, stop_wait],
+                                    timeout=HEARTBEAT_SECONDS,
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                                async with self.context.coordinator.coordination.fenced(
+                                    lease
+                                ):
+                                    pass
+                        finally:
+                            activate_wait.cancel()
+                            stop_wait.cancel()
+                            await asyncio.gather(
+                                activate_wait, stop_wait, return_exceptions=True
+                            )
+                        if self._stop.is_set():
+                            return
+                        from .runtime_project_handoff import activation_allowed
+
+                        await activation_allowed(self.context.coordinator, lease)
+                        self.activation_started = True
+                        await deferred()
+                    self.state = "ready"
                     delivery = RuntimeDelivery(
                         self.context.coordinator.coordination,
                         RuntimeVault(
@@ -302,6 +403,9 @@ class ProjectExecution:
             )
         finally:
             self.application = None
+            self.cleanup_complete = bool(
+                getattr(self.context, "restore_cleanup_completed", False)
+            )
             if self.state not in {"failed", "fenced"}:
                 self.state = "closed"
 

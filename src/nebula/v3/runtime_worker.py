@@ -6,13 +6,14 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import sys
 from typing import Any
 
 import uvicorn
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .database import (
@@ -30,6 +31,7 @@ from .runtime_http import PrivateRuntimeHttp
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcServer
 from .runtime_processes import (
     WorkerBootstrap,
+    MigrationBootstrap,
     read_worker_bootstrap,
     validate_worker_binding,
 )
@@ -46,6 +48,59 @@ class WorkerContext:
 
 
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
+
+
+async def run_migration(bootstrap: MigrationBootstrap) -> dict:
+    """Apply this accepted executable's additive migrations, never a worker's."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    manifest = ReleaseStore.verify(
+        Path(bootstrap.release_root),
+        expected_manifest_sha256=bootstrap.manifest_sha256,
+    )
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path(__file__).with_name("migrations"))
+    )
+    if not manifest.additive_migrations or ScriptDirectory.from_config(
+        config
+    ).get_heads() != [manifest.migration_head]:
+        raise RuntimeIpcError("Accepted migration head does not match this executable")
+    database = Database(bootstrap.database, bootstrap=False)
+    try:
+        await database.initialize()
+        schema = await database.current_schema_version()
+        async with database.session() as session:
+            heads = list(
+                await session.scalars(text("SELECT version_num FROM alembic_version"))
+            )
+        if schema != bootstrap.expected_schema or heads != [bootstrap.expected_head]:
+            raise RuntimeIpcError("SQL changed after migration preflight")
+        await database.bootstrap()
+        schema = await database.current_schema_version()
+        async with database.session() as session:
+            heads = list(
+                await session.scalars(text("SELECT version_num FROM alembic_version"))
+            )
+        if (
+            heads != [manifest.migration_head]
+            or not manifest.schema_min <= schema <= manifest.schema_max
+        ):
+            raise RuntimeIpcError(
+                "Migration did not reach the accepted compatible schema"
+            )
+        return {"version": manifest.version, "schema": schema, "head": heads[0]}
+    finally:
+        await database.dispose()
+
+
+def migration_main() -> None:
+    raw = sys.stdin.buffer.readline(64 * 1024 + 1)
+    if len(raw) > 64 * 1024 or not raw.endswith(b"\n"):
+        raise RuntimeIpcError("Invalid private migration bootstrap")
+    bootstrap = MigrationBootstrap.model_validate_json(raw)
+    print(json.dumps(asyncio.run(run_migration(bootstrap)), separators=(",", ":")))
 
 
 @asynccontextmanager

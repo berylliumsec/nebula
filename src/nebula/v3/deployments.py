@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
@@ -31,6 +31,7 @@ from .database import (
     RuntimeProcessRow,
     RuntimeReleaseRow,
     RuntimeResourceRow,
+    RuntimeRecoveryRow,
     SchemaVersionRow,
 )
 from .deployment_protocol import (
@@ -274,6 +275,10 @@ class DeploymentCoordinator:
             raise ValueError("unknown independently supervised worker role")
         async with self.coordination._write() as session:
             host = await self._host(session)
+            if host.shutdown_requested:
+                raise CoordinationConflict(
+                    "the host is draining for coordinated shutdown"
+                )
             memory_import = await session.get(
                 BootstrapStateRow, SHARED_MEMORY_BOOTSTRAP_KEY
             )
@@ -509,6 +514,154 @@ class DeploymentCoordinator:
                 "execution.target",
                 {"version": version, "rollback_version": host.rollback_version},
             )
+
+    async def migration_preflight(
+        self, version: str, *, expected_revision: int | None
+    ) -> dict:
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            if expected_revision is not None and host.revision != expected_revision:
+                raise CoordinationConflict("deployment changed before migration")
+            release = await session.get(RuntimeReleaseRow, version)
+            if release is None:
+                raise CoordinationConflict("stage the migration release first")
+            manifest = ReleaseManifest.model_validate(release.manifest)
+            if not manifest.additive_migrations:
+                raise CoordinationConflict(
+                    "online deployment requires additive migrations"
+                )
+            await self._compatible(session, manifest, role="api")
+            heads = list(
+                await session.scalars(text("SELECT version_num FROM alembic_version"))
+            )
+            if len(heads) != 1:
+                raise CoordinationConflict(
+                    "migration requires one verified database head"
+                )
+            schema = int(
+                await session.scalar(select(func.max(SchemaVersionRow.version))) or 0
+            )
+            return {
+                "version": version,
+                "revision": host.revision,
+                "schema": schema,
+                "current_head": heads[0],
+                "target_head": manifest.migration_head,
+            }
+
+    async def rollback_code(self, version: str, *, expected_revision: int) -> None:
+        """Change desired retained code without restoring old data."""
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            if host.revision != expected_revision:
+                raise CoordinationConflict("deployment changed before code rollback")
+            release = await session.get(RuntimeReleaseRow, version)
+            if release is None:
+                raise CoordinationConflict("rollback code is not retained")
+            await self._compatible(
+                session,
+                ReleaseManifest.model_validate(release.manifest),
+                role="execution",
+            )
+            host.rollback_version, host.target_version = host.target_version, version
+            host.revision += 1
+            await self._receipt(
+                session, "execution.code_rollback", {"version": version}
+            )
+
+    async def shutdown_preflight(self, *, expected_revision: int) -> dict:
+        """Refuse shutdown while project work, effects or charges remain."""
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            if host.revision != expected_revision:
+                raise CoordinationConflict("deployment changed before shutdown")
+            blockers = []
+            for project in await session.scalars(
+                select(ProjectOwnershipRow.project_id).where(
+                    ProjectOwnershipRow.runtime_id.is_not(None)
+                )
+            ):
+                blockers.append("Project " + project + " still has an execution owner")
+            for command in await session.scalars(
+                select(RuntimeCommandRow.id).where(
+                    RuntimeCommandRow.state.in_(_UNFINISHED)
+                )
+            ):
+                blockers.append("Command " + command + " is unfinished")
+            for resource in await session.scalars(
+                select(RuntimeResourceRow.id).where(
+                    RuntimeResourceRow.state != "closed"
+                )
+            ):
+                blockers.append("Resource " + resource + " remains resident")
+            for reservation in await session.scalars(
+                select(RuntimeCapacityReservationRow.id).where(
+                    RuntimeCapacityReservationRow.state == "held"
+                )
+            ):
+                blockers.append("Capacity " + reservation + " remains held")
+            if blockers:
+                raise CoordinationConflict("; ".join(blockers[:20]))
+            return {"revision": host.revision, "ready": True, "blockers": []}
+
+    async def begin_shutdown(self, *, expected_revision: int) -> list[str]:
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            if host.revision != expected_revision:
+                raise CoordinationConflict("deployment changed before shutdown")
+            processes = list(
+                await session.scalars(
+                    select(RuntimeProcessRow)
+                    .where(RuntimeProcessRow.state != "retired")
+                    .order_by(RuntimeProcessRow.runtime_id)
+                    .with_for_update()
+                )
+            )
+            if any(
+                row.state in {"reserved", "starting", "aborting"} for row in processes
+            ):
+                raise CoordinationConflict(
+                    "reconcile pending worker startup before shutdown"
+                )
+            for model, predicate in (
+                (ProjectOwnershipRow, ProjectOwnershipRow.runtime_id.is_not(None)),
+                (RuntimeCommandRow, RuntimeCommandRow.state.in_(_UNFINISHED)),
+                (RuntimeResourceRow, RuntimeResourceRow.state != "closed"),
+                (
+                    RuntimeCapacityReservationRow,
+                    RuntimeCapacityReservationRow.state == "held",
+                ),
+            ):
+                if await session.scalar(
+                    select(func.count()).select_from(model).where(predicate)
+                ):
+                    raise CoordinationConflict(
+                        "Project work, unresolved effects or charged resources prevent shutdown"
+                    )
+            host.shutdown_requested, host.api_runtime_id = True, None
+            host.revision += 1
+            host.detail = "Coordinated shutdown has fenced all new admissions."
+            for row in processes:
+                row.state = "draining"
+            await self._receipt(
+                session,
+                "host.shutdown_admitted",
+                {"runtimes": [row.runtime_id for row in processes]},
+            )
+            return [row.runtime_id for row in processes]
+
+    async def resume_after_shutdown(self) -> None:
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            remaining = await session.scalar(
+                select(RuntimeProcessRow.runtime_id)
+                .where(RuntimeProcessRow.state != "retired")
+                .limit(1)
+            )
+            if host.shutdown_requested and remaining is None:
+                host.shutdown_requested = False
+                host.revision += 1
+                host.detail = "The prior coordinated shutdown completed; the host can admit workers."
 
     async def resource(self, lease: ProjectLease, snapshot: ResourceSnapshot) -> None:
         if (snapshot.project_id, snapshot.runtime_id, snapshot.fencing_token) != (
@@ -895,6 +1048,10 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "worker did not restore the accepted checkpoint"
                 )
+            if row.checkpoint.get("format") == "nebula.project-recovery/v1":
+                raise CoordinationConflict(
+                    "use recovery verification for an expired-owner claim"
+                )
             if row.phase == HandoffPhase.VERIFIED:
                 return
             for resource in await session.scalars(
@@ -915,6 +1072,444 @@ class DeploymentCoordinator:
                 session,
                 "handoff.verified",
                 {"project_id": lease.project_id, "runtime_id": lease.runtime_id},
+            )
+
+    async def _recovery_blockers(self, session, project_id, target_runtime_id):
+        reasons = []
+        for row in await session.scalars(
+            select(RuntimeCommandRow).where(
+                RuntimeCommandRow.project_id == project_id,
+                RuntimeCommandRow.state.in_(("running", "uncertain")),
+            )
+        ):
+            reasons.append(f"Command {row.id} needs an explicit outcome")
+        for row in await session.scalars(
+            select(RuntimeResourceRow).where(
+                RuntimeResourceRow.project_id == project_id,
+                RuntimeResourceRow.state != "closed",
+            )
+        ):
+            if row.state != "restorable" or row.restoration == "pinned":
+                reasons.append(
+                    row.detail or f"Resource {row.id} needs completion evidence"
+                )
+        for identity in await session.scalars(
+            select(RuntimeCapacityReservationRow.id).where(
+                RuntimeCapacityReservationRow.project_id == project_id,
+                RuntimeCapacityReservationRow.state == "held",
+            )
+        ):
+            reasons.append(
+                f"Capacity reservation {identity} still needs positive completion evidence"
+            )
+        running = await session.scalar(
+            select(ProviderTurnQueueRow.turn_id)
+            .join(EntityRow, EntityRow.id == ProviderTurnQueueRow.turn_id)
+            .where(
+                EntityRow.engagement_id == project_id,
+                ProviderTurnQueueRow.state == "running",
+            )
+            .limit(1)
+        )
+        if running is not None:
+            reasons.append(
+                f"Provider turn {running} needs explicit interrupted-effect reconciliation"
+            )
+        target = await session.get(RuntimeProcessRow, target_runtime_id)
+        if target is not None:
+            release = await session.get(RuntimeReleaseRow, target.version)
+            supported = (
+                set(
+                    ReleaseManifest.model_validate(
+                        release.manifest
+                    ).restorable_resources
+                )
+                if release
+                else set()
+            )
+            for resource in await session.scalars(
+                select(RuntimeResourceRow).where(
+                    RuntimeResourceRow.project_id == project_id,
+                    RuntimeResourceRow.state == "restorable",
+                )
+            ):
+                if resource.kind not in supported:
+                    reasons.append(
+                        f"The target cannot restore {resource.kind} {resource.id}"
+                    )
+        return list(dict.fromkeys(reasons))[:100]
+
+    async def begin_recovery(
+        self,
+        project_id: str,
+        target_runtime_id: str,
+        *,
+        expected_owner: ProjectLease,
+        expected_handoff_revision: int | None,
+        operation_id: str,
+        actor_id: str,
+    ) -> ProjectLease:
+        """Claim an expired incarnation with admission held and no effect replay."""
+        if expected_owner.project_id != project_id:
+            raise CoordinationConflict("recovery owner belongs to another project")
+        if any(not value or len(value) > 200 for value in (operation_id, actor_id)):
+            raise ValueError(
+                "recovery requires a bounded operation and authenticated actor"
+            )
+        async with self.coordination._write() as session:
+            await self._host(session)
+            prior = await session.get(RuntimeRecoveryRow, operation_id)
+            owner = await session.get(
+                ProjectOwnershipRow, project_id, with_for_update=True
+            )
+            if prior is not None:
+                if (
+                    prior.project_id != project_id
+                    or prior.target_runtime_id != target_runtime_id
+                    or prior.source_runtime_id != expected_owner.runtime_id
+                    or prior.source_fencing_token != expected_owner.fencing_token
+                    or prior.expected_handoff_revision != expected_handoff_revision
+                    or prior.actor_id != actor_id
+                ):
+                    raise CoordinationConflict(
+                        "recovery operation ID identifies another request"
+                    )
+                lease = ProjectLease(
+                    project_id, target_runtime_id, prior.target_fencing_token
+                )
+                await self.coordination._check(session, lease, lock=False)
+                return lease
+            if owner is None or (owner.runtime_id, owner.fencing_token) != (
+                expected_owner.runtime_id,
+                expected_owner.fencing_token,
+            ):
+                raise CoordinationConflict(
+                    "project ownership changed; read fresh recovery state"
+                )
+            now = await self.coordination._clock_ms(session)
+            if owner.lease_expires_at_ms > now:
+                raise CoordinationConflict("the project owner is still live")
+            if target_runtime_id == expected_owner.runtime_id:
+                raise CoordinationConflict(
+                    "recovery requires a new process incarnation"
+                )
+            await self.coordination._live_execution(session, target_runtime_id, now)
+            handoff = await session.get(
+                ProjectHandoffRow, project_id, with_for_update=True
+            )
+            if (handoff.revision if handoff else None) != expected_handoff_revision:
+                raise CoordinationConflict("handoff changed; read fresh recovery state")
+            for previous in await session.scalars(
+                select(RuntimeRecoveryRow).where(
+                    RuntimeRecoveryRow.project_id == project_id,
+                    RuntimeRecoveryRow.phase.in_(("held", "prepared")),
+                )
+            ):
+                previous.phase = "blocked"
+                previous.blockers = [
+                    "Its target expired; recovery continued with a new incarnation"
+                ]
+                previous.revision += 1
+                previous.updated_at_ms = now
+            await session.execute(
+                update(RuntimeCommandRow)
+                .where(
+                    RuntimeCommandRow.project_id == project_id,
+                    RuntimeCommandRow.state == "running",
+                )
+                .values(state="uncertain")
+            )
+            for resource in await session.scalars(
+                select(RuntimeResourceRow).where(
+                    RuntimeResourceRow.project_id == project_id,
+                    RuntimeResourceRow.state == "active",
+                )
+            ):
+                resource.state = "uncertain"
+                resource.updated_at_ms = now
+            target = await session.get(RuntimeProcessRow, target_runtime_id)
+            if target is None:
+                raise CoordinationConflict(
+                    "recovery requires a retained execution worker"
+                )
+            release = await session.get(RuntimeReleaseRow, target.version)
+            if (
+                release is None
+                or "project.handoff/v1"
+                not in ReleaseManifest.model_validate(release.manifest).features
+            ):
+                raise CoordinationConflict(
+                    "the recovery target must support prepared project restoration"
+                )
+            from .runtime_project_handoff import project_sql_checkpoint
+
+            checkpoint = {
+                "format": "nebula.project-recovery/v1",
+                "operation_id": operation_id,
+                "project_state": await project_sql_checkpoint(session, project_id),
+            }
+            blockers = await self._recovery_blockers(
+                session, project_id, target_runtime_id
+            )
+            owner.runtime_id, owner.fencing_token, owner.lease_expires_at_ms = (
+                target_runtime_id,
+                owner.fencing_token + 1,
+                now + LEASE_MS,
+            )
+            values = dict(
+                project_id=project_id,
+                revision=(handoff.revision + 1) if handoff else 1,
+                source_runtime_id=expected_owner.runtime_id,
+                source_fencing_token=expected_owner.fencing_token,
+                target_runtime_id=target_runtime_id,
+                target_version=target.version,
+                phase=HandoffPhase.TRANSFERRED,
+                admission_held=True,
+                blockers=blockers,
+                checkpoint=checkpoint,
+                admitted_turn_ids=[],
+                updated_at_ms=now,
+            )
+            if handoff is None:
+                session.add(ProjectHandoffRow(**values))
+            else:
+                for key, value in values.items():
+                    setattr(handoff, key, value)
+            session.add(
+                RuntimeRecoveryRow(
+                    operation_id=operation_id,
+                    actor_id=actor_id,
+                    project_id=project_id,
+                    revision=1,
+                    source_runtime_id=expected_owner.runtime_id,
+                    source_fencing_token=expected_owner.fencing_token,
+                    target_runtime_id=target_runtime_id,
+                    target_fencing_token=owner.fencing_token,
+                    expected_handoff_revision=expected_handoff_revision,
+                    phase="held",
+                    checkpoint=checkpoint,
+                    blockers=blockers,
+                    created_at_ms=now,
+                    updated_at_ms=now,
+                )
+            )
+            await self._receipt(
+                session,
+                "project.recovery_claimed",
+                {
+                    "operation_id": operation_id,
+                    "project_id": project_id,
+                    "actor_id": actor_id,
+                    "runtime_id": target_runtime_id,
+                    "fencing_token": owner.fencing_token,
+                    "blockers": blockers,
+                },
+            )
+            return ProjectLease(project_id, target_runtime_id, owner.fencing_token)
+
+    async def recovery_status(self, project_id: str) -> dict | None:
+        async with self.database.session() as session:
+            row = await session.scalar(
+                select(RuntimeRecoveryRow)
+                .where(
+                    RuntimeRecoveryRow.project_id == project_id,
+                )
+                .order_by(
+                    RuntimeRecoveryRow.created_at_ms.desc(),
+                    RuntimeRecoveryRow.operation_id,
+                )
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return {
+                "operation_id": row.operation_id,
+                "phase": row.phase,
+                "revision": row.revision,
+                "lease": {
+                    "project_id": row.project_id,
+                    "runtime_id": row.target_runtime_id,
+                    "fencing_token": row.target_fencing_token,
+                },
+                "blockers": await self._recovery_blockers(
+                    session, project_id, row.target_runtime_id
+                )
+                if row.phase in {"held", "prepared"}
+                else row.blockers,
+                "checkpoint_digest": checkpoint_digest(row.checkpoint),
+            }
+
+    async def prepare_recovery(self, lease: ProjectLease, *, operation_id: str) -> str:
+        async with self.coordination.fenced(lease) as session:
+            row = await session.get(RuntimeRecoveryRow, operation_id)
+            if (
+                row is None
+                or (row.project_id, row.target_runtime_id, row.target_fencing_token)
+                != (lease.project_id, lease.runtime_id, lease.fencing_token)
+                or row.phase not in {"held", "prepared"}
+            ):
+                raise CoordinationConflict(
+                    "this incarnation does not own pending recovery"
+                )
+            blockers = await self._recovery_blockers(
+                session, lease.project_id, lease.runtime_id
+            )
+            if blockers:
+                raise CoordinationConflict("; ".join(blockers[:10]))
+            from .runtime_project_handoff import project_sql_checkpoint
+
+            row.checkpoint = {
+                "format": "nebula.project-recovery/v1",
+                "operation_id": operation_id,
+                "project_state": await project_sql_checkpoint(
+                    session, lease.project_id
+                ),
+            }
+            row.phase, row.blockers, row.revision = "prepared", [], row.revision + 1
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            if handoff is None or handoff.target_runtime_id != lease.runtime_id:
+                raise CoordinationConflict("recovery admission record changed")
+            handoff.checkpoint, handoff.blockers = row.checkpoint, []
+            handoff.revision += 1
+            return checkpoint_digest(row.checkpoint)
+
+    async def verify_recovery(
+        self, lease: ProjectLease, *, operation_id: str, restored_checkpoint_digest: str
+    ) -> None:
+        async with self.coordination.fenced(lease) as session:
+            row = await session.get(RuntimeRecoveryRow, operation_id)
+            if (
+                row is None
+                or (row.project_id, row.target_runtime_id, row.target_fencing_token)
+                != (lease.project_id, lease.runtime_id, lease.fencing_token)
+                or row.phase not in {"prepared", "verified"}
+            ):
+                raise CoordinationConflict("this incarnation has not prepared recovery")
+            if checkpoint_digest(row.checkpoint) != restored_checkpoint_digest:
+                raise CoordinationConflict(
+                    "worker did not restore the recovery checkpoint"
+                )
+            if row.phase == "verified":
+                return
+            if await self._recovery_blockers(
+                session, lease.project_id, lease.runtime_id
+            ):
+                raise CoordinationConflict(
+                    "recovery acquired unresolved effects before verification"
+                )
+            from .runtime_project_handoff import project_sql_checkpoint
+
+            if row.checkpoint["project_state"] != await project_sql_checkpoint(
+                session, lease.project_id
+            ):
+                raise CoordinationConflict(
+                    "project changed before recovery verification"
+                )
+            for resource in await session.scalars(
+                select(RuntimeResourceRow).where(
+                    RuntimeResourceRow.project_id == lease.project_id,
+                    RuntimeResourceRow.state == "restorable",
+                )
+            ):
+                resource.runtime_id, resource.fencing_token = (
+                    lease.runtime_id,
+                    lease.fencing_token,
+                )
+            row.phase, row.blockers, row.revision = "verified", [], row.revision + 1
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            if handoff is None or handoff.target_runtime_id != lease.runtime_id:
+                raise CoordinationConflict("recovery admission record changed")
+            handoff.phase, handoff.admission_held, handoff.blockers = (
+                HandoffPhase.VERIFIED,
+                False,
+                [],
+            )
+            handoff.revision += 1
+            await self._receipt(
+                session,
+                "project.recovery_verified",
+                {
+                    "operation_id": operation_id,
+                    "project_id": lease.project_id,
+                    "runtime_id": lease.runtime_id,
+                    "fencing_token": lease.fencing_token,
+                },
+            )
+
+    async def relinquish_failed_restoration(self, lease: ProjectLease) -> None:
+        """Expire a cleaned pre-activation grant; keep all evidence and its fence."""
+        async with self.coordination.fenced(lease) as session:
+            handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            if (
+                handoff is None
+                or handoff.phase != HandoffPhase.TRANSFERRED
+                or handoff.target_runtime_id != lease.runtime_id
+            ):
+                raise CoordinationConflict(
+                    "only an unverified restoration may relinquish"
+                )
+            from .runtime_project_handoff import project_sql_checkpoint
+
+            expected = handoff.checkpoint.get("project_state", handoff.checkpoint)
+            if expected != await project_sql_checkpoint(session, lease.project_id):
+                raise CoordinationConflict(
+                    "restoration changed project state; explicit recovery is required"
+                )
+            active = await session.scalar(
+                select(RuntimeResourceRow.id)
+                .where(
+                    RuntimeResourceRow.runtime_id == lease.runtime_id,
+                    RuntimeResourceRow.project_id == lease.project_id,
+                    RuntimeResourceRow.state != "closed",
+                )
+                .limit(1)
+            )
+            command = await session.scalar(
+                select(RuntimeCommandRow.id)
+                .where(
+                    RuntimeCommandRow.runtime_id == lease.runtime_id,
+                    RuntimeCommandRow.project_id == lease.project_id,
+                )
+                .limit(1)
+            )
+            capacity = await session.scalar(
+                select(RuntimeCapacityReservationRow.id)
+                .where(
+                    RuntimeCapacityReservationRow.runtime_id == lease.runtime_id,
+                    RuntimeCapacityReservationRow.project_id == lease.project_id,
+                    RuntimeCapacityReservationRow.state == "held",
+                )
+                .limit(1)
+            )
+            if active or command or capacity:
+                raise CoordinationConflict(
+                    "restoration retains admitted effects or capacity"
+                )
+            # The commit-time fence would reject an already expired lease.
+            # Verify everything under the normal fence, then expire in a
+            # separate CAS transaction after the worker has stopped permanently.
+        async with self.coordination._write() as session:
+            owner = await session.get(
+                ProjectOwnershipRow, lease.project_id, with_for_update=True
+            )
+            if owner is None or (owner.runtime_id, owner.fencing_token) != (
+                lease.runtime_id,
+                lease.fencing_token,
+            ):
+                raise CoordinationConflict(
+                    "restoration grant changed before relinquishment"
+                )
+            owner.lease_expires_at_ms = 0
+            await self._receipt(
+                session,
+                "project.restore_relinquished",
+                {
+                    "project_id": lease.project_id,
+                    "runtime_id": lease.runtime_id,
+                    "fencing_token": lease.fencing_token,
+                },
             )
 
     async def retirement_blockers(self, runtime_id: str) -> list[str]:
