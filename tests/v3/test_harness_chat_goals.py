@@ -199,6 +199,11 @@ async def test_harness_goal_continues_and_pauses_at_step_limit_without_self_comp
 ):
     async def scenario() -> None:
         store, _engagement, _profile, _mcp, adapter, runtime = await _runtime(tmp_path)
+
+        async def inert_open(request, _memory):
+            return await adapter.open(request)
+
+        adapter.open_memory_managed = inert_open
         goals = ChatGoalService(store, runtime)
         created = await _new_goal(goals)
         started = await goals.write(
@@ -219,7 +224,13 @@ async def test_harness_goal_continues_and_pauses_at_step_limit_without_self_comp
         assert goal.blocked_reason == "Goal step budget is exhausted."
         assert goal.completion_summary is None
         assert len(adapter.connections) == 1
-        assert "Core-owned Nebula goal" in adapter.connections[0].prompts[0]
+        assert "Core-owned Nebula goal" not in adapter.connections[0].prompts[0]
+        assert (
+            "Core-owned Nebula goal"
+            in adapter.connections[0].request.session.metadata["standing_instructions"][
+                "text"
+            ]
+        )
         assert len(adapter.connections[0].prompts) == 2
         await runtime.shutdown()
 

@@ -8,11 +8,13 @@ part of the transcript that context compaction summarizes.
 from __future__ import annotations
 
 import hashlib
+import codecs
 import json
 import os
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import Field
+from pydantic import Field, StringConstraints
 
 from .domain import NebulaModel
 
@@ -29,7 +31,7 @@ class ProjectInstructions(NebulaModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: int = Field(ge=0)
     truncated: bool = False
-    content: str
+    content: Annotated[str, StringConstraints(strip_whitespace=False)]
 
     def receipt(self) -> dict[str, object]:
         """Metadata recorded on the turn; the content itself lives in the model request."""
@@ -73,14 +75,15 @@ def load_project_instructions(workspace: Path) -> ProjectInstructions | None:
         raw = handle.read(MAX_PROJECT_INSTRUCTIONS_BYTES + 1)
     truncated = len(raw) > MAX_PROJECT_INSTRUCTIONS_BYTES
     body = raw[:MAX_PROJECT_INSTRUCTIONS_BYTES] if truncated else raw
-    content = body.decode("utf-8", errors="replace")
-    if truncated:
-        # The cap can split one multi-byte character at the very end.
-        content = content.removesuffix("\ufffd")
+    # A non-final decode withholds only an incomplete trailing sequence. Keep
+    # complete U+FFFD characters and the existing malformed-interior replacement
+    # policy; trimming a decoded replacement character cannot distinguish them.
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    content = decoder.decode(body, final=not truncated)
     return ProjectInstructions(
         path=AGENTS_FILENAME,
         # Hash exactly what the model receives.
-        sha256=hashlib.sha256(body).hexdigest(),
+        sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
         size_bytes=size,
         truncated=truncated,
         content=content,

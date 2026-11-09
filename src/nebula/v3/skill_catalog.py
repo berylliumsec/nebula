@@ -6,11 +6,11 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Annotated, Any, Iterable, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field, field_validator
+from pydantic import Field, StringConstraints, field_validator
 
 from .domain import NebulaModel, RiskClass, ScopePolicy
 from .runtime_platform import RuntimeToolComponents
@@ -46,10 +46,19 @@ class SkillCatalogInfo(NebulaModel):
 
 class SkillSnapshot(SkillSummary):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    instructions: str = Field(min_length=1, max_length=MAX_SKILL_INSTRUCTIONS_BYTES)
+    instructions: Annotated[str, StringConstraints(strip_whitespace=False)] = Field(
+        min_length=1, max_length=MAX_SKILL_INSTRUCTIONS_BYTES
+    )
     resources: list["SkillResourceReference"] = Field(
         default_factory=list, max_length=MAX_SKILL_RESOURCES
     )
+
+    @field_validator("instructions")
+    @classmethod
+    def instructions_are_nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("selected skill instructions are empty")
+        return value
 
 
 class SkillResourceReference(NebulaModel):

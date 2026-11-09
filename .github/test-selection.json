@@ -1,18 +1,29 @@
 {
-  "change_digest": "940028563921e055f02c668eb73d1fe26b9598e0809bcb7cada9126fc9f0a289",
-  "reviewed_by": "Codex",
-  "reason": "Expose authenticated host diagnostic ingress through the compatibility CLI and runtime service, and apply the existing accessible primary button variant to live Memory Settings. Two diagnostics cases cover SQLite/PostgreSQL and six component cases cover saved settings, conflicts, unsupported capability and retry. Production build and final LAN continuity matrix are separate acceptance receipts.",
-  "exclusions": "No full suite, live providers or deployments. Native packaging and production browser journeys retain separate pinned-build evidence; WebKit and installed GUI gates remain unavailable.",
+  "change_digest": "a32f9cd8e66aa324c58c1577c473ecf7429838cca2b1b83aec68547453c79ea7",
+  "reviewed_by": "Codex standing-instructions agent",
+  "reason": "74 collected feature-specific cases: native continuity17, exact instruction/goal bodies8, native readback and cold-process contract14, UTF8 cap/read/digest boundaries13, authenticated disposable Kernel LAN1, provider project instructions9, minimal instruction protocol6, existing ACP compatibility2 and command/saved-context/Butler/goal continuation1 each. Three independent causal gates passed before repairs. Final local bound180s; no full suite. Final selection74/74passed in18.24s; strengthened unchanged restart/reconnect cwd checks2/2passed in3.08s. Ruff/diff checks passed. Rebased onto exact integration base698d82a0; retain74 selection. Post-rebase8 relevant Kernel/storage/native-channel/Butler/persisted-goal integration cases passed in8.03s; raw authenticated Kernel LAN capture refreshed. Root owns public-host/browser/installed-native gaps.",
+  "exclusions": "No full suite, installed vendor/account, GitHub Actions, or UI changes. Frontend/native/browser geometry layers excluded. Real-Core network entry point included with inert ACP and normal authentication. Browser operator controls/production bundle and installed native compaction are separate remaining acceptance gates.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 6,
+    "python": 74,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_host_observations.py::test_diagnostic_settings_files_errors_and_direct_bounded_telemetry"
+    "tests/v3/test_standing_instruction_continuity.py",
+    "tests/v3/test_standing_instruction_text.py",
+    "tests/v3/test_standing_instruction_channel.py",
+    "tests/v3/test_standing_instruction_lan.py",
+    "tests/v3/test_project_instruction_boundaries.py",
+    "tests/v3/test_project_instructions.py",
+    "tests/v3/test_minimal_agent_instructions.py",
+    "tests/v3/test_harness_adapters.py::test_grok_receives_project_gateway_on_create_and_resume",
+    "tests/v3/test_harness_commands.py::test_grok_goal_prefix_precedes_but_preserves_core_context",
+    "tests/v3/test_chat_decisions.py::test_harness_submits_and_freezes_explicit_context",
+    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session",
+    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing"
   ],
-  "frontend": ["ui/src/components/MemoryBudgetSettings.test.tsx"],
+  "frontend": [],
   "native": [],
   "playwright": []
 }

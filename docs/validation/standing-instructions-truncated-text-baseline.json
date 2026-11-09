@@ -1,0 +1,20 @@
+{
+  "synthetic_only": true,
+  "input_recipe": "a * (MAX_PROJECT_INSTRUCTIONS_BYTES-1) + \u00e9 + tail",
+  "source_byte_count": 65541,
+  "included_utf8_byte_count": 65535,
+  "truncated": true,
+  "receipt_sha256": "aa2cbcd22ff5500eb2fe92eee05d3b6d7c720ed6dd813639e4a6cbfafec975dc",
+  "actual_delivered_sha256": "6e1bebca6a8229364a162a72ef064826c4cd7457bf54f190ef782bd9deff3e42",
+  "capped_raw_tail_hex": "61616161c3",
+  "complete_replacement_character_boundary": {
+    "input_recipe": "a * (MAX_PROJECT_INSTRUCTIONS_BYTES-3) + U+FFFD + tail",
+    "source_byte_count": 65540,
+    "capped_raw_decodes_strictly": true,
+    "capped_raw_tail_hex": "efbfbd",
+    "observed_content_ends_replacement_character": false,
+    "expected_content_ends_replacement_character": true,
+    "observed_utf8_byte_count": 65533,
+    "expected_utf8_byte_count": 65536
+  }
+}
