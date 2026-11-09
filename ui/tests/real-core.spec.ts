@@ -8302,6 +8302,12 @@ test("assistant upgrade OpenAI API Daybreak Blue profile sends its saved key and
     await expect(program).not.toBeChecked();
     await dialog.getByRole("textbox", {name: "Credential", exact: true}).fill("synthetic-daybreak-key");
     await program.check();
+    const vaultState = (await (await api.get("credentials/vault")).json() as {state: string}).state;
+    if (vaultState === "available") {
+      await dialog.getByRole("checkbox", {name: "Use for this Nebula session only"}).check();
+    } else {
+      await expect(dialog.getByText(/credential vault is (unavailable|locked)/i)).toBeVisible();
+    }
     let failedOnce = false;
     await page.route(`**/api/v1/providers/${providerId}`, async route => {
       if (route.request().method() === "PATCH" && !failedOnce) {
@@ -8318,7 +8324,7 @@ test("assistant upgrade OpenAI API Daybreak Blue profile sends its saved key and
     await expect(card.getByText("Daybreak Blue requested")).toBeVisible();
     const saved = await (await api.get(`providers/${providerId}`)).json() as {secret_ref?: string; metadata: {options: Record<string, unknown>}};
     expect(saved.metadata.options.openai_cyber_access_program).toBe("daybreak_blue");
-    expect(saved.secret_ref).toMatch(/^(vault|session):[0-9a-f]{32}$/);
+    expect(saved.secret_ref).toMatch(/^session:[0-9a-f]{32}$/);
     expect(JSON.stringify(saved)).not.toContain("synthetic-daybreak-key");
     expect((await new AxeBuilder({page}).include("#provider-settings").analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
