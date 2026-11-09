@@ -682,7 +682,8 @@ class SetupService:
             return (
                 self.tool_platform is not None
                 and self.tool_platform.execution_enabled
-                and self._terminal.status in {
+                and self._terminal.status
+                in {
                     TerminalSetupState.NEEDS_RUNNER,
                     TerminalSetupState.ERROR,
                 }

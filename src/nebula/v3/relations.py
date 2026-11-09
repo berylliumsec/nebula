@@ -77,11 +77,7 @@ async def resolve_resource_ref(
         # diagnostic-expected: absence is a successful deleted-resource result.
         return ResourceResolution(ref=ref, label=ref.id, state="deleted")
     project_id = entity_engagement_id(entity)
-    label = (
-        getattr(entity, "name", None)
-        or getattr(entity, "title", None)
-        or ref.id
-    )
+    label = getattr(entity, "name", None) or getattr(entity, "title", None) or ref.id
     if ref.project_id is not None and project_id != ref.project_id:
         return ResourceResolution(
             ref=ref, label=label, state="wrong_project", actual_project_id=project_id
