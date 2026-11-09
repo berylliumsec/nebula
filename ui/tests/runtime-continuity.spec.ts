@@ -311,6 +311,8 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   await page.goto(`/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`);
   const composer = page.locator(".chat-composer textarea");
   await expect(composer).toBeVisible();
+  const finePointer = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+  if (finePointer) await page.locator(".chat-composer").hover();
   await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
   const settings = page.getByRole("dialog", {name: "Assistant settings", exact: true});
   await expect(settings.getByRole("combobox", {name: "Chat provider"})).toHaveValue("continuity-provider");
