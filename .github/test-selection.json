@@ -1,16 +1,16 @@
 {
-  "change_digest": "adec80ef7c1f608d09f4ea0e4437b60ffcc15264645ec4f2c1951ce892de7166",
-  "reviewed_by": "Codex worker feature admission track; independent validate_worker_feature_admission causal gate and root agreement",
-  "reason": "All12 collected cases passed first run21.85s:4 actual checksummed archived runtime_worker.main subprocess starts (API/execution x SQLite/PostgreSQL) with all8 canonical features, plus8 actual run_worker unknown-feature/missing-provider-table refusals before factory/listener/diagnostics/readiness. API private HTTP200/version and execution unassigned RPC confirm real factories. Refusals preserve missing table and original Alembic head, proving no worker migration. Original replaceable sources were deleted; child module path confirms retained source. Ruff and mypy1 source pass. Raw /tmp/nebula-worker-feature-tests.txt and /tmp/nebula-worker-feature-mypy.txt.",
-  "exclusions": "No full suite, live deployment, installation, real provider/harness/OCI workload, or browser run. API tests use normal bearer plus private channel; execution remains unassigned. Parent owns final5-case retained production bundle/LAN acceptance rerun and combined selection.",
+  "change_digest": "28f6f3a75537973fbe70a8c12693be02544bfaf40ec84754bf51ec2036f76018",
+  "reviewed_by": "Codex desktop packaging track; parent explicitly assigned bounded CI orchestration and hazard contracts",
+  "reason": "Exactly five Python3.12 cases collected in0.02s for the new CI-only orchestrator: actual clean Git pins versus inherited relabels, docs-only/dirty refusal, output and cleanup containment, explicit GUI evidence allowlist including symlink escape refusal, and credential redaction. First execution passed5/5 in0.16s. Static review then removed the now-unused candidate build env before the GUI journey and cleared inherited pytest options/plugins; final diff-bound execution passed5/5 in0.19s. These contracts protect cleanup/provenance/upload boundaries without mirroring GUI behavior. CLI help and Ruff pass.",
+  "exclusions": "No dependency install/download, Core build, native GUI launch, live provider, deployment, existing installation, broad suite, frontend or Rust execution. Root owns real baseline/candidate builds and exactly one GUI journey in GitHub CI; local canonical browser CDN policy block is unchanged. These five checks are orchestration contracts only and do not prove GUI continuity.",
   "expected_tests": {
-    "python": 12,
+    "python": 5,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_worker_features.py"
+    "tests/test_ci_native_runtime_continuity.py"
   ],
   "frontend": [],
   "native": [],
