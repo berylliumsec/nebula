@@ -58,6 +58,7 @@ import type {
 } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useCoreConnectionMonitor } from "./useCoreConnectionMonitor";
+import { forgetNavigation, rememberProject, rememberedNavigation, type NavigationScope } from "./navigationContinuity";
 
 type CoreState = "checking" | "online" | "offline";
 export type WorkspaceState = "starting" | "bootstrapping" | "ready" | "degraded" | "failed";
@@ -86,6 +87,7 @@ function writeMissionIdToUrl(id: string, mode: "push" | "replace" = "replace") {
 
 interface WorkspaceContextValue {
   api?: ApiClient;
+  continuityScope?: NavigationScope;
   runtime?: ApiRuntime;
   coreState: CoreState;
   workspaceState: WorkspaceState;
@@ -168,16 +170,16 @@ interface WorkspaceMissionsValue {
 const WorkspaceMissionsContext = createContext<WorkspaceMissionsValue | undefined>(undefined);
 const WorkspaceEventsContext = createContext<RunEvent[] | undefined>(undefined);
 
-const ENGAGEMENT_STORAGE_KEY = "nebula.engagement";
-
 /** The project the operator last worked in, if browser storage remembers one. */
-export function rememberedProjectId(): string | undefined {
-  return readStorage(ENGAGEMENT_STORAGE_KEY) ?? undefined;
+export function rememberedProjectId(scope?: NavigationScope): string | undefined {
+  return rememberedNavigation(scope)?.projectId;
 }
 
 export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [runtime, setRuntime] = useState<ApiRuntime>();
   const [api, setApi] = useState<ApiClient>();
+  const [continuityScope, setContinuityScope] = useState<NavigationScope>();
+  const continuityScopeRef = useRef<NavigationScope | undefined>(undefined);
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("starting");
   const coreState: CoreState = workspaceState === "starting" ? "checking" : workspaceState === "failed" ? "offline" : "online";
   const workspaceAvailable = workspaceState === "ready" || workspaceState === "degraded";
@@ -207,8 +209,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [attempt, setAttempt] = useState(0);
   const [streamAttempt, setStreamAttempt] = useState(0);
   const [selectedEngagementId, setSelectedEngagementId] = useState(() => (
-    projectIdFromPath(window.location.pathname) ?? readStorage(ENGAGEMENT_STORAGE_KEY) ?? ""
+    projectIdFromPath(window.location.pathname) ?? ""
   ));
+  // Learning the authenticated saved project must not abort its own first
+  // resource load. Only an explicit switch starts another project bootstrap.
+  const [projectSelection, setProjectSelection] = useState(0);
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || readStorage("nebula.mission") || "");
   const selectedMissionIdRef = useRef(selectedMissionId);
   selectedMissionIdRef.current = selectedMissionId;
@@ -284,8 +289,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         } else {
           nextHealth = await nextApi.health(controller.signal);
           if (!active) return;
-          await nextApi.initializeContinuity();
+          const previousScope = continuityScopeRef.current;
+          const scope = await nextApi.initializeContinuity();
           if (!active) return;
+          continuityScopeRef.current = scope;
+          setContinuityScope(scope);
           setCoreDiagnosticsHealth(nextHealth);
           setHealth(nextHealth);
           if (nextHealth.apiReady === false) {
@@ -311,18 +319,18 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           if (engagementResult.status === "rejected") loadErrors.push("projects");
           setEngagements(engagementItems);
           const urlProjectId = projectIdFromPath(window.location.pathname);
-          const storedProjectId = readStorage(ENGAGEMENT_STORAGE_KEY) || "";
-          const rememberedId = urlProjectId || selectedEngagementId || storedProjectId;
+          const storedProjectId = rememberedProjectId(scope) || "";
+          const rememberedId = urlProjectId || storedProjectId || (previousScope?.key === scope.key ? selectedEngagementId : "");
           const availableEngagements = engagementItems.filter((item) => item.status !== "archived");
           nextEngagement = availableEngagements.find((item) => item.id === rememberedId)
             ?? (urlProjectId ? undefined : availableEngagements[0]);
           if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
             setSelectedEngagementId(nextEngagement.id);
-            writeStorage(ENGAGEMENT_STORAGE_KEY, nextEngagement.id);
           }
+          if (nextEngagement) rememberProject(scope, nextEngagement.id);
           // A stale link to an archived or unknown project is refused without
           // substitution, but it must not forget the project the operator was using.
-          if (!nextEngagement && !availableEngagements.some((item) => item.id === storedProjectId)) removeStorage(ENGAGEMENT_STORAGE_KEY);
+          if (engagementResult.status === "fulfilled" && !nextEngagement && !availableEngagements.some((item) => item.id === storedProjectId)) forgetNavigation(scope);
 
           if (providerResult.status === "fulfilled") {
             const items = providerResult.value.items;
@@ -465,7 +473,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       active = false;
       controller.abort();
     };
-  }, [attempt, selectedEngagementId]);
+  }, [attempt, projectSelection]);
 
   // A mission change only replays that mission's events. It does not discard
   // project data or repeat the Core/catalog bootstrap.
@@ -672,8 +680,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
-    writeStorage(ENGAGEMENT_STORAGE_KEY, id);
+    rememberProject(continuityScopeRef.current, id);
     setSelectedEngagementId(id);
+    setProjectSelection(value => value + 1);
     // The catalog already identifies this project. Show it while its own
     // resources refresh; the previous project's data must not cross over.
     if (bootstrappedAttempt.current === attempt) {
@@ -704,8 +713,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const created = await api.createEngagement(request);
     setEngagements((current) => [created, ...current.filter((item) => item.id !== created.id)]);
     if (options?.select !== false) {
-      writeStorage(ENGAGEMENT_STORAGE_KEY, created.id);
+      rememberProject(continuityScopeRef.current, created.id);
       setSelectedEngagementId(created.id);
+      setProjectSelection(value => value + 1);
       setWorkspaceState("starting");
     }
     return created;
@@ -746,9 +756,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const available = refreshed.items.filter((item) => item.status !== "archived");
     const nextId = available.find((item) => item.id === selectedEngagementId)?.id ?? available[0]?.id;
     if (archived && id === selectedEngagementId) {
-      if (nextId) writeStorage(ENGAGEMENT_STORAGE_KEY, nextId);
-      else removeStorage(ENGAGEMENT_STORAGE_KEY);
+      if (nextId) rememberProject(continuityScopeRef.current, nextId);
+      else forgetNavigation(continuityScopeRef.current);
       setSelectedEngagementId(nextId ?? "");
+      setProjectSelection(value => value + 1);
       setEngagement(available.find((item) => item.id === nextId));
     }
     return nextId;
@@ -1176,6 +1187,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const value = useMemo(
     () => ({
       api,
+      continuityScope,
       runtime,
       coreState,
       workspaceState,
@@ -1249,6 +1261,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     }),
     [
       api,
+      continuityScope,
       approvals,
       assets,
       coreState,
