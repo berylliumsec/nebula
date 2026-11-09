@@ -1,18 +1,24 @@
 {
-  "change_digest": "7a0a998ff126d839d7b6d48b0c0190e2d7b03f957f1b1a36430cbdf5dbab7c0f",
+  "change_digest": "1a63a535749a7e2ca4cd1c37bd50a13fae5d662b29982ce5df2b0d7d5566c100",
   "reviewed_by": "Codex",
-  "reason": "Two collected rollback cases repeat only because the scenario now commits a project edit under APIv2 and verifies it remains after routing back to retained APIv1. This directly guards against restoring a pre-deployment SQL snapshot. The other24 stable-listener/control cases already passed; all26 passed in25.90s before this added assertion. Fixture now exposes its already-owned store; no product source changed after the26 passing cases. Both passed in9.94s. Added the local stable-listener evidence report after source validation.",
-  "exclusions": "No full suite, existing installation, operational service/provider, SSH or deployment. Worker fixtures import repository code and serve inert retained HTML; no immutable packaged dependency or desktop continuity claim. Execution factory, shared host services, production memory admission and compatibility-launcher wiring remain pending. No frontend change in this step.",
+  "reason": "Four selected Python auth/Butler/product-guidance cases passed in8.15s; six exact memory UI cases passed in1.82s. One icon case and production build failed because the selected upstream Lucide icon is absent from Nebula curated alias. Fresh independent validation confirmed aliases in TS/Vite, not stale cache or mocks. Use an existing curated glyph, rerun only the one failed case and build, then the five collected production-LAN journeys with the real resident API process and32MiB container allocator. Exact icon retry passed; production build passed. All five collected production-LAN cases passed in49.5s against authenticated Core with a real residentAPI under the same reserve policy and actual32MiB allocator OOM. Cleanup verified listener closed and no compute/API fixture remains. Updated evidence and benchmark source inventories only after these passing behavioral checks; no benchmark workload.",
+  "exclusions": "No full suite, existing installation, operational service/provider, SSH or deployment. API worker imports repository libraries and retained fixture HTML; full architecture/packaged desktop remain pending. Mobile WebKit official downloads are policy-blocked, so the three WebKit widths remain unverified. Runtime reserve is declared Core admission accounting; individual compute still requires actual kernel limits.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 1,
     "native": 0,
-    "playwright": 0
+    "playwright": 5
   },
-  "python": [
-    "tests/v3/test_supervisor.py::test_one_listener_routes_static_builds_through_api_promotion_and_code_rollback"
+  "python": [],
+  "frontend": [
+    "ui/src/components/CompactSettingsList.test.tsx::gives every catalog entry its own row glyph"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "tests/memory-budgets.spec.ts --project=model-desktop",
+    "tests/memory-budgets.spec.ts --project=model-compact",
+    "tests/memory-budgets.spec.ts --project=model-chromium-320",
+    "tests/memory-budgets.spec.ts --project=model-chromium-390",
+    "tests/memory-budgets.spec.ts --project=model-chromium-430"
+  ]
 }

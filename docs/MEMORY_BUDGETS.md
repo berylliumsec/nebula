@@ -6,6 +6,15 @@ GiB (1 GiB = 1,073,741,824 bytes); Core stores exact integer bytes. The minimum
 job ceiling is 16 MiB. The page shows administrator maxima, host capacity and the
 minimum reserve for Core, SQL, indexes and essential services.
 
+When independent runtimes are resident, Core also shows their declared reserved
+memory and the current minimum Core reserve. A budget save cannot remove capacity
+reserved by those processes. New runtime starts serialize with policy edits; an
+expired heartbeat alone does not free their reserve. Graceful verified retirement
+or a verified failed-start cleanup does. If older runtime records exceed the
+saved reserve, new compute waits until you increase Core reserve or retire an
+inactive runtime. Existing job limits stay unchanged. This service accounting is
+separate from each compute job's kernel-enforced limits.
+
 Set a per-job ceiling, an explicit swap allowance (zero by default), an optional
 pressure threshold where a runner supports it, and a total job budget. The total
 reserves each job's ceiling **plus swap** before launch. Increasing the Core

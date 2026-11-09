@@ -23,6 +23,7 @@ from .runtime_http import RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
 from .runtime_routing import RuntimeRouting
+from .runtime_memory import RuntimeMemoryAdmission
 from .storage import NebulaStore
 
 
@@ -83,6 +84,12 @@ class RuntimeSupervisor:
         self.store = NebulaStore(self.coordinator.database)
         self.retained = ReleaseStore(retained_root or host.root / "releases")
         self.worker_admission = worker_admission
+        if isinstance(worker_admission, RuntimeMemoryAdmission):
+            if worker_admission.budgets.database is not self.coordinator.database:
+                raise ValueError(
+                    "runtime admission and deployment must share the host database"
+                )
+            self.coordinator.runtime_admission = worker_admission.check
         self.routing = RuntimeRouting(
             self.coordinator.coordination, host.credentials.directory
         )

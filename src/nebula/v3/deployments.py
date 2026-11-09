@@ -8,11 +8,13 @@ serializes transfers with authoritative execution commits on both dialects.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Awaitable, Callable
 import json
 from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
     Database,
@@ -89,8 +91,17 @@ def checkpoint_digest(value: dict) -> str:
 
 
 class DeploymentCoordinator:
-    def __init__(self, database: Database):
+    def __init__(
+        self,
+        database: Database,
+        *,
+        runtime_admission: Callable[
+            [AsyncSession, ReleaseManifest, str], Awaitable[None]
+        ]
+        | None = None,
+    ):
         self.database, self.coordination = database, RuntimeCoordination(database)
+        self.runtime_admission = runtime_admission
 
     async def _host(self, session):
         await self.coordination._insert_absent(
@@ -216,6 +227,10 @@ class DeploymentCoordinator:
                 host.detail = "Two execution versions remain resident. The candidate is staged until the older version can retire."
                 host.revision += 1
                 return None
+            if self.runtime_admission is not None:
+                await self.runtime_admission(
+                    session, ReleaseManifest.model_validate(release.manifest), role
+                )
             identity = str(uuid4())
             now = await self.coordination._clock_ms(session)
             session.add(

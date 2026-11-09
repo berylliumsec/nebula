@@ -22,6 +22,11 @@ test("memory budgets save, conflict, enforce a bounded allocation and survive re
   const ceiling = section.getByLabel(/Per job ceiling/);
   const save = section.getByRole("button", {name: "Save memory budgets"});
   await expect(ceiling).toHaveValue("2");
+  const reserve = section.getByLabel(/Core and services reserve/);
+  await expect(reserve).toHaveValue("3");
+  await expect(reserve).toHaveAttribute("min", "2.25");
+  await expect(section.getByText(/Resident runtimes reserve 0.25 GiB/)).toBeVisible();
+  expect((await read()).minimum_core_reserve_bytes).toBe(2.25 * 1024 ** 3);
   await ceiling.fill("4"); await save.click();
   await expect(section.getByText(/Saved and read back/)).toBeVisible();
   expect((await read()).policy.default_job.max_bytes).toBe(4 * 1024 ** 3);

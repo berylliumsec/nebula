@@ -85,6 +85,8 @@ class MemoryBudgetStatus(NebulaModel):
     queued_jobs: int
     application_state: str
     detail: str
+    runtime_reserved_bytes: int = 0
+    minimum_core_reserve_bytes: int = 0
 
 
 def administrator_memory_limits() -> MemoryAdministratorLimits:
@@ -137,9 +139,18 @@ class MemoryBudgetService:
         administrator: Callable[
             [], MemoryAdministratorLimits
         ] = administrator_memory_limits,
+        runtime_defaults_bytes: int = 0,
     ):
+        if (
+            type(runtime_defaults_bytes) is not int
+            or not 0 <= runtime_defaults_bytes <= 1024**5
+        ):
+            raise MemoryBudgetError(
+                "default runtime reserve must be a bounded byte count"
+            )
         self.database = database
         self.administrator = administrator
+        self.runtime_defaults_bytes = runtime_defaults_bytes
 
     @asynccontextmanager
     async def _write(self) -> AsyncIterator[Any]:
@@ -159,12 +170,17 @@ class MemoryBudgetService:
         if existing is not None:
             return existing
         administrator = self.administrator()
+        reserve = administrator.minimum_reserve_bytes + self.runtime_defaults_bytes
+        aggregate = min(
+            administrator.maximum_aggregate_bytes,
+            administrator.capacity_bytes - reserve,
+        )
         policy = MemoryBudgetPolicy(
             default_job=MemoryLimits(
-                max_bytes=min(2 * GIB, administrator.maximum_job_bytes)
+                max_bytes=min(2 * GIB, administrator.maximum_job_bytes, aggregate)
             ),
-            aggregate_bytes=administrator.maximum_aggregate_bytes,
-            reserve_bytes=administrator.minimum_reserve_bytes,
+            aggregate_bytes=aggregate,
+            reserve_bytes=reserve,
         )
         validate_policy(policy, administrator)
         factory = (
@@ -240,6 +256,11 @@ class MemoryBudgetService:
                 or 0
             )
             administrator = self.administrator()
+            from .runtime_memory import runtime_memory_footprint
+
+            runtime_memory = await runtime_memory_footprint(
+                session, services_floor=administrator.minimum_reserve_bytes
+            )
             effective_aggregate = max(
                 0,
                 min(
@@ -257,6 +278,11 @@ class MemoryBudgetService:
                 effective_aggregate = max(
                     0, min(effective_aggregate, *runner_capacities)
                 )
+            reserve_gap = (
+                runtime_memory.minimum_core_reserve_bytes > policy.reserve_bytes
+            )
+            if reserve_gap:
+                effective_aggregate = 0
             usable = any(
                 item.kernel_enforced
                 and item.protected_process_tree
@@ -265,7 +291,7 @@ class MemoryBudgetService:
             )
             state = (
                 "draining"
-                if reserved > effective_aggregate
+                if reserve_gap or reserved > effective_aggregate
                 else "ready"
                 if usable
                 else "unavailable"
@@ -280,8 +306,12 @@ class MemoryBudgetService:
                 effective_aggregate_bytes=effective_aggregate,
                 held_jobs=held,
                 queued_jobs=queued,
+                runtime_reserved_bytes=runtime_memory.reserved_bytes,
+                minimum_core_reserve_bytes=runtime_memory.minimum_core_reserve_bytes,
                 application_state=state,
-                detail="New admissions wait for existing reservations to drain; running limits are unchanged."
+                detail="Core reserve is below the resident-runtime minimum. Increase Core reserve or retire inactive runtimes; new compute waits and running limits are unchanged."
+                if reserve_gap
+                else "New admissions wait for existing reservations to drain; running limits are unchanged."
                 if state == "draining"
                 else "Saved policy applies to newly submitted jobs; each launch still requires observed kernel enforcement."
                 if usable
@@ -320,6 +350,15 @@ class MemoryBudgetService:
                     "memory budgets changed; reload before saving"
                 )
             previous = row.policy
+            from .runtime_memory import runtime_memory_footprint
+
+            runtime_memory = await runtime_memory_footprint(
+                session, services_floor=self.administrator().minimum_reserve_bytes
+            )
+            if request.policy.reserve_bytes < runtime_memory.minimum_core_reserve_bytes:
+                raise MemoryBudgetError(
+                    f"Resident runtimes and essential services need at least {runtime_memory.minimum_core_reserve_bytes} bytes of Core reserve; retire unused runtimes before reducing it"
+                )
             row.policy = request.policy.model_dump(mode="json")
             row.revision += 1
             row.updated_at = utc_now()
@@ -447,6 +486,14 @@ class MemoryBudgetService:
                 or 0
             )
             administrator = self.administrator()
+            from .runtime_memory import runtime_memory_footprint
+
+            runtime_memory = await runtime_memory_footprint(
+                session, services_floor=administrator.minimum_reserve_bytes
+            )
+            reserve_gap = (
+                runtime_memory.minimum_core_reserve_bytes > policy.reserve_bytes
+            )
             capacity = min(
                 policy.aggregate_bytes,
                 administrator.maximum_aggregate_bytes,
@@ -457,13 +504,16 @@ class MemoryBudgetService:
                     capacity, capabilities.capacity_bytes - policy.reserve_bytes
                 )
             if (
-                used + snapshot.reservation_bytes > capacity
+                reserve_gap
+                or used + snapshot.reservation_bytes > capacity
                 or snapshot.limits.max_bytes > administrator.maximum_job_bytes
                 or snapshot.limits.swap_bytes > administrator.maximum_swap_bytes
             ):
                 job.state, job.detail = (
                     "queued",
-                    "Waiting for aggregate memory capacity. Existing jobs keep their reserved limits.",
+                    "Increase Core reserve or retire inactive runtimes before admitting more compute. Existing jobs keep their limits."
+                    if reserve_gap
+                    else "Waiting for aggregate memory capacity. Existing jobs keep their reserved limits.",
                 )
             else:
                 job.state, job.detail, job.reserved_bytes = (

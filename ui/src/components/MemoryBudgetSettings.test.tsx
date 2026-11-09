@@ -11,8 +11,8 @@ const initial: MemorySettings = {
   capabilities: [], profiles: [], reserved_bytes: 0, available_bytes: 12 * GIB, effective_aggregate_bytes: 12 * GIB, held_jobs: 0, queued_jobs: 0,
   application_state: "unavailable", detail: "Policy saved. No runner has verified enforcement.",
 };
-function fixture(atLimit = false) {
-  let saved = structuredClone(initial);
+function fixture(atLimit = false, observed: Partial<MemorySettings> = {}) {
+  let saved = {...structuredClone(initial), ...observed};
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (path === "memory-budgets/jobs") return {items: atLimit ? [{id: "queued", resource_kind: "fixture", resource_id: "older-job", state: "queued", application_state: "not_started", snapshot: {limits: initial.policy.default_job, policy_revision: 1}, evidence: null}] : [], at_limit: atLimit, display_limit: 1};
     if (options?.method === "PUT") {const body = JSON.parse(String(options.body)); if (body.expected_revision !== saved.revision) throw new Error("409: budgets changed; reload"); saved = {...saved, revision: saved.revision + 1, policy: body.policy};}
@@ -22,6 +22,21 @@ function fixture(atLimit = false) {
 }
 
 describe("Memory budgets", () => {
+  it("uses the observed resident-runtime minimum and saves a valid Core reserve", async () => {
+    const user = userEvent.setup();
+    const {api, request} = fixture(false, {runtime_reserved_bytes: GIB / 2, minimum_core_reserve_bytes: 2.5 * GIB, policy: {...initial.policy, reserve_bytes: 3 * GIB}});
+    render(<MemoryBudgetSettings api={api} />);
+    const reserve = await screen.findByLabelText(/Core and services reserve/);
+    expect(reserve).toHaveAttribute("min", "2.5");
+    expect(screen.getByText(/Resident runtimes reserve 0.5 GiB/)).toBeVisible();
+    await user.clear(reserve); await user.type(reserve, "2.25");
+    await user.click(screen.getByRole("button", {name: "Save memory budgets"}));
+    expect(request.mock.calls.some(([, options]) => options?.method === "PUT")).toBe(false);
+    await user.clear(reserve); await user.type(reserve, "2.5");
+    await user.click(screen.getByRole("button", {name: "Save memory budgets"}));
+    await screen.findByText(/Saved and read back/);
+    expect(JSON.parse(String(request.mock.calls.find(([, options]) => options?.method === "PUT")?.[1]?.body)).policy.reserve_bytes).toBe(2.5 * GIB);
+  });
   it("identifies a bounded job page without claiming a complete roster", async () => {
     const {api} = fixture(true);
     render(<MemoryBudgetSettings api={api} />);

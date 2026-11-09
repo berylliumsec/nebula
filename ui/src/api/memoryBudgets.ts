@@ -20,6 +20,7 @@ export interface MemorySettings {
   capabilities: MemoryCapabilities[];
   profiles: {id: string; name: string; enabled: boolean; capabilities: MemoryCapabilities | null}[];
   reserved_bytes: number; available_bytes: number; effective_aggregate_bytes: number;
+  runtime_reserved_bytes?: number; minimum_core_reserve_bytes?: number;
   held_jobs: number; queued_jobs: number; application_state: string; detail: string;
 }
 export interface MemoryJob {

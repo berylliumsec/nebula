@@ -32,6 +32,8 @@ const categoryOrder = ["Setup", "Models", "Automation", "Environments", "Integra
 
 /** Row glyph per catalog entry; every entry needs one so no row falls back to the generic terminal. */
 export const settingIcons: Record<string, LucideIcon> = {
+  "settings.memory-budgets": Cpu,
+  "settings.host-pressure": Activity,
   "settings.butler-instructions": BookOpen,
   "settings.butler-check-interval": Clock3,
   "settings.butler-effort": Bot,

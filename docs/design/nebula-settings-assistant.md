@@ -1,5 +1,11 @@
 # Nebula assistant contract
 
+Memory budgets include the observed resident-runtime reserve and minimum Core
+reserve. Butler reads these through the same API as Settings. It must not lower
+Core reserve below resident requirements or describe declared service capacity as
+measured job usage or kernel enforcement; retire unused runtimes or increase the
+reserve when new admissions are held.
+
 Memory budgets are a host-wide Settings destination (`memory-budgets`, target
 `memory-budget-settings`). Butler discovers typed `nebula.settings.memory_budget`,
 `memory_usage`, `set_memory_budget`, `verify_memory_job` and `apply_memory_limit`

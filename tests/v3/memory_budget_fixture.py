@@ -1,6 +1,7 @@
 """Disposable authenticated production-UI Core and bounded real OCI allocator."""
 
 import asyncio
+from contextlib import AsyncExitStack
 import hashlib
 import os
 from pathlib import Path
@@ -19,6 +20,10 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import Engagement, RunnerProfile, RunnerRuntime, RunnerIsolation
 from nebula.v3.memory_budget import MemoryBudgetService
+from nebula.v3.deployments import DeploymentCoordinator
+from nebula.v3.runtime_memory import RuntimeMemoryAdmission
+from nebula.v3.runtime_processes import RuntimeProcessHost
+from nebula.v3.supervisor import RuntimeSupervisor
 from nebula.v3.memory_policy import (
     GIB,
     MIB,
@@ -36,14 +41,22 @@ from nebula.v3.sandbox import (
     SandboxWorkspaceAccess,
 )
 from nebula.v3.storage import NebulaStore
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.v3.test_memory_enforcement import IsolatedKernelFixtureRunner, _SOURCE
+from tests.v3.test_release_store import bundle as runtime_bundle
 
 TOKEN = "memory-budget-test-token"
 
 
 async def serve(root: Path):
+    async with AsyncExitStack() as cleanup:
+        await serve_fixture(root, cleanup)
+
+
+async def serve_fixture(root: Path, cleanup: AsyncExitStack):
     store = NebulaStore(root / "core.db")
+    cleanup.push_async_callback(store.database.dispose)
     await store.create(
         Engagement(id="memory-project", name="Synthetic memory settings")
     )
@@ -94,7 +107,31 @@ async def serve(root: Path):
         minimum_reserve_bytes=2 * GIB,
         maximum_swap_bytes=2 * GIB,
     )
-    service = MemoryBudgetService(store.database, administrator=lambda: admin)
+    service = MemoryBudgetService(
+        store.database, administrator=lambda: admin, runtime_defaults_bytes=GIB
+    )
+    supervisor = RuntimeSupervisor(
+        RuntimeProcessHost(
+            DeploymentCoordinator(store.database), root, operator_token=TOKEN
+        ),
+        operator_token=TOKEN,
+        worker_admission=RuntimeMemoryAdmission(service),
+    )
+    await supervisor.start()
+    cleanup.push_async_callback(supervisor.close)
+    source = root / "resident-api-source"
+    digest = runtime_bundle(
+        source,
+        version="memory-ui-fixture",
+        code=(
+            "#!"
+            + sys.executable
+            + "\nfrom nebula.v3.runtime_worker import main\nmain()\n"
+        ).encode(),
+    )
+    await supervisor.stage(source, manifest_sha256=digest)
+    resident = await supervisor.prepare_api("memory-ui-fixture")
+    cleanup.push_async_callback(supervisor.host.retire, resident.runtime_id, timeout=5)
     bundle = Path(__file__).resolve().parents[2] / "ui/dist"
     index_sha = hashlib.sha256((bundle / "index.html").read_bytes()).hexdigest()
     app = create_app(

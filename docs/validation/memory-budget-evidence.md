@@ -103,6 +103,48 @@ end-to-end or deployment-continuity claim.
 
 ## Remaining integrations
 
+### Resident runtime reserve follow-up
+
+Resident API/execution process declarations now consume capacity within the Core
+reserve in addition to the essential-service floor. Atomic startup reservation
+shares the memory-policy lock with edits and compute admission. Preflight is
+rechecked at reservation; expired leases retain capacity until verified cleanup.
+Saving a smaller reserve than resident requirements is rejected. Older unaccounted
+runtime records hold new compute without changing existing job limits. Fresh
+architecture defaults can reserve overlap capacity; existing saved policy is
+preserved. This is declared service admission accounting, separate from each
+compute job's kernel enforcement.
+
+The follow-up passed 26 selected SQLite/PostgreSQL backend cases, four
+API/Butler/product-guidance cases, six memory component cases and one exact
+Settings-icon coverage case. The Settings page displays the observed minimum and
+resident reservation and prevents an invalid lower save. The production build and
+601/601 Butler API signature inventory passed. Product knowledge now has 406
+passages, source digest `718ceebdad8f…`; verification and real Chroma sync passed.
+
+Five rebuilt production-LAN journeys passed in 49.5 seconds at
+`http://172.26.91.238:19486`: desktop Chromium1440/1024 and emulated Android
+Chromium320/390/430. They include a real retained API process under the same memory
+policy (3 GiB Core reserve, 2.25 GiB observed minimum, 0.25 GiB runtime reservation)
+and an actual 32 MiB-contained allocator OOM while Core health remains responsive.
+Save/readback, conflict preservation, refresh, persisted failure, axe, focus,
+44px targets and no horizontal clipping passed. The disposable listener, API
+worker and compute groups were removed afterward; only the separately needed
+disposable PostgreSQL fixture remains. Raw outputs are
+`/tmp/nebula-runtime-memory-*`; screenshots remain `/tmp/nebula-memory-model-*.png`.
+
+A collection mistake is retained in the evidence: the npm test wrapper treated
+`list` as another file filter and ran 22 tests in three files before the corrected
+selection. Twenty-one passed; catalog coverage exposed two absent icon mappings.
+Fresh independent diagnosis confirmed both missing entries and then the selected
+icon's absence from Nebula's curated Lucide alias. The exact glyph case and build
+passed after using an existing curated icon. Subsequent collection used Vitest's
+read-only listing command directly; executions used the guarded npm commands.
+Benchmark source inventories were updated for the new memory helper; no benchmark
+workload ran. WebKit and packaged desktop gates remain missing as described above.
+
+### Runner adapters still required
+
 Host commands/Notebook kernels, native vendor harness adapters, CPU/PDF runners,
 raw SSH agents and interactive PTY adapters need protected memory-runner support.
 Their covered entry points hold/reject before launching, with regression checks

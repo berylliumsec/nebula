@@ -18,7 +18,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.memory-budgets",
     label: "Memory budgets",
-    description: "Set per-job memory, swap, total capacity and the Core reserve; inspect worker enforcement and usage",
+    description: "Set job memory, swap and total capacity; reserve Core and runtime memory; inspect enforced limits and usage",
     category: "Automation",
     scope: "Workspace",
     target: "memory-budget-settings",
