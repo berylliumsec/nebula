@@ -444,7 +444,6 @@ from .domain import (
     ScopePolicy,
     ToolCall,
     ToolCallOrigin,
-    entity_engagement_id,
     utc_now,
 )
 from .notebooks import (
@@ -608,8 +607,8 @@ from .writing_ai import (
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .runtime_chat_acceptance import CHAT_RESUME_COMMAND, bind_chat_command
 from .relations import (
-    RESOURCE_ENTITY_KINDS,
     ResourceRelationService,
+    resolve_resource_ref,
 )
 from .search import FederatedSearch, SearchCursorError
 from .handoffs import (
@@ -4207,47 +4206,7 @@ def create_execution_kernel(
     )
     async def resolve_resource(ref: ResourceRef) -> ResourceResolution:
         """Validate canonical identity without silently substituting another object."""
-
-        # One import-checked map (relations.RESOURCE_ENTITY_KINDS) serves
-        # resolution, relations and actions; a private copy here once named a
-        # kind no entity declares and resolved every browser exchange as gone.
-        entity_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
-        model = ENTITY_MODEL_BY_KIND.get(entity_kind or "")
-        if model is None:
-            return ResourceResolution(
-                ref=ref,
-                label=ref.id,
-                state="inaccessible",
-            )
-        try:
-            entity = await store.get(model, ref.id)
-        except NotFoundError:
-            # diagnostic-expected: absence is the successful deleted-resource
-            # resolution result surfaced to canonical-route recovery UI.
-            return ResourceResolution(ref=ref, label=ref.id, state="deleted")
-
-        actual_project_id = entity_engagement_id(entity)
-        if ref.project_id is not None and actual_project_id != ref.project_id:
-            return ResourceResolution(
-                ref=ref,
-                label=getattr(entity, "name", None)
-                or getattr(entity, "title", None)
-                or ref.id,
-                state="wrong_project",
-                actual_project_id=actual_project_id,
-            )
-        resolved_ref = ref.model_copy(
-            update={"project_id": actual_project_id, "revision": entity.revision}
-        )
-        return ResourceResolution(
-            ref=resolved_ref,
-            label=getattr(entity, "name", None)
-            or getattr(entity, "title", None)
-            or getattr(entity, "filename", None)
-            or ref.id,
-            state="available",
-            actual_project_id=actual_project_id,
-        )
+        return await resolve_resource_ref(store, ref)
 
     @app.get(
         f"{API_PREFIX}/search",

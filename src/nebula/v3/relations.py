@@ -20,9 +20,11 @@ from .domain import (
     ReportStatus,
     ResourceKind,
     ResourceRef,
+    ResourceResolution,
     ResourceRelation,
     ResourceRelationCreate,
     ResourceRelationSet,
+    entity_engagement_id,
     utc_now,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError, _entity_lookup_fields
@@ -60,6 +62,44 @@ if _UNMAPPED_ENDPOINT_KINDS:
         "RESOURCE_ENTITY_KINDS names entity kinds without a model: "
         + ", ".join(_UNMAPPED_ENDPOINT_KINDS)
     )
+
+
+async def resolve_resource_ref(
+    store: NebulaStore, ref: ResourceRef
+) -> ResourceResolution:
+    """Resolve canonical identity from SQL without invoking an execution owner."""
+    model = ENTITY_MODEL_BY_KIND.get(RESOURCE_ENTITY_KINDS.get(ref.kind) or "")
+    if model is None:
+        return ResourceResolution(ref=ref, label=ref.id, state="inaccessible")
+    try:
+        entity = await store.get(model, ref.id)
+    except NotFoundError:
+        # diagnostic-expected: absence is a successful deleted-resource result.
+        return ResourceResolution(ref=ref, label=ref.id, state="deleted")
+    project_id = entity_engagement_id(entity)
+    label = (
+        getattr(entity, "name", None)
+        or getattr(entity, "title", None)
+        or ref.id
+    )
+    if ref.project_id is not None and project_id != ref.project_id:
+        return ResourceResolution(
+            ref=ref, label=label, state="wrong_project", actual_project_id=project_id
+        )
+    return ResourceResolution(
+        ref=ref.model_copy(
+            update={"project_id": project_id, "revision": entity.revision}
+        ),
+        label=(
+            getattr(entity, "name", None)
+            or getattr(entity, "title", None)
+            or getattr(entity, "filename", None)
+            or ref.id
+        ),
+        state="available",
+        actual_project_id=project_id,
+    )
+
 
 VALID_ENDPOINTS: dict[RelationPredicate, set[tuple[ResourceKind, ResourceKind]]] = {
     RelationPredicate.AFFECTS: {(ResourceKind.FINDING, ResourceKind.ASSET)},
