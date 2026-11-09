@@ -25,9 +25,10 @@ The first clean-profile frozen run reached authenticated API readiness with the
 exact worker PID/birth checks intact. Project creation then failed with
 `sqlite3.OperationalError: database is locked` while inserting its default scope;
 the API subsequently lost its runtime lease. This is an incomplete acceptance
-result. The separate runtime owner is reviewing the transaction boundary before
-another candidate is built. Normal explicit shutdown succeeded, and a read-only
-check found no registered or fixture-owned processes alive afterward.
+result. The runtime owner repaired the shared API/global transaction boundary in
+`17ec988e`; four focused factory tests passed on PostgreSQL and SQLite. Normal
+explicit shutdown of the failed fixture succeeded, and a read-only check found
+no registered or fixture-owned processes alive afterward.
 
 The installer follow-up verifies every retained file and the manifest digest
 before allowing only `bin/_internal/playwright/driver/node`. A Node binary at any
@@ -36,6 +37,30 @@ remain available to their current consumers; duplicate retained copies must matc
 every file, including legal and nonexecutable data. Dependency test packages are
 excluded from the freezer and rejected by both archive and installer audits.
 All 20 selected installer/archive checks passed in 0.55 seconds; Ruff passed.
+
+A new frozen baseline at `557ffd7d` combines the transaction repair with this
+packaging follow-up. Its production UI build and both canonical freezer builds
+passed. The actual frozen test passed once in 39.91 seconds using default SQLite
+settings and normal authentication. It created and listed a durable project,
+reconnected through the public connector with the same listener, credential and
+principal, started and retired an exact-PID execution worker through private IPC,
+and verified explicit shutdown left every registered worker gone. The disposable
+database, retained runtimes and home were removed after capturing evidence.
+
+The [baseline receipt](frozen-core-baseline-receipt.json) records the accepted
+binary, runtime and manifest hashes. The runtime contains 8,091 files and
+569,048,772 bytes; both archive audits report zero forbidden members. The build
+used the existing Python/Node environments and real locked dependency notices.
+The commands were:
+
+```sh
+npm --prefix ui run build
+CARGO_HOME=/workspace/nebula-package-toolchain/cargo RUSTUP_HOME=/workspace/nebula-package-toolchain/rustup PATH=/workspace/nebula-package-toolchain/cargo/bin:$PATH PYTHONPATH=src NEBULA_BUILD_TARGET=x86_64-unknown-linux-gnu NEBULA_DISTRIBUTION_CHANNEL=qa /workspace/nebula/.venv/bin/python -m scripts.build_nebula_core
+PYTHONPATH=src NEBULA_TEST_FROZEN_CORE=/workspace/nebula-frozen-baseline/dist/nebula-core NEBULA_TEST_FROZEN_BUNDLE=/workspace/nebula-frozen-baseline/ui/src-tauri/resources/nebula-runtime /workspace/nebula/.venv/bin/python -m pytest -q tests/v3/test_frozen_core_runtime.py --basetemp=/workspace/nebula-frozen-evidence/baseline-557
+```
+
+A distinct assembled candidate is still required for real code promotion and
+rollback evidence; the earlier failed artifacts are diagnostic evidence only.
 
 The frozen driver records registered worker PID/birth identities and verifies
 that they are gone after normal explicit shutdown. A native installed GUI, its

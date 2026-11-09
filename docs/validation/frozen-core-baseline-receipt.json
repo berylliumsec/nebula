@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "result": "passed",
+  "surface": "frozen Core; no installed GUI",
+  "startup_configuration": "clean_sqlite",
+  "core_sha256": "97cc4c3e35fb722cd7fe1a901c283eb3514dcb6d436f236e4d21a64d959af1b6",
+  "archive_audit": {
+    "status": "ok",
+    "member_count": 11834,
+    "forbidden_member_count": 0,
+    "artifact": "/workspace/nebula-frozen-baseline/dist/nebula-core",
+    "size_bytes": 196725136
+  },
+  "runtime_archive_audit": {
+    "status": "ok",
+    "member_count": 11835,
+    "forbidden_member_count": 0,
+    "artifact": "/workspace/nebula-frozen-baseline/ui/src-tauri/resources/nebula-runtime/bin",
+    "runtime_executable": "nebula-core",
+    "file_count": 8091,
+    "size_bytes": 569048772,
+    "format": "pyinstaller-onedir"
+  },
+  "runtime_executable_sha256": "f16b29ef0457c8326b93fa032b8125151db7234220cc4cf96e37515c57ace1cf",
+  "manifest_sha256": "1b1e296d11873480b0c6fa33b2ba9d0fb70901b524ab9ad6a4a64a5a2432c851",
+  "baseline_version": "3.0.0-beta.3+3583bd1fbb6ed666",
+  "candidate_version": null,
+  "identity": {
+    "core_id": "2d05aeb6-5aeb-4ffa-b183-884d4f8476c3",
+    "principal_id": "operator"
+  },
+  "runtime_processes": [
+    {
+      "runtime_id": "9802766e-5906-4d57-8cdc-7539a40c2400",
+      "role": "api",
+      "pid": 132775,
+      "process_birth": "linux:f5b0a3ca-0861-4981-9972-7b6213f7a92c:6188146",
+      "state_before_shutdown": "ready"
+    },
+    {
+      "runtime_id": "8d18a8dd-84bc-49bd-b350-73a21c3bf4d1",
+      "role": "execution",
+      "pid": 132848,
+      "process_birth": "linux:f5b0a3ca-0861-4981-9972-7b6213f7a92c:6189161",
+      "state_before_shutdown": "retired"
+    }
+  ],
+  "checks": [
+    "authenticated stable listener and API role ready",
+    "connector exit/reconnect preserves endpoint, credential and principal",
+    "packaged execution-role startup, private IPC and retirement",
+    "explicit shutdown observes service exit after durable success"
+  ]
+}
