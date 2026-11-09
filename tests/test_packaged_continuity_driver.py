@@ -254,3 +254,163 @@ def test_native_window_close_rejects_wrong_process_birth_before_x_access(monkeyp
                 "operation": "close",
             }
         )
+
+
+def test_native_project_selection_reveals_navigation_and_avoids_remove_confirmation(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    class Node:
+        def __init__(self, name, children=(), showing=True):
+            self.name, self.children, self.showing = name, list(children), showing
+
+        @property
+        def childCount(self):
+            return len(self.children)
+
+        def __getitem__(self, index):
+            return self.children[index]
+
+        def getState(self):
+            return SimpleNamespace(contains=lambda _state: self.showing)
+
+        def getRoleName(self):
+            return "push button"
+
+    project = Node("Packaged continuity fixture active", showing=False)
+    remove = Node("Remove project Packaged continuity fixture", showing=False)
+    switch = Node("Switch project", showing=False)
+    navigation = Node("Open navigation")
+    root = Node("app", [navigation, switch, project, remove])
+    activated = []
+
+    def activate(node):
+        activated.append(node.name)
+        if node is navigation:
+            navigation.showing, switch.showing = False, True
+        elif node is switch:
+            project.showing = remove.showing = True
+
+    monkeypatch.setattr(desktop, "activate", activate)
+    desktop.select_project(
+        root, "Packaged continuity fixture", SimpleNamespace(STATE_SHOWING="showing")
+    )
+    assert activated == [
+        "Open navigation",
+        "Switch project",
+        "Packaged continuity fixture active",
+    ]
+
+
+def test_release_pair_refuses_relabelled_identical_retained_code():
+    baseline = {
+        "version": "baseline",
+        "core_executable": "bin/core",
+        "files": {"bin/core": "same-actual-digest"},
+    }
+    candidate = {**baseline, "version": "candidate"}
+    with pytest.raises(ValueError, match="distinct retained Core bytes"):
+        driver.verify_release_pair({"baseline": baseline, "candidate": candidate})
+
+
+def test_native_provenance_binds_real_sidecar_and_resource_inventory(tmp_path):
+    import shutil
+    from types import SimpleNamespace
+
+    values, manifests = {}, {}
+    for prefix, source in (("baseline", "a" * 40), ("candidate", "b" * 40)):
+        layout = tmp_path / prefix
+        layout.mkdir()
+        executable = layout / "nebula-ui"
+        executable.write_bytes((prefix + " native binary").encode())
+        core = layout / "connector-input"
+        core.write_bytes((prefix + " public onefile connector").encode())
+        sibling = layout / "nebula-core"
+        shutil.copyfile(core, sibling)
+        resources = layout / "resources"
+        manifest = make_bundle(resources / "nebula-runtime")
+        bundle = layout / "input-bundle"
+        shutil.copytree(resources / "nebula-runtime", bundle)
+        receipt = {
+            "format": "nebula.native-build/v1",
+            "source_commit": source,
+            "desktop_sha256": driver.digest(executable),
+            "connector_sha256": driver.digest(core),
+            "bundle_manifest_sha256": driver.digest(bundle / "nebula-runtime.json"),
+            "frontend_index_sha256": manifest["files"]["ui/index.html"],
+            "resource_directory": str(resources),
+        }
+        provenance = layout / "build.json"
+        provenance.write_text(json.dumps(receipt))
+        manifests[prefix] = manifest
+        values.update(
+            {
+                prefix + "_desktop": executable,
+                prefix + "_core": core,
+                prefix + "_bundle": bundle,
+                prefix + "_resources": resources,
+                prefix + "_provenance": provenance,
+            }
+        )
+    args = SimpleNamespace(**values)
+    assert set(driver.verify_native_provenance(args, manifests)) == {
+        "baseline",
+        "candidate",
+    }
+    sidecar = args.baseline_desktop.parent / "nebula-core"
+    sidecar.write_bytes(b"unrelated actual sibling sidecar")
+    with pytest.raises(ValueError, match="fixed sidecar"):
+        driver.verify_native_provenance(args, manifests)
+    shutil.copyfile(args.baseline_core, sidecar)
+    (args.baseline_resources / "nebula-runtime/ui/index.html").write_bytes(
+        b"unrelated actual resource UI"
+    )
+    with pytest.raises(ValueError, match="inventory differs"):
+        driver.verify_native_provenance(args, manifests)
+
+
+def test_native_bootstrap_observes_desktop_created_release_before_connector(tmp_path):
+    import sqlite3
+
+    data = tmp_path / "data"
+    (data / "runtime").mkdir(parents=True)
+    manifest = {
+        "version": "baseline",
+        "core_executable": "bin/core",
+        "files": {"bin/core": "pending"},
+    }
+    assert driver.native_bootstrap_identity(data, manifest, "expected-manifest") is None
+    installed = data / "runtime/releases/baseline"
+    (installed / "bin").mkdir(parents=True)
+    (installed / "bin/core").write_bytes(b"actual retained baseline")
+    manifest["files"]["bin/core"] = driver.digest(installed / "bin/core")
+    (data / "runtime/connection.json").write_text(
+        json.dumps(
+            {
+                "data_root": str(data),
+                "pid": os.getpid(),
+                "process_birth": driver.process_birth(os.getpid()),
+            }
+        )
+    )
+    with sqlite3.connect(data / "nebula.db") as database:
+        database.execute(
+            "CREATE TABLE runtime_releases (version TEXT, manifest_sha256 TEXT, install_path TEXT)"
+        )
+        database.execute(
+            "INSERT INTO runtime_releases VALUES (?,?,?)",
+            ("baseline", "different-manifest", str(installed)),
+        )
+    with pytest.raises(RuntimeError, match="another retained release"):
+        driver.native_bootstrap_identity(data, manifest, "expected-manifest")
+    with sqlite3.connect(data / "nebula.db") as database:
+        database.execute(
+            "UPDATE runtime_releases SET manifest_sha256=?", ("expected-manifest",)
+        )
+    assert (
+        driver.native_bootstrap_identity(data, manifest, "expected-manifest")[
+            "retained_core_sha256"
+        ]
+        == manifest["files"]["bin/core"]
+    )

@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -315,6 +316,103 @@ def served_ui(client, manifest, phase):
     return {"phase": phase, "index_sha256": observed, "version": manifest["version"]}
 
 
+def verify_release_pair(manifests):
+    baseline, candidate = (manifests[prefix] for prefix in ("baseline", "candidate"))
+    if baseline["version"] == candidate["version"]:
+        raise ValueError(
+            "baseline and candidate need distinct verified manifest versions"
+        )
+    if (
+        baseline["files"][baseline["core_executable"]]
+        == candidate["files"][candidate["core_executable"]]
+    ):
+        raise ValueError("code-update acceptance needs distinct retained Core bytes")
+
+
+def verify_native_provenance(args, manifests):
+    receipts = {}
+    for prefix, manifest in manifests.items():
+        receipt = json.loads(getattr(args, prefix + "_provenance").read_bytes())
+        if (
+            receipt.get("format") != "nebula.native-build/v1"
+            or re.fullmatch(r"[0-9a-f]{40}", receipt.get("source_commit", "")) is None
+        ):
+            raise ValueError("native build provenance is missing its pinned source")
+        bundle = getattr(args, prefix + "_bundle")
+        desktop = getattr(args, prefix + "_desktop")
+        core = getattr(args, prefix + "_core")
+        resources = getattr(args, prefix + "_resources").resolve(strict=True)
+        expected = {
+            "desktop_sha256": digest(desktop),
+            "connector_sha256": digest(core),
+            "bundle_manifest_sha256": digest(bundle / "nebula-runtime.json"),
+            "frontend_index_sha256": manifest["files"][
+                manifest["ui_directory"] + "/index.html"
+            ],
+        }
+        if (
+            any(receipt.get(name) != value for name, value in expected.items())
+            or Path(receipt["resource_directory"]).resolve(strict=True) != resources
+        ):
+            raise ValueError(
+                "native build inputs differ from their actual build receipt"
+            )
+        sibling = desktop.parent / "nebula-core"
+        if (
+            sibling.resolve(strict=True).parent != desktop.parent
+            or digest(sibling) != expected["connector_sha256"]
+        ):
+            raise ValueError(
+                "native desktop's fixed sidecar differs from its connector input"
+            )
+        embedded = resources / "nebula-runtime"
+        if (
+            digest(embedded / "nebula-runtime.json")
+            != expected["bundle_manifest_sha256"]
+            or verify_bundle(embedded) != manifest
+        ):
+            raise ValueError(
+                "native desktop resource bundle differs from its supplied release"
+            )
+        receipts[prefix] = receipt
+    if receipts["baseline"]["source_commit"] == receipts["candidate"]["source_commit"]:
+        raise ValueError("code-update acceptance needs distinct pinned source builds")
+    return receipts
+
+
+def native_bootstrap_identity(data, manifest, manifest_sha256):
+    """Observe the desktop-created service before any connector can start one."""
+    connection_file = data / "runtime/connection.json"
+    if not connection_file.exists():
+        return None
+    connection = json.loads(connection_file.read_bytes())
+    if (
+        connection.get("data_root") != str(data)
+        or process_birth(connection["pid"]) != connection["process_birth"]
+    ):
+        raise RuntimeError("native desktop did not establish its owned runtime")
+    with sqlite3.connect(f"file:{data / 'nebula.db'}?mode=ro", uri=True) as database:
+        row = database.execute(
+            "SELECT manifest_sha256,install_path FROM runtime_releases WHERE version=?",
+            (manifest["version"],),
+        ).fetchone()
+    if row is None or row[0] != manifest_sha256:
+        raise RuntimeError("native desktop bootstrapped another retained release")
+    installed = Path(row[1]).resolve(strict=True)
+    if (
+        not installed.is_relative_to(data)
+        or digest(installed / manifest["core_executable"])
+        != manifest["files"][manifest["core_executable"]]
+    ):
+        raise RuntimeError("native desktop retained another Core executable")
+    return {
+        "pid": connection["pid"],
+        "process_birth": connection["process_birth"],
+        "manifest_sha256": row[0],
+        "retained_core_sha256": manifest["files"][manifest["core_executable"]],
+    }
+
+
 def fixture_environment(output, bundle):
     allowed = {
         "PATH",
@@ -563,10 +661,8 @@ def run(args) -> dict:
         prefix: verify_bundle(getattr(args, prefix + "_bundle"))
         for prefix in ("baseline", "candidate")
     }
-    if manifests["baseline"]["version"] == manifests["candidate"]["version"]:
-        raise ValueError(
-            "baseline and candidate must have distinct verified manifest versions"
-        )
+    verify_release_pair(manifests)
+    native_provenance = verify_native_provenance(args, manifests)
     from scripts.package_audit import (
         inspect_pyinstaller_binary,
         inspect_pyinstaller_directory,
@@ -625,6 +721,14 @@ def run(args) -> dict:
     try:
         with inert_provider() as (provider_url, starts, release):
             desktop = open_desktop("baseline", "baseline-desktop")
+            native_start = wait_until(
+                lambda: native_bootstrap_identity(
+                    data,
+                    manifests["baseline"],
+                    digest(args.baseline_bundle / "nebula-runtime.json"),
+                ),
+                timeout=90,
+            )
             first = connect(args.baseline_core, data, environments["baseline"])
             client = api(first)
             clients.append(client)
@@ -933,6 +1037,8 @@ def run(args) -> dict:
             }
             receipt["archive_audits"] = archive_audits
             receipt["served_production_ui"] = ui_observations
+            receipt["native_build_provenance"] = native_provenance
+            receipt["desktop_created_runtime"] = native_start
             (args.output / "continuity-receipt.json").write_text(
                 json.dumps(receipt, indent=2) + "\n"
             )
@@ -1026,6 +1132,9 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--baseline-bundle", type=Path, required=True)
     parser.add_argument("--candidate-bundle", type=Path, required=True)
+    for prefix in ("baseline", "candidate"):
+        parser.add_argument("--" + prefix + "-provenance", type=Path, required=True)
+        parser.add_argument("--" + prefix + "-resources", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--desktop-fixture",
@@ -1052,6 +1161,12 @@ def main():
     for prefix in ("baseline", "candidate"):
         bundle = getattr(args, prefix + "_bundle").resolve()
         setattr(args, prefix + "_bundle", bundle)
+        for suffix in ("provenance", "resources"):
+            setattr(
+                args,
+                prefix + "_" + suffix,
+                getattr(args, prefix + "_" + suffix).resolve(strict=True),
+            )
     args.desktop_fixture = args.desktop_fixture.resolve(strict=True)
     if args.public_model_cache is not None:
         args.public_model_cache = args.public_model_cache.resolve(strict=True)

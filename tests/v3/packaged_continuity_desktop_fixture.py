@@ -295,14 +295,20 @@ def visible(node, atspi):
     return node.getState().contains(atspi.STATE_SHOWING)
 
 
-def named(app, name, atspi, *, contains=False):
+def named(app, name, atspi, *, contains=False, prefix=False):
     return next(
         (
             node
             for node in descendants(app)
             if visible(node, atspi)
             and node.getRoleName() in {"push button", "button", "link"}
-            and (name in node.name if contains else node.name == name)
+            and (
+                name in node.name
+                if contains
+                else node.name.startswith(name)
+                if prefix
+                else node.name == name
+            )
             and not node.name.startswith("More actions")
         ),
         None,
@@ -313,6 +319,18 @@ def activate(node):
     action = node.queryAction()
     if not action.nActions or not action.doAction(0):
         raise RuntimeError("actual native accessible control did not activate")
+
+
+def select_project(app, project_name, atspi):
+    control = wait(
+        lambda: (
+            named(app, "Open navigation", atspi) or named(app, "Switch project", atspi)
+        )
+    )
+    if control.name == "Open navigation":
+        activate(control)
+    activate(wait(lambda: named(app, "Switch project", atspi)))
+    activate(wait(lambda: named(app, project_name, atspi, prefix=True)))
 
 
 def composer(app, atspi):
@@ -385,13 +403,7 @@ def run(request):
         app = wait(lambda: application(pid, pyatspi))
         if request["operation"] in {"select", "select_and_write"}:
             x11.reload(window)
-            switch = wait(lambda: named(app, "Switch project", pyatspi))
-            activate(switch)
-            activate(
-                wait(
-                    lambda: named(app, request["project_name"], pyatspi, contains=True)
-                )
-            )
+            select_project(app, request["project_name"], pyatspi)
             workbench = named(app, "Workbench", pyatspi)
             if workbench:
                 activate(workbench)
