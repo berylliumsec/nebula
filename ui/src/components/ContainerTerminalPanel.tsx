@@ -523,6 +523,9 @@ export function ContainerTerminalPanel({
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeKey, setActiveKey] = useState<string>();
   const [capacity, setCapacity] = useState<ContainerTerminalCapacity>();
+  const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityError, setCapacityError] = useState(false);
+  const capacityReadRef = useRef(0);
   const [initializing, setInitializing] = useState(true);
   const [initialError, setInitialError] = useState<string>();
   const [launchingKey, setLaunchingKey] = useState<string>();
@@ -559,11 +562,25 @@ export function ContainerTerminalPanel({
   };
 
   const refreshCapacity = async (signal?: AbortSignal) => {
+    const projectController = projectAbortRef.current;
+    if (!projectController || projectController.signal.aborted || signal?.aborted) return;
+    const read = ++capacityReadRef.current;
+    const isCurrentRead = () => projectAbortRef.current === projectController
+      && !projectController.signal.aborted && capacityReadRef.current === read;
+    setCapacity(undefined);
+    setCapacityLoading(true);
     try {
-      const current = await api.containerTerminalCapacity(engagementId, signal);
-      if (!signal?.aborted) setCapacity(current);
+      const current = await api.containerTerminalCapacity(engagementId, signal ?? projectController.signal);
+      if (isCurrentRead() && !signal?.aborted) {
+        setCapacity(current);
+        setCapacityError(false);
+      }
     } catch (reason) {
+      if (!isCurrentRead() || signal?.aborted) return; // diagnostic-expected: a newer capacity read or Project owns the result.
       void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_04", "A handled interface operation failed.", reason, "container_terminal_panel");
+      setCapacityError(true);
+    } finally {
+      if (isCurrentRead()) setCapacityLoading(false);
     }
   };
 
@@ -747,6 +764,9 @@ export function ContainerTerminalPanel({
     setInitializing(true);
     setTerminalCapabilities(undefined);
     setCapacity(undefined);
+    setCapacityLoading(false);
+    setCapacityError(false);
+    capacityReadRef.current += 1;
     setOverflowOpen(false);
 
     const bootstrap = async () => {
@@ -985,11 +1005,11 @@ export function ContainerTerminalPanel({
             disabled={launchInProgress}
           />
         </label>
-        <p>{capacity ? `${capacity.activeSessions} / ${capacity.maxActiveSessions} terminal containers active in this Project.` : "Checking Project terminal capacity…"}</p>
+        <p>{capacity ? `${capacity.activeSessions} / ${capacity.maxActiveSessions} terminal containers active in this Project.` : capacityError ? "Project terminal capacity is unavailable." : capacityLoading ? "Checking Project terminal capacity…" : "Project terminal capacity has not been checked."}</p>
         </TerminalToolbarDetails>
         {publishedPortsError && <span className="terminal-port-error" role="alert">{publishedPortsError}</span>}
         {activeTab && <button className="icon-button subtle terminal-tab-close" type="button" aria-label={`Close Terminal ${activeTab.ordinal}`} onClick={() => void closeTab(activeTab)}><X size={14} /></button>}
-        <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : !capacity ? "Checking terminal capacity" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
+        <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacityError ? "Terminal capacity is unavailable" : !capacity ? "Checking terminal capacity" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
         <div className="terminal-overflow">
           <button className="icon-button subtle" type="button" aria-label="List all terminals" aria-expanded={overflowOpen} onClick={() => setOverflowOpen((value) => !value)}><ChevronDown size={16} /></button>
           {overflowOpen && <div className="terminal-overflow-menu" role="menu">
@@ -1000,6 +1020,10 @@ export function ContainerTerminalPanel({
     </header>;
   return <section className="terminal-workspace" aria-label="Project terminals">
     {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
+    {capacityError && <p className="terminal-audit-warning" role="alert" aria-busy={capacityLoading}>
+      <AlertTriangle size={16} aria-hidden="true" /><span>Project terminal capacity is unavailable. Retry to check whether another terminal can start.</span>
+      <button className="icon-button subtle" type="button" style={{width: 44, height: 44, minWidth: 44, minHeight: 44}} aria-label="Retry terminal capacity" title="Retry terminal capacity" disabled={capacityLoading} onClick={() => void refreshCapacity(projectAbortRef.current?.signal)}><RotateCcw className={capacityLoading ? "spin" : undefined} size={16} aria-hidden="true" /></button>
+    </p>}
     {!tabs.length && <div className="terminal-empty-state"><SquareTerminal size={28} /><strong>No open terminals</strong><p>Start another isolated Kali container for this Project.</p><button className="button primary" type="button" disabled={!canAdd} onClick={addTerminal}><Plus size={15} /> New terminal</button></div>}
     {tabs.map((tab) => <div
       id={`terminal-panel-${tab.key}`}
