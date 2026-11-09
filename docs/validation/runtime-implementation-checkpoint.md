@@ -25,8 +25,16 @@ At the following `2b4ff750` retry, both remaining desktop tools cases passed;
 all eight tools profiles are now excluded. Eight native-instruction profiles
 failed the same independently confirmed filesystem/wall-clock freshness check.
 Their repair has independent static review and is the only journey selected for
-the next eight-case browser push. The packaged case failed later in initial GUI
-Project selection and is deferred to a separate causal repair/retry, not waived.
+the subsequent eight-case browser push. All eight then passed at `48eb7a36`,
+browser run `42690527522`, with a passing gate. No browser case may be selected
+again. The packaged case failed later in initial GUI Project selection and is
+the sole remaining failed case for a separate reviewed repair/retry, not waived.
+
+That preparation repair is integrated from `1413cc2a`, with independent final
+static review and unchanged product source trees. The current receipt selects
+only its one exact packaged node, excluding every passing test. Its actual
+result is pending at this commit; consult PR #960 for subsequent CI and merge
+state rather than repeating the completed browser cases.
 
 ## Current combined PR checkpoint
 

@@ -1,8 +1,8 @@
 {
-  "change_digest": "8ac1c4d5a4d0698429929d5f182b8d3046e8daacda1b616965bec9f4429600a2",
-  "reviewed_by": "Codex integration coordinator; validate_native_readback_freshness independently validated cause/design/final source; audit_final_failed_selection verified the exact eight failed captures, anchored selectors, runtime guards and omitted layers",
-  "reason": "Retry only the eight native standing-instruction browser title/profile pairs that failed run 42685160535 at 2b4ff750. Bounded captures and fresh independent review confirmed filesystem mtime versus wall-clock false refusal; the same-filesystem barrier and joined cancellation repair passed static review. Both desktop tools cases passed that run, completing all eight tools profiles, and are excluded. The sole packaged case also failed initial native GUI Project selection; its separate causal investigation is deferred from this browser-only push, not waived.",
-  "exclusions": "Every prior passing case remains excluded: original 964 Python/32 browser passes, subsequent five portable Python retries, all eight tools profiles, frontend audit, macOS UI build, frontend unit tests, Rust and migrations. No Python tests or packaged builds run on this push. The single packaged GUI failure will be selected separately only after its cause/repair is reviewed; no successful native package result is claimed. Additional global/operator regression sources remain unrun; negative probe/cancellation paths have static review only under the explicit failed-case-only restriction. No full suite, feature union, live provider, existing installation, deployment or release.",
+  "change_digest": "a8346b6d96dd0cc6fea7df9ac6e9eeac05c6ba313ba54db651c0406019673008",
+  "reviewed_by": "Codex integration coordinator; validate_packaged_gui_failure independently validated the preparation contract and final lifecycle/diagnostic diff; audit_final_failed_selection verified exclusive one-case routing, zero retries, omission guards, unchanged product trees and frozen passing receipts",
+  "reason": "Retry only the sole packaged native continuity case that failed run 42685160515 at 2b4ff750 during initial native Project selection. The reviewed fixture preparation fix loads a fresh baseline UI after seeding and verifies the same Core, API/execution workers, Project fence and held turn while the bootstrap window is closed, preserving later observe-only reopen/rollback assertions. All eight native browser cases passed run 42690527522 at 48eb7a36 and are excluded together with every other prior pass. Product source trees remain identical to that passing native-browser candidate.",
+  "exclusions": "No browser, portable Python, frontend or Rust test is selected. Exclude all prior passing Python and browser cases, all eight tools and eight native profiles, frontend audit, macOS UI build and migrations. The one packaged case is routed exclusively to the native artifact job with zero retries and exact-one collection/result guards; its genuine independently retained fixture packages are build dependencies, not additional tests. Additional host/global runtime regression cases remain unrun under the user failed-case-only instruction. No full suite, extra journeys, live provider, existing installation, deployment or release.",
   "python_versions": [
     "3.12"
   ],
@@ -10,26 +10,19 @@
   "python_browser": false,
   "checks": [],
   "expected_tests": {
-    "python": 0,
+    "python": 1,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "expected_python_jobs": {
     "portable": 0,
-    "packaged_native": 0
+    "packaged_native": 1
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "runtime-standing-instructions/model-chromium-320",
-    "runtime-standing-instructions/model-chromium-390",
-    "runtime-standing-instructions/model-chromium-430",
-    "runtime-standing-instructions/model-compact",
-    "runtime-standing-instructions/model-desktop",
-    "runtime-standing-instructions/model-webkit-320",
-    "runtime-standing-instructions/model-webkit-390",
-    "runtime-standing-instructions/model-webkit-430"
-  ]
+  "playwright": []
 }

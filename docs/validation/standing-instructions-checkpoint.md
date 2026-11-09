@@ -163,16 +163,21 @@ sessions filesystem before the RPC, preserving refusal of preexisting artifacts
 and every account/identity/content guard. Independent final static review of
 `codex/native-readback-freshness` passed, including device checks, owned probe
 cleanup, configured account-root compatibility and cancellation settlement.
-Actual selected CI execution remains required; no successful result is inferred
-from source.
+Actual execution then passed at `48eb7a36`: browser run `42690527522` completed
+all eight exact native profiles with one passing case each and a passing gate.
+Desktop/compact, Chromium 320/390/430 and WebKit 320/390/430 retain all standing
+authority, compaction, reconnect and API replacement assertions. The case
+durations range from 1.6 to 3.0 minutes. Installed-vendor conformance is still
+not established by the inert native transport.
 
 The user expressly forbids repeating passing cases. Both desktop tools cases
 passed this retry, completing all eight tools profiles across the CI receipts;
 they and the five successful portable Python retries must stay excluded from
-later runs and pushes. The packaged job subsequently failed its initial native
-Project-control observation and is independently investigated. Its retry is
-deferred from this eight-browser-only push rather than counted as successful.
-Reload the failed-only retry record alongside this checkpoint after compaction.
+later runs and pushes. The eight native passes must also remain excluded. The
+packaged job failed its initial native Project-control observation and has a
+separate, reviewed fixture-preparation repair in progress; its one-case retry is
+the remaining runtime gate. Reload the failed-only retry record alongside this
+checkpoint after compaction.
 
 ## Final provider integration follow-up
 

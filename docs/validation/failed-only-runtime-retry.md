@@ -4,6 +4,38 @@ The user explicitly requires pushes to select only specific failed cases, with
 passing cases excluded. This record supersedes the earlier combined test union
 for retry selection; it does not erase that run or expand its passing receipts.
 
+## Eight native retries passed at `48eb7a36`
+
+Browser run `42690527522` passed all eight exact native-instruction title/profile
+pairs, one case per job, with no retries. Gate job `129412046757` passed. The
+desktop/compact, Chromium 320/390/430 and WebKit 320/390/430 cases all retain the
+same instruction identity/content, compaction, reconnect and replacement checks.
+The Python/package/frontend/Rust layers were omitted on this push.
+
+These eight passing cases must never be selected again. The sole remaining
+failed case is packaged native continuity. Its next retry will be exclusively
+that exact node after reviewed fixture preparation and failure diagnostics;
+no browser case or prior passing test/check belongs in that receipt.
+
+## Single packaged retry after reviewed preparation repair
+
+The fixture repair is integrated from `1413cc2a`; see
+[the preparation contract and verification limits](packaged-gui-initial-setup.md).
+It removes the unobserved Ctrl+R dependency by reopening the bootstrap window
+after seeding and before the first chat/draft setup. Before any connector or
+reopen, exact Core, API/execution worker, Project fence and held-turn evidence
+must remain unchanged while that initial window is closed. All later automatic
+selected-chat/draft restoration, rollback, completion and shutdown checks remain.
+Separate final static review passed, including bounded private-data-free failure
+diagnostics. Product source trees are unchanged from `48eb7a36`.
+
+The next receipt selects exactly the single still-failed packaged node in its
+artifact job. Every portable, frontend, Rust and browser test is excluded. The
+two genuine fixture packages are necessary build dependencies. No passing case
+was executed to prepare this repair; its actual native result remains pending
+at this commit. PR #960 records subsequent CI and merge results without requiring
+another push of passing cases.
+
 ## Latest results at `2b4ff750`
 
 Browser run `42685160535` completed with both selected tools cases passing
