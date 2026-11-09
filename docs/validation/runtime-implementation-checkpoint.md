@@ -5,6 +5,15 @@ an integration checkpoint, not a release acceptance receipt.
 
 ## Current failed-only retry
 
+The final user instruction supersedes the earlier packaged retry: fix and run
+only its failed item locally, run no more CI tests, then merge. The isolated
+held-turn wire-contract check reproduced its wrong `running` expectation, then
+passed once with `routing` (2.44 seconds). Every CI test layer is now explicitly
+empty. Normal non-test required checks remain; the complete packaged journey
+and its later phases are unverified. See
+[the local item record](held-provider-status-item.md). Subsequent sections retain
+their pinned historical evidence and must not expand this final selection.
+
 Reload [the failed-only retry record](failed-only-runtime-retry.md) before
 continuing. PR #960 contains the combined implementation. Its original
 `eee508bc` run completed with 964 Python passes/five failures/one skip and 32

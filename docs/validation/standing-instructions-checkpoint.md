@@ -176,8 +176,13 @@ they and the five successful portable Python retries must stay excluded from
 later runs and pushes. The eight native passes must also remain excluded. The
 packaged job failed its initial native Project-control observation and has a
 separate, reviewed fixture-preparation repair in progress; its one-case retry is
-the remaining runtime gate. Reload the failed-only retry record alongside this
-checkpoint after compaction.
+the remaining runtime gate at that checkpoint. The user subsequently required
+only its failed held-turn item to run locally, no more CI tests, then merge.
+That separate assertion's incorrect scheduler status was repaired and its sole
+schema-backed local check passed once; the full native desktop journey remains
+unverified and will not be repeated. Reload the failed-only retry record and
+[local item evidence](held-provider-status-item.md) after compaction; every
+previous native browser and provider pass remains frozen.
 
 ## Final provider integration follow-up
 

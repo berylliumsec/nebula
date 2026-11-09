@@ -4,6 +4,25 @@ The user explicitly requires pushes to select only specific failed cases, with
 passing cases excluded. This record supersedes the earlier combined test union
 for retry selection; it does not erase that run or expand its passing receipts.
 
+## Final user-directed local-only scope
+
+The user subsequently requested: run only the failed item locally, run no more
+tests in CI, then merge. The last full packaged run at `29766d18` failed its
+held-turn assertion before a window close. Separate fresh-context diagnosis
+confirmed it expected scheduler state `running` from an API that returns admitted
+`ChatTurnStatus` value `routing` instead.
+
+The actual assertion was isolated and repaired in `1f81483c`. Exactly one new
+local schema-backed node failed with the old comparison (3.26 seconds), then
+passed after repair (2.44 seconds); no passing case was rerun. See
+[the single-item evidence and limits](held-provider-status-item.md).
+
+The final CI receipt has every test array and count empty. Only normal required
+non-test selection/security/omission/gate checks may run before merge. The full
+packaged journey is not rerun and remains an unverified lifecycle gate; its
+earlier failure is not converted into a pass. PR #960 records the latest result.
+Earlier retry sections below are historical and do not authorize execution.
+
 ## Eight native retries passed at `48eb7a36`
 
 Browser run `42690527522` passed all eight exact native-instruction title/profile
