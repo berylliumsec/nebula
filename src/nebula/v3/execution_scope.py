@@ -236,6 +236,8 @@ class ExecutionSQLScope:
                 "device_pairing_offers",
                 "runtime_capacity_policy",
                 "runtime_capacity_reservations",
+                "butler_memory_items",
+                "butler_memory_cursors",
                 "runtime_releases",
                 "runtime_processes",
                 "deployment_host",

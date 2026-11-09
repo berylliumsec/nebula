@@ -163,6 +163,36 @@ class RuntimeCapacityReservationRow(Base):
     release_reason: Mapped[str | None] = mapped_column(String(100))
 
 
+class ButlerMemoryItemRow(Base):
+    __tablename__ = "butler_memory_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope", "scope_key", "content_hash", name="uq_butler_memory_content"
+        ),
+        Index("ix_butler_memory_scope", "scope", "scope_key", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(30), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(String(800), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_label: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_ref: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ButlerMemoryCursorRow(Base):
+    __tablename__ = "butler_memory_cursors"
+
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class MemoryBudgetPolicyRow(Base):
     __tablename__ = "memory_budget_policies"
 

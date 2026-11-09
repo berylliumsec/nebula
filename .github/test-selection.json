@@ -1,26 +1,20 @@
 {
-  "change_digest": "b68f8c5c0ea254bbcd838d3c8de7886fb6a49f5cae910b222207c37fea91415d",
+  "change_digest": "1e571a8ab8303bd42725bfce1f0524d36b423e771e29237da91788971ac762c3",
   "reviewed_by": "Codex",
-  "reason": "7 collected affected tool-dispatch cases after independent causal validation. The first selection passed36 cases and exposed a real serial-tool bypass: only parallel waves acquired host capacity. A fresh-context validator reproduced the inert turn completing while its tool slot was occupied and observed no tool acquisition, ruling out admission failure/context loss/deadlock. Centralize all four broker paths (serial, parallel, discovery, approval resume). Run3 new real tool-loop cases plus4 exact existing parallel/approval/planning regressions; unaffected26 ledger/4 cleanup/4 worker-retirement/1 provider-cap cases are already passing and excluded. Also annotate the optional admission context manager per mypy diagnostics. Final reviewed union:42 unique cases collected;36 passed in the initial run and7 affected cases passed after repair (one existing approval case repeated). Ruff/targeted mypy passed; evidence notes added after source validation. The union is collected only and is not rerun.",
-  "exclusions": "No full suite, provider network, existing installation, operational service, SSH, deployment, benchmark or compute workload. Synthetic projects, inert scripted provider/tool and retained inert worker fixtures only. Production role enablement, shared index services and final browser/packaged continuity gates remain pending.",
+  "reason": "26 collected shared-memory cases:22 new SQLite/PostgreSQL SQL-fenced host-memory/private-RPC cases and4 exact affected legacy memory/capture regressions. Synthetic memories, cross-project visibility/redaction, concurrency and revision conflict, host replacement, worker expiry, private-peer identity, cursor/novelty persistence, lease loss during commit rollback, unsafe data rejection and actual host-only Chroma indexing with deterministic local vectors. All26 passed in13.33s. Ruff and final targeted mypy passed. Independent static validation confirmed a class-scope list annotation collision; builtin qualification changes no runtime behavior. Evidence notes added after source validation.",
+  "exclusions": "No full suite, existing installation, operational service/provider, SSH, deployment, compute or benchmark workload. Embedded Chroma uses inert three-dimensional fixture embeddings; no model fetch. The backend/proxy is not yet wired to production supervisor lifetime; import of legacy memory and complete shared knowledge service plus final role/browser/packaged gates remain pending.",
   "expected_tests": {
-    "python": 42,
+    "python": 26,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_capacity.py",
-    "tests/v3/test_chat_runtime_capacity.py",
-    "tests/v3/test_async_admission_cleanup.py::test_release_failure_returns_capacity_exactly_once",
-    "tests/v3/test_async_admission_cleanup.py::test_release_joins_durable_cleanup_after_repeated_cancellation",
-    "tests/v3/test_async_admission_cleanup.py::test_old_release_cannot_close_a_new_admission_from_the_same_core",
-    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
-    "tests/v3/test_chat_throughput.py::test_approved_call_runs_when_its_turn_resumes_through_admission",
-    "tests/v3/test_runtime_processes.py::test_graceful_retirement_reaps_only_an_empty_worker",
-    "tests/v3/test_chat_tool_loop.py::test_batched_safe_reads_overlap_and_commit_in_provider_order",
-    "tests/v3/test_chat_tool_loop.py::test_approval_inside_a_batch_pauses_and_drops_the_queued_calls",
-    "tests/v3/test_chat_planning.py::test_provider_discovery_cannot_execute_and_saves_plan_before_tool"
+    "tests/v3/test_shared_butler_memory.py",
+    "tests/v3/test_butler_memory.py::test_edit_revision_is_authoritative_and_stale_delete_fails",
+    "tests/v3/test_butler_memory.py::test_restart_vector_search_and_delete_cannot_resurrect_a_memory",
+    "tests/v3/test_butler_memory_pivotal.py::test_pivotal_capture_is_selective_scoped_and_replay_safe",
+    "tests/v3/test_butler_memory_pivotal.py::test_review_lesson_keeps_distinct_cited_process_insights_only"
   ],
   "frontend": [],
   "native": [],
