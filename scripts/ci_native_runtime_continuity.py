@@ -295,6 +295,10 @@ class NativeJob:
             self.run("native-journey", ["timeout", "--kill-after=15s", "900s", "xvfb-run", "-a", "-s", "-screen 0 1440x900x24 -nolisten tcp", "dbus-run-session", "--", *argv, "--tb=short", "--basetemp=" + str(self.private / "native-journey")], self.candidate, env, timeout=930)
         finally:
             self.export_gui()
+            report = self.evidence / "native-journey.log"
+            if report.is_file():
+                print("Native continuity output (sanitized, last 65536 characters):", flush=True)
+                print(report.read_text(errors="replace")[-65536:], flush=True)
         receipts = list((self.private / "native-journey").rglob("continuity-receipt.json"))
         if len(receipts) != 1 or json.loads(owned_file(self.private, receipts[0]).read_text()).get("result") != "passed":
             raise ValueError("a passing real GUI receipt is required; skipped tests are insufficient")

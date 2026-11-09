@@ -156,6 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       python: ${{ steps.plan.outputs.python }}
+      packaged: ${{ steps.plan.outputs.packaged }}
       frontend: ${{ steps.plan.outputs.frontend }}
       native: ${{ steps.plan.outputs.native }}
       checks: ${{ steps.plan.outputs.checks }}
@@ -174,7 +175,8 @@ jobs:
           CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python scripts/test_selection.py --baseline "$BASELINE" --candidate "$CANDIDATE" --output test-selection-receipt.json
-          printf 'python=%s\n' "$(jq -c '.python' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
+          printf 'python=%s\n' "$(jq -c '.python | map(select(. != "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"))' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
+          printf 'packaged=%s\n' "$(jq -c '.python | map(select(. == "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"))' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'frontend=%s\n' "$(jq -c '.frontend' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'native=%s\n' "$(jq -c '.native' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'checks=%s\n' "$(jq -c '.checks // []' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
@@ -200,7 +202,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     services:
       postgres:
-        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py')) && 'postgres:16-alpine' || '' }}
+        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py')) && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: nebula_async
           POSTGRES_PASSWORD: synthetic-ci-password
@@ -258,7 +260,7 @@ jobs:
         if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/test_playwright_impact.py') || contains(needs.selection.outputs.python, 'tests/v3/test_butler_workflow_registry.py'))
         run: npm --prefix ui ci
       - name: Build production UI for selected retained-process journeys
-        if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/v3/test_runtime_continuity_acceptance.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py'))
+        if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/v3/test_runtime_continuity_acceptance.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py'))
         run: |
           npm --prefix ui ci
           npm --prefix ui run build
@@ -273,12 +275,12 @@ jobs:
         if: env.RUN_SELECTED == 'true'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.python }}
-          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
+          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           NEBULA_TEST_POSTGRES_ADMIN_URL: ${{ contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') && 'postgresql://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
-          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination|test_runtime_work_batch_integration)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
+          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination|test_runtime_work_batch_integration|test_api_worker_composition|test_shutdown_readmission)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
             test -n "$NEBULA_TEST_POSTGRES_URL" || { echo 'Selected PostgreSQL coverage requires its owned database runtime.' >&2; exit 1; }
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
@@ -547,7 +549,7 @@ jobs:
 
   native-runtime-continuity-linux:
     needs: selection
-    if: contains(needs.selection.outputs.python, 'tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback')
+    if: contains(needs.selection.outputs.packaged, 'tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback')
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:
