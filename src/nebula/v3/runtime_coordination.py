@@ -289,6 +289,9 @@ class RuntimeCoordination:
             from .runtime_context_requirements import require_runtime_context
 
             await require_runtime_context(session, project_id, runtime_id)
+            # Compatibility reads can outlast a lease. Validate the runtime and
+            # start the ownership grant from the clock after those reads.
+            now = await self._live_execution(session, runtime_id, now)
             token = await session.scalar(
                 update(ProjectOwnershipRow)
                 .where(
