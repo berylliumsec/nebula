@@ -52,6 +52,7 @@ destination and five typed actions retain their public names and schemas.
 
 These are source/backend results. Browser asset/auth bootstrap while no API
 worker exists still needs integration before claiming that complete Settings
-recovery journey. Large Butler result handling, actual running-apply routing
+recovery journey. [Large Butler result handling](large-memory-assistant-results.md)
+is covered by the next stage. Actual running-apply routing
 with an allocator, production LAN/mobile WebKit and packaged desktop continuity
 evidence also remain outstanding.

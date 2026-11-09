@@ -28,6 +28,7 @@ from .mcp_scope import mcp_metadata_is_visible, project_mcp_profiles
 from .storage import NotFoundError
 from .tools import GuidedToolError
 from .memory_actor import memory_actor
+from .memory_assistant_result import MEMORY_SETTINGS_LIMIT, memory_assistant_result
 
 
 _PROJECT_SETTING = re.compile(
@@ -943,22 +944,26 @@ async def execute_settings_api(
                     observed = value
             elif selected == "DELETE" and readback.status_code == 404:
                 observed = {"deleted": True}
-        rendered = json.dumps(
-            _safe_result(
-                result
-                if action_readback is not None
-                else observed
-                if observed is not None
-                else result
-            ),
-            default=str,
+        safe_result = _safe_result(
+            result
+            if action_readback is not None
+            else observed
+            if observed is not None
+            else result
         )
+        rendered = json.dumps(safe_result, default=str)
         if len(rendered) > 30_000:
+            safe_result = memory_assistant_result(candidate, safe_result)
+            rendered = json.dumps(safe_result, default=str)
+        result_limit = (
+            MEMORY_SETTINGS_LIMIT if candidate == "/api/v1/memory-budgets" else 30_000
+        )
+        if len(rendered) > result_limit:
             outcome: dict[str, Any] = {
                 "status": response.status_code,
-                "read_back": observed is not None,
+                "read_back": observed is not None or selected == "GET",
                 "truncated": True,
-                "result_excerpt": rendered[:30_000],
+                "result_excerpt": rendered[:result_limit],
             }
         else:
             outcome = {

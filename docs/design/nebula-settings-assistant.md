@@ -25,6 +25,13 @@ acknowledgement; a memory failure never authorizes automatic retry, a larger
 budget or goal resume. See [Compute memory budgets](../MEMORY_BUDGETS.md) for
 precedence, units, scope and runner dependencies.
 
+Large memory inventories retain structured job summaries with explicit
+`at_limit` and `summary_only` flags. They are partial observations, not a complete
+job roster; use `verify_memory_job` for full saved evidence. Profile metadata
+may be previewed, while the policy retains unrelated overrides within its
+bounded structured response. Never construct a policy update from a truncated
+excerpt or treat missing measurements as zero usage.
+
 Entry: the persistent assistant icon in the shared shell opens one movable,
 hideable control conversation. Closing the window preserves its Core transcript.
 The operator may open Settings from a catalog result without losing the draft.

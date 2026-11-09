@@ -1,24 +1,18 @@
 {
-  "change_digest": "99b57b5941691b520e0acd45ed6cd7161701187d2bc10853577e88766f64afb2",
+  "change_digest": "9f87c7fb2caedb5df63ac9c9421005b4a7d91c3d257779fa88c5855a6fd7c669",
   "reviewed_by": "Codex",
-  "reason": "63 distinct passing cases:58 role-boundary cases75.71s plus5 capability/actualChroma source-sync cases8.91s. Stable host repairs valid saved floor-only reserve before API admission; bound private project Butler and actual retained Kernel typed action use same validation/audit/readback; job IDs select current owner, public actors/CAS/body bounds and private forged/stale requests hold. Direct execution global-policy isolation remains. Existing memory/routing/admission cases pass. Canonical Settings model import preserves runtime identity and fixes static alias diagnostic; mypy8sourcefiles and Ruff pass. Bundled product knowledge regenerated/verified407passages4a6d31863ed9 and actual host Chroma synchronization/restart verified. Final union63 collected; evidence-only doc followed.",
-  "exclusions": "No full suite, live services/provider/harness, existing installation, deployment, SSH, compute or browser workload. Disposable SQL, source wrapper processes and private Unix RPC only. UI no-API asset/auth bootstrap and final production LAN/WebKit/desktop gates remain subsequent integration. Direct execution global-policy restrictions remain verified; kernel enforcement is not inferred from saved configuration.",
+  "reason": "Twelve distinct passing cases: nine presentation/policy cases across two focused runs, plus three actual Chroma/source-sync checks. Large Core inventories retain structured partial job summaries through typed Butler and the private host channel on both SQL backends. Ninety profile overrides survive save/readback; oversized envelopes remain explicit, and generic truncated GET reads report success. Independent validation identified the original missing-result failure and the invalid synthetic runner basename. Ruff and targeted mypy passed. Product knowledge was rebuilt and verified at 407 passages, source e1cfebe0f4c0, and host Chroma synchronization/restart passed. Final union collected 12 cases.",
+  "exclusions": "No full suite, live services, existing installation, deployment, browser, provider, SSH or compute workload. Synthetic SQL records, inert private peers and validated APIs only. These checks prove presentation and readback. Final production LAN, mobile WebKit and packaged-desktop gates remain outstanding.",
   "expected_tests": {
-    "python": 63,
+    "python": 12,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_memory_control.py",
-    "tests/v3/test_memory_api.py",
-    "tests/v3/test_execution_memory.py",
-    "tests/v3/test_runtime_routing.py",
-    "tests/v3/test_runtime_host_services.py::test_private_host_socket_requires_both_peer_identity_and_its_credential",
-    "tests/v3/test_runtime_host_services.py::test_api_peers_and_expired_execution_peers_cannot_call_host_memory",
-    "tests/v3/test_runtime_memory.py::test_architecture_defaults_only_initialize_an_unsaved_policy",
-    "tests/v3/test_runtime_memory.py::test_supervisor_binds_real_process_admission_to_saved_memory_policy",
-    "tests/v3/test_runtime_host_services.py::test_shared_service_capabilities_require_a_valid_private_peer",
+    "tests/v3/test_memory_assistant_result.py",
+    "tests/v3/test_memory_api.py::test_butler_discovers_typed_actions_saves_and_verifies_with_actor_audit",
+    "tests/v3/test_memory_api.py::test_concurrent_browser_and_butler_saves_have_one_winner",
     "tests/v3/test_runtime_host_services.py::test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],

@@ -29,7 +29,15 @@ def memory_budget_tools(
     async def usage(_arguments):
         settings = await call("GET", "")
         result = await call("GET", "/jobs")
-        jobs = result["result"]["items"]
+        page = result.get("result")
+        if not isinstance(page, dict) or not isinstance(page.get("items"), list):
+            page = {
+                "items": [],
+                "at_limit": True,
+                "display_limit": 0,
+                "summary_only": True,
+            }
+        jobs = page["items"]
         for job in jobs:
             proof = job.get("evidence") or {}
             current = proof.get("current_bytes")
@@ -39,11 +47,17 @@ def memory_budget_tools(
                 current >= 0.8 * ceiling if current is not None else None
             )
         return {
-            "settings": settings["result"],
+            "settings": settings.get("result")
+            or {
+                "truncated": True,
+                "read_back": settings.get("read_back", False),
+                "detail": "The full policy exceeds the assistant response bound. Review Memory budgets before changing it; job observations remain independently available.",
+            },
             "jobs": jobs,
-            "at_limit": result["result"].get("at_limit", False),
-            "display_limit": result["result"].get("display_limit", 100),
-            "detail": "Usage is a timestamped observation, not an additional limit. Missing measurements are unknown. Only each job's evidence verifies applied limits. Charged jobs appear first; at_limit means this bounded page may omit other jobs and must not be described as a complete roster.",
+            "at_limit": page.get("at_limit", False),
+            "display_limit": page.get("display_limit", 100),
+            "summary_only": page.get("summary_only", False),
+            "detail": "Usage is a timestamped observation, not an additional limit. Missing measurements are unknown. Charged jobs appear first; at_limit means this bounded page may omit jobs, including when its response cannot fit. Never describe it as a complete roster. Use verify_memory_job for complete saved enforcement evidence.",
         }
 
     async def update(arguments):
@@ -76,14 +90,14 @@ def memory_budget_tools(
     items = [
         (
             "nebula.settings.memory_budget",
-            "Read configured and effective host memory budgets, administrator ceilings, Core reserve, policy revision and runner capabilities. Save affects new jobs; worker application requires observed evidence.",
+            "Read configured and effective host memory budgets, administrator ceilings, Core reserve, policy revision and runner capabilities. Large profile metadata is a marked preview; preserve the complete policy and never construct an update from a truncated excerpt. Save affects new jobs; worker application requires observed evidence.",
             _EMPTY,
             read,
             True,
         ),
         (
             "nebula.settings.memory_usage",
-            "Inspect reservations, queued and running compute jobs, measured usage, peaks and jobs approaching their memory limits. Unknown measurements and pending or failed worker application must be reported accurately.",
+            "Inspect a bounded job summary with reservations, measured usage, peaks and jobs approaching their memory limits. Report at_limit as a partial roster and use verify_memory_job for full evidence. Unknown measurements and pending or failed worker application must be reported accurately.",
             _EMPTY,
             usage,
             True,
