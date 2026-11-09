@@ -75,6 +75,7 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
         operator_token=bootstrap.operator_token.get_secret_value(),
         project_for=routing.project_for,
         chat_acceptance_for=routing.supports_chat_acceptance,
+        chat_resume_for=routing.supports_chat_resume,
         upstream_for=routing.upstream_for,
         static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
     )
@@ -112,7 +113,7 @@ async def run_worker(
             raise RuntimeIpcError(
                 "worker version differs from its retained application"
             )
-        if set(manifest.features) - {"chat.accept/v1"}:
+        if set(manifest.features) - {"chat.accept/v1", "chat.resume/v1"}:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
             )
@@ -121,12 +122,13 @@ async def run_worker(
             raise RuntimeIpcError(
                 "retained application cannot use the current SQL schema"
             )
-        if bootstrap.identity.role == "api" or "chat.accept/v1" in manifest.features:
+        if bootstrap.identity.role == "api" or set(manifest.features) & {
+            "chat.accept/v1",
+            "chat.resume/v1",
+        }:
             try:
                 async with database.session() as session:
-                    await session.execute(
-                        select(RuntimeChatBindingRow.command_id).limit(0)
-                    )
+                    await session.execute(select(RuntimeChatBindingRow).limit(0))
             except SQLAlchemyError:
                 raise RuntimeIpcError(
                     "The supervisor must apply additive chat migrations before worker readiness"

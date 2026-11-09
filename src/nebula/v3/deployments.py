@@ -200,8 +200,9 @@ class DeploymentCoordinator:
                 )
         if role == "execution":
             required = set(manifest.required_api_features)
-            if "chat.accept/v1" in manifest.features:
-                required.add("chat.accept/v1")
+            required.update(
+                set(manifest.features) & {"chat.accept/v1", "chat.resume/v1"}
+            )
             host = await session.get(DeploymentHostRow, "host")
             api = (
                 await session.get(RuntimeProcessRow, host.api_runtime_id)
@@ -243,14 +244,19 @@ class DeploymentCoordinator:
                 assert resident is not None
                 resident_manifest = ReleaseManifest.model_validate(resident.manifest)
                 required.update(resident_manifest.required_api_features)
-                if "chat.accept/v1" in resident_manifest.features:
-                    required.add("chat.accept/v1")
-            if await session.scalar(
-                select(RuntimeCommandRow.id)
-                .where(RuntimeCommandRow.name == "chat.accept/v1")
-                .limit(1)
-            ):
-                required.add("chat.accept/v1")
+                required.update(
+                    set(resident_manifest.features)
+                    & {"chat.accept/v1", "chat.resume/v1"}
+                )
+            required.update(
+                await session.scalars(
+                    select(RuntimeCommandRow.name)
+                    .where(
+                        RuntimeCommandRow.name.in_(("chat.accept/v1", "chat.resume/v1"))
+                    )
+                    .distinct()
+                )
+            )
             missing = required - set(manifest.features)
             if missing:
                 raise CoordinationConflict(
@@ -732,6 +738,29 @@ class DeploymentCoordinator:
             await self.coordination._live_execution(
                 session, handoff.target_runtime_id, now
             )
+            target_release = await session.get(
+                RuntimeReleaseRow, handoff.target_version
+            )
+            assert target_release is not None
+            required = set(
+                await session.scalars(
+                    select(RuntimeCommandRow.name)
+                    .where(
+                        RuntimeCommandRow.project_id == project_id,
+                        RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+                        RuntimeCommandRow.name.in_(
+                            ("chat.accept/v1", "chat.resume/v1")
+                        ),
+                    )
+                    .distinct()
+                )
+            )
+            if not required <= set(
+                ReleaseManifest.model_validate(target_release.manifest).features
+            ):
+                raise CoordinationConflict(
+                    "The target cannot read this project's accepted chat requests"
+                )
             unfinished = await session.scalar(
                 select(RuntimeCommandRow.id)
                 .where(

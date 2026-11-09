@@ -59,7 +59,8 @@ retained source wrappers and inert model implementations. No live provider,
 operator installation, SSH, model download, compute workload or deployment was
 used. Final selection: `/tmp/nebula-chat-acceptance-final-selection.json`.
 
-This stage detaches new streaming provider submissions. Direct resume/harness
+This stage detaches new streaming provider submissions. Explicit provider resume
+is covered by [the subsequent resume stage](durable-chat-resume.md). Harness
 commands and nonstreaming requests still use their existing delivery paths.
 Complete handoff admission/restoration, crash reconciliation, clients, launchers,
 desktop and packaging integration remain in progress. This is backend source

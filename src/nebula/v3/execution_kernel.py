@@ -578,6 +578,7 @@ from .writing_ai import (
     WritingTransformResponse,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .runtime_chat_acceptance import CHAT_RESUME_COMMAND, bind_chat_command
 from .relations import (
     LEGACY_RELATION_MODELS,
     RESOURCE_ENTITY_KINDS,
@@ -1816,6 +1817,7 @@ def create_execution_kernel(
     runtime_capacity=None,
     stream_journal=None,
     durable_chat_acceptance: bool = False,
+    durable_chat_resume: bool = False,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -1828,7 +1830,7 @@ def create_execution_kernel(
         store = NebulaStore(location)
     elif database is not None:
         raise ValueError("pass either store or database, not both")
-    if durable_chat_acceptance and (
+    if (durable_chat_acceptance or durable_chat_resume) and (
         stream_journal is None or store.database.execution_runtime_id is None
     ):
         raise ValueError(
@@ -11620,15 +11622,38 @@ def create_execution_kernel(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def resume_chat_turn(turn_id: str) -> StreamingResponse:
+    async def resume_chat_turn(turn_id: str, http_request: Request) -> Response:
         service = chat_service()
+        command_id = (
+            getattr(http_request.state, "runtime_command_id", None)
+            if durable_chat_resume
+            and getattr(http_request.state, "runtime_chat_resume", False)
+            else None
+        )
         prepared = (
             None
             if service.has_active_provider_turn(turn_id)
             else (await service.prepare_resume(turn_id))
         )
+        if command_id is not None:
+            turn = await store.get(ChatTurn, turn_id)
+            async with store.database.session() as binding_session:
+                await bind_chat_command(
+                    binding_session,
+                    command_id=command_id,
+                    turn_id=turn_id,
+                    session_id=turn.session_id,
+                    name=CHAT_RESUME_COMMAND,
+                )
         if prepared is not None:
-            (await service.start_provider_turn(prepared))
+            (await service.start_provider_turn(prepared, command_id=command_id))
+        elif command_id is not None:
+            await service.accept_existing_provider_turn(turn_id, command_id=command_id)
+        if command_id is not None:
+            return JSONResponse(
+                {"state": "accepted", "turn_id": turn_id, "session_id": turn.session_id},
+                status_code=202,
+            )
 
         async def event_stream() -> Any:
             started_at = time.monotonic()

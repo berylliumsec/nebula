@@ -92,6 +92,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             ),
             stream_journal=RuntimeChatJournal(context.coordinator.coordination, store),
             durable_chat_acceptance=CHAT_ACCEPT_FEATURE in context.manifest.features,
+            durable_chat_resume="chat.resume/v1" in context.manifest.features,
         )
         async with app.router.lifespan_context(app):
             yield app

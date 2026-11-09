@@ -353,7 +353,9 @@ class RuntimeCoordination:
                 "project_id": project_id,
                 # Both transports accept the same immutable HTTP intent. API
                 # replacement must not change its idempotency identity.
-                "name": "http.invoke/v1" if name == "chat.accept/v1" else name,
+                "name": "http.invoke/v1"
+                if name in {"chat.accept/v1", "chat.resume/v1"}
+                else name,
                 "payload": payload,
                 "expected_revision": expected_revision,
             }
@@ -519,7 +521,7 @@ class RuntimeCoordination:
         *,
         batch_key: str,
         events: Sequence[tuple[str, dict[str, Any]]],
-        apply: Callable[[AsyncSession], Awaitable[None]] | None = None,
+        apply: Callable[[AsyncSession, list[StreamFrame]], Awaitable[None]] | None = None,
     ) -> list[StreamFrame]:
         """Persist one batch before publication, using existing event retention."""
         _identifier(batch_key, "batch_key")
@@ -611,9 +613,10 @@ class RuntimeCoordination:
                     for row in rows
                 ],
             )
+            frames = [self._frame(row) for row in rows]
             if apply is not None:
-                await apply(session)
-            return [self._frame(row) for row in rows]
+                await apply(session, frames)
+            return frames
 
     @staticmethod
     def _frame(row: RunEventRow) -> StreamFrame:

@@ -1,26 +1,21 @@
 {
-  "change_digest": "0616fb8cbeb34d0d18721664df3eead4e37e0b4f8332cc7db6df23497c3a64a4",
+  "change_digest": "7445b519d68666f981c04323a99d1fbfd1ca22a067c2a4964f878a86034db4aa",
   "reviewed_by": "Codex",
-  "reason": "77 distinct passing cases collected as final CI union:27 acceptance/compatibility passed13.58s and50 process/journal/delivery/atomic-publication/bundle cases passed64.68s. Capability-gated typed acceptance commits conversation/turn/user-message/binding atomically, canonical old/new transport retries preserve identity, immutable bindings fence stale tasks, and feature/data guards protect API rollback. Actual retained kernel runs2 chats in1project while acceptance receipts finish, promotes APIv2/retiresv1, retries original receipt without new turn/provider and replays both durable cursors. Provider resource closure/end publication share one fenced commit with injected rollback proof. Ruff and targeted mypy passed. Evidence-only doc added after source validation.",
-  "exclusions": "No full suite, live service/provider/harness, existing installation, deployment, SSH, model download, browser or compute workload. Disposable SQL, private Unix listeners, retained source wrappers and inert local model barriers only. Source compatibility fallback and typed mode both exercised. Required final LAN/mobile WebKit/packaged desktop gates remain pending.",
+  "reason": "81 distinct passing cases:73 initial passes,5 after independently validated fixture domain/acquisition corrections,3 PostgreSQL reader cases after fixture pool-budget correction. No product behavior changed after first run; formatting and evidence only. Detached resume retains turn identity, atomically publishes segment cursor, isolates pending/errors from old frames, preserves retries and feature compatibility. Actual retained kernel resumes/attaches/replaces API with exactly2 provider starts across2 segments and same execution PID. Ruff and targeted mypy pass. Final CI union collected81.",
+  "exclusions": "No full suite, live provider/harness, existing installation, deployment, SSH or compute. Disposable SQL and retained source worker wrappers with inert providers only. Browser/LAN and packaged desktop acceptance remain separate final architecture gates.",
   "expected_tests": {
-    "python": 77,
+    "python": 81,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_runtime_chat_resume.py",
     "tests/v3/test_chat_acceptance_compatibility.py",
-    "tests/v3/test_execution_worker_process.py::test_detached_acceptance_runs_two_chats_in_one_project_through_api_replacement",
-    "tests/v3/test_execution_worker_process.py::test_api_promotion_reconnects_durable_chat_without_restarting_producer",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_execution_worker_process.py::test_explicit_resume_detaches_and_replays_its_new_segment_after_api_replacement",
     "tests/v3/test_runtime_chat_stream.py",
-    "tests/v3/test_runtime_delivery.py::test_lost_response_retry_and_api_replacement_preserve_one_mutation",
-    "tests/v3/test_runtime_delivery.py::test_device_is_revalidated_before_queued_work_executes",
-    "tests/v3/test_runtime_coordination.py::test_stream_replays_committed_batches_on_another_connection",
-    "tests/v3/test_runtime_coordination.py::test_stream_batch_retry_is_atomic_and_conflicting_retry_fails",
-    "tests/v3/test_release_store.py::test_installed_assets_survive_the_original_application_directory",
-    "tests/v3/test_release_store.py::test_tampered_or_symlinked_assets_never_install"
+    "tests/v3/test_execution_worker_process.py::test_detached_acceptance_runs_two_chats_in_one_project_through_api_replacement"
   ],
   "frontend": [],
   "native": [],

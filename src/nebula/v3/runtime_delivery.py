@@ -12,6 +12,7 @@ import base64
 import binascii
 from dataclasses import dataclass
 import json
+import re
 from typing import Literal
 from uuid import uuid4
 
@@ -40,6 +41,8 @@ from .runtime_ipc import RuntimeIpcError
 from .runtime_vault import RuntimeVault
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
+    CHAT_RESUME_COMMAND,
+    CHAT_COMMANDS,
     HTTP_INVOKE_COMMAND,
     ChatBinding,
 )
@@ -163,7 +166,16 @@ class RuntimeDelivery:
         lane: Literal["work", "control"] = "work",
         expected_revision: int | None = None,
         chat_acceptance: bool = False,
+        chat_resume: bool = False,
     ) -> CommandReceipt:
+        if chat_acceptance and chat_resume:
+            raise ValueError("A request has one chat transport")
+        if chat_resume and (
+            intent.method != "POST"
+            or not re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path)
+            or intent.body() not in (b"", b"{}")
+        ):
+            raise ValueError("Chat resume requires an empty explicit resume intent")
         if chat_acceptance:
             try:
                 body = json.loads(intent.body())
@@ -186,7 +198,9 @@ class RuntimeDelivery:
             project_id=project_id,
             actor_id=actor_id,
             idempotency_key=idempotency_key,
-            name=CHAT_ACCEPT_COMMAND if chat_acceptance else HTTP_INVOKE_COMMAND,
+            name=CHAT_ACCEPT_COMMAND
+            if chat_acceptance
+            else (CHAT_RESUME_COMMAND if chat_resume else HTTP_INVOKE_COMMAND),
             payload={"format": 1, "request_reference": reference},
             lane=lane,
             expected_revision=expected_revision,
@@ -197,7 +211,7 @@ class RuntimeDelivery:
             row = await session.get(RuntimeCommandRow, command.receipt.command_id)
             if (
                 row is None
-                or row.name not in {HTTP_INVOKE_COMMAND, CHAT_ACCEPT_COMMAND}
+                or row.name not in CHAT_COMMANDS | {HTTP_INVOKE_COMMAND}
                 or row.name != command.name
                 or row.payload != command.payload
             ):
@@ -328,7 +342,7 @@ class RuntimeDelivery:
             binding = await session.get(RuntimeChatBindingRow, command_id)
             if binding is None:
                 return None
-            if command.name != CHAT_ACCEPT_COMMAND:
+            if command.name not in CHAT_COMMANDS:
                 raise CoordinationConflict(
                     "The chat binding does not belong to a typed chat receipt"
                 )
@@ -347,7 +361,12 @@ class RuntimeDelivery:
                     "The accepted chat binding needs reconciliation"
                 )
             return ChatBinding(
-                command_id, binding.project_id, binding.turn_id, binding.session_id
+                command_id,
+                binding.project_id,
+                binding.turn_id,
+                binding.session_id,
+                binding.stream_after,
+                command.name == CHAT_ACCEPT_COMMAND or binding.stream_after is not None,
             )
 
     async def valid_actor(self, actor: str) -> bool:
@@ -453,6 +472,7 @@ class DurableHttpRunner:
             "state": {
                 "runtime_command_id": command_id,
                 "runtime_chat_acceptance": command.name == CHAT_ACCEPT_COMMAND,
+                "runtime_chat_resume": command.name == CHAT_RESUME_COMMAND,
             },
         }
         consumed, started, ended, status_code = False, False, False, 0

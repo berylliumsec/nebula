@@ -27,6 +27,67 @@ async def stage_feature(host):
     )
 
 
+async def test_resume_receipts_and_resident_workers_require_the_resume_reader(
+    host, tmp_path
+):
+    coordinator, _ = host
+    await stage_feature(host)
+    old_api = await worker(host, "feature", "api")
+    await coordinator.stage(
+        manifest("resume", features=[FEATURE, "chat.resume/v1"]),
+        Path("/isolated/releases/resume"),
+        "c" * 64,
+    )
+    new_api = await worker(host, "resume", "api")
+    delivery = RuntimeDelivery(
+        coordinator.coordination, RuntimeVault(tmp_path / "payloads")
+    )
+    await delivery.accept(
+        HttpIntent.capture("POST", "/api/v1/chat/turns/turn/resume", b"", [], b""),
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="resume",
+        chat_resume=True,
+    )
+    with pytest.raises(CoordinationConflict, match="chat.resume/v1"):
+        await coordinator.promote_api(
+            old_api, expected_revision=(await coordinator.status()).revision
+        )
+    await coordinator.promote_api(
+        new_api, expected_revision=(await coordinator.status()).revision
+    )
+    assert await worker(host, "resume") is not None
+
+
+async def test_queued_resume_cannot_transfer_to_an_older_execution_worker(
+    host, tmp_path
+):
+    coordinator, _ = host
+    await coordinator.stage(
+        manifest("resume", features=[FEATURE, "chat.resume/v1"]),
+        Path("/isolated/releases/resume"),
+        "c" * 64,
+    )
+    source, target = await worker(host, "resume"), await worker(host, "v1")
+    lease = await coordinator.coordination.claim_project("one", source)
+    await coordinator.request_handoff("one", target)
+    delivery = RuntimeDelivery(
+        coordinator.coordination, RuntimeVault(tmp_path / "payloads")
+    )
+    await delivery.accept(
+        HttpIntent.capture("POST", "/api/v1/chat/turns/turn/resume", b"", [], b""),
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="resume",
+        chat_resume=True,
+    )
+    await coordinator.checkpoint(lease, checkpoint={}, blockers=[])
+    with pytest.raises(CoordinationConflict, match="accepted chat requests"):
+        await coordinator.transfer("one")
+    async with coordinator.coordination.fenced(lease):
+        pass
+
+
 async def test_resident_feature_worker_blocks_an_older_api_promotion(host):
     coordinator, _ = host
     old_api = await worker(host, "v1", "api")

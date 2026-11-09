@@ -470,3 +470,148 @@ async def test_detached_acceptance_runs_two_chats_in_one_project_through_api_rep
                 assert same_process(execution.pid, execution.process_birth)
     finally:
         release.write_text("fixture cleanup")
+
+
+async def test_explicit_resume_detaches_and_replays_its_new_segment_after_api_replacement(
+    supervised,
+):
+    from sqlalchemy import select
+    from nebula.v3.database import RuntimeCommandRow
+    from nebula.v3.domain import ChatTurnStatus
+
+    root, fixture = supervised.supervisor, supervised.managed
+    await fixture.store.create(
+        ProviderProfile(
+            id="inert-provider",
+            name="Inert fixture",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    features = ["chat.accept/v1", "chat.resume/v1"]
+    await fixture.stage("v1", _JOURNALED_WORKER, features=features)
+    await fixture.stage("v2", _API_WORKER, features=features)
+    execution = await root.prepare_execution("v1")
+    await root.attach_execution("admitted-project", execution.runtime_id)
+    first_api = await root.prepare_api("v1")
+    await root.promote_api(
+        first_api.runtime_id,
+        expected_revision=(await root.coordinator.status()).revision,
+    )
+    release = fixture.data / "fixture-provider-release"
+    starts = fixture.data / "fixture-provider-starts"
+    auth = {"Authorization": "Bearer " + _TOKEN}
+    body = {
+        "provider_id": "inert-provider",
+        "engagement_id": "admitted-project",
+        "model": "model-a",
+        "messages": [{"role": "user", "content": "Resume fixture"}],
+        "include_knowledge": False,
+        "stream": True,
+    }
+
+    async def capture(client, path, key, **kwargs):
+        async with client.stream(
+            "POST", path, headers={**auth, "Idempotency-Key": key}, **kwargs
+        ) as response:
+            assert response.status_code == 200, await response.aread()
+            frames = []
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    frames.append(json.loads(line[6:]))
+                    if frames[-1].get("type") == "delta":
+                        break
+            assert frames[-1]["delta"] == "First "
+            return response.headers["x-nebula-command-id"], frames
+
+    try:
+        async with server(root.app) as endpoint:
+            async with httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(uds=endpoint[7:]),
+                base_url="http://synthetic-listener",
+                trust_env=False,
+                timeout=20,
+            ) as client:
+                original, frames = await capture(
+                    client, "/api/v1/chat/completions", "create", json=body
+                )
+                turn_id = next(
+                    frame["turn_id"]
+                    for frame in frames
+                    if frame.get("type") == "started"
+                )
+                release.write_text("Finish initial segment")
+                await client.get(
+                    f"/api/v1/chat/turns/{turn_id}/events?after={frames[-1]['sequence']}",
+                    headers=auth,
+                )
+                async with asyncio.timeout(8):
+                    while (
+                        await fixture.store.get(ChatTurn, turn_id)
+                    ).status != ChatTurnStatus.COMPLETE:
+                        await asyncio.sleep(0.02)
+                # Synthetic crash-recovery state, using the actual saved request.
+                turn = await fixture.store.get(ChatTurn, turn_id)
+                await fixture.store.update(
+                    ChatTurn,
+                    turn_id,
+                    {"status": ChatTurnStatus.INTERRUPTED, "final_message_id": None},
+                    expected_revision=turn.revision,
+                )
+                release.unlink()
+                path = f"/api/v1/chat/turns/{turn_id}/resume"
+                resumed, new_frames = await capture(client, path, "resume")
+                assert resumed != original
+                assert (
+                    min(frame["sequence"] for frame in new_frames)
+                    > frames[-1]["sequence"]
+                )
+                assert not any(frame.get("type") == "done" for frame in new_frames)
+                assert starts.read_text().splitlines() == ["one", "one"]
+                attached, attached_frames = await capture(
+                    client, path, "attach-existing"
+                )
+                assert attached != resumed and attached_frames == new_frames
+                assert starts.read_text().splitlines() == ["one", "one"]
+                # Both resume commands finish while their producer is still held.
+                async with asyncio.timeout(8):
+                    while True:
+                        async with fixture.database.session() as session:
+                            commands = list(
+                                await session.scalars(select(RuntimeCommandRow))
+                            )
+                        if len(commands) == 3 and all(
+                            command.state == "succeeded" for command in commands
+                        ):
+                            break
+                        await asyncio.sleep(0.02)
+                assert [command.name for command in commands].count(
+                    "chat.resume/v1"
+                ) == 2
+                new_api = await root.prepare_api("v2")
+                await root.promote_api(
+                    new_api.runtime_id,
+                    expected_revision=(await root.coordinator.status()).revision,
+                )
+                await root.host.retire(first_api.runtime_id)
+                retry, retry_frames = await capture(client, path, "resume")
+                assert retry == resumed and retry_frames == new_frames
+                assert starts.read_text().splitlines() == ["one", "one"]
+                release.write_text("Finish resumed producer")
+                response = await client.get(
+                    f"/api/v1/runtime/requests/{resumed}/response?after={new_frames[-1]['sequence']}",
+                    headers=auth,
+                )
+                assert (
+                    response.status_code == 200
+                    and response.headers["x-nebula-api-version"] == "v2"
+                )
+                assert (
+                    '"delta":"last"' in response.text and "event: done" in response.text
+                )
+                assert '"delta":"First "' not in response.text
+                assert len(await fixture.store.list_entities(ChatTurn)) == 1
+                assert same_process(execution.pid, execution.process_birth)
+    finally:
+        release.write_text("Fixture cleanup")

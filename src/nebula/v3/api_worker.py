@@ -72,6 +72,7 @@ def create_api_worker(
     project_for: Callable[[HttpIntent], Awaitable[str]],
     upstream_for: Callable[[dict], Awaitable[HttpUpstream]],
     chat_acceptance_for: Callable[[str], Awaitable[bool]] | None = None,
+    chat_resume_for: Callable[[str], Awaitable[bool]] | None = None,
     static_dir: Path | None = None,
     maximum_waiting_views: int = 32,
     maximum_control_views: int = 8,
@@ -178,10 +179,17 @@ def create_api_worker(
             while True:
                 page = await delivery.page(actor, command_id, limit=1)
                 binding = await delivery.chat_binding(actor, command_id)
-                if binding is not None and await journal.has_history(binding.turn_id):
-                    await journal.validate_cursor(binding.turn_id, after_sequence=after)
+                if (
+                    binding is not None
+                    and binding.ready
+                    and await journal.has_history(binding.turn_id)
+                ):
+                    cursor = max(after, binding.stream_after or 0)
+                    await journal.validate_cursor(
+                        binding.turn_id, after_sequence=cursor
+                    )
                     response = _ViewerResponse(
-                        journal.sse(binding.turn_id, after_sequence=after),
+                        journal.sse(binding.turn_id, after_sequence=cursor),
                         slots=slots,
                         media_type="text/event-stream",
                         headers={
@@ -279,7 +287,12 @@ def create_api_worker(
             "project_id": page.project_id,
             "state": page.state,
             **(
-                {"turn_id": binding.turn_id, "session_id": binding.session_id}
+                {
+                    "turn_id": binding.turn_id,
+                    "session_id": binding.session_id,
+                    "stream_after": binding.stream_after,
+                    "stream_ready": binding.ready,
+                }
                 if binding is not None
                 else {}
             ),
@@ -353,6 +366,13 @@ def create_api_worker(
         lane = command_lane(intent.path)
         project_id = await project_for(intent)
         chat_acceptance = False
+        chat_resume = False
+        if (
+            intent.method == "POST"
+            and re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path)
+            and chat_resume_for is not None
+        ):
+            chat_resume = await chat_resume_for(project_id)
         if (
             intent.method == "POST"
             and intent.path == "/api/v1/chat/completions"
@@ -376,6 +396,7 @@ def create_api_worker(
             idempotency_key=key,
             lane=lane,
             chat_acceptance=chat_acceptance,
+            chat_resume=chat_resume,
         )
         del body, intent
         return await response_view(

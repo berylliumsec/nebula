@@ -332,6 +332,7 @@ class RuntimeChatBindingRow(Base):
     session_id: Mapped[str] = mapped_column(String(200), nullable=False)
     runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    stream_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class RuntimeReleaseRow(Base):

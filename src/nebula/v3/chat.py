@@ -4116,7 +4116,11 @@ class ChatService:
         prepared.execution_claim_id = None
 
     async def start_provider_turn(
-        self, prepared: PreparedChat, *, automatic_recovery: bool = False
+        self,
+        prepared: PreparedChat,
+        *,
+        automatic_recovery: bool = False,
+        command_id: str | None = None,
     ) -> str:
         turn = prepared.turn
         if turn is None:
@@ -4133,6 +4137,8 @@ class ChatService:
                 turn.id
             )
             await self.stream_journal.begin(turn.id, runtime.epoch)
+        if command_id is None and getattr(prepared, "source_request", None) is not None:
+            command_id = prepared.source_request._runtime_command_id
         initial_frames = await self._publish_provider_events(
             turn.id,
             runtime,
@@ -4151,6 +4157,7 @@ class ChatService:
                     },
                 )
             ],
+            command_id=command_id,
         )
         if initial_frames:
             runtime.journal_start_sequence = initial_frames[0].sequence - 1
@@ -4167,6 +4174,17 @@ class ChatService:
             name=f"nebula-provider-chat-{turn.id}",
         )
         return turn.id
+
+    async def accept_existing_provider_turn(self, turn_id, *, command_id):
+        runtime = self._active_provider_turns.get(turn_id)
+        if runtime is None or self.stream_journal is None:
+            raise ChatHistoryConflict("The accepted turn no longer has a local stream")
+        await self.stream_journal.accept_existing(
+            turn_id,
+            runtime.epoch,
+            command_id=command_id,
+            after=runtime.journal_start_sequence,
+        )
 
     async def _run_provider_turn(
         self,
@@ -5044,10 +5062,12 @@ class ChatService:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._active_provider_turns.clear()
 
-    async def _publish_provider_events(self, turn_id, runtime, events):
+    async def _publish_provider_events(self, turn_id, runtime, events, *, command_id=None):
         if self.stream_journal is not None:
             # Durable followers read SQL; no second unbounded frame list.
-            return await self.stream_journal.publish(turn_id, events)
+            return await self.stream_journal.publish(
+                turn_id, events, command_id=command_id
+            )
         async with runtime.condition:
             runtime.events.extend(events)
             runtime.condition.notify_all()

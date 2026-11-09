@@ -12,6 +12,7 @@ from .domain import ChatTurn
 from .database import EntityRow, RuntimeResourceRow
 from .execution_scope import current_execution_lease
 from .runtime_coordination import CoordinationConflict, LeaseLost, STREAM_EPOCH
+from .runtime_chat_acceptance import bind_stream_cursor
 
 SEGMENT_END = "runtime_stream_end"
 
@@ -20,10 +21,23 @@ class RuntimeChatJournal:
     def __init__(self, coordination, store):
         self.coordination, self.store = coordination, store
 
-    async def publish(self, turn_id, events, *, batch_key=None, apply=None):
+    async def publish(
+        self, turn_id, events, *, batch_key=None, apply=None, command_id=None
+    ):
         lease = current_execution_lease()
         if lease is None:
             raise LeaseLost("Chat publication requires exact project ownership")
+
+        async def publication(session, frames):
+            if command_id is not None:
+                await bind_stream_cursor(
+                    session,
+                    command_id=command_id,
+                    turn_id=turn_id,
+                    after=frames[0].sequence - 1,
+                )
+            if apply is not None:
+                await apply(session, frames)
 
         async def commit():
             return await self.coordination.append_stream_batch(
@@ -31,10 +45,28 @@ class RuntimeChatJournal:
                 turn_id,
                 batch_key=batch_key or uuid4().hex,
                 events=events,
-                apply=apply,
+                apply=publication,
             )
 
         return await finish_cleanup(commit())
+
+    async def accept_existing(self, turn_id, segment, *, command_id, after):
+        lease = current_execution_lease()
+        if lease is None:
+            raise LeaseLost("Chat attachment requires exact project ownership")
+        async with self.coordination.fenced(lease) as session:
+            resource = await session.get(
+                RuntimeResourceRow, self.resource_id(turn_id, segment)
+            )
+            if resource is None or (
+                resource.project_id,
+                resource.runtime_id,
+                resource.fencing_token,
+            ) != (lease.project_id, lease.runtime_id, lease.fencing_token):
+                raise CoordinationConflict("The active stream belongs to another owner")
+            await bind_stream_cursor(
+                session, command_id=command_id, turn_id=turn_id, after=after
+            )
 
     async def has_history(self, turn_id):
         return bool(await self.coordination.replay_stream(turn_id, limit=1))
@@ -99,7 +131,7 @@ class RuntimeChatJournal:
         )
         lease = current_execution_lease()
 
-        async def release(session):
+        async def release(session, frames):
             resource = await session.get(
                 RuntimeResourceRow, self.resource_id(turn_id, segment)
             )
