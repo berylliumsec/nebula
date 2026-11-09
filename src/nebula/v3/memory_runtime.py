@@ -395,7 +395,7 @@ class MemoryComputeController:
         request,
         *,
         job_id: str,
-        project_id: str,
+        project_id: str | None,
         resource_kind: str,
         resource_id: str,
         container_name: str,

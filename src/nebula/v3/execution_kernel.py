@@ -2241,6 +2241,12 @@ def create_execution_kernel(
             ("runtime", "agent-security-browser-host", agent_security_host.close)
         )
         started.append(("runtime", "agent-security-tools", agent_security_tools.close))
+        if tool_platform is not None:
+            close_search = getattr(
+                getattr(tool_platform, "search_runtime", None), "close", None
+            )
+            if callable(close_search):
+                started.append(("runtime", "managed-search-service", close_search))
 
         async def start_component(
             feature: str,

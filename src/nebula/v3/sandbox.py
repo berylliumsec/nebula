@@ -3197,6 +3197,32 @@ CMD ["/bin/bash"]
     async def _runtime_command(
         self, *arguments: str, timeout_seconds: int
     ) -> tuple[str, str, int]:
+        if arguments and arguments[0] in {"pull", "build"}:
+            # Docker/BuildKit performs this work in the daemon, outside any
+            # cgroup applied to its client. A CLI limit is not containment.
+            detail = (
+                "Image download/build requires a memory-managed daemon runner "
+                "that reserves capacity and verifies limits on its build/transfer "
+                "workers. This runner has no such contract; use a fully verified "
+                "cached image. No unrestricted image provisioning was started."
+            )
+            controller = getattr(self.runner, "memory_compute", None)
+            if controller is not None:
+                from .memory_policy import MemoryEnforcementUnavailable
+                from .memory_runtime import compute_context
+
+                context = compute_context.get()
+                try:
+                    await controller.reject_unsupported(
+                        "container",
+                        project_id=context.project_id if context else None,
+                        resource_kind="container_image_" + arguments[0],
+                        resource_id=self.source_reference,
+                        detail=detail,
+                    )
+                except MemoryEnforcementUnavailable as error:
+                    raise SandboxUnavailable(str(error)) from error
+            raise SandboxUnavailable(detail)
         process = await asyncio.create_subprocess_exec(
             *self.runner._runtime_argv(),
             *arguments,
