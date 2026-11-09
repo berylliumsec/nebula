@@ -215,6 +215,23 @@ class RuntimeCommandRow(Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
+class RuntimeDeliveryRow(Base):
+    """Immutable encrypted HTTP delivery frames, ordered within one command."""
+
+    __tablename__ = "runtime_delivery"
+    __table_args__ = (
+        UniqueConstraint("command_id", "sequence", name="uq_runtime_delivery_sequence"),
+        Index("ix_runtime_delivery_project", "project_id", "command_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    command_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    content_reference: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class RuntimeReleaseRow(Base):
     __tablename__ = "runtime_releases"
     version: Mapped[str] = mapped_column(String(200), primary_key=True)

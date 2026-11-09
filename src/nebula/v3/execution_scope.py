@@ -232,6 +232,7 @@ class ExecutionSQLScope:
                 "runtime_instances",
                 "project_ownership",
                 "runtime_commands",
+                "runtime_delivery",
                 "runtime_releases",
                 "runtime_processes",
                 "deployment_host",

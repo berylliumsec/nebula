@@ -493,6 +493,43 @@ class RuntimeProcessHost:
                 await finish_cleanup(failed_start())
                 raise
 
+    async def retire(self, runtime_id: str, *, timeout: float = 30) -> WorkerIdentity:
+        """Request graceful retirement only after SQL fences every admission.
+
+        An unreachable or slow worker keeps its process slot and retained assets.
+        There is no forced termination deadline for a resident runtime.
+        """
+        if not 0.1 <= timeout <= 300:
+            raise ValueError("runtime retirement timeout is outside its bound")
+        async with self._launch:
+            if self.closed or self.lock.descriptor is None:
+                raise RuntimeError(
+                    "retirement requires the active supervisor host lock"
+                )
+            if self.launch_origin is None or self.launch_origin != process_origin():
+                raise RuntimeIpcError(
+                    "The original process namespace cannot verify retirement"
+                )
+            identity = await self.coordinator.begin_retirement(runtime_id)
+            client = await self.rpc(runtime_id)
+            try:
+                try:
+                    await client.call("worker.shutdown", {}, timeout=min(timeout, 5))
+                except (httpx.HTTPError, OSError, RuntimeIpcError):
+                    # A lost reply can follow successful shutdown. Only an OS
+                    # identity check, never the missing reply, proves exit.
+                    pass
+            finally:
+                await client.close()
+            async with asyncio.timeout(timeout):
+                while same_process(identity.pid, identity.process_birth):
+                    await asyncio.sleep(0.05)
+            child = self.children.get(runtime_id)
+            if child is not None:
+                await asyncio.to_thread(child.wait, timeout=5)
+            await self.coordinator.retired(identity)
+            return identity
+
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:
             raise RuntimeError("rediscovery requires the active supervisor host lock")

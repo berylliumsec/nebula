@@ -11,6 +11,7 @@ import sys
 import time
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from sqlalchemy import select
 
@@ -22,6 +23,7 @@ from nebula.v3.process_identity import process_birth, same_process, signal_proce
 from nebula.v3.release_store import ReleaseStore
 from nebula.v3.runtime_coordination import CoordinationConflict
 from nebula.v3.runtime_ipc import RuntimeIpcError
+from nebula.v3.runtime_http import internal_headers
 from nebula.v3.runtime_processes import RuntimeProcessHost, read_worker_bootstrap
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_release_store import bundle
@@ -36,6 +38,7 @@ pytestmark = [
 ]
 _SETTINGS = PoolSettings(5, 12, 5, 2)
 _TOKEN = "synthetic-operator-private-bootstrap-token"
+_API_WORKER = "from nebula.v3.runtime_worker import main\nmain()\n"
 
 
 @pytest.fixture
@@ -232,6 +235,80 @@ async def test_worker_survives_host_close_and_is_rediscovered_with_retained_asse
     assert len(observed) == 1 and observed[0].reachable
     assert observed[0].identity == identity and observed[0].process_state == "alive"
     assert (installed / "nebula-core").is_file()
+
+
+@pytest.mark.parametrize("role", ["api", "execution"])
+async def test_graceful_retirement_reaps_only_an_empty_worker(managed, role):
+    await managed.stage("v1")
+    identity = await managed.host.spawn("v1", role)
+    assert await managed.host.retire(identity.runtime_id, timeout=5) == identity
+    assert not same_process(identity.pid, identity.process_birth)
+    async with managed.database.session() as session:
+        row = await session.get(RuntimeProcessRow, identity.runtime_id)
+        assert row.state == "retired"
+
+
+async def test_real_api_role_requires_both_private_channel_and_public_auth(managed):
+    await managed.stage("v1", _API_WORKER)
+    identity = await managed.host.spawn("v1", "api")
+    rpc = await managed.host.rpc(identity.runtime_id)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(uds=identity.endpoint[7:]),
+            base_url="http://private-runtime",
+            trust_env=False,
+        ) as client:
+            assert (
+                await client.get(
+                    "/api/v1/deployment/status",
+                    headers={"Authorization": "Bearer " + _TOKEN},
+                )
+            ).status_code == 401
+            assert (
+                await client.get(
+                    "/api/v1/deployment/status",
+                    headers=internal_headers(rpc.secret, "http"),
+                )
+            ).status_code == 401
+            headers = [
+                *internal_headers(rpc.secret, "http"),
+                (b"authorization", ("Bearer " + _TOKEN).encode()),
+            ]
+            response = await client.get("/api/v1/deployment/status", headers=headers)
+            assert response.status_code == 200
+            assert response.json()["protocol"] == "nebula.runtime/v1"
+    finally:
+        await rpc.close()
+    await managed.host.retire(identity.runtime_id, timeout=5)
+
+
+async def test_real_api_promotion_keeps_old_worker_until_replacement_is_ready(managed):
+    await managed.stage("v1", _API_WORKER)
+    await managed.stage("v2", _API_WORKER)
+    first = await managed.host.spawn("v1", "api")
+    status = await managed.coordinator.status()
+    await managed.coordinator.promote_api(
+        first.runtime_id, expected_revision=status.revision
+    )
+    with pytest.raises(CoordinationConflict, match="promote another API"):
+        await managed.host.retire(first.runtime_id, timeout=5)
+    assert same_process(first.pid, first.process_birth)
+    second = await managed.host.spawn("v2", "api")
+    status = await managed.coordinator.status()
+    await managed.coordinator.promote_api(
+        second.runtime_id, expected_revision=status.revision
+    )
+    await managed.host.retire(first.runtime_id, timeout=5)
+    assert same_process(second.pid, second.process_birth)
+    assert (await managed.coordinator.status()).api_version == "v2"
+    # The fixture has no public supervisor listener. Clearing its synthetic
+    # promotion explicitly allows normal teardown of the last API process.
+    from nebula.v3.database import DeploymentHostRow
+
+    async with managed.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        host.api_runtime_id = None
+    await managed.host.retire(second.runtime_id, timeout=5)
 
 
 async def test_two_failed_real_starts_do_not_prevent_a_later_version(managed):

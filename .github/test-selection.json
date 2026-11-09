@@ -1,17 +1,17 @@
 {
-  "change_digest": "243298166e7ee0b66183b0c24f8d7b4047c8f9aeefd2cad034f7b9f58157fcc2",
+  "change_digest": "2584313f92acd882c9d45ece456830154278631a35a2ad6c1e86f0ab8f7c54de",
   "reviewed_by": "Codex",
-  "reason": "Six collected process cases previously failed because the disposable fixture omitted its synthetic Engagement entities. Fresh-context independent causal validation confirmed the setup fault; repair only seeds the two real synthetic projects and closes their event history. Rerun exactly the six failed cases across SQLite and disposable PostgreSQL. Prior 17 startup/process cases, 21 factory/auth cases and 19 transport cases passed.",
-  "exclusions": "No full suite, existing installation, operational service/provider/SSH or deployment. Workers only await events and answer private control messages. Fixture executable uses current repository libraries; this does not certify packaged immutable runtime contents or desktop update/reopen. Source role/CLI/stable-listener wiring remains unfinished; WebKit and packaged desktop evidence remain unavailable. No benchmark workload is run.",
+  "reason": "Four collected real API OS-process cases across SQLite/disposable PostgreSQL. Retained synthetic launch scripts enter the production worker lifecycle/API factory, validate bound incarnation and retained hashes, require both private transport and public bearer auth, promote a ready replacement while the old API stays alive, prevent retirement of the promoted API, and retire only after promotion. Prior16 routing/retirement reruns passed in12.48s; avoid repetition. All four passed in10.82s. Added consolidated local evidence report; source remained unchanged after these passing cases.",
+  "exclusions": "No full suite, existing installation, operational provider/service, SSH or deployment. ASGI mutations are inert synthetic fixtures; this validates delivery boundaries, not complete role/CLI wiring or packaged desktop continuity. No frontend change in this step.",
   "expected_tests": {
-    "python": 6,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_processes.py::test_published_worker_survives_cancellation_after_committed_readiness",
-    "tests/v3/test_runtime_processes.py::test_actual_supervisor_process_exit_leaves_worker_reachable"
+    "tests/v3/test_runtime_processes.py::test_real_api_role_requires_both_private_channel_and_public_auth",
+    "tests/v3/test_runtime_processes.py::test_real_api_promotion_keeps_old_worker_until_replacement_is_ready"
   ],
   "frontend": [],
   "native": [],
