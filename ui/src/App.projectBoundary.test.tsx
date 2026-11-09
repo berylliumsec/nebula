@@ -5,6 +5,7 @@ import { App } from "./App";
 import { DialogProvider } from "./components/DialogSystem";
 import { ThemeProvider } from "./state/ThemeContext";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
+import { rememberProject, rememberedNavigation } from "./state/navigationContinuity";
 
 const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1, description: "", client_name: "Client", tags: [], metadata: {} };
 
@@ -17,10 +18,11 @@ describe("canonical project links", () => {
 
   it("offers the remembered project when a link names an archived one", async () => {
     window.history.replaceState({}, "", "/projects/archived/findings");
-    localStorage.setItem("nebula.engagement", "current");
+    rememberProject({key: "boundary-core:operator", persistent: true}, "current");
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/runtime/identity")) return new Response(JSON.stringify({core_id: "boundary-core", principal_id: "operator"}), {status: 200});
       if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([
         { ...entity, id: "current", name: "Current project", status: "active" },
         { ...entity, id: "archived", name: "Archived project", status: "archived" },
@@ -37,6 +39,6 @@ describe("canonical project links", () => {
     const heading = await screen.findByRole("heading", { name: "Project unavailable" });
     const alert = heading.closest("[role='alert']") as HTMLElement;
     expect(within(alert).getByRole("link", { name: "Open Current project" })).toHaveAttribute("href", "/projects/current");
-    expect(localStorage.getItem("nebula.engagement")).toBe("current");
+    expect(rememberedNavigation({key: "boundary-core:operator", persistent: true})?.projectId).toBe("current");
   });
 });
