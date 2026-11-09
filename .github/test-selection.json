@@ -1,17 +1,22 @@
 {
-  "change_digest": "e02d220265de5ca20153714461849e6d1b7bc0d847035d9d4feb707aefa706c9",
+  "change_digest": "ab74ccc97fc94fd3f17230c96a88431ff1132d3ca068932df84e33e00f482243",
   "reviewed_by": "Codex",
-  "reason": "Nineteen collected cases verify semantic context capability fencing at initial ownership, post-preflight transfer and expired recovery on SQLite/PostgreSQL, plus exact migration-tree review. Additive 0046 creates only immutable manifest storage/index with session cascade and keeps schema family5; code rollback must retain context-aware project execution. Scoped CI continuity preparation is reviewed alongside this integration and does not trigger full testing.",
-  "exclusions": "No full suite, operational provider, deployment or browser execution. Production UI matrix and installed desktop have separate selected acceptance receipts.",
+  "reason": "Fourteen collected tests verify query-only versus host observation capability, typed refusal evidence, original-controller cleanup, real kernel publication/daemon identity checks and effective pressure selection. Fresh independent validation classified the five expected failure projections without changing audit rules. Full Core Mypy now passes344modules. CI retained bundles explicitly build/verify current product guidance.",
+  "exclusions": "No full suite, operational search/provider, deployment or browser run. Physical cases use only an explicitly selected disposable daemon and cached image; GUI/browser acceptance is separately selected.",
   "expected_tests": {
-    "python": 19,
+    "python": 14,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_context_requirements.py",
-    "tests/v3/test_runtime_bundle.py::test_compatibility_requires_review_of_exact_migration_tree"
+    "tests/v3/test_managed_search_runtime.py::test_real_service_uses_one_reservation_and_verified_nonroot_loopback_group",
+    "tests/v3/test_managed_search_runtime.py::test_real_service_refuses_changed_publication_or_daemon_identity",
+    "tests/v3/test_managed_search_runtime.py::test_pressure_threshold_is_rejected_only_when_selected_policy_requires_it",
+    "tests/v3/test_web_search.py::test_status_reports_an_unconfigured_runtime_without_failing",
+    "tests/v3/test_web_search.py::test_status_counts_only_projects_that_can_actually_search",
+    "tests/v3/test_runtime_host_search.py::test_failed_host_admission_never_falls_back_and_preserves_job_evidence",
+    "tests/v3/test_runtime_host_search.py::test_default_platform_never_constructs_a_search_service"
   ],
   "frontend": [],
   "native": [],

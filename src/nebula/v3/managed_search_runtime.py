@@ -152,8 +152,17 @@ class ManagedSearchRuntime(SearchRuntime):
             "web-search:"
             + hashlib.sha256(str(self.config_root).encode()).hexdigest()[:32]
         )
-        self._job = self._runner_instance = self._active_controller = None
+        self._job = self._runner_instance = None
+        self._active_controller: MemoryComputeController | None = None
         self._configuration_export: Path | None = None
+
+    @property
+    def _owned_controller(self) -> MemoryComputeController:
+        if self._active_controller is None:
+            raise SearchRuntimeUnavailable(
+                "The original search controller is unavailable; capacity remains charged"
+            )
+        return self._active_controller
 
     def _runner(self, profile, *, configuration=None, port=0, image=None):
         kwargs = dict(
@@ -277,6 +286,7 @@ class ManagedSearchRuntime(SearchRuntime):
             OSError,
             ValueError,
         ) as error:
+            # diagnostic-expected: unavailable image/runner/policy returns explicit unsupported capability without starting work.
             return {"supported": False, "detail": str(error)}
 
     async def install(self) -> str:
@@ -310,7 +320,7 @@ class ManagedSearchRuntime(SearchRuntime):
             )
 
     async def _observed(self):
-        job = await self._active_controller.service.get_job(self._job.job_id)
+        job = await self._owned_controller.service.get_job(self._job.job_id)
         runner = self._runner_instance
         owner = job.launch_owner
         if (
@@ -371,7 +381,7 @@ class ManagedSearchRuntime(SearchRuntime):
                 else WebSearchRuntimeState.ABSENT
             ), "No owned managed search service is running"
         if self._job.task.done():
-            job = await self._active_controller.service.get_job(self._job.job_id)
+            job = await self._owned_controller.service.get_job(self._job.job_id)
             return WebSearchRuntimeState.FAILED, "Managed search ended: " + (
                 job.outcome or job.detail or job.state
             )
@@ -382,13 +392,14 @@ class ManagedSearchRuntime(SearchRuntime):
                 "Search is running in its verified memory group on host loopback",
             )
         except (WebSearchError, MemoryBudgetError, ValueError) as error:
+            # diagnostic-expected: read-only health exposes failed verification and retains the charged group.
             return WebSearchRuntimeState.FAILED, str(error)
 
     async def ensure_ready(self) -> int:
         async with self._lock:
             if self._job is not None:
                 if self._job.task.done():
-                    ended = await self._active_controller.service.get_job(
+                    ended = await self._owned_controller.service.get_job(
                         self._job.job_id
                     )
                     await self._stop_locked()
@@ -487,6 +498,7 @@ class ManagedSearchRuntime(SearchRuntime):
                     try:
                         current = await self.memory_compute.service.get_job(job_id)
                     except MemoryBudgetError:
+                        # diagnostic-expected: no durable job means the common controller never admitted this launch.
                         # No durable launch record means computation never entered the controller.
                         current = None
                     if (
@@ -500,6 +512,7 @@ class ManagedSearchRuntime(SearchRuntime):
                     try:
                         current = await self.memory_compute.service.get_job(job_id)
                     except MemoryBudgetError:
+                        # diagnostic-expected: absent optional job evidence cannot replace the original launch error below.
                         current = None
                     raise ManagedSearchUnavailable(str(error), job=current) from error
                 raise
@@ -512,7 +525,7 @@ class ManagedSearchRuntime(SearchRuntime):
                 )
             return
         # Pin the original daemon before invoking its immutable-group cleanup.
-        current = await self._active_controller.service.get_job(self._job.job_id)
+        current = await self._owned_controller.service.get_job(self._job.job_id)
         owner = current.launch_owner
         if (
             owner is None
@@ -523,7 +536,7 @@ class ManagedSearchRuntime(SearchRuntime):
                 "The original search daemon is unavailable; capacity remains charged"
             )
         await self._job.close()
-        current = await self._active_controller.service.get_job(self._job.job_id)
+        current = await self._owned_controller.service.get_job(self._job.job_id)
         if current.state != "finished" or current.reserved_bytes:
             raise SearchRuntimeUnavailable(
                 "Search cleanup is unverified; capacity remains charged"

@@ -147,6 +147,11 @@ jobs:
           echo "NEBULA_TEST_PYTHON=$(poetry env info --executable)" >> "$GITHUB_ENV"
       - name: Build production UI
         run: npm --prefix ui run build
+      - name: Build current product guidance for retained continuity bundles
+        if: matrix.test_match == 'tests/runtime-continuity.spec.ts'
+        run: |
+          poetry run python scripts/build_product_knowledge.py
+          poetry run python scripts/build_product_knowledge.py --verify
       - name: List selected tests and their runtime needs
         id: selected_tests
         shell: bash

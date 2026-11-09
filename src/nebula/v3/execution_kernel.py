@@ -27,7 +27,9 @@ from .host_cpu_budget import (
 from .report_cpu_executor import ReportCpuExecutor
 from .diagnostic_requests import DiagnosticsSettingsRequest, BrowserDiagnosticBatch
 from .diagnostic_requests import BrowserDiagnosticEvent as BrowserDiagnosticEvent
-from .diagnostic_requests import BrowserDiagnosticStackFrame as BrowserDiagnosticStackFrame
+from .diagnostic_requests import (
+    BrowserDiagnosticStackFrame as BrowserDiagnosticStackFrame,
+)
 
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .code_completion import complete as complete_code
@@ -328,6 +330,7 @@ from .credentials import (
 )
 from .runtime_usage import HarnessQuotaRead, RuntimeUsageResponse, RuntimeUsageService
 from .integration_settings import (
+    SearchRuntimeObservation,
     TypeSafeKeyRequest,
     TypeSafeIntegrationStatus,
     WebSearchStatus,
@@ -8602,9 +8605,9 @@ def create_execution_kernel(
         return tool_platform.search_runtime
 
     async def web_search_status() -> WebSearchStatus:
-        return await web_search_integration_status(
-            store, tool_platform.search_runtime if tool_platform is not None else None
-        )
+        runtime = tool_platform.search_runtime if tool_platform is not None else None
+        observation = runtime if isinstance(runtime, SearchRuntimeObservation) else None
+        return await web_search_integration_status(store, observation)
 
     @app.get(
         f"{API_PREFIX}/integrations/web-search",

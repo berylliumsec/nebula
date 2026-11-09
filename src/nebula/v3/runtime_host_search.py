@@ -149,7 +149,7 @@ async def _authorize(session, request: HostSearchRequest) -> tuple[str, ...]:
 
 
 def _failure(error: Exception) -> HostSearchFailure:
-    values = {
+    values: dict[str, object] = {
         "detail": redact_text(str(error))[:1_000] or "Host search is unavailable",
     }
     for name, bound in (
@@ -197,6 +197,7 @@ def register_host_search(rpc, runtime_id, coordination, search_runtime):
                 MemoryBudgetConflict,
                 MemoryEnforcementUnavailable,
             ) as error:
+                # diagnostic-expected: the signed result preserves the typed refusal; the project records its failed tool receipt.
                 failure = _failure(error)
 
             async with coordination.fenced(lease) as session:

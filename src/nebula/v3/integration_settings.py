@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from fastapi import HTTPException
 from pydantic import Field, SecretStr
@@ -91,6 +91,7 @@ class CredentialObservation(Protocol):
     def vault_state(self) -> VaultState: ...
 
 
+@runtime_checkable
 class SearchRuntimeObservation(Protocol):
     async def state(self) -> tuple[WebSearchRuntimeState, str]: ...
 
