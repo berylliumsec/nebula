@@ -194,6 +194,15 @@ counts as one of the retry attempts above, so a timeout shorter than a thinking
 model's answer pays for that answer again on every attempt. Bedrock throttling
 and service-unavailable errors are retried like the HTTP statuses above.
 
+For direct OpenAI API use, add an OpenAI model provider in Settings → Models and
+paste an API key into its private credential field. The optional **Request
+Daybreak Blue** choice is saved on that provider and sends
+`access_programs: {"cyber":"daybreak_blue"}` on its Responses requests.
+Leaving it off lets OpenAI resolve access automatically. An explicit Daybreak
+Blue request requires access for the selected OpenAI project and model; OpenAI
+returns 403 if that access is unavailable. This is separate from the Codex
+account harness's Daybreak control.
+
 Short utility requests -- the capability probe, conversation naming, retrieval
 planning, context compaction and scope import -- ask the model to skip
 reasoning where the route takes that control, and a route whose model must

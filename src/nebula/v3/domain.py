@@ -2867,6 +2867,13 @@ class ProviderProfile(Entity):
             raise ValueError("default model must be present in model_allowlist")
         options = self.metadata.get("options", {})
         if isinstance(options, dict):
+            cyber_program = options.get("openai_cyber_access_program")
+            if cyber_program is not None and (
+                self.provider_type != "openai" or cyber_program != "daybreak_blue"
+            ):
+                raise ValueError(
+                    "provider option openai_cyber_access_program requires an OpenAI profile and daybreak_blue"
+                )
             if (
                 self.provider_type == "openrouter"
                 and "openrouter_zdr" in options
