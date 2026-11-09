@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 NATIVE_ID = "acceptance-native"
@@ -264,10 +265,16 @@ def provider_factory(profile: Any, *, root: Path, lease: Any, version: str) -> A
                     ),
                     "",
                 )
-                learn, fill = (
-                    "[TOOLS_CONTEXT:LEARN]" in user,
-                    "[TOOLS_CONTEXT:FILL]" in user,
+                # Core appends JSON excerpts of earlier commands to this text.
+                # Only the current operator command occupies its own line.
+                commands = re.findall(
+                    r"(?m)^\[TOOLS_CONTEXT:(LEARN|USE|FILL)\](?:[ \t]|$)", user
                 )
+                if len(commands) != 1:
+                    raise AssertionError(
+                        "fixture requires one current operator command"
+                    )
+                learn, fill = commands[0] == "LEARN", commands[0] == "FILL"
                 loaded = any(
                     result.name == "tool_catalog.load"
                     for result in request.tool_results

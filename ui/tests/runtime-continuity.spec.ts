@@ -320,15 +320,29 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   let submissions = 0;
   let sent = 0;
   page.on("request", value => {if (value.method() === "POST" && value.url().includes("/chat/completions")) submissions++;});
+  const messages = async (session = fixture.session_id): Promise<{id: string; role: string; content: string}[]> => read(`/api/v1/chat/sessions/${session}/messages`);
+  const revealLearned = async () => {
+    // Earlier rows are mounted only when the virtual transcript reaches them.
+    await expect(page.locator(".chat-virtual-list")).toBeVisible();
+    await page.locator(".chat-scroll").evaluate(element => {element.scrollTop = 0;});
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "TOOLS_CONTEXT_LEARNED ABC"})).toBeVisible();
+  };
   const send = async (content: string, answer: string, session = fixture.session_id) => {
-    const previous = await page.locator(".chat-message.assistant").count();
+    const previous = (await messages(session)).filter(item => item.role === "assistant").length;
     await composer.fill(content);
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     sent++;
     await expect.poll(() => submissions).toBe(sent);
-    await expect(page.locator(".chat-message.assistant")).toHaveCount(previous + 1);
-    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText(answer, {timeout: 60_000});
+    let saved: Awaited<ReturnType<typeof messages>> = [];
+    await expect.poll(async () => {
+      saved = (await messages(session)).filter(item => item.role === "assistant");
+      return saved.length;
+    }, {timeout: 60_000}).toBe(previous + 1);
+    const response = saved.at(-1)!;
+    expect(response.content).toContain(answer);
+    await expect(page.locator(`#chat-message-${response.id} .assistant-markdown`)).toContainText(answer);
     await expect.poll(async () => read(`/api/v1/chat/sessions/${session}/pending-turn`), {timeout: 30_000}).toBeNull();
+    expect((await messages(session)).filter(item => item.role === "assistant")).toHaveLength(previous + 1);
     await expect(page.getByRole("button", {name: "Stop response", exact: true})).toBeHidden();
   };
   await send("[TOOLS_CONTEXT:LEARN]", "TOOLS_CONTEXT_LEARNED ABC");
@@ -355,7 +369,7 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   await page.reload();
   await expect(composer).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`session=${fixture.session_id}`));
-  await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "TOOLS_CONTEXT_LEARNED ABC"})).toBeVisible();
+  await revealLearned();
   await send("[TOOLS_CONTEXT:USE] after reload", "TOOLS_CONTEXT_USED ABC");
   const beforeHandoff = await manifest();
   const beforeEvents = (await control.control("inspect")).events;
@@ -386,6 +400,7 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   expect((await new AxeBuilder({page}).include(".chat-message.assistant").analyze()).violations).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({path: info.outputPath("provider-tools-restored.png"), fullPage: true});
+  await revealLearned();
   const historical = page.locator(".chat-message.assistant").filter({hasText: "TOOLS_CONTEXT_LEARNED ABC"});
   await historical.hover();
   await historical.getByRole("button", {name: "Fork conversation here", exact: true}).click();
@@ -397,6 +412,7 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   expect(forkId).toBeTruthy();
   await expect(page.locator(".chat-action-status").filter({hasText: "Branched conversation"})).toBeVisible();
   await expect(page.locator(".chat-message.assistant").filter({hasText: "TOOLS_CONTEXT_PADDING"})).toHaveCount(0);
+  expect((await messages(forkId!)).filter(item => item.content.includes("TOOLS_CONTEXT_PADDING"))).toHaveLength(0);
   expect((await read(`/api/v1/chat-sessions/${forkId}`)).parent_session_id).toBe(fixture.session_id);
   expect(checkDefinition(await manifest(forkId)).definition_digest).toBe(definition.definition_digest);
   await send("[TOOLS_CONTEXT:USE] from the historical fork", "TOOLS_CONTEXT_USED ABC", forkId);

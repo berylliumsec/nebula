@@ -701,6 +701,7 @@ interface TranscriptRowApproval {
 
 interface TranscriptRowProps {
   message: ConversationMessage;
+  messageNumber: number;
   shared: TranscriptRowShared;
   actions: TranscriptRowActions;
   editing?: MessageEdit;
@@ -768,7 +769,7 @@ function ChatSubagentTranscriptGroup({groupKey, messages, results, selectedMessa
  * streaming turn re-renders only its own row.
  */
 const ChatTranscriptRow = memo(function ChatTranscriptRow({
-  message, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
+  message, messageNumber, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
   taskPlan, planDirective,
   historicalState, historicalError, subagentResult, bookmarked, interactions, answers, waitingLabel,
   harnessProgressDetail, approval, focusPendingAction,
@@ -792,14 +793,15 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   const answerBlockOrdinalOffset = savedProviderContent.progress
     ? parseExactFences(savedProviderContent.progress).blocks.length
     : 0;
+  const activityTitle = `Work summary for message ${messageNumber}`;
   const activityLedgerBase = messageActivityItems.length > 0
-    ? activityLedgerFromHarness("Work summary", message.state, messageActivityItems)
+    ? activityLedgerFromHarness(activityTitle, message.state, messageActivityItems)
     : messageToolCards.length > 0
-      ? activityLedgerFromNative("Work summary", message.state, messageToolCards)
+      ? activityLedgerFromNative(activityTitle, message.state, messageToolCards)
       : historicalTurnId
-        ? activityLedgerFromHarness("Work summary", message.state, [])
+        ? activityLedgerFromHarness(activityTitle, message.state, [])
         : progressContent
-          ? activityLedgerFromHarness("Work summary", message.state, [])
+          ? activityLedgerFromHarness(activityTitle, message.state, [])
         : undefined;
   const activityLedger = activityLedgerBase && message.elapsedMs !== undefined
     ? { ...activityLedgerBase, durationMs: message.elapsedMs }
@@ -6828,6 +6830,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return <ChatTranscriptRow
       key={message.runtimeId ?? message.id}
       message={message}
+      messageNumber={visibleMessages.findIndex(item => item.id === message.id) + 1}
       shared={transcriptShared}
       actions={transcriptActions}
       editing={editing}
