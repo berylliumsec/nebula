@@ -3,16 +3,19 @@
 This is a recipe for a dedicated root-owned validation job. It does not dispatch
 the full-suite CI workflow or a release/publish workflow. Run exactly
 `tests/v3/test_packaged_runtime_continuity.py` once, after collecting exactly one
-case, with no retries. The repaired driver/artifact helper starts at
-`6e7094f4f8dfb98d78a0bca2029bbaf6bd7ec459` and must be included in the final
-candidate source. Source, frozen-framework and native-UI evidence remain separate.
+case, with no retries. The candidate includes the repaired driver, artifact
+helper and automatic chat restoration assertions. Source, frozen Core and native
+UI evidence remain separate.
 
 ## Inputs and dependency boundary
 
-- Baseline source: `557ffd7d316a272283ed7064496d38baadb69ffe`, published by root on
-  its baseline branch so Actions can check out the object.
-- Candidate product source: `4a39c121975bcdad01f1cbddc1c94b934ef6dc15`, or
-  root's subsequent CI-only commit preserving those exact product inputs.
+- Baseline source: `fac1d729bf61858ef415e11f3816edfa1ca422c7`, published on
+  `codex/continuity-baseline`. This is the old Core/worker/schema source
+  `557ffd7d316a272283ed7064496d38baadb69ffe` with only the fresh-launch navigation
+  feature from `4a009288` added. Both versions must support the selected-chat
+  restoration contract; no browser storage is seeded to hide missing behavior.
+- Candidate source: the exact PR head (or selected main commit), checked out
+  independently. The CI orchestrator reads and records its actual full SHA.
 - Require two distinct full 40-character commit SHAs and actual product-code
   differences under `src/nebula/v3`, `ui/src` or `ui/src-tauri/src`. Do not count
   a timestamp-only rebuild as a code update.
@@ -88,7 +91,8 @@ retained manifest was assembled. From that checkout's `ui/` directory run:
 
 ```sh
 NO_STRIP=1 npm run tauri -- build --ci --target x86_64-unknown-linux-gnu \
-  --bundles deb --config "$skip_ui_config" -- --locked
+  --bundles deb --config src-tauri/tauri.managed.conf.json \
+  --config "$skip_ui_config" -- --locked
 ```
 
 The repository has no `pretauri` script at the reviewed pins; the explicit Core
@@ -219,7 +223,9 @@ stopped at a missing genuine notebook resource. The canonical Chromium CDN then
 returned a proxy CONNECT 403. No browser payload or native GUI result was obtained
 locally; the controlled CI job is required to complete this gate.
 
-This recipe changes documentation only. No product tests or disposable LAN Core
-run are required to verify its text; native execution remains a separate pending
-CI acceptance gate. Commands and CLI flags were checked against the pinned
-preparation/build helpers, canonical release workflow and repaired driver.
+The `native-runtime-continuity-linux` job in `.github/workflows/ci.yml` implements
+this recipe only when the exact native journey appears in the reviewed test
+selection. Its source checkouts are siblings, its generated output is outside
+both, and only `output/evidence/**` is uploaded. A source-job skip of the opt-in
+GUI test cannot satisfy this job's required passing native receipt. Native
+execution remains pending until that receipt is available.

@@ -31,8 +31,10 @@ SQLite and PostgreSQL. Live memory application passed on both databases: a real
 bounded allocator's limit changed from 32 MiB to 16 MiB without changing its owner
 or resource group, with kernel readback and released capacity on completion.
 Participant transfer, paused/disabled work preservation and third-version staging
-also have passing isolated process evidence. Five final backend cases remain
-selected for the assembled source revision.
+also have passing isolated process evidence. The five remaining original backend
+cases passed in 246.40 s on immutable source `029d9edc`, with unchanged fixtures,
+the verified 417-passage product asset and explicitly older `4a39c121` static UI.
+This is backend evidence; it does not certify the new UI.
 
 The frozen runtime now uses verified retained onedir workers with exact PID/birth
 matching. Independently built baseline `557ffd7d` and candidate `66fdcac0` passed
@@ -49,26 +51,59 @@ source/UI builds. The live-memory UI workflow completed, but its accessibility
 check identified low text contrast on Apply; the existing primary button variant
 repairs that cause. On `49e59a34`, six Memory Settings component cases, two host
 diagnostics cases (SQLite/PostgreSQL), Ruff and the production UI build passed.
-The final three-journey Chromium matrix (15 cases at 1440/1024 and 320/390/430)
-is collected and awaits the combined source pin.
+The final five-journey Chromium matrix (25 cases at 1440/1024 and 320/390/430)
+awaits the combined source/UI pin. It also covers provider tools context and
+native standing instructions through inert transports and actual retained
+workers. The native fixture does not certify an installed vendor process.
 
-Remaining implementation tracks are canonical host integration mutations and
-session credential resolution, provider-only durable tool manifests (including
-large successful schema loads), and stateful standing-instruction continuity.
-The standing-instruction branch contains the complete durable goal and its own
-causal/validation checkpoint. Fresh independent reviews confirmed its bounded
-UTF8 digest fault and the tool manifest's pre-delivery ownership fault before
-repairs. Host search and image initialization also need memory-policy coverage:
-legacy search has a fixed container ceiling but lacks shared admission, while
-daemon image work cannot be contained by limiting its client process. A supported
-managed search adapter and explicit unsupported runner behavior are being
-implemented and reviewed; no unrestricted fallback is authorized.
+Canonical host integration mutations, session credentials, provider-only durable
+tool manifests, and stateful standing-instruction continuity are integrated.
+Host Settings and memory-limit application use the canonical host controller;
+project workers proxy those operations with exact lease evidence. Production
+startup opens the shared Chroma index only after acquiring host ownership and
+synchronizes current bundled product guidance. Managed web search is one charged
+host service with observed kernel limits; uncontained daemon pull/build work is
+refused. Their focused receipts remain separately pinned in the validation docs.
 
-The nine selected mobile WebKit cases cannot execute here: Playwright 1.61.1's
+Final integration found and repaired a stale worker capability allowlist; 12
+focused checks exercise actual worker startup and schema refusal. Fresh-launch
+navigation now restores Core/principal-scoped selected chat identity, with 47
+focused UI cases and two production-UI mock browser cases passing. These local
+browser checks do not replace the real-Core LAN matrix.
+
+Independent final review confirmed a remaining provider tools renderer defect:
+raw global-periodic `BUTLER.md` instructions containing literal managed tools or
+hints markers can be removed or rejected on first preparation. JSON-escaped
+project instructions, decisions and skills are unaffected. The repair must use
+durable explicit fragment ownership and preserve all caller text. See the full
+standing-instruction goal/checkpoint; no repair is accepted from a delimiter
+shape alone. The final native/browser fixtures also need to use the supported
+draft-goal conversation API for an empty newer distractor; generic saved-chat
+POST is intentionally unsupported. Both causes were independently validated
+before repairs.
+
+The 15 selected mobile WebKit cases cannot execute here: Playwright 1.61.1's
 `webkit-2311/pw_run.sh` is absent and no alternate installed engine was found.
-Native installed GUI close/update/reopen also lacks GTK3/WebKit2GTK dependencies.
-These required gates block the unqualified continuity claim and full merge.
-Product-knowledge synchronization, combined test selection, final PR review and
-CI remain outstanding. Existing installations and live services have not been
-changed. Continue implementation and isolated validation from this checkpoint;
-do not describe these separately pinned receipts as final-build acceptance.
+The official browser CDN is blocked by this environment's proxy. A focused CI
+job must supply genuine WebKit evidence. Native GTK preparation succeeded inside
+an owned bounded fixture, but the same official browser resource download block
+prevented a genuine native package/GUI run locally; that fixture is stopped.
+
+The native CI job builds two genuine independently pinned packages and runs one
+X11/AT-SPI journey with zero retries. Its baseline is `fac1d729` on
+`codex/continuity-baseline`: old Core/worker/schema `557ffd7d` plus only the same
+fresh-launch navigation feature. Candidate and baseline reopens must observe the
+older selected chat and unsent draft before any helper navigation. Only
+sanitized evidence is uploaded; private fixture state is excluded. Actual GUI
+execution remains pending. See [the native CI recipe](native-desktop-ci-recipe.md).
+
+The current combined selection proposal collects 752 Python and 106 frontend
+cases, plus 40 browser cases and one exact Rust test. Final fixture/renderer
+repairs will change these counts; the coordinator must review and bind the final
+selection before pushing the updated PR. Product guidance is currently verified
+at 417 passages with source digest
+`4cc8b1f32983bf7231cdc63d5e4af7f862cfbb937124a5dd7f95a78d153c269e`.
+PR #960 is still the older draft foundation; later implementation commits are
+local until the final integration push. Browser/native gates, final PR review and
+CI block merge. Existing installations and live services have not been changed.
+Continue from these receipts; do not relabel earlier builds as final acceptance.

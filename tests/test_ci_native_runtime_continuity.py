@@ -1,5 +1,6 @@
 """CI ownership/provenance hazards only; no build, download or GUI proof."""
 
+import json
 import subprocess
 
 import pytest
@@ -107,6 +108,35 @@ def test_gui_evidence_allowlist_rejects_tokens_and_symlink_escape(tmp_path):
     exported.unlink()
     exported.write_text("bounded fixture log")
     assert ci.gui_evidence(private, exported) == exported
+
+
+@pytest.mark.parametrize("encoding_layers", [1, 3])
+def test_export_redacts_nested_fixture_credentials_after_private_cleanup(
+    tmp_path, encoding_layers
+):
+    private = tmp_path / "private"
+    fixture = private / "native-journey/case0/packaged-continuity"
+    fixture.mkdir(parents=True)
+    secret = "synthetic-fixture-credential-not-from-environment"
+    detail = {"kind": "synthetic-error", "ipc_token": secret}
+    for _ in range(encoding_layers):
+        detail = json.dumps(detail)
+    document = {"result": "failed", "detail": detail}
+    (fixture / "continuity-failure.json").write_text(json.dumps(document))
+    job = object.__new__(ci.NativeJob)
+    job.private = private
+    job.evidence = tmp_path / "evidence"
+    job.evidence.mkdir()
+    job.secrets = []  # Confirmed driver cleanup has removed operator-token.
+    job.export_gui()
+    exported = next(job.evidence.rglob("continuity-failure.json")).read_text()
+    assert secret not in exported
+    decoded = json.loads(exported)
+    assert decoded["result"] == "failed"
+    nested = decoded["detail"]
+    for _ in range(encoding_layers):
+        nested = json.loads(nested)
+    assert nested == {"kind": "synthetic-error", "ipc_token": "<redacted>"}
 
 
 def test_export_redacts_literal_credentials_bearer_and_token_fragments():

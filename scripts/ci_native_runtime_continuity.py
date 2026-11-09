@@ -104,6 +104,47 @@ def redact(text: str, secrets: list[str]) -> str:
     for value in sorted(set(secrets), key=len, reverse=True):
         if len(value) >= 8:
             text = text.replace(value, "<redacted>")
+
+    def structured(value, depth=0):
+        if isinstance(value, dict):
+            return {
+                key: "<redacted>"
+                if re.fullmatch(
+                    r"(?i)(?:ipc_token|operator_token|access_token|token|password|secret)",
+                    key,
+                )
+                else structured(item, depth + 1)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [structured(item, depth + 1) for item in value]
+        if isinstance(value, str):
+            if depth >= 16:
+                return "<redacted nested data>"
+            try:
+                nested = json.loads(value)
+            except (ValueError, RecursionError):
+                return value
+            if isinstance(nested, (dict, list, str)):
+                return json.dumps(structured(nested, depth + 1))
+        return value
+
+    # Receipts can quote serialized errors. Their fields must remain safe after
+    # confirmed driver cleanup removes the private fixture token file.
+    try:
+        text = json.dumps(structured(json.loads(text)), indent=2)
+    except (ValueError, RecursionError):
+        lines = []
+        for line in text.splitlines(keepends=True):
+            try:
+                sanitized = json.dumps(
+                    structured(json.loads(line)), separators=(",", ":")
+                )
+            except (ValueError, RecursionError):
+                lines.append(line)
+            else:
+                lines.append(sanitized + ("\n" if line.endswith("\n") else ""))
+        text = "".join(lines)
     text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+", r"\1<redacted>", text)
     text = re.sub(r"(https?://)[^\s/@:]+:[^\s/@]+@", r"\1<redacted>@", text)
     return re.sub(
