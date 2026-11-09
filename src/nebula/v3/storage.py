@@ -62,6 +62,7 @@ from .database import (
     EntityRow,
     OperationEventRow,
     ProviderTurnQueueRow,
+    ProviderToolManifestRow,
     RunBudgetCounterRow,
     RunEventRow,
     SearchDocumentRow,
@@ -2822,6 +2823,11 @@ class NebulaStore:
                 )
             )
             (await _delete_chat_turn_ledgers(session, chat_turn_ids))
+            await session.execute(
+                delete(ProviderToolManifestRow).where(
+                    ProviderToolManifestRow.session_id.in_(session_ids)
+                )
+            )
             # The chat and harness turns' run and operation events go once
             # they are gone; the triggers refuse while the owners exist.
             event_owner_ids = list(
@@ -3035,6 +3041,11 @@ class NebulaStore:
                 )
             )
             (await _delete_chat_turn_ledgers(session, project_chat_turn_ids))
+            await session.execute(
+                delete(ProviderToolManifestRow).where(
+                    ProviderToolManifestRow.project_id == engagement_id
+                )
+            )
             # Run events are keyed by Missions, chat and harness turns; every
             # operation event carries the project.
             run_owner_ids = list(

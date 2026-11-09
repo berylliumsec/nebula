@@ -47,6 +47,7 @@ from .domain import (
 from .redaction import redact_text
 from .tool_catalog import CATALOG_TOOL_NAMES, loaded_tool_names, summary
 from .tools import ToolSpec
+from .provider_tool_manifest import spec_digest
 
 SETTINGS_ID = "typesafe"
 ENV_KEY = "TYPESAFE_API_KEY"
@@ -171,12 +172,19 @@ def suggestions_enabled(scope: ScopePolicy) -> bool:
     return scope.tool_suggestions and not scope.local_only
 
 
-def request_key(state: Mapping[str, Any], questions: Mapping[str, Any]) -> str:
+def request_key(
+    state: Mapping[str, Any],
+    questions: Mapping[str, Any],
+    *,
+    definition_digests: Mapping[str, str] | None = None,
+) -> str:
     """Identify a ranking request by the exact payload that would be sent."""
 
     return hashlib.sha256(
         json.dumps(
-            [JEV_MODEL, state, questions],
+            [JEV_MODEL, state, questions, definition_digests]
+            if definition_digests is not None
+            else [JEV_MODEL, state, questions],
             sort_keys=True,
             ensure_ascii=False,
             separators=(",", ":"),
@@ -517,6 +525,8 @@ async def suggest_tools(
     """
 
     names = sorted(deferred)
+    if not names:
+        return ToolSuggestionReceipt(status="no_tool_needed", deferred=[])
     if client is None:
         return ToolSuggestionReceipt(
             status="unavailable",
@@ -538,7 +548,13 @@ async def suggest_tools(
             with_skills=bool(sent_skills),
         )
         if cache is not None:
-            key = request_key(state, questions)
+            key = request_key(
+                state,
+                questions,
+                definition_digests={
+                    name: spec_digest(deferred[name]) for name in names
+                },
+            )
             hit = cache.get(key)
             if hit is not None:
                 # This turn spent no tokens upstream, so it reports none.

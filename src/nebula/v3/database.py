@@ -915,6 +915,26 @@ class ChatTurnCheckpointRow(Base):
     )
 
 
+class ProviderToolManifestRow(Base):
+    """Immutable complete tool knowledge at one provider-session revision."""
+
+    __tablename__ = "provider_tool_manifests"
+    __table_args__ = (
+        Index("ix_provider_tools_project_session", "project_id", "session_id"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProviderTurnQueueRow(Base):
     """Durable admission record; provider capacity is process-local."""
 
@@ -969,7 +989,11 @@ def _prevent_chat_turn_ledger_change(*_: object) -> None:
     raise RuntimeError("chat turn ledgers are append-only")
 
 
-for _append_only_model in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
+for _append_only_model in (
+    ChatTurnStepEventRow,
+    ChatTurnCheckpointRow,
+    ProviderToolManifestRow,
+):
     event.listen(_append_only_model, "before_update", _prevent_chat_turn_ledger_change)
     event.listen(_append_only_model, "before_delete", _prevent_chat_turn_ledger_change)
 

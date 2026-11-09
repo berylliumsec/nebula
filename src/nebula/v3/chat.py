@@ -235,7 +235,14 @@ from .model_catalog import (
 from .model_pricing import combined_billed_cost
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .environments import resolve_ssh_environments
-from .mcp import McpProbeError, catalog_mcp_profiles, resolve_mcp_profiles
+from .mcp import (
+    McpProbeError,
+    catalog_mcp_profiles,
+    resolve_mcp_profiles,
+    mcp_tool_runtime_name,
+    usable_mcp_tools,
+)
+from .mcp_scope import mcp_metadata_is_visible
 from .native_hooks import NativeHookError, NativeHookRunner, NativeHookSnapshot
 from .workspace_provenance import (
     PROVENANCE_SCHEMA,
@@ -314,6 +321,21 @@ from .tool_suggestions import (
     public_suggestions,
     suggest_tools,
     suggestions_enabled,
+)
+from .provider_tool_manifest import (
+    MANIFEST_KEY,
+    ToolManifest,
+    absent_candidates,
+    apply_tools_context,
+    catalog_load_receipt,
+    legacy_present_names,
+    managed_load_result,
+    read_manifest,
+    reconcile as reconcile_tool_manifest,
+    render_hints,
+    render_tools,
+    stage_manifest,
+    successful_load_names,
 )
 from .skill_catalog import (
     SkillSelection,
@@ -1003,6 +1025,8 @@ class PreparedChat:
     context_snapshot: ContextSnapshot | None = None
     tools_enabled: bool = False
     tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
+    tool_manifest: ToolManifest | None = None
+    tool_source_profiles: dict[str, McpServerProfile] = field(default_factory=dict)
     # A turn carries its own start; a turnless completion still reports elapsed.
     started_at: datetime = field(default_factory=utc_now)
     turn: ChatTurn | None = None
@@ -1629,7 +1653,10 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
 
 
 def _largest_catalog_picks(
-    deferred: Mapping[str, ToolSpec], sources: Mapping[str, Any]
+    deferred: Mapping[str, ToolSpec],
+    sources: Mapping[str, Any],
+    *,
+    complete_definitions: bool = False,
 ) -> dict[str, Any]:
     """The catalog receipt whose picks would cost a request the most.
 
@@ -1641,7 +1668,11 @@ def _largest_catalog_picks(
     def schema_size(spec: ToolSpec) -> int:
         return len(
             json.dumps(spec.input_schema, ensure_ascii=False, separators=(",", ":"))
-        ) + min(len(spec.description), MAX_PRELOADED_DESCRIPTION_CHARS)
+        ) + (
+            len(spec.description)
+            if complete_definitions
+            else min(len(spec.description), MAX_PRELOADED_DESCRIPTION_CHARS)
+        )
 
     preloaded = [
         spec.name
@@ -6197,6 +6228,8 @@ class ChatService:
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
         tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
+        tool_manifest: ToolManifest | None = None
+        previous_tool_manifest: ToolManifest | None = None
         ranking: asyncio.Task[_ToolRanking] | None = None
         # Standing profile consent stands in for the per-turn confirmation the
         # operator would otherwise give before tool results leave the device.
@@ -6643,6 +6676,12 @@ class ChatService:
                     raise ChatConfigurationError(str(exc)) from exc
             tool_suggestions: dict[str, Any] | None = None
             tool_catalog: dict[str, Any] | None = None
+            tool_components = dataclass_replace(
+                tool_components,
+                specs=await self._eligible_provider_specs(
+                    tool_components.specs, tool_components.scope, engagement_id
+                ),
+            )
             deferred_specs = (
                 deferrable_specs(
                     tool_components.specs,
@@ -6661,6 +6700,22 @@ class ChatService:
                 else {}
             )
             tool_index = self._tool_index() if deferred_specs else None
+            owner = session or pending_session
+            assert owner is not None
+            previous_tool_manifest = await self._provider_manifest_seed(
+                owner, tool_components.specs
+            )
+            selection = reconcile_tool_manifest(
+                previous_tool_manifest,
+                tool_components.specs,
+                native=self._routing_tools(
+                    spec
+                    for name, spec in tool_components.specs.items()
+                    if name not in deferred_specs
+                ),
+                deferred=deferred_specs,
+            )
+            ranking_candidates = absent_candidates(deferred_specs, selection)
             if deferred_specs:
                 # Only the operator's words, the selected skills and the
                 # catalog decide the ranking, so it runs while knowledge
@@ -6670,7 +6725,7 @@ class ChatService:
                 ranking = asyncio.create_task(
                     self._rank_deferred_tools(
                         tool_components.scope,
-                        deferred_specs,
+                        ranking_candidates,
                         operator_messages=[
                             *(
                                 item.content
@@ -6783,10 +6838,34 @@ class ChatService:
                     deferred_specs,
                     catalog_profiles,
                     request.max_active_subagents if subagents_enabled else None,
+                    manifest=previous_tool_manifest,
                 )
                 if tool_components is not None
                 else estimate_tokens(_NO_TOOL_PREFIX)
             )
+            if tool_components is not None and previous_tool_manifest is not None:
+                native = {
+                    name: spec
+                    for name, spec in tool_components.specs.items()
+                    if name not in deferred_specs
+                }
+                if deferred_specs:
+                    catalog = catalog_components(
+                        tool_components, deferred=deferred_specs
+                    )
+                    if catalog is not None:
+                        native.update(catalog.specs)
+                fixed = ModelRequest(
+                    model=selected_model,
+                    messages=[],
+                    instructions=instructions + render_tools(selection),
+                    tools=self._routing_tools(native.values()),
+                    max_output_tokens=request.max_output_tokens,
+                )
+                if not self._fits_request_capacity(profile, fixed, calibration=None):
+                    raise ChatConfigurationError(
+                        "retained tool definitions and mandatory instructions exceed the selected model context capacity; choose a model with a larger context or disable tools"
+                    )
             # A compacted tool turn also declares conversation.search.
             archive_reserved_tokens = (
                 estimate_tool_definitions(
@@ -6937,6 +7016,21 @@ class ChatService:
                 model_request = self._with_working_notes(
                     profile, model_request, notes_block, calibration
                 )
+            if (
+                not tools_enabled
+                and (owner := (session or pending_session)) is not None
+            ):
+                async with self.store.database.session() as database_session:
+                    previous = await read_manifest(
+                        database_session,
+                        project_id=owner.engagement_id,
+                        session_id=owner.id,
+                    )
+                if previous.revision:
+                    tool_manifest = reconcile_tool_manifest(
+                        previous, {}, native=[], deferred=[]
+                    )
+                    model_request = apply_tools_context(model_request, tool_manifest)
             if goal is not None:
                 model_request = await self._fit_goal_request_budget(
                     goal.id, model_request
@@ -6964,6 +7058,9 @@ class ChatService:
                 )
             if ranking is not None:
                 tool_suggestions, catalog_receipt, ranked_sources = await ranking
+                # Ranking sees only absent current definitions. Discovery and
+                # execution retain the complete eligible deferred catalog.
+                catalog_receipt.deferred = sorted(deferred_specs)
                 # The model is told which server each pick comes from and what
                 # the operator says that server is for.
                 catalog_receipt.sources = picked_sources(
@@ -6976,10 +7073,27 @@ class ChatService:
                     tool_components,
                     deferred=catalog_receipt.deferred,
                     index=tool_index,
+                    complete_definitions=True,
                 )
                 if catalog is not None:
                     tool_components = combine_tool_components(tool_components, catalog)
                 tool_catalog = catalog_receipt.model_dump(mode="json")
+            assert previous_tool_manifest is not None
+            tool_manifest = reconcile_tool_manifest(
+                previous_tool_manifest,
+                tool_components.specs,
+                native=self._routing_tools(
+                    spec
+                    for name, spec in tool_components.specs.items()
+                    if name not in deferred_specs
+                ),
+                deferred=deferred_specs,
+                introduce=(tool_catalog or {}).get("preloaded", []),
+            )
+            model_request = apply_tools_context(
+                model_request, tool_manifest, receipt=tool_catalog
+            )
+            self._ensure_request_capacity(profile, model_request, calibration)
             session_id = (
                 session.id
                 if session is not None
@@ -7065,6 +7179,9 @@ class ChatService:
                     ),
                     "tool_suggestions": tool_suggestions,
                     "tool_catalog": tool_catalog,
+                    MANIFEST_KEY: tool_manifest.reference(),
+                    "provider_tool_manifest_initial": tool_manifest.reference(),
+                    "provider_tool_manifest_history": [tool_manifest.reference()],
                     "conversation_search": conversation_search,
                     "knowledge_search": knowledge_search,
                     "knowledge_enabled": request.include_knowledge,
@@ -7125,6 +7242,11 @@ class ChatService:
                     "plan_behavior": "advisory",
                     "knowledge_enabled": request.include_knowledge,
                     "cloud_knowledge_confirmed": request.allow_cloud_knowledge,
+                    **(
+                        {MANIFEST_KEY: tool_manifest.reference()}
+                        if tool_manifest is not None
+                        else {}
+                    ),
                 },
             )
         try:
@@ -7155,6 +7277,12 @@ class ChatService:
             context_snapshot=context_snapshot,
             tools_enabled=tools_enabled,
             tool_components=tool_components,
+            tool_manifest=tool_manifest,
+            tool_source_profiles={
+                item.id: item for item in [*mcp_profiles, *catalog_profiles]
+            }
+            if tools_enabled
+            else {},
             turn=turn,
             queue_claim=request._queue_claim,
             operator_decisions=operator_decisions,
@@ -7301,6 +7429,7 @@ class ChatService:
         recoveries: list[str] = []
         while True:
             try:
+                request = await self._with_provider_tools(prepared, request)
                 request = await self._with_current_goal_time_instruction(
                     prepared, request
                 )
@@ -7858,6 +7987,7 @@ class ChatService:
         while True:
             output_started = False
             try:
+                request = await self._with_provider_tools(prepared, request)
                 request = await self._with_current_goal_time_instruction(
                     prepared, request
                 )
@@ -8942,7 +9072,12 @@ class ChatService:
                             requested_by="chat-planner",
                         )
                         result = await self._invoke_tool_broker(
-                            broker, invocation, components.scope
+                            broker,
+                            invocation,
+                            components.scope,
+                            specs=components.specs
+                            if prepared.tool_manifest is not None
+                            else None,
                         )
                         output = result.model_result()
                     except Exception as exc:
@@ -9231,7 +9366,11 @@ class ChatService:
                             )
                             + "\n\n"
                             + (prepared.model_request.instructions or "")
-                            + catalog_instructions(catalog_receipt, components.specs)
+                            + (
+                                catalog_instructions(catalog_receipt, components.specs)
+                                if prepared.tool_manifest is None
+                                else ""
+                            )
                             + (await self._plan_execution_instructions(turn.id)),
                             "tools": self._routing_tools(available_specs),
                             "tool_choice": ToolChoice.AUTO,
@@ -9525,6 +9664,11 @@ class ChatService:
                         requested_at=requested_at,
                         responded_at=responded_at,
                     )
+                    if prepared.tool_manifest is not None:
+                        for routed in batched_calls:
+                            routed.replay[MANIFEST_KEY] = (
+                                prepared.tool_manifest.reference()
+                            )
                 # Validate the whole batch before any parallel member starts.
                 # This also catches a Butler directive that arrived after the
                 # model request but before dispatch.
@@ -9714,7 +9858,12 @@ class ChatService:
                             current=searched,
                         )
                     result = await self._invoke_tool_broker(
-                        components.broker, invocation, components.scope
+                        components.broker,
+                        invocation,
+                        components.scope,
+                        specs=components.specs
+                        if prepared.tool_manifest is not None
+                        else None,
                     )
                 except ApprovalRequired as paused:
                     record_caught_exception(
@@ -9830,6 +9979,7 @@ class ChatService:
                         spec=spec,
                         arguments=call.arguments,
                         call_id=durable_call_id,
+                        provider_manifest=prepared.tool_manifest,
                     )
                     entry.update(fields)
                     receipt = result.receipt
@@ -9915,12 +10065,17 @@ class ChatService:
                             _CHAT_TOOL_RESULT_INSTRUCTIONS
                             + "\n\n"
                             + (prepared.model_request.instructions or "")
-                            + _tool_inventory_instructions(
-                                {
-                                    name: spec
-                                    for name, spec in components.specs.items()
-                                    if name in deferred_names and name in loaded_names
-                                }
+                            + (
+                                ""
+                                if prepared.tool_manifest is not None
+                                else _tool_inventory_instructions(
+                                    {
+                                        name: spec
+                                        for name, spec in components.specs.items()
+                                        if name in deferred_names
+                                        and name in loaded_names
+                                    }
+                                )
                             )
                             + _reference_instructions(
                                 help_chunks, trusted_operator_help=True
@@ -10328,6 +10483,8 @@ class ChatService:
         deferred: Mapping[str, ToolSpec],
         catalog_profiles: Sequence[McpServerProfile],
         max_active_subagents: int | None,
+        *,
+        manifest: ToolManifest | None = None,
     ) -> int:
         """Estimated tokens a tool turn's requests add beside the conversation.
 
@@ -10350,7 +10507,34 @@ class ChatService:
         reserve = estimate_tool_definitions(
             cls._routing_tools(specs.values())
         ) + estimate_tokens(_routing_instructions(specs, max_active_subagents) + "\n\n")
-        if deferred:
+        if manifest is not None:
+            # Includes retained schemas before compaction chooses its boundary.
+            # Ranking is concurrent, so also reserve its largest possible new
+            # complete definitions, without repeating already-present schemas.
+            all_specs = {**components.specs, **specs}
+            selection = reconcile_tool_manifest(
+                manifest,
+                all_specs,
+                native=cls._routing_tools(specs.values()),
+                deferred=deferred,
+            )
+            candidates = absent_candidates(deferred, selection)
+            picks = _largest_catalog_picks(
+                candidates,
+                mcp_catalog_sources(catalog_profiles),
+                complete_definitions=True,
+            )
+            retained = reconcile_tool_manifest(
+                manifest,
+                all_specs,
+                native=cls._routing_tools(specs.values()),
+                deferred=deferred,
+                introduce=picks["preloaded"],
+            )
+            reserve += estimate_tokens(
+                render_tools(retained) + render_hints(picks, retained)
+            )
+        elif deferred:
             reserve += estimate_tokens(
                 catalog_instructions(
                     _largest_catalog_picks(
@@ -10758,6 +10942,10 @@ class ChatService:
         """
 
         history = await self._provider_tool_history(turn, entries=entries)
+        if prepared.tool_manifest is not None:
+            history = [
+                managed_load_result(item, prepared.tool_manifest) for item in history
+            ]
         screenshot = await self._browser_screenshot(prepared, turn)
         if screenshot is None:
             return history
@@ -10988,6 +11176,7 @@ class ChatService:
         be cleared too.
         """
 
+        request = await self._with_provider_tools(prepared, request, turn=turn)
         limits = self._request_limits(prepared.provider_profile, request)
         # Compared in the provider's tokens: the calibration scales the
         # request's text, and its JSON never counts below its estimate
@@ -11454,6 +11643,250 @@ class ChatService:
                 ]
         return None
 
+    async def _provider_manifest_seed(
+        self,
+        owner: ChatSession,
+        specs: Mapping[str, ToolSpec],
+    ) -> ToolManifest:
+        async with self.store.database.session() as database_session:
+            manifest = await read_manifest(
+                database_session, project_id=owner.engagement_id, session_id=owner.id
+            )
+        if manifest.revision:
+            return manifest
+        # This one-time expansion path uses durable selection/load facts. It
+        # never treats a directory, suggestion or transcript mention as a schema.
+        messages = await self._session_messages(owner)
+        visible_turns = {
+            value
+            for message in messages
+            if isinstance(value := message.metadata.get("chat_turn_id"), str)
+        }
+        visible_messages = {message.id for message in messages}
+        known: set[str] = set()
+        for old in await self.store.list_session_entities(ChatTurn, owner.id):
+            if old.backend != ChatBackend.PROVIDER or not old.tools_enabled:
+                continue
+            if old.final_message_id and old.final_message_id not in visible_messages:
+                continue
+            if old.final_message_id is None and old.id not in visible_turns:
+                continue
+            known.update(
+                legacy_present_names(
+                    old.request_snapshot, await self._turn_history(old)
+                )
+            )
+        if known:
+            seed = reconcile_tool_manifest(
+                manifest,
+                specs,
+                native=[],
+                deferred=specs,
+                introduce=known,
+                reason="legacy_selection_or_successful_load",
+            )
+            return seed.model_copy(update={"revision": 0})
+        return manifest
+
+    async def _eligible_provider_specs(
+        self,
+        specs: Mapping[str, ToolSpec],
+        scope: ScopePolicy,
+        engagement_id: str,
+        *,
+        frozen_profiles: Mapping[str, McpServerProfile] | None = None,
+    ) -> dict[str, ToolSpec]:
+        """Current revocation checks remain independent of remembered knowledge."""
+
+        engagement = await self.store.get(Engagement, engagement_id)
+        if engagement.scope_policy_id:
+            current_scope = await self.store.get(
+                ScopePolicy, engagement.scope_policy_id
+            )
+            if current_scope.id != scope.id or current_scope.revision != scope.revision:
+                raise ChatHistoryConflict(
+                    "project scope changed during this response; start a new response with the current scope"
+                )
+        profiles: dict[str, McpServerProfile | None] = {}
+        eligible: dict[str, ToolSpec] = {}
+        for name, spec in specs.items():
+            if spec.policy_deny_reason and not scope.bypass_permissions:
+                continue
+            if not spec.source_id or not spec.source_id.startswith("mcp:"):
+                eligible[name] = spec
+                continue
+            identifier = spec.source_id.removeprefix("mcp:")
+            if identifier not in profiles:
+                try:
+                    profiles[identifier] = await self.store.get(
+                        McpServerProfile, identifier
+                    )
+                except NotFoundError:
+                    profiles[identifier] = None
+            profile = profiles[identifier]
+            if (
+                profile is None
+                or not profile.enabled
+                or not mcp_metadata_is_visible(profile.metadata, engagement_id)
+            ):
+                continue
+            tools = usable_mcp_tools(
+                profile, bypass_permissions=scope.bypass_permissions
+            )
+            tool = next(
+                (
+                    item
+                    for item in tools
+                    if name
+                    in {
+                        mcp_tool_runtime_name(identifier, item.name),
+                        f"mcp.{identifier}.{item.name}",
+                    }
+                ),
+                None,
+            )
+            if tool is None:
+                continue
+            if (
+                not scope.bypass_permissions
+                and profile.tool_overrides.get(tool.name, profile.default_approval)
+                == "deny"
+            ):
+                continue
+            frozen = (frozen_profiles or {}).get(identifier)
+            original = (
+                next(
+                    (
+                        item
+                        for item in frozen.capabilities.tools
+                        if item.name == tool.name
+                    ),
+                    None,
+                )
+                if frozen
+                else None
+            )
+            if original is not None and (
+                original.input_schema != tool.input_schema
+                or original.description != tool.description
+            ):
+                raise ChatHistoryConflict(
+                    "a connected tool definition changed during this response; start a new response to use its current schema"
+                )
+            eligible[name] = spec
+        return eligible
+
+    async def _with_provider_tools(
+        self,
+        prepared: PreparedChat,
+        request: ModelRequest,
+        *,
+        turn: ChatTurn | None = None,
+    ) -> ModelRequest:
+        manifest = prepared.tool_manifest
+        components = prepared.tool_components
+        if manifest is None or components is None:
+            return request
+        current_turn = turn or prepared.turn
+        if current_turn is None or current_turn.backend != ChatBackend.PROVIDER:
+            return request
+        specs = await self._eligible_provider_specs(
+            components.specs,
+            components.scope,
+            current_turn.engagement_id,
+            frozen_profiles=prepared.tool_source_profiles,
+        )
+        receipt = catalog_snapshot(current_turn.request_snapshot)
+        deferred = set(receipt.get("deferred", [])) & specs.keys()
+        known = successful_load_names(await self._turn_history(current_turn))
+        known.update(
+            successful_load_names(
+                {
+                    "name": result.name,
+                    "status": "failed" if result.is_error else "complete",
+                    "provider_result": result.output,
+                }
+                for result in request.tool_results
+            )
+        )
+        candidate = reconcile_tool_manifest(
+            manifest,
+            specs,
+            native=self._routing_tools(
+                spec for name, spec in specs.items() if name not in deferred
+            ),
+            deferred=deferred,
+            introduce=known,
+            reason="catalog_load",
+        )
+        if candidate.digest != manifest.digest:
+            owner = prepared.session
+            if owner is None:
+                raise ChatError("provider tool context is missing its durable session")
+            base = apply_tools_context(
+                prepared.model_request, candidate, receipt=receipt
+            )
+            async with self.store.transaction(immediate=True) as transaction:
+                latest = await self.store.get(ChatTurn, current_turn.id)
+                if (
+                    latest.execution_claim_id != current_turn.execution_claim_id
+                    or latest.execution_owner_id != current_turn.execution_owner_id
+                ):
+                    raise ChatHistoryConflict(
+                        "provider execution changed before tool context was saved"
+                    )
+                candidate = await stage_manifest(transaction, owner, candidate)
+                compact, parts = split_request_snapshot(
+                    {
+                        **latest.request_snapshot,
+                        MANIFEST_KEY: candidate.reference(),
+                        "provider_tool_manifest_history": [
+                            *latest.request_snapshot.get(
+                                "provider_tool_manifest_history", [manifest.reference()]
+                            ),
+                            candidate.reference(),
+                        ],
+                        "model_request": base.model_dump(mode="json"),
+                    },
+                    engagement_id=latest.engagement_id,
+                    session_id=latest.session_id,
+                )
+                await stage_snapshot_parts(transaction, parts)
+                prepared.turn = await transaction.update(
+                    ChatTurn,
+                    latest.id,
+                    {"request_snapshot": compact},
+                    expected_revision=latest.revision,
+                )
+            prepared.model_request = base
+            prepared.tool_manifest = candidate
+            manifest = candidate
+            prepared.context_reserved_tokens = self._tool_request_reserve(
+                dataclass_replace(components, specs=specs),
+                {name: specs[name] for name in deferred},
+                list(prepared.tool_source_profiles.values()),
+                current_turn.request_snapshot.get("max_active_subagents"),
+                manifest=candidate,
+            )
+        result = apply_tools_context(request, manifest, receipt=receipt)
+        result = result.model_copy(
+            update={
+                "tools": [tool for tool in result.tools if tool.name in specs],
+                "tool_results": [
+                    managed_load_result(item, manifest) for item in result.tool_results
+                ],
+            }
+        )
+        # A retained definition is never truncated or silently evicted.
+        fixed = result.model_copy(update={"messages": [], "tool_results": []})
+        if not self._fits_request_capacity(
+            prepared.provider_profile, fixed, prepared.estimate_calibration
+        ):
+            raise ChatConfigurationError(
+                "retained tool definitions and mandatory instructions exceed the selected model context capacity; choose a model with a larger context or disable tools"
+            )
+        return result
+
     async def _rank_deferred_tools(
         self,
         scope: ScopePolicy,
@@ -11473,6 +11906,8 @@ class ChatService:
         tool_suggestions: dict[str, Any] | None = None
         catalog_receipt: CatalogReceipt | None = None
         ranked_sources: list[str] = []
+        if not deferred_specs:
+            return None, CatalogReceipt(), []
         if suggestions_enabled(scope):
             receipt = await suggest_tools(
                 (await call_async(self.tool_suggestion_client)),
@@ -11580,8 +12015,28 @@ class ChatService:
         *,
         approval=None,
         parallel=False,
+        specs: Mapping[str, ToolSpec] | None = None,
     ):
         async def invoke():
+            if specs is not None:
+                try:
+                    eligible = await self._eligible_provider_specs(
+                        specs, scope, invocation.engagement_id
+                    )
+                except ChatHistoryConflict as exc:
+                    setattr(exc, "_nebula_before_execution", True)
+                    raise
+                targets = (
+                    invocation.arguments.get("names", [])
+                    if invocation.tool_name == "tool_catalog.load"
+                    else [invocation.tool_name]
+                )
+                if any(name not in eligible for name in targets):
+                    refused = InvalidToolArguments(
+                        "the requested tool is disabled, revoked, or outside the current scope"
+                    )
+                    setattr(refused, "_nebula_before_execution", True)
+                    raise refused
             options = {"approval": approval} if approval is not None else {}
             return await broker.execute(invocation, scope, **options)
 
@@ -11742,7 +12197,11 @@ class ChatService:
 
         async def execute(invocation: ToolInvocation) -> Any:
             return await self._invoke_tool_broker(
-                components.broker, invocation, components.scope, parallel=True
+                components.broker,
+                invocation,
+                components.scope,
+                parallel=True,
+                specs=components.specs if prepared.tool_manifest is not None else None,
             )
 
         results = await asyncio.gather(
@@ -11776,6 +12235,7 @@ class ChatService:
                     spec=spec,
                     arguments=call.arguments,
                     call_id=str(entry["tool_call_id"]),
+                    provider_manifest=prepared.tool_manifest,
                 )
                 entry.update(fields)
                 if waiting_callback:
@@ -12455,6 +12915,7 @@ class ChatService:
         spec: Any = None,
         arguments: dict[str, Any] | None = None,
         call_id: str | None = None,
+        provider_manifest: ToolManifest | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Classify one broker result into its durable tool-history fields.
 
@@ -12465,6 +12926,15 @@ class ChatService:
 
         model_result = result.model_result()
         receipt = result.receipt
+        loaded_facts: dict[str, str] = {}
+        if (
+            provider_manifest is not None
+            and invocation.tool_name == "tool_catalog.load"
+            and not self._tool_result_failed(result)
+        ):
+            loaded = catalog_load_receipt(model_result, provider_manifest)
+            if loaded is not None:
+                model_result, loaded_facts = loaded
         if self._tool_result_failed(result) and spec is not None:
             cause = getattr(result, "failure_error", None)
             failure = tool_failure(
@@ -12512,6 +12982,7 @@ class ChatService:
         waiting_callback = bool(receipt and receipt.results_url and receipt.process_id)
         delivery_incomplete = model_result.get("schema") == "nebula.bounded-result/v1"
         fields = {
+            **({"provider_tool_loaded": loaded_facts} if loaded_facts else {}),
             "status": (
                 "waiting_callback"
                 if waiting_callback
@@ -12593,7 +13064,11 @@ class ChatService:
         )
         try:
             result = await self._invoke_tool_broker(
-                components.broker, invocation, components.scope, approval=approval
+                components.broker,
+                invocation,
+                components.scope,
+                approval=approval,
+                specs=components.specs if prepared.tool_manifest is not None else None,
             )
         except PolicyDenied as exc:
             record_caught_exception(
@@ -12648,6 +13123,7 @@ class ChatService:
                 spec=components.specs[invocation.tool_name],
                 arguments=invocation.arguments,
                 call_id=str(entry["tool_call_id"]),
+                provider_manifest=prepared.tool_manifest,
             )
             entry.update(fields)
             receipt = result.receipt
@@ -13591,7 +14067,10 @@ class ChatService:
             if deferred:
                 # Rebuilt from the snapshot; nothing is re-ranked on resume.
                 catalog = catalog_components(
-                    components, deferred=deferred, index=self._tool_index()
+                    components,
+                    deferred=deferred,
+                    index=self._tool_index(),
+                    complete_definitions=True,
                 )
                 if catalog is not None:
                     components = combine_tool_components(components, catalog)
@@ -13617,6 +14096,62 @@ class ChatService:
             )
         resolved_model = provider.require(model_request)
         turn = await activate_recovery(turn)
+        reference = turn.request_snapshot.get(MANIFEST_KEY)
+        if isinstance(reference, dict) and isinstance(reference.get("revision"), int):
+            async with self.store.database.session() as database_session:
+                tool_manifest = await read_manifest(
+                    database_session,
+                    project_id=session.engagement_id,
+                    session_id=session.id,
+                    revision=reference["revision"],
+                )
+            if tool_manifest.digest != reference.get("digest"):
+                raise ChatHistoryConflict(
+                    "provider tool context changed while the response was paused"
+                )
+        else:
+            previous = await self._provider_manifest_seed(session, components.specs)
+            deferred_names = set(
+                catalog_snapshot(turn.request_snapshot).get("deferred", [])
+            )
+            tool_manifest = reconcile_tool_manifest(
+                previous,
+                components.specs,
+                native=self._routing_tools(
+                    spec
+                    for name, spec in components.specs.items()
+                    if name not in deferred_names
+                ),
+                deferred=deferred_names,
+                introduce=(
+                    set(catalog_snapshot(turn.request_snapshot).get("preloaded", []))
+                    | successful_load_names(await self._turn_history(turn))
+                ),
+                reason="legacy_selection_or_successful_load",
+            )
+            async with self.store.transaction(immediate=True) as transaction:
+                tool_manifest = await stage_manifest(
+                    transaction, session, tool_manifest
+                )
+                turn = await transaction.update(
+                    ChatTurn,
+                    turn.id,
+                    {
+                        "request_snapshot": {
+                            **turn.request_snapshot,
+                            MANIFEST_KEY: tool_manifest.reference(),
+                            "provider_tool_manifest_history": [
+                                tool_manifest.reference()
+                            ],
+                        }
+                    },
+                    expected_revision=turn.revision,
+                )
+        model_request = apply_tools_context(
+            model_request,
+            tool_manifest,
+            receipt=catalog_snapshot(turn.request_snapshot),
+        )
         return PreparedChat(
             provider=provider,
             provider_profile=profile,
@@ -13634,6 +14169,8 @@ class ChatService:
             ),
             tools_enabled=True,
             tool_components=components,
+            tool_manifest=tool_manifest,
+            tool_source_profiles={item.id: item for item in mcp_profiles},
             turn=turn,
             inputs_persisted=True,
             hook_snapshots=hook_snapshots,
@@ -15001,8 +15538,14 @@ class ChatService:
             )
             for message in copied_messages
         ]
-        async with self.store.transaction() as transaction:
+        async with self.store.transaction(
+            immediate=source.backend == ChatBackend.PROVIDER
+        ) as transaction:
             (await transaction.add(fork))
+            if source.backend == ChatBackend.PROVIDER:
+                await self._fork_provider_tools(
+                    transaction, source, fork, copied_messages, inherited
+                )
             (await transaction.add_chat_messages(inherited))
         from .chat_decisions import fork_decisions
         from .chat_goals import ChatGoalService
@@ -15060,6 +15603,81 @@ class ChatService:
                         )
                     )
         return fork
+
+    async def _fork_provider_tools(
+        self,
+        transaction: StoreTransaction,
+        source: ChatSession,
+        fork: ChatSession,
+        originals: Sequence[ChatMessage],
+        inherited: Sequence[ChatMessage],
+    ) -> None:
+        """Copy referenced historical revisions, never the source's later head."""
+
+        references = {
+            item["revision"]: item
+            for message in originals
+            if isinstance(item := message.metadata.get(MANIFEST_KEY), dict)
+            and isinstance(item.get("revision"), int)
+        }
+        project = await self.store.get(Engagement, fork.engagement_id)
+        scope = (
+            await self.store.get(ScopePolicy, project.scope_policy_id)
+            if project.scope_policy_id
+            else ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id)
+        )
+        copied = ToolManifest(session_id=fork.id, project_id=fork.engagement_id)
+        mapped: dict[int, dict[str, Any]] = {}
+        for revision, reference in sorted(references.items()):
+            historical = await read_manifest(
+                transaction.session,
+                project_id=source.engagement_id,
+                session_id=source.id,
+                revision=revision,
+            )
+            if historical.digest != reference.get("digest"):
+                raise ChatHistoryConflict(
+                    "fork source tool context does not match its recorded revision"
+                )
+            specs = {
+                item.name: ToolSpec(
+                    name=item.name,
+                    description=item.description,
+                    input_schema=item.input_schema,
+                    output_schema={"type": "object", "additionalProperties": True},
+                    source_id=item.source_id,
+                    risk_class=RiskClass.LOCAL_READ,
+                )
+                for item in historical.definitions
+            }
+            eligible = await self._eligible_provider_specs(
+                specs, scope, fork.engagement_id
+            )
+            candidate = copied.model_copy(
+                update={
+                    "revision": copied.revision + 1,
+                    "definitions": [
+                        item.model_copy(update={"introduction_reason": "fork"})
+                        for item in historical.definitions
+                        if item.name in eligible
+                    ],
+                },
+                deep=True,
+            )
+            copied = await stage_manifest(transaction, fork, candidate)
+            mapped[revision] = copied.reference()
+        if not copied.revision:
+            # A pre-manifest boundary cannot inherit knowledge learned later.
+            copied = await stage_manifest(
+                transaction, fork, copied.model_copy(update={"revision": 1})
+            )
+        for message in inherited:
+            reference = message.metadata.get(MANIFEST_KEY)
+            if isinstance(reference, dict) and reference.get("revision") in mapped:
+                message.metadata = {
+                    **message.metadata,
+                    MANIFEST_KEY: mapped[reference["revision"]],
+                }
 
     async def rewind_session(
         self,
@@ -15123,7 +15741,9 @@ class ChatService:
             for record in (await self.subagents.for_session(session.id))
             if record.parent_turn_id in retracted_turn_ids
         ]
-        async with self.store.transaction() as transaction:
+        async with self.store.transaction(
+            immediate=session.backend == ChatBackend.PROVIDER
+        ) as transaction:
             retracted = [
                 (
                     await transaction.update(
@@ -15159,6 +15779,41 @@ class ChatService:
                 },
                 expected_revision=session.revision,
             )
+            if session.backend == ChatBackend.PROVIDER:
+                current = await read_manifest(
+                    transaction.session,
+                    project_id=session.engagement_id,
+                    session_id=session.id,
+                )
+                if current.revision:
+                    retained = [
+                        message
+                        for message in messages
+                        if message.sequence < boundary.sequence
+                    ]
+                    reference = (
+                        retained[-1].metadata.get(MANIFEST_KEY) if retained else None
+                    )
+                    historical = (
+                        await read_manifest(
+                            transaction.session,
+                            project_id=session.engagement_id,
+                            session_id=session.id,
+                            revision=reference["revision"],
+                        )
+                        if isinstance(reference, dict)
+                        and isinstance(reference.get("revision"), int)
+                        else ToolManifest(
+                            session_id=session.id, project_id=session.engagement_id
+                        )
+                    )
+                    await stage_manifest(
+                        transaction,
+                        session,
+                        historical.model_copy(
+                            update={"revision": current.revision + 1}
+                        ),
+                    )
         for record in retracted_subagents:
             (await self.subagents.close_retracted_messages(record))
         retained = [
@@ -17197,6 +17852,14 @@ class ChatService:
                     {
                         **_context_attachment_metadata(prepared.context_attachments),
                         "operator_decisions": prepared.operator_decisions,
+                        **(
+                            {
+                                MANIFEST_KEY: prepared.tool_manifest.reference(),
+                                "chat_turn_id": turn.id,
+                            }
+                            if prepared.tool_manifest is not None
+                            else {}
+                        ),
                     }
                     if index == len(prepared.new_messages) - 1
                     else {}
@@ -17228,6 +17891,17 @@ class ChatService:
                     )
                 )
                 (await transaction.add_all([session, *messages]))
+                if prepared.tool_manifest is not None:
+                    persisted_manifest = await stage_manifest(
+                        transaction, session, prepared.tool_manifest
+                    )
+                    if (
+                        persisted_manifest.reference()
+                        != prepared.tool_manifest.reference()
+                    ):
+                        raise ChatHistoryConflict(
+                            "provider tool knowledge changed before this response was saved"
+                        )
                 (await stage_snapshot_parts(transaction, snapshot_parts))
                 (await transaction.add(turn))
                 await bind_chat_command(
@@ -17263,6 +17937,17 @@ class ChatService:
                     },
                     expected_revision=session.revision,
                 )
+                if prepared.tool_manifest is not None:
+                    persisted_manifest = await stage_manifest(
+                        transaction, prepared.session, prepared.tool_manifest
+                    )
+                    if (
+                        persisted_manifest.reference()
+                        != prepared.tool_manifest.reference()
+                    ):
+                        raise ChatHistoryConflict(
+                            "provider tool knowledge changed before this response was saved"
+                        )
                 (await transaction.add_all(messages))
                 (await stage_snapshot_parts(transaction, snapshot_parts))
                 (await transaction.add(turn))
@@ -17532,6 +18217,11 @@ class ChatService:
                 citations=completion.citations,
                 metadata={
                     **(
+                        {MANIFEST_KEY: prepared.tool_manifest.reference()}
+                        if prepared.tool_manifest is not None
+                        else {}
+                    ),
+                    **(
                         {
                             "chat_turn_id": prepared.turn.id,
                             **(
@@ -17661,6 +18351,10 @@ class ChatService:
                             },
                             expected_revision=latest_session.revision,
                         )
+                        if prepared.turn is None and prepared.tool_manifest is not None:
+                            await stage_manifest(
+                                transaction, prepared.session, prepared.tool_manifest
+                            )
                         (await transaction.add_all(messages))
                     last_error = None
                     break
@@ -17675,7 +18369,12 @@ class ChatService:
             self._schedule_provider_usage_check(prepared.provider_profile.id)
             return
         entities.extend(messages)
-        (await self.store.create_many(entities))
+        if prepared.tool_manifest is not None:
+            async with self.store.transaction(immediate=True) as transaction:
+                await transaction.add_all(entities)
+                await stage_manifest(transaction, session, prepared.tool_manifest)
+        else:
+            (await self.store.create_many(entities))
         self._schedule_provider_usage_check(prepared.provider_profile.id)
 
     @staticmethod
