@@ -5519,8 +5519,11 @@ export class ApiClient {
     } catch { return false; }
   }
 
-  storageDashboard(signal?: AbortSignal): Promise<StorageDashboard> {
-    return this.request<StorageDashboard>("storage", { signal });
+  storageDashboard(signal?: AbortSignal, options: {offset?: number; limit?: number} = {}): Promise<StorageDashboard> {
+    const query = new URLSearchParams();
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return this.request<StorageDashboard>(`storage${query.size ? `?${query}` : ""}`, { signal });
   }
 
   createStorageSource(body: Record<string, unknown>): Promise<{ source: StorageSource; token: string; webhook_url: string }> {

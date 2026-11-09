@@ -5746,7 +5746,7 @@
     },
     {
       "key": "ui/src/pages/StoragePage.tsx::storageDashboard",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
