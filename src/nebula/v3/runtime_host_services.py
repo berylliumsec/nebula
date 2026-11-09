@@ -26,6 +26,7 @@ from .runtime_browser_bridge import HostBrowserBridge
 from .runtime_host_settings import HostSettings
 from .runtime_host_credentials import register_session_credentials
 from .runtime_host_pressure import register_host_pressure
+from .runtime_integration_credentials import register_integration_credentials
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
@@ -152,6 +153,7 @@ class HostSharedServices:
                             "browser_bridge": True,
                             "provider_credentials": True,
                             "host_pressure": True,
+                            "integration_credentials": True,
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
                         }
@@ -172,6 +174,12 @@ class HostSharedServices:
                         runtime_id,
                         self.coordination,
                         self.host_settings.observations.gate,
+                    )
+                    register_integration_credentials(
+                        rpc,
+                        runtime_id,
+                        self.coordination,
+                        self.host_settings.credentials,
                     )
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)

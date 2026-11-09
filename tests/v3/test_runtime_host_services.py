@@ -140,6 +140,7 @@ async def test_shared_service_capabilities_require_a_valid_private_peer(shared):
         "browser_bridge": True,
         "provider_credentials": True,
         "host_pressure": True,
+        "integration_credentials": True,
         "knowledge": False,
         "product_guidance": {"state": "unavailable"},
     }

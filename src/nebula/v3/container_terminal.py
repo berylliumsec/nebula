@@ -560,14 +560,28 @@ class ContainerTerminalService:
             raise ContainerTerminalError(
                 "vpn_unavailable", "VPN secret storage is unavailable"
             )
-        status = self.credential_store.status(profile.secret_ref)
-        if not status.available:
+        from .runtime_credential_access import (
+            credential_available_async,
+            resolve_credential_async,
+        )
+
+        if not await credential_available_async(
+            self.credential_store,
+            profile.secret_ref,
+            purpose="vpn",
+            profile_id=profile.id,
+        ):
             raise ContainerTerminalError(
                 "vpn_unavailable",
                 "the selected VPN profile is unavailable; upload it again or choose another profile",
             )
-        return profile, self.credential_store.resolve(
-            profile.secret_ref
+        return profile, (
+            await resolve_credential_async(
+                self.credential_store,
+                profile.secret_ref,
+                purpose="vpn",
+                profile_id=profile.id,
+            )
         ).get_secret_value()
 
     def workspace_lock(self, engagement_id: str) -> asyncio.Lock:

@@ -45,6 +45,16 @@ Focused backend evidence:
   TypeSafe save/test/replace/delete, lost responses and encrypted replay, and
   synthetic Web Search lifecycle/configuration all pass. Existing public
   contracts are retained; no new VPN update endpoint is introduced.
+- Integration credential slice: 22 distinct focused cases passed across 16
+  initial passes and six independently reviewed fixture rechecks. TypeSafe and
+  VPN session references resolve through a signed private exact-grant channel.
+  TypeSafe use requires the project's current opt-in and privacy policy. VPN
+  preselection exposes availability only; secret use requires that project's
+  committed selected VPN and enabled Docker networking. Existing environment
+  fallback remains unchanged. Real retained Kernel consumers used both saved
+  integrations, then observed TypeSafe revocation and local fallback. Per-action
+  Search capability tests cover supported initialization versus unavailable
+  provisioning/reconfiguration without performing OCI work.
 - Ruff passed; targeted mypy reported no issues in the 11 observation modules.
 - Actual retained API composition requires the independently validated shared
   database ownership change in commit `17ec988e`.
@@ -53,9 +63,15 @@ The image preparer, provider and runtime observations were synthetic. No provide
 network, real credential, container image build, live installation or deployment
 was used. Browser/device, production bundle, non-loopback LAN, installed desktop,
 and final Settings-assistant/product-index acceptance belong to the integrated
-candidate and are not established by this backend receipt. Session-only
-integration credentials still need exact-grant resolver delivery to their project
-consumers. Web Search initialization reports its unsupported memory-enforcement
-capability explicitly until a memory-managed persistent adapter is supplied;
-the legacy direct OCI initializer is not enabled by this write slice. Verified
-daemon image-build enforcement is a separate runner capability requirement.
+candidate and are not established by this backend receipt. Web Search capability
+is read from its current managed adapter per action. The legacy direct OCI
+initializer is never treated as a supported memory-managed adapter. The managed
+Search adapter/binding and verified daemon image-build enforcement have their
+own runtime validation requirements.
+
+The credential slice's seven-module focused mypy check passed. Including the
+existing terminal module also reports the preexisting
+`_TerminalReservation.engagement_id` attribute error outside the changed VPN
+method; it remains with the terminal owner. Ruff passed. The repository's fresh
+causal gate reviewed invalid inert image fixture input and discarded async test
+helper calls before those fixture repairs; product validation was preserved.

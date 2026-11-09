@@ -935,7 +935,7 @@ async def test_typesafe_key_is_saved_tested_and_never_returned(typesafe_api):
     empty = (await client.get(TYPESAFE_URL, headers=HEADERS)).json()
     assert empty["source"] is None and empty["available"] is False
 
-    saved = _save(client, "ts-secret-1")
+    saved = await _save(client, "ts-secret-1")
     assert saved.status_code == 200, saved.text
     body = saved.json()
     assert "ts-secret-1" not in saved.text and "session:" not in saved.text
@@ -956,9 +956,9 @@ async def test_replacing_the_key_discards_the_old_secret(typesafe_api):
     from nebula.v3.domain import ToolSuggestionSettings
 
     client, store, credentials, _ = typesafe_api
-    _save(client, "ts-secret-1")
+    await _save(client, "ts-secret-1")
     first = (await store.get(ToolSuggestionSettings, "typesafe")).secret_ref
-    _save(client, "ts-secret-2")
+    await _save(client, "ts-secret-2")
     assert credentials.status(first).available is False
     second = (await store.get(ToolSuggestionSettings, "typesafe")).secret_ref
     assert credentials.resolve(second).get_secret_value() == "ts-secret-2"
@@ -966,7 +966,7 @@ async def test_replacing_the_key_discards_the_old_secret(typesafe_api):
 
 async def test_failed_test_is_recorded_and_retest_uses_the_saved_key(typesafe_api):
     client, _, _, sent_keys = typesafe_api
-    failed = _save(client, "bad-key").json()
+    failed = (await _save(client, "bad-key")).json()
     assert failed["available"] is True
     assert failed["last_test"]["ok"] is False
     assert "refused" in failed["last_test"]["error"]
@@ -986,7 +986,7 @@ async def test_environment_key_is_the_fallback_and_remove_restores_it(
     assert (await client.post(TYPESAFE_URL + "/test", headers=HEADERS)).json()[
         "last_test"
     ]["ok"]
-    _save(client, "ts-secret-1")
+    await _save(client, "ts-secret-1")
     removed = (await client.delete(TYPESAFE_URL, headers=HEADERS)).json()
     assert removed["source"] == "environment"
     assert removed["last_test"] is None

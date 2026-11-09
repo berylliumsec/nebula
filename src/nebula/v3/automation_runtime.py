@@ -1265,9 +1265,10 @@ class AutomationRuntimeManager:
                     "enable project networking before selecting a VPN profile"
                 )
             vpn = await self.store.get(VpnProfile, vpn_profile_id)
-            if (
-                self.credential_store is None
-                or not self.credential_store.status(vpn.secret_ref).available
+            from .runtime_credential_access import credential_available_async
+
+            if self.credential_store is None or not await credential_available_async(
+                self.credential_store, vpn.secret_ref, purpose="vpn", profile_id=vpn.id
             ):
                 raise AutomationRuntimeUnavailable(
                     "selected VPN profile is unavailable"
@@ -2132,8 +2133,15 @@ class AutomationRuntimeManager:
                         "VPN secret storage is unavailable"
                     )
                 vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
-                vpn_config = self.credential_store.resolve(
-                    vpn.secret_ref
+                from .runtime_credential_access import resolve_credential_async
+
+                vpn_config = (
+                    await resolve_credential_async(
+                        self.credential_store,
+                        vpn.secret_ref,
+                        purpose="vpn",
+                        profile_id=vpn.id,
+                    )
                 ).get_secret_value()
             has_network_boundary = bool(rules or domains)
             session = AutomationSession(

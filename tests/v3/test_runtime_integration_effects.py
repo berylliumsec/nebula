@@ -414,3 +414,37 @@ async def test_integration_mutation_auth_keys_and_validation_precede_effects(set
         )
         assert response.status_code == 422
     assert runtime.calls == []
+
+
+async def test_dynamic_search_adapter_capabilities_are_checked_per_action(settings):
+    observations = settings.host.observations
+    runtime = observations.search = InertSearch(settings.store)
+
+    async def capability(*, action="start"):
+        return {
+            "supported": action in {"start", "test"},
+            "detail": "Synthetic per-action memory capability",
+        }
+
+    runtime.initialization_capability = capability
+    status = await settings.client.get("/api/v1/integrations/web-search")
+    assert (
+        status.json()["initialization_supported"]
+        and not status.json()["installation_supported"]
+    )
+    refused = await settings.mutate(
+        "integrations/web-search/install", key="dynamic-install"
+    )
+    assert refused.status_code == 501 and runtime.calls == []
+    started = await settings.mutate(
+        "integrations/web-search/start", key="dynamic-start"
+    )
+    assert started.status_code == 200 and started.json()["container_state"] == "ready"
+    before = list(runtime.calls)
+    refused = await settings.mutate(
+        "integrations/web-search/engines",
+        method="PUT",
+        key="dynamic-reconfigure",
+        body={"engines": ["wikipedia"]},
+    )
+    assert refused.status_code == 501 and runtime.calls == before

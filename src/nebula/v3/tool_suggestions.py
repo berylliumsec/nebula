@@ -24,6 +24,7 @@ an action.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -619,7 +620,13 @@ async def key_source(store: Any, credentials: Any) -> tuple[KeySource | None, bo
 
     settings = await load_settings(store)
     if settings is not None and settings.secret_ref:
-        status = credentials.status(settings.secret_ref)
+        from .runtime_credential_access import credential_available_async
+
+        if settings.secret_ref.startswith("session:"):
+            return "session", await credential_available_async(
+                credentials, settings.secret_ref, purpose="typesafe"
+            )
+        status = await asyncio.to_thread(credentials.status, settings.secret_ref)
         return status.persistence, status.available
     if os.environ.get(ENV_KEY, "").strip():
         return "environment", True
@@ -630,11 +637,14 @@ async def resolve_jev_client(store: Any, credentials: Any) -> JevClient | None:
     """A saved key wins over the environment; an unusable saved key yields None."""
 
     from .credentials import CredentialError
+    from .runtime_credential_access import resolve_credential_async
 
     settings = await load_settings(store)
     if settings is not None and settings.secret_ref:
         try:
-            secret = credentials.resolve(settings.secret_ref)
+            secret = await resolve_credential_async(
+                credentials, settings.secret_ref, purpose="typesafe"
+            )
         except CredentialError:
             # diagnostic-expected: a lost session/vault key surfaces as "not working"
             return None

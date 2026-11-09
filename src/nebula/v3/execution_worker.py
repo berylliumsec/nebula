@@ -49,6 +49,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_memory_control import RemoteMemorySettings
     from .runtime_host_credentials import RemoteSessionCredentials
     from .runtime_host_pressure import RemoteHostLoadGate
+    from .runtime_integration_credentials import RemoteExecutionCredentials
     from .runtime_browser_bridge import RemoteBrowserBridge
     from .storage import NebulaStore
 
@@ -105,6 +106,9 @@ async def project_application(context, lease) -> AsyncIterator[object]:
         app = create_execution_kernel(
             store,
             artifact_store=artifacts,
+            credential_store=RemoteExecutionCredentials(client)
+            if services.get("integration_credentials") is True
+            else None,
             auth_token=bootstrap.operator_token.get_secret_value(),
             execution_data_root=root,
             controller_root=controllers,

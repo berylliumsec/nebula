@@ -71,29 +71,52 @@ class HostIntegrationEffects:
         self.typesafe_check = check_connection
         self.typesafe_client = resolve_jev_client
         # Direct legacy OCI startup is not an acceptable memory-managed adapter.
-        self.search_initialization_supported = False
+        self.search_initialization_supported = None
 
     @property
     def credentials(self):
         return self.settings.credentials
 
-    def require_search_initialization(self):
-        if not self.search_initialization_supported:
+    async def search_capability(self, action):
+        if self.search_initialization_supported is not None:
+            return {
+                "supported": self.search_initialization_supported,
+                "detail": "Synthetic runtime adapter",
+            }
+        observe = getattr(self.observations.search, "initialization_capability", None)
+        if callable(observe):
+            value = await observe(action=action)
+            if (
+                isinstance(value, dict)
+                and type(value.get("supported")) is bool
+                and isinstance(value.get("detail"), str)
+            ):
+                return value
+        return {
+            "supported": False,
+            "detail": "This Core has no supported memory-managed search runtime adapter.",
+        }
+
+    async def require_search_initialization(self, action):
+        capability = await self.search_capability(action)
+        if not capability["supported"]:
             raise HTTPException(
-                501,
-                "Web search initialization is unavailable: this Core has no supported memory-managed search runtime adapter.",
+                501, "Web search initialization is unavailable: " + capability["detail"]
             )
 
     async def search_status(self):
         status = await web_search_integration_status(
             self.store, self.observations.search
         )
+        start, install = await asyncio.gather(
+            self.search_capability("start"), self.search_capability("install")
+        )
         return {
             **status.model_dump(mode="json"),
-            "initialization_supported": self.search_initialization_supported,
-            "initialization_detail": None
-            if self.search_initialization_supported
-            else "Starting or recreating web search requires a supported memory-managed runtime adapter.",
+            "initialization_supported": start["supported"],
+            "initialization_detail": start["detail"],
+            "installation_supported": install["supported"],
+            "installation_detail": install["detail"],
         }
 
     async def save_typesafe(self, **changes):
@@ -284,7 +307,7 @@ class HostIntegrationEffects:
                 runtime = self.observations.search
                 try:
                     if action in {"install", "start", "test"}:
-                        self.require_search_initialization()
+                        await self.require_search_initialization(action)
                     if action == "install":
                         await runtime.record(
                             image_digest=await runtime.install(),
@@ -330,7 +353,7 @@ class HostIntegrationEffects:
                 runtime = self.observations.search
                 state, _ = await runtime.state()
                 if state == WebSearchRuntimeState.READY:
-                    self.require_search_initialization()
+                    await self.require_search_initialization("reconfigure")
                 await runtime.record(engines=body.engines)
                 if state == WebSearchRuntimeState.READY:
                     try:
