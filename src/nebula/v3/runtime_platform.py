@@ -68,7 +68,12 @@ from .tools import (
     ToolSpec,
     register_artifact_retrieval_tools,
 )
-from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
+from .web_search import (
+    SearchQueryRuntime,
+    UnavailableProjectSearch,
+    WebSearchTool,
+    web_search_enabled,
+)
 from .working_notes import WriteNotesTool
 from .settings_assistant_api import SettingsAssistantApi
 
@@ -348,6 +353,7 @@ class RuntimePlatform:
         execution_enabled: bool = False,
         kali_source_image: str = DEFAULT_KALI_SOURCE_IMAGE,
         kali_repository: str = DEFAULT_KALI_REPOSITORY,
+        search_runtime: SearchQueryRuntime | None = None,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
@@ -371,7 +377,9 @@ class RuntimePlatform:
         self.kali_source_image = kali_source_image
         self.kali_repository = kali_repository
         self.runtime_metadata_path = self.data_root / "kali-runtime.json"
-        self.search_runtime = SearchRuntime(store=store, data_root=self.data_root)
+        self.search_runtime = (
+            search_runtime if search_runtime is not None else UnavailableProjectSearch()
+        )
         self._prepared_images: dict[tuple[str, int], PreparedContainerImage] = {}
         self._image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.mcp_service: McpProbeService | None = None
@@ -832,7 +840,11 @@ class RuntimePlatform:
 
 
 def default_runtime_platform(
-    *, store: NebulaStore, artifact_store: ArtifactStore, data_root: Path
+    *,
+    store: NebulaStore,
+    artifact_store: ArtifactStore,
+    data_root: Path,
+    search_runtime: SearchQueryRuntime | None = None,
 ) -> RuntimePlatform:
     source = (
         os.getenv("NEBULA_KALI_SOURCE_IMAGE")
@@ -856,6 +868,7 @@ def default_runtime_platform(
         data_root=data_root,
         execution_enabled=True,
         kali_source_image=source,
+        search_runtime=search_runtime,
     )
 
 
