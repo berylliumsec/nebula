@@ -490,7 +490,11 @@ class DeploymentCoordinator:
             await self._receipt(
                 session,
                 "api.promoted",
-                {"runtime_id": runtime_id, "version": process.version},
+                {
+                    "runtime_id": runtime_id,
+                    "version": process.version,
+                    "revision": host.revision,
+                },
             )
 
     async def target_execution(self, version: str) -> None:
@@ -1885,6 +1889,62 @@ class DeploymentCoordinator:
                     for item in capacity
                 ),
             ]
+
+    async def retire_missing_api(self, identity: WorkerIdentity) -> None:
+        """Release only an exactly identified API proven absent by its host.
+
+        The host calls this after same-namespace observation. A missing socket
+        alone never establishes process absence; execution owners use their
+        separate fenced recovery protocol.
+        """
+        if identity.role != "api" or same_process(identity.pid, identity.process_birth):
+            raise CoordinationConflict(
+                "Only a positively absent API incarnation can be released"
+            )
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            row = await session.get(
+                RuntimeProcessRow, identity.runtime_id, with_for_update=True
+            )
+            if row is None or (
+                row.role,
+                row.pid,
+                row.process_birth,
+                row.endpoint,
+                row.version,
+            ) != (
+                "api",
+                identity.pid,
+                identity.process_birth,
+                identity.endpoint,
+                identity.version,
+            ):
+                raise CoordinationConflict(
+                    "Missing API proof belongs to another incarnation"
+                )
+            if row.state == "retired":
+                return
+            blockers = await self.retirement_blockers(identity.runtime_id)
+            if blockers:
+                raise CoordinationConflict("; ".join(blockers[:10]))
+            if same_process(identity.pid, identity.process_birth):
+                raise CoordinationConflict("API process absence is no longer verified")
+            if host.api_runtime_id == identity.runtime_id:
+                host.api_runtime_id = None
+            row.state = "retired"
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            await session.execute(
+                update(RuntimeInstanceRow)
+                .where(RuntimeInstanceRow.id == identity.runtime_id)
+                .values(lease_expires_at_ms=0)
+            )
+            host.revision += 1
+            host.detail = "The previous API process ended; host recovery and project workers remain available."
+            await self._receipt(
+                session,
+                "api.process_absent",
+                {"runtime_id": identity.runtime_id, "version": identity.version},
+            )
 
     async def begin_retirement(self, runtime_id: str) -> WorkerIdentity:
         async with self.coordination._write() as session:

@@ -1,16 +1,18 @@
 {
-  "change_digest": "8334c126fd65fff6a95ee7c1db3d5fde9d87bda41e29da3ccdb1d23920b139d5",
+  "change_digest": "4e66f64311509a6e5cf0f6e4b75dd013cfd72c24204e5261eacbfb6328996dd5",
   "reviewed_by": "Codex",
-  "reason": "Four collected SQL-backend cases exercise the actual api_application factory: one task-owned connection for atomic project/receipt writes, replay and rollback, worker-owned database cleanup, and rejection of mismatched transaction owners. Independent actual-factory reproduction established the prior two-connection deadlock. All four cases passed in3.47s on SQLite/PostgreSQL; rollback and cleanup ownership verified.",
-  "exclusions": "No full suite, real provider or deployment. Actual frozen artifact is retested after source commit by packaging acceptance.",
+  "reason": "Eighteen collected SQLite/PostgreSQL checks for independently validated missing-API recovery and mapped aggregate faults. Tests preserve active project ownership, last promoted API version, unknown/live process retention, current cleanup guards, and filtered counts constrained to owned project. All eighteen cases passed in28.36s; isolation guards remain unchanged.",
+  "exclusions": "No full suite or live services. Inert exact-PID workers and isolated SQL only; actual Butler and frozen workflow rechecks are separate acceptance.",
   "expected_tests": {
-    "python": 4,
+    "python": 18,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_api_worker_composition.py"
+    "tests/v3/test_runtime_reconciliation.py",
+    "tests/v3/test_execution_scope.py::test_filtered_count_retains_mapped_project_scope",
+    "tests/v3/test_execution_scope.py::test_column_only_reads_and_raw_connections_are_scoped"
   ],
   "frontend": [],
   "native": [],

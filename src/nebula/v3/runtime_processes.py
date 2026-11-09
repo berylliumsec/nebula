@@ -656,10 +656,13 @@ class RuntimeProcessHost:
                         await self.coordinator.abort_start(worker.runtime_id)
                         retired.append(worker.runtime_id)
                     elif worker.process_state == "gone" and worker.identity is not None:
-                        identity = await self.coordinator.begin_retirement(
-                            worker.runtime_id
-                        )
-                        await self.coordinator.retired(identity)
+                        if worker.identity.role == "api":
+                            await self.coordinator.retire_missing_api(worker.identity)
+                        else:
+                            identity = await self.coordinator.begin_retirement(
+                                worker.runtime_id
+                            )
+                            await self.coordinator.retired(identity)
                         retired.append(worker.runtime_id)
                     else:
                         retained.append(

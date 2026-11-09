@@ -1943,7 +1943,9 @@ class NebulaStore:
             return int(
                 (
                     await session.scalar(
-                        statement.with_only_columns(func.count()).order_by(None)
+                        statement.with_only_columns(func.count(EntityRow.id)).order_by(
+                            None
+                        )
                     )
                 )
                 or 0

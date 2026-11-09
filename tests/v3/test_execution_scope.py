@@ -101,6 +101,18 @@ async def test_column_only_reads_and_raw_connections_are_scoped(execution):
         ) == ["turn-mine"]
 
 
+async def test_filtered_count_retains_mapped_project_scope(execution):
+    control, runtime, _, _ = execution
+    assert await control.count_entities(ChatTurn, {"model": "inert"}) == 2
+    assert await runtime.count_entities(ChatTurn, {"model": "inert"}) == 1
+    assert (
+        await runtime.count_entities(
+            ChatTurn, {"model": "inert"}, engagement_id="other"
+        )
+        == 0
+    )
+
+
 async def test_first_raw_statement_loads_current_transaction_authority(execution):
     _, runtime, _, _ = execution
     await runtime.database.initialize()

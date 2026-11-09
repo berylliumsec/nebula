@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from .database import (
     DeploymentHostRow,
+    DeploymentReceiptRow,
     MemoryBudgetPolicyRow,
     ProjectOwnershipRow,
     RuntimeProcessRow,
@@ -64,6 +65,26 @@ class RuntimeAutoAdmission:
                 policy = await session.get(MemoryBudgetPolicyRow, "host")
                 signature = (host.revision, policy.revision if policy else None)
                 version = host.target_version or self.default_version
+                promotion = await session.scalar(
+                    select(DeploymentReceiptRow)
+                    .where(
+                        DeploymentReceiptRow.action == "api.promoted",
+                    )
+                    .order_by(
+                        DeploymentReceiptRow.result["revision"]
+                        .as_integer()
+                        .desc()
+                        .nullslast(),
+                        DeploymentReceiptRow.occurred_at_ms.desc(),
+                        DeploymentReceiptRow.id.desc(),
+                    )
+                    .limit(1)
+                )
+                api_version = (
+                    promotion.result.get("version", self.default_version)
+                    if promotion
+                    else self.default_version
+                )
                 demands = list(
                     await session.scalars(
                         select(ProjectOwnershipRow)
@@ -77,7 +98,7 @@ class RuntimeAutoAdmission:
                 api_id = host.api_runtime_id
             if api_id is None and self._blocked.get("api") != signature:
                 try:
-                    worker = await supervisor.prepare_api(version)
+                    worker = await supervisor.prepare_api(api_version)
                     current = await supervisor.coordinator.status()
                     await supervisor.promote_api(
                         worker.runtime_id, expected_revision=current.revision
