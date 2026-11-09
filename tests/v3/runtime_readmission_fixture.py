@@ -15,13 +15,19 @@ import sys
 import httpx
 from sqlalchemy import select
 
-from nebula.v3.database import Database, RuntimeProcessRow
+from nebula.v3.database import (
+    Database,
+    DeploymentHostRow,
+    ProjectOwnershipRow,
+    RuntimeProcessRow,
+)
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployment_protocol import ReleaseManifest
 from nebula.v3.memory_budget import MemoryBudgetService
 from nebula.v3.memory_policy import MIB, MemoryBudgetUpdate
 from nebula.v3.process_identity import process_birth, same_process, signal_process
 from nebula.v3.release_store import MANIFEST_NAME, ReleaseStore
+from nebula.v3.runtime_ipc import RuntimeCredentials, RuntimeRpcClient
 from nebula.v3.runtime_launcher import discovery, operator_token
 from nebula.v3.storage import NebulaStore
 
@@ -40,6 +46,7 @@ def candidate_bundle(root):
     for name, target in (
         ("runtime_continuity_worker.py", "acceptance_worker.py"),
         ("runtime_continuity_allocator.py", "acceptance_allocator.py"),
+        ("runtime_readmission_worker.py", "acceptance_readmission_worker.py"),
     ):
         shutil.copy2(Path(__file__).with_name(name), source / target)
     (source / "bin").mkdir()
@@ -47,7 +54,7 @@ def candidate_bundle(root):
         "#!" + sys.executable + "\nfrom pathlib import Path\nimport sys\n"
         "root=Path(__file__).resolve().parent.parent\n"
         "sys.path[:0]=[str(root/'source'),str(root)]\n"
-        "from acceptance_worker import main\nmain()\n"
+        "from acceptance_readmission_worker import main\nmain()\n"
     )
     (source / "bin" / "nebula-core").chmod(0o755)
     (source / "ui").mkdir()
@@ -188,6 +195,33 @@ class OwnedReadmissionCore:
                     break
                 await asyncio.sleep(0.05)
 
+    async def wait_for_chat_maintenance(self, project_id):
+        async with self.database.session() as session:
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            assert owner is not None and owner.runtime_id is not None
+            process = await session.get(RuntimeProcessRow, owner.runtime_id)
+            assert process is not None
+        credentials = RuntimeCredentials(self.root / "runtime" / "credentials")
+        client = RuntimeRpcClient(
+            process.endpoint, credentials.read(process.credential_reference)
+        )
+        observed = None
+        try:
+            async with asyncio.timeout(30):
+                while True:
+                    observed = await client.call(
+                        "acceptance.chat-maintenance/v1", {}, timeout=5
+                    )
+                    if observed == {"naming": 0, "precompactions": 0}:
+                        return
+                    await asyncio.sleep(0.02)
+        except TimeoutError as error:
+            raise AssertionError(
+                f"Chat maintenance did not finish: {observed}"
+            ) from error
+        finally:
+            await client.close()
+
     async def stop(self, key):
         status = (await self.client.get("/api/v1/deployment/status")).json()
         response = await self.client.post(
@@ -198,13 +232,19 @@ class OwnedReadmissionCore:
                 "parameters": {"expected_revision": status["revision"]},
             },
         )
-        assert (
-            response.status_code == 200 and response.json()["state"] == "succeeded"
-        ), response.text
+        if response.status_code != 200 or response.json()["state"] != "succeeded":
+            observed = await self.client.get("/api/v1/deployment/status")
+            raise AssertionError(
+                f"{response.text}; deployment status: {observed.text}; logs: {self.root}"
+            )
         process, birth = self.processes[-1]
         await asyncio.to_thread(process.wait, timeout=30)
         assert not same_process(process.pid, birth)
         assert discovery(self.root) is None
+        async with self.database.session() as session:
+            host = await session.get(DeploymentHostRow, "host")
+            assert host is not None
+            assert host.shutdown_requested and host.api_runtime_id is None
 
     async def close(self):
         if self.client is not None:

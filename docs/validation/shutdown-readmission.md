@@ -46,3 +46,53 @@ Ruff and focused mypy on `runtime_auto_admission.py` pass. Raw receipts are
 claim rules or other product modules changed. Final combined production UI/browser
 acceptance remains with the parent owner. This fixture is a source-runtime
 backend proof, not an installed distribution or live-provider test.
+
+## CI shutdown fixture follow-up
+
+The original CI run on `eee508bc` failed the two actual-Core variants: SQLite
+reported `CoordinationConflict` during the second shutdown, and PostgreSQL
+reported `RuntimeIpcError` during the first. A scoped diagnostic retry on
+`c4fb0ff5` reproduced only SQLite; PostgreSQL passed. None of the later recovery
+reconciliation changes caused these original failures.
+
+A separate fresh-context causal review confirmed the SQLite fixture raced
+optional conversation naming. The second turn was complete at
+`18:15:24.106480`, its shutdown operation was refused by `18:15:24.282`, and its
+title's authoritative `initial_title_state=generated` write finished only at
+`18:15:24.362612`. The signed worker refusal was “Conversation maintenance is
+still active.” Each test chat creates a fresh session, so completing the reply
+does not prove its separate naming task has finished. Reaching worker quiescence
+also excludes a stale deployment revision as the cause of that refusal.
+
+The readmission-only retained inert adapter now exposes an authenticated,
+read-only observation of its actual naming and precompaction tasks. The fixture
+waits for those tasks before each public shutdown operation, replacing the first
+stop's fixed delay and adding the missing boundary before the second stop. It
+also reads back the durable host shutdown state and includes fresh deployment
+status if an operation fails. Product runtime code, shutdown guards, fencing
+counters, paused inventory and exact process-absence assertions are unchanged.
+
+Only the still-failing SQLite node was rerun after the repair:
+
+```text
+tests/v3/test_shutdown_readmission.py::test_actual_core_shutdown_reopen_readmits_existing_project_and_preserves_pauses[sqlite]
+1 passed in 39.51s
+```
+
+Its authenticated source-Core LAN origins were `http://172.26.91.238:38771` and
+`http://172.26.91.238:45763`. Both turns completed, the ownership fence advanced
+from 1 to 2, the old lease was rejected, prior workers were absent, both paused
+records were preserved, and both stops were read back from durable host state.
+The original two-node diagnostic run recorded one failure and one PostgreSQL
+pass in 87.58 seconds; that passing local case was not repeated.
+
+External receipts and traces are
+`/tmp/nebula-ci-shutdown-diagnostic-selection-receipt.json`,
+`/tmp/nebula-ci-shutdown-diagnostic.txt`,
+`/tmp/nebula-ci-shutdown-sqlite-selection-receipt.json`, and
+`/tmp/nebula-ci-shutdown-sqlite-final.txt`. Focused Ruff check and formatting pass.
+The PostgreSQL CI exception's inner cause remains unknown; its diagnostic pass
+does not prove that original exception is repaired. No other tests, browser
+matrix, installed distribution, existing installation or live provider was
+exercised in this follow-up. This is fixture evidence for the stated backend
+journey only.

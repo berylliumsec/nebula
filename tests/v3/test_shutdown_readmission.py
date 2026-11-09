@@ -291,7 +291,7 @@ async def test_actual_core_shutdown_reopen_readmits_existing_project_and_preserv
     from nebula.v3.deployments import DeploymentCoordinator
     from nebula.v3.process_identity import same_process
 
-    await asyncio.sleep(0.2)  # Drain the inert title completion before idle quiescence.
+    await core.wait_for_chat_maintenance(project["id"])
     await core.stop("stop-used-project")
     assert all(not same_process(pid, birth) for pid, birth in old_processes)
     async with core.database.session() as session:
@@ -327,6 +327,7 @@ async def test_actual_core_shutdown_reopen_readmits_existing_project_and_preserv
     after = await core.store.list_entities(ChatTurn, engagement_id=project["id"])
     assert len(after) == 2 and all(turn.status == "complete" for turn in after)
     assert turns[0].id in {turn.id for turn in after}
+    await core.wait_for_chat_maintenance(project["id"])
     await core.stop("stop-reopened-project")
     print(
         {
