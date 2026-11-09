@@ -27,7 +27,8 @@ Ruff and targeted mypy passed. Raw outputs/receipts are
 `/tmp/nebula-host-services-*`.
 
 No existing installation, operational provider/service, SSH, deployment or compute
-workload was used. Compatibility memory import, general shared knowledge-index
-operations and production execution-factory wiring remain pending. These are
+workload was used. The [compatibility memory import](shared-memory-import.md) is
+now validated; general shared knowledge-index operations and production
+execution-factory wiring remain pending. These are
 backend lifetime checks; production LAN/reconnect, mobile WebKit and packaged
 desktop acceptance evidence are still required for deployment continuity.

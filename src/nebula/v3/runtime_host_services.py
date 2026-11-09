@@ -20,6 +20,7 @@ from .runtime_capacity import RuntimeCapacity
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
+from .shared_memory_import import CompatibilityMemoryImport
 
 HOST_SOCKET_NAME = "host-services.sock"
 PEER_HEADER = b"x-nebula-ipc-worker"
@@ -155,6 +156,7 @@ class HostSharedServices:
             return
         if self.host.lock.descriptor is None or self.host.socket_root is None:
             raise RuntimeError("Shared services require exclusive supervisor ownership")
+        await CompatibilityMemoryImport(self.host).run()
         path = self.host.socket_root / HOST_SOCKET_NAME
         if path.exists() or path.is_symlink():
             details = path.lstat()

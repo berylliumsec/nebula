@@ -1,19 +1,19 @@
 {
-  "change_digest": "22e999bafefce9c6c79bab27e0a16f261e82e2368c32da26b0437fedfb1a56a6",
+  "change_digest": "04e66c7756f7c712b6a59b2f6425fd511081d44311c43a0b4bbe9dec055a29b2",
   "reviewed_by": "Codex",
-  "reason": "8 exact collected Unix-socket cases after independent diagnosis. Initial26-case run passed18 unaffected socket-path/supervisor/fence cases, while8 actual host requests failed before authentication. Fresh-context validation traced installed Uvicorn0.34 bound-method autodetection selecting ASGI2 and introducing a one-argument call to the correct3-argument ASGI3 method. Pin this listener interface explicitly. Rerun only the8 failed real socket/role/restart/drain cases across SQLite/PostgreSQL; preserve18 earlier passes without broadening. Final reviewed26-case union:18 initial passes plus8 exact repaired passes in21.14s. Ruff and targeted mypy passed. Only evidence notes changed after source validation; the union is not rerun.",
-  "exclusions": "No full suite, existing installation, operational provider/service, SSH, deployment or compute workload. Only local disposable Uvicorn/Unix listeners and retained inert fixture workers. No frontend change; final production LAN/WebKit/packaged continuity gates remain pending. Compatibility memory import and complete shared knowledge/execution factory integration remain pending.",
+  "reason": "40 collected compatibility import/lifetime cases:24 new SQLite/PostgreSQL import contracts,12 affected actual host-service socket cases and4 exact stable promotion/rollback/supervisor replacement cases. Preserve original memory/revisions/cursors, no replay after completed import, bounded checkpoint resume after failure/cancellation, reject changed checkpoints/private-path violations/corruption, hold other-pool admissions while importing/blocked, require active host lock and verified retirement, and exercise startup integration. All40 passed in48.18s; Ruff and targeted mypy passed. Evidence notes added after source validation. No broader rerun.",
+  "exclusions": "No full suite, existing installation, operational service/provider, SSH, deployment, compute or benchmark workload. Only synthetic compatibility files and disposable local SQL/Unix/inert-worker fixtures. The one-time initial transition still requires coordinated retirement; no live Python task migration. Shared knowledge indexing, execution factory/client/desktop/deployer and final browser/packaged acceptance remain pending.",
   "expected_tests": {
-    "python": 26,
+    "python": 40,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_shared_memory_import.py",
     "tests/v3/test_runtime_host_services.py",
-    "tests/v3/test_supervisor.py",
-    "tests/v3/test_shared_butler_memory.py::test_lease_loss_during_memory_write_rolls_back_sql_before_indexing",
-    "tests/v3/test_shared_butler_memory.py::test_context_and_peer_identity_cannot_select_another_project"
+    "tests/v3/test_supervisor.py::test_one_listener_routes_static_builds_through_api_promotion_and_code_rollback",
+    "tests/v3/test_supervisor.py::test_supervisor_close_leaves_ready_api_alive_and_new_host_rediscovers_it"
   ],
   "frontend": [],
   "native": [],

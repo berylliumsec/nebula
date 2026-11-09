@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
     Database,
+    BootstrapStateRow,
     DeploymentHostRow,
     DeploymentReceiptRow,
     ProjectHandoffRow,
@@ -37,6 +38,7 @@ from .deployment_protocol import (
     ProjectDeploymentStatus,
     ReleaseManifest,
     ResourceSnapshot,
+    SHARED_MEMORY_BOOTSTRAP_KEY,
     WorkerIdentity,
 )
 from .runtime_coordination import (
@@ -219,6 +221,13 @@ class DeploymentCoordinator:
             raise ValueError("unknown independently supervised worker role")
         async with self.coordination._write() as session:
             host = await self._host(session)
+            memory_import = await session.get(
+                BootstrapStateRow, SHARED_MEMORY_BOOTSTRAP_KEY
+            )
+            if memory_import is not None and memory_import.status != "complete":
+                raise CoordinationConflict(
+                    "Shared memory import is incomplete; resolve it before starting another runtime"
+                )
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("stage and verify the runtime bundle first")

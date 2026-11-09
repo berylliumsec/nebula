@@ -31,7 +31,8 @@ preserves runtime behavior; no behavior repair or additional test run was needed
 Raw collection, receipt and outputs are `/tmp/nebula-shared-memory-*`.
 
 Supervisor socket/lifetime wiring is now covered by the
-[host-services evidence](runtime-host-services.md). A verified import of
-compatibility memories is still required before enabling the full architecture. Shared knowledge
+[host-services evidence](runtime-host-services.md). The verified one-time
+[compatibility import](shared-memory-import.md) preserves existing memories.
+Shared knowledge
 index operations, production execution construction, production LAN/reconnect,
 mobile WebKit and packaged-desktop continuity evidence also remain pending.
