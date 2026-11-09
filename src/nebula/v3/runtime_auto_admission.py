@@ -89,10 +89,10 @@ class RuntimeAutoAdmission:
                 demands = list(
                     await session.scalars(
                         select(ProjectOwnershipRow)
-                        .where(
-                            ProjectOwnershipRow.runtime_id.is_(None),
-                            ProjectOwnershipRow.fencing_token == 0,
-                        )
+                        # A verified quiescence clears the owner while retaining
+                        # its fencing history. Reopening may claim the next fence;
+                        # expired or uncertain owners still have a runtime ID.
+                        .where(ProjectOwnershipRow.runtime_id.is_(None))
                         .limit(16)
                     )
                 )
