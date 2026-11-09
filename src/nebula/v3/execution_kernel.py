@@ -1812,6 +1812,7 @@ def create_execution_kernel(
     host_load_gate: HostLoadGate | None = None,
     host_cpu_budget: HostCpuBudget | None = None,
     memory_budget_service: MemoryBudgetService | None = None,
+    runtime_capacity=None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -2216,6 +2217,7 @@ def create_execution_kernel(
         workspace_resolver=native_workspace,
         managed_skill_root=managed_skill_root,
         provider_usage_observer=openrouter_credit_observer.schedule,
+        runtime_capacity=runtime_capacity,
     )
     provider_chat.butler_memory = butler_memory_service
     if automation_runtime is not None:

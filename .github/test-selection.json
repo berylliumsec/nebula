@@ -1,17 +1,26 @@
 {
-  "change_digest": "016e3a53960eb0371c102e82f87c1905340715513afef046132b757354d90808",
+  "change_digest": "b68f8c5c0ea254bbcd838d3c8de7886fb6a49f5cae910b222207c37fea91415d",
   "reviewed_by": "Codex",
-  "reason": "37 collected authentication/API cases:16 new durable pairing/device-control cases across isolated SQLite/PostgreSQL plus21 affected API boundary cases. Verify invitations survive API replacement, concurrent redemption is single-use, bounded attempts/expiry/capacity commit, creation locality and TLS/CSRF controls, atomic device creation rollback, no-store response headers and independent control/import ownership. All37 passed in18.88s; Ruff and targeted mypy passed. Evidence documentation added after the validated source.",
-  "exclusions": "No full suite, existing installation, operational service, provider, SSH or deployment. ASGI clients and synthetic sessions only. No new frontend changes; production LAN/browser/packaged continuity gates remain pending for complete architecture.",
+  "reason": "7 collected affected tool-dispatch cases after independent causal validation. The first selection passed36 cases and exposed a real serial-tool bypass: only parallel waves acquired host capacity. A fresh-context validator reproduced the inert turn completing while its tool slot was occupied and observed no tool acquisition, ruling out admission failure/context loss/deadlock. Centralize all four broker paths (serial, parallel, discovery, approval resume). Run3 new real tool-loop cases plus4 exact existing parallel/approval/planning regressions; unaffected26 ledger/4 cleanup/4 worker-retirement/1 provider-cap cases are already passing and excluded. Also annotate the optional admission context manager per mypy diagnostics. Final reviewed union:42 unique cases collected;36 passed in the initial run and7 affected cases passed after repair (one existing approval case repeated). Ruff/targeted mypy passed; evidence notes added after source validation. The union is collected only and is not rerun.",
+  "exclusions": "No full suite, provider network, existing installation, operational service, SSH, deployment, benchmark or compute workload. Synthetic projects, inert scripted provider/tool and retained inert worker fixtures only. Production role enablement, shared index services and final browser/packaged continuity gates remain pending.",
   "expected_tests": {
-    "python": 37,
+    "python": 42,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_authentication_api.py",
-    "tests/v3/test_api_worker.py"
+    "tests/v3/test_runtime_capacity.py",
+    "tests/v3/test_chat_runtime_capacity.py",
+    "tests/v3/test_async_admission_cleanup.py::test_release_failure_returns_capacity_exactly_once",
+    "tests/v3/test_async_admission_cleanup.py::test_release_joins_durable_cleanup_after_repeated_cancellation",
+    "tests/v3/test_async_admission_cleanup.py::test_old_release_cannot_close_a_new_admission_from_the_same_core",
+    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
+    "tests/v3/test_chat_throughput.py::test_approved_call_runs_when_its_turn_resumes_through_admission",
+    "tests/v3/test_runtime_processes.py::test_graceful_retirement_reaps_only_an_empty_worker",
+    "tests/v3/test_chat_tool_loop.py::test_batched_safe_reads_overlap_and_commit_in_provider_order",
+    "tests/v3/test_chat_tool_loop.py::test_approval_inside_a_batch_pauses_and_drops_the_queued_calls",
+    "tests/v3/test_chat_planning.py::test_provider_discovery_cannot_execute_and_saves_plan_before_tool"
   ],
   "frontend": [],
   "native": [],

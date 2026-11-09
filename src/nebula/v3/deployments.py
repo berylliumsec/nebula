@@ -23,6 +23,7 @@ from .database import (
     ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeCommandRow,
+    RuntimeCapacityReservationRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
@@ -790,6 +791,14 @@ class DeploymentCoordinator:
                     )
                 )
             )
+            capacity = list(
+                await session.scalars(
+                    select(RuntimeCapacityReservationRow.id).where(
+                        RuntimeCapacityReservationRow.runtime_id == runtime_id,
+                        RuntimeCapacityReservationRow.state == "held",
+                    )
+                )
+            )
             return [
                 *(
                     "Project " + item + " still belongs to this worker"
@@ -799,6 +808,10 @@ class DeploymentCoordinator:
                 *(
                     "Command " + item + " is unfinished or uncertain"
                     for item in commands
+                ),
+                *(
+                    "Capacity reservation " + item + " remains held"
+                    for item in capacity
                 ),
             ]
 

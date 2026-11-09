@@ -130,6 +130,39 @@ class ProjectOwnershipRow(Base):
     command_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
+class RuntimeCapacityPolicyRow(Base):
+    __tablename__ = "runtime_capacity_policy"
+
+    key: Mapped[str] = mapped_column(String(30), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    limits: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+
+
+class RuntimeCapacityReservationRow(Base):
+    __tablename__ = "runtime_capacity_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "runtime_id",
+            "project_id",
+            "fencing_token",
+            "request_key",
+            name="uq_runtime_capacity_request",
+        ),
+        Index("ix_runtime_capacity_state", "state", "runtime_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    demands: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    released_at_ms: Mapped[int | None] = mapped_column(BigInteger)
+    release_reason: Mapped[str | None] = mapped_column(String(100))
+
+
 class MemoryBudgetPolicyRow(Base):
     __tablename__ = "memory_budget_policies"
 

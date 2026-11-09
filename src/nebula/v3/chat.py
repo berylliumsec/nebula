@@ -88,6 +88,9 @@ from .chat_turn_ledger import (
     recent_window_tokens,
 )
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
+from .runtime_capacity import RuntimeCapacity
+from .execution_scope import current_execution_lease
+from .runtime_coordination import LeaseLost
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .butler_reporting_tools import REPORT_TOOL_NAMES, report_components
 from .chat_goal_tools import (
@@ -2671,6 +2674,7 @@ class ChatService:
         worker_id: str | None = None,
         tool_suggestion_client: MaybeAsync[[], JevClient | None] | None = None,
         provider_usage_observer: Callable[[str], None] | None = None,
+        runtime_capacity: RuntimeCapacity | None = None,
     ) -> None:
         self.store = store
         from .runtime_switching import RuntimeSwitchService
@@ -2707,7 +2711,10 @@ class ChatService:
         # valid. Recovery passes read turns off the event loop too.
         self._sealed_reasoning: OrderedDict[str, str] = OrderedDict()
         self._sealed_reasoning_lock = threading.Lock()
-        self.provider_scheduler = ProviderScheduler(store, worker_id=self.worker_id)
+        self.runtime_capacity = runtime_capacity
+        self.provider_scheduler = ProviderScheduler(
+            store, worker_id=self.worker_id, runtime_capacity=runtime_capacity
+        )
         self._global_tool_slots = asyncio.Semaphore(
             self.provider_scheduler.config.global_tool_limit
         )
@@ -8711,7 +8718,9 @@ class ChatService:
                             workspace=Path(components.workspace),
                             requested_by="chat-planner",
                         )
-                        result = await broker.execute(invocation, components.scope)
+                        result = await self._invoke_tool_broker(
+                            broker, invocation, components.scope
+                        )
                         output = result.model_result()
                     except Exception as exc:
                         record_caught_exception(
@@ -9481,8 +9490,8 @@ class ChatService:
                             maximum=MAX_CATALOG_CALLS_PER_TURN,
                             current=searched,
                         )
-                    result = await components.broker.execute(
-                        invocation, components.scope
+                    result = await self._invoke_tool_broker(
+                        components.broker, invocation, components.scope
                     )
                 except ApprovalRequired as paused:
                     record_caught_exception(
@@ -11340,6 +11349,34 @@ class ChatService:
             )
             return await self._complete_with_context_recovery(prepared, request)
 
+    async def _invoke_tool_broker(
+        self,
+        broker,
+        invocation: ToolInvocation,
+        scope,
+        *,
+        approval=None,
+        parallel=False,
+    ):
+        async def invoke():
+            options = {"approval": approval} if approval is not None else {}
+            return await broker.execute(invocation, scope, **options)
+
+        if self.runtime_capacity is None and not parallel:
+            return await invoke()
+        async with self._global_tool_slots:
+            if self.runtime_capacity is None:
+                return await invoke()
+            lease = current_execution_lease()
+            if lease is None or lease.project_id != invocation.engagement_id:
+                raise LeaseLost(
+                    "Tool capacity requires the exact project execution context"
+                )
+            async with self.runtime_capacity.slot(
+                lease, "tool:" + invocation.id, {"tool": 1}
+            ):
+                return await invoke()
+
     def _parallel_safe_wave(
         self,
         batch: Sequence[_RoutedCall],
@@ -11481,8 +11518,9 @@ class ChatService:
             )
 
         async def execute(invocation: ToolInvocation) -> Any:
-            async with self._global_tool_slots:
-                return await components.broker.execute(invocation, components.scope)
+            return await self._invoke_tool_broker(
+                components.broker, invocation, components.scope, parallel=True
+            )
 
         results = await asyncio.gather(
             *(execute(invocation) for _, _, _, invocation in work),
@@ -12331,8 +12369,8 @@ class ChatService:
             requested_by="chat-assistant",
         )
         try:
-            result = await components.broker.execute(
-                invocation, components.scope, approval=approval
+            result = await self._invoke_tool_broker(
+                components.broker, invocation, components.scope, approval=approval
             )
         except PolicyDenied as exc:
             record_caught_exception(

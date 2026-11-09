@@ -234,6 +234,8 @@ class ExecutionSQLScope:
                 "runtime_commands",
                 "runtime_delivery",
                 "device_pairing_offers",
+                "runtime_capacity_policy",
+                "runtime_capacity_reservations",
                 "runtime_releases",
                 "runtime_processes",
                 "deployment_host",
