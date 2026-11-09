@@ -79,7 +79,7 @@ from .chat_planning import (
 )
 from .chat_turn_headers import (
     ChatTurnHeader,
-    engagement_turn_headers,
+    pending_engagement_turn_headers,
     session_turn_headers,
 )
 from .chat_turn_ledger import (
@@ -14804,15 +14804,15 @@ class ChatService:
     async def pending_turns(self, engagement_id: str) -> dict[str, ChatTurnHeader]:
         """Return the pending turn of every conversation in a project, by session.
 
-        One indexed read of the project's turn versions replaces a
-        ``pending_turn`` lookup per conversation, and revision-keyed headers
-        replace a JSON status scan over every turn payload, which cost tens of
-        milliseconds per activity poll on a busy project.
+        Filter by indexed status before resolving headers, so a cold cache does
+        not decode every historical payload inside an execution transaction.
         """
 
         pending: dict[str, ChatTurnHeader] = {}
         async with self.store.database.session() as database:
-            for turn in await engagement_turn_headers(database, engagement_id):
+            for turn in await pending_engagement_turn_headers(
+                database, engagement_id, statuses=_UNFINISHED_TURN_STATUSES
+            ):
                 if not self._header_is_pending(turn):
                     continue
                 if turn.session_id in pending:

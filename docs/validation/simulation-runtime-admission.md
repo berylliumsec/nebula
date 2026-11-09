@@ -25,3 +25,10 @@ No automated tests, browser matrix, or synthetic LAN instance are run for this
 change. Production build and authenticated operational readbacks are the allowed
 verification; they do not establish full product acceptance. No settings or
 operator feature is added, so assistant catalogs and product knowledge do not change.
+
+The follow-up repair bounds cold activity polling by indexed pending turn status.
+Terminal and settled interrupted turns are excluded before payload hydration;
+unknown legacy projections retain their fallback, and candidate rows must still
+belong to an existing project conversation. Header revalidation and duplicate
+pending-turn detection remain in place. Independent read-only review traced the
+cold-cache transaction to heartbeat starvation and confirmed these guards.
