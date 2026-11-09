@@ -18,6 +18,7 @@ include = [
   { path = "src/nebula/v3/product_knowledge.sqlite3.b85", format = [ "wheel", "sdist",] },
   "src/nebula/v3/diagnostic_guidance.json",
   "src/nebula/v3/assistant_destinations.json",
+  "src/nebula/v3/runtime-compatibility.json",
   "src/nebula/v3/report_assets/**/*",
   { path = "build_backend/nebula_build_backend.py", format = "sdist" },
   { path = "scripts/build_product_knowledge.py", format = "sdist" },

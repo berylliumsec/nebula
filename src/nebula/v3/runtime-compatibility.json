@@ -1,0 +1,20 @@
+{
+  "format": "nebula.runtime-compatibility/v1",
+  "migration_tree_sha256": "14c510524cdc918167f48b511348400d37d850c2d0c6b42a300d83f5b9584fb0",
+  "manifest": {
+    "schema_family": 5,
+    "schema_min": 5,
+    "schema_max": 5,
+    "additive_migrations": true,
+    "migration_head": "0041_handoff_admission",
+    "api_protocol_min": 1,
+    "api_protocol_max": 1,
+    "execution_protocol_min": 1,
+    "execution_protocol_max": 1,
+    "features": [
+      "chat.accept/v1",
+      "chat.resume/v1",
+      "project.handoff/v1"
+    ]
+  }
+}

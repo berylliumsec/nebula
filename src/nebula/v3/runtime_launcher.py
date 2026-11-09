@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
 import hmac
 import json
 import os
@@ -70,11 +69,21 @@ def write_private(path: Path, value: bytes) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def operator_token(data_root: Path, requested: str | None = None) -> str:
+def operator_token(
+    data_root: Path, requested: str | None = None, *, adopt_legacy: bool = False
+) -> str:
     path = runtime_root(data_root) / "operator-token"
     try:
         token = read_private(path).decode().strip()
     except FileNotFoundError:
+        if not adopt_legacy and (
+            (data_root / "nebula.db").exists() or os.getenv("NEBULA_V3_DATABASE_URL")
+        ):
+            raise ValueError(
+                "This existing or external database needs a coordinated legacy restart. "
+                "Stop every legacy Core using it, then run nebula-core runtime-adopt "
+                "--confirm-core-stopped --data-dir <the same directory>. No data will be copied or reset."
+            )
         token = requested or secrets.token_urlsafe(32)
         if len(token) < 32:
             raise ValueError(
@@ -85,7 +94,7 @@ def operator_token(data_root: Path, requested: str | None = None) -> str:
                 path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
             )
         except FileExistsError:
-            return operator_token(data_root, requested)
+            return operator_token(data_root, requested, adopt_legacy=adopt_legacy)
         with os.fdopen(descriptor, "w") as stream:
             stream.write(token + "\n")
             stream.flush()
@@ -101,6 +110,8 @@ def operator_token(data_root: Path, requested: str | None = None) -> str:
 
 @contextmanager
 def startup_lock(data_root: Path):
+    import fcntl
+
     path = runtime_root(data_root) / "launcher.lock"
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
@@ -187,6 +198,13 @@ def retain_bundle(
         tempfile.mkdtemp(prefix="bundle-source-", dir=runtime_root(data_root))
     )
     try:
+        if not frontend.is_dir() and static_dir is None:
+            # Headless Core deliberately needs no frontend development build.
+            frontend = staging / "headless-ui"
+            frontend.mkdir()
+            (frontend / "index.html").write_text(
+                "<!doctype html><title>Nebula Core</title><p>Nebula Core is running. Connect with a paired client.</p>"
+            )
         _, digest = build_source_bundle(source_package, frontend, staging / "payload")
         _, installed = ReleaseStore(runtime_root(data_root) / "releases").install(
             staging / "payload", expected_manifest_sha256=digest
@@ -212,9 +230,15 @@ def desktop_connection(
         if existing is not None and same_process(
             existing["pid"], existing["process_birth"]
         ):
+            frame = connection_frame(existing, token)
             health(existing, token)
-            return connection_frame(existing, token)
+            return frame
         bundle, digest = retain_bundle(data_root, static_dir=static_dir)
+        startup_id = str(uuid4())
+        # A restarted supervisor keeps the same listener address. A PyInstaller
+        # one-file bootloader has a different PID from the actual service, so
+        # startup authentication uses this private nonce plus kernel identity.
+        requested_port = connection_frame(existing, token)["port"] if existing else 0
         log_path = runtime_root(data_root) / "supervisor.log"
         descriptor = os.open(
             log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600
@@ -235,7 +259,9 @@ def desktop_connection(
                     "--host",
                     "127.0.0.1",
                     "--port",
-                    "0",
+                    str(requested_port),
+                    "--startup-id",
+                    startup_id,
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=output,
@@ -250,12 +276,13 @@ def desktop_connection(
             candidate = discovery(data_root)
             if (
                 candidate
-                and candidate["pid"] == process.pid
+                and candidate.get("startup_id") == startup_id
                 and same_process(candidate["pid"], candidate["process_birth"])
             ):
                 try:
+                    frame = connection_frame(candidate, token)
                     health(candidate, token)
-                    return connection_frame(candidate, token)
+                    return frame
                 except (httpx.HTTPError, ValueError):
                     pass
             if process.poll() is not None:
@@ -293,7 +320,9 @@ def connection_frame(value: dict, token: str) -> dict:
 def shutdown_runtime(data_root: Path, *, timeout: float = 30) -> dict:
     value = discovery(data_root)
     if value is None or not same_process(value["pid"], value["process_birth"]):
-        return {"state": "stopped"}
+        raise RuntimeError(
+            "Core supervisor is unavailable; reconnect before requesting shutdown so retained workers can be verified"
+        )
     token = operator_token(data_root)
     with httpx.Client(trust_env=False, timeout=timeout) as client:
         headers = {"Authorization": "Bearer " + token}
@@ -309,4 +338,24 @@ def shutdown_runtime(data_root: Path, *, timeout: float = 30) -> dict:
             },
         )
         response.raise_for_status()
-        return response.json()
+        receipt = response.json()
+        deadline = time.monotonic() + timeout
+        while receipt.get("state") == "running" and time.monotonic() < deadline:
+            time.sleep(0.1)
+            response = client.get(
+                value["endpoint"] + "/deployment/operations/" + receipt["operation_id"],
+                headers=headers,
+            )
+            response.raise_for_status()
+            receipt = response.json()
+        if receipt.get("state") != "succeeded":
+            raise RuntimeError(
+                "Core shutdown needs attention: " + json.dumps(receipt.get("result"))
+            )
+        while same_process(value["pid"], value["process_birth"]):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Core accepted shutdown but has not exited; saved work remains authoritative"
+                )
+            time.sleep(0.1)
+        return {**receipt, "observed_state": "stopped"}

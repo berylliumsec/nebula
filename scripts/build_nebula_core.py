@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import importlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -72,6 +73,11 @@ def macos_codesign_arguments(
 
 
 def target_triple() -> str:
+    configured = os.getenv("NEBULA_BUILD_TARGET")
+    if configured:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", configured):
+            raise ValueError("NEBULA_BUILD_TARGET must be a target triple")
+        return configured
     output = subprocess.check_output(["rustc", "-vV"], text=True)
     for line in output.splitlines():
         if line.startswith("host: "):
@@ -272,6 +278,8 @@ def main() -> None:
         "--add-data",
         f"{assistant_destinations}:nebula/v3",
         "--add-data",
+        f"{root / 'src/nebula/v3/runtime-compatibility.json'}:nebula/v3",
+        "--add-data",
         f"{kali_tool_inventory}:nebula/v3",
         "--add-data",
         f"{egress_helper}:nebula/v3",
@@ -310,13 +318,22 @@ def main() -> None:
 
     runtime_bundle = root / "ui" / "src-tauri" / "resources" / "nebula-runtime"
     if runtime_bundle.exists():
-        shutil.rmtree(runtime_bundle)
+        for child in runtime_bundle.iterdir():
+            if child.name == ".gitignore":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
     resources = {
         name: root / "ui" / "src-tauri" / "resources" / name
         for name in ("playwright-browsers", "notebook-runtime")
         if (root / "ui" / "src-tauri" / "resources" / name).is_dir()
     }
-    resources["security-proxy"] = root / "security-proxy"
+    proxy_resource = root / "build" / "nebula-core-stage" / "security-proxy"
+    proxy_resource.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(root / "security-proxy" / "addon.py", proxy_resource / "addon.py")
+    resources["security-proxy"] = proxy_resource
     manifest, manifest_digest = build_frozen_bundle(
         source, frontend, runtime_bundle, resources=resources
     )

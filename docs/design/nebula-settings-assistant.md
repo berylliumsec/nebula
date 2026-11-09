@@ -955,3 +955,33 @@ choose **Open investigation and subagents** to inspect the case's saved chat,
 provider or harness transcript, and child results. Each case has a separate
 conversation. Reloading preserves the same case and investigation, and restarting
 Core reattaches to existing investigation turns rather than duplicating work.
+
+
+## Closing the desktop and shutting down Core
+
+On Linux, local Core runs independently of its desktop viewer. Closing, updating,
+or restarting the desktop leaves admitted work running. Reopening uses the same
+private local connection and saved Core identity. **Settings → Terminal and Core
+setup → Shut down Core** is the separate, explicit shutdown action. It confirms
+the request, waits for Core's durable shutdown decision and observed process exit,
+and reports blockers instead of treating an accepted request as completion.
+The current window stays disconnected after shutdown; reopen it to start Core.
+
+The settings assistant should direct an operator who wants to close the window
+to the normal desktop close action. If the operator explicitly wants to shut down
+Core, open Terminal and Core setup and explain the confirmation and possible
+active-work blocker. Never infer a Core shutdown request from closing the viewer.
+Remote Core is controlled by its own host; the local shutdown control is hidden
+when the desktop is connected to a remote Core.
+
+An existing installation that predates independent Core needs one coordinated
+restart before adoption. Follow the project's Butler deployment coordination
+procedure, stop every legacy Core using that database, then run
+`nebula-core runtime-adopt --confirm-core-stopped --data-dir <existing-directory>`.
+Keep any configured administration credential in `NEBULA_V3_API_TOKEN` for this
+command. Adoption preserves the database and files in place; it does not merge
+different desktop data directories. New roots need no adoption step.
+
+Local detached workers currently require Linux pidfd support. Other desktop
+platforms can connect to a remote Core; local continuity on them remains
+unavailable. The retained runtime rejects unauthenticated remote mode explicitly.

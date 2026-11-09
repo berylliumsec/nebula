@@ -701,7 +701,18 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
     result = validate_members(
         {
             "nebula.v3.cli",
+            "nebula.v3.runtime_worker",
+            "nebula.v3.runtime_launcher",
+            "nebula.v3.runtime_service",
+            "nebula/v3/runtime-compatibility.json",
             "nebula.v3.mcp_gateway",
+            "psycopg",
+            "psycopg_binary",
+            "sqlalchemy.dialects.postgresql.psycopg",
+            "sqlalchemy.ext.asyncio",
+            "sqlalchemy.dialects.sqlite.aiosqlite",
+            "aiosqlite",
+            "greenlet",
             "regex",
             "reportlab",
             "PIL",

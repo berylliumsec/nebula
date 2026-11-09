@@ -500,6 +500,10 @@ async def serve(
     from .runtime_service import serve_runtime
 
     root = _data_dir(data_dir)
+    if not sys.platform.startswith("linux"):
+        raise typer.BadParameter(
+            "Independent local Core requires Linux pidfd support; configure a remote Core on this platform"
+        )
     if handshake_stdout:
         raise typer.BadParameter(
             "desktop lifetime protocol has changed; use desktop-connect --bootstrap-stdin"
@@ -507,6 +511,10 @@ async def serve(
     if allow_unauthenticated_remote:
         raise typer.BadParameter(
             "independent Core requires authentication; use normal device pairing"
+        )
+    if allow_browser_diagnostics:
+        raise typer.BadParameter(
+            "remote browser diagnostic ingress is not available in the independent runtime"
         )
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as probe:
         try:
@@ -1516,6 +1524,7 @@ async def runtime_service_command(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     host: Annotated[str, typer.Option()] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=0, max=65535)] = 0,
+    startup_id: Annotated[str | None, typer.Option()] = None,
 ) -> None:
     from .runtime_service import serve_runtime
 
@@ -1527,7 +1536,20 @@ async def runtime_service_command(
         manifest_sha256=manifest_sha256,
         host=host,
         port=port,
+        startup_id=startup_id,
     )
+
+
+@app.command("runtime-migrate", hidden=True)
+def runtime_migrate_command(
+    bootstrap_stdin: Annotated[bool, typer.Option()] = False,
+) -> None:
+    """Run one supervisor-authorized migration from retained source."""
+    if not bootstrap_stdin:
+        raise typer.BadParameter("runtime migration requires --bootstrap-stdin")
+    from .runtime_worker import migration_main
+
+    migration_main()
 
 
 @app.command("desktop-connect", hidden=True)
@@ -1551,7 +1573,12 @@ def desktop_connect_command(
             or frame.get("protocol") != DESKTOP_PROTOCOL
         ):
             raise typer.BadParameter("unsupported desktop bootstrap protocol")
-    result = desktop_connection(_data_dir(data_dir), static_dir=static_dir)
+    from httpx import HTTPError
+
+    try:
+        result = desktop_connection(_data_dir(data_dir), static_dir=static_dir)
+    except (OSError, ValueError, RuntimeError, HTTPError) as error:
+        raise typer.BadParameter(str(error)) from None
     typer.echo(json.dumps(result, separators=(",", ":")))
 
 
@@ -1561,8 +1588,53 @@ def runtime_stop_command(
 ) -> None:
     """Explicitly stop local Core after its durable work is safe to stop."""
     from .runtime_launcher import shutdown_runtime
+    from httpx import HTTPError
 
-    _print(shutdown_runtime(_data_dir(data_dir)))
+    try:
+        _print(shutdown_runtime(_data_dir(data_dir)))
+    except (OSError, ValueError, RuntimeError, HTTPError) as error:
+        raise typer.BadParameter(str(error)) from None
+
+
+@app.command("runtime-adopt")
+def runtime_adopt_command(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    confirm_core_stopped: Annotated[
+        bool,
+        typer.Option(help="Confirm every legacy Core using this database is stopped."),
+    ] = False,
+) -> None:
+    """Prepare an existing data root for one coordinated legacy restart."""
+    if not confirm_core_stopped:
+        raise typer.BadParameter(
+            "Stop every legacy Core and pass --confirm-core-stopped"
+        )
+    from .runtime_launcher import (
+        operator_token,
+        runtime_root,
+        startup_lock,
+        write_private,
+    )
+    from .runtime_service import OFFLINE_ADOPTION
+
+    root = _data_dir(data_dir)
+    with startup_lock(root):
+        state = runtime_root(root)
+        if (state / "releases").exists() or (state / "connection.json").exists():
+            raise typer.BadParameter(
+                "This root already has retained runtime state; use its supervisor's verified migration or recovery operation"
+            )
+        operator_token(root, os.getenv("NEBULA_V3_API_TOKEN"), adopt_legacy=True)
+        write_private(
+            state / OFFLINE_ADOPTION,
+            json.dumps(
+                {
+                    "state": "offline-legacy-adoption",
+                    "data_root": str(root),
+                }
+            ).encode(),
+        )
+    _print({"state": "adopted", "data_dir": str(root), "data_preserved": True})
 
 
 def main() -> None:

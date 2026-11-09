@@ -10,13 +10,13 @@ import sys
 import webbrowser
 
 import uvicorn
+from sqlalchemy import inspect
 
-from .database import Database
+from .database import Base, Database
 from .database_pool import PoolSettings
 from .deployments import DeploymentCoordinator
-from .diagnostics import configure_diagnostics, record_caught_exception
+from .diagnostics import configure_diagnostics, install_exception_hooks
 from .memory_budget import MemoryBudgetService
-from .memory_policy import MemoryBudgetError
 from .process_identity import process_birth
 from .release_store import ReleaseStore
 from .runtime_host_services import HostSharedServices
@@ -26,10 +26,58 @@ from .runtime_launcher import (
     operator_token,
     runtime_root,
     write_private,
+    read_private,
 )
 from .runtime_memory import RuntimeMemoryAdmission
 from .runtime_processes import RuntimeProcessHost
 from .supervisor import RuntimeSupervisor
+
+OFFLINE_ADOPTION = "offline-adoption.json"
+
+
+async def initialize_database(database: Database, data_root: Path) -> None:
+    """Bootstrap only empty or explicitly offline-adopted legacy storage.
+
+    Routine recovery never applies a candidate's migrations to retained workers.
+    A missing control table or column requires the previous supervisor's verified
+    migration operation, rather than silently running a new Alembic head.
+    """
+    await database.initialize()
+    marker = runtime_root(data_root) / OFFLINE_ADOPTION
+    try:
+        adoption = json.loads(read_private(marker))
+    except FileNotFoundError:
+        adoption = None
+    if adoption is not None and adoption != {
+        "state": "offline-legacy-adoption",
+        "data_root": str(data_root.resolve()),
+    }:
+        raise ValueError("Offline adoption marker is invalid; preserve it for recovery")
+    async with database.engine.connect() as connection:
+        tables = await connection.run_sync(
+            lambda sync: set(inspect(sync).get_table_names())
+        )
+    if not tables or adoption is not None:
+        await database.bootstrap()
+        marker.unlink(missing_ok=True)
+        return
+    async with database.engine.connect() as connection:
+
+        def missing_columns(sync):
+            inspection = inspect(sync)
+            for name, table in Base.metadata.tables.items():
+                if name not in tables:
+                    return True
+                columns = {column["name"] for column in inspection.get_columns(name)}
+                if not set(table.columns.keys()).issubset(columns):
+                    return True
+            return False
+
+        missing = await connection.run_sync(missing_columns)
+    if missing:
+        raise RuntimeError(
+            "This retained supervisor needs a schema migration. Use the previous retained supervisor's verified migration operation; routine reopen never migrates existing workers."
+        )
 
 
 def configure_retained_resources(bundle: Path) -> None:
@@ -60,6 +108,7 @@ async def serve_runtime(
     open_browser: bool = False,
     print_ready: bool = False,
     diagnostics_level: str | None = None,
+    startup_id: str | None = None,
 ) -> None:
     if not sys.platform.startswith("linux"):
         raise ValueError(
@@ -71,12 +120,13 @@ async def serve_runtime(
     manifest = ReleaseStore.verify(bundle, expected_manifest_sha256=manifest_sha256)
     configure_retained_resources(bundle)
     configure_diagnostics(data_root, level_override=diagnostics_level)
+    install_exception_hooks()
     settings = PoolSettings.from_environment()
     database = Database(
         os.getenv("NEBULA_V3_DATABASE_URL") or data_root / "nebula.db",
+        bootstrap=False,
         pool_settings=settings,
     )
-    await database.initialize()
     coordinator = DeploymentCoordinator(database)
     budgets = MemoryBudgetService(
         database, runtime_defaults_bytes=3 * manifest.execution_reserve_bytes
@@ -106,33 +156,32 @@ async def serve_runtime(
     )
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     connection = None
+    automatic = None
     try:
         # Bind before opening controllers or migrating legacy state into a live
         # runtime. An occupied compatibility port is never replaced silently.
         listener.bind((host, port))
         listener.listen(2048)
         port = listener.getsockname()[1]
+        from .automation_runtime import resolve_callback_origin
+
+        os.environ["NEBULA_CALLBACK_ORIGIN"] = resolve_callback_origin(
+            host=host, port=port, tls=tls_cert is not None
+        )
+        process_host.lock.acquire()
+        await initialize_database(database, data_root)
+        schema = await database.current_schema_version()
+        if not manifest.schema_min <= schema <= manifest.schema_max:
+            raise RuntimeError(
+                "The retained supervisor is incompatible with this database schema"
+            )
         await supervisor.start()
         await supervisor.stage(bundle, manifest_sha256=manifest_sha256)
         await supervisor.select_recovery_release(manifest.version)
-        status = await coordinator.status()
-        if status.api_version is None:
-            try:
-                api = await supervisor.prepare_api(manifest.version)
-                status = await coordinator.status()
-                await supervisor.promote_api(
-                    api.runtime_id, expected_revision=status.revision
-                )
-            except MemoryBudgetError as error:
-                # The authenticated host control surface remains reachable so
-                # the operator can resolve admission. Never weaken its policy.
-                record_caught_exception(
-                    "runtime",
-                    "runtime.startup.admission_held",
-                    "Core startup is waiting for the saved memory policy.",
-                    error,
-                    stage="startup",
-                )
+        from .runtime_auto_admission import RuntimeAutoAdmission
+
+        automatic = RuntimeAutoAdmission(supervisor, default_version=manifest.version)
+        await automatic.start()
         scheme = "https" if tls_cert else "http"
         display_host = f"[{host}]" if ":" in host else host
         endpoint = f"{scheme}://{display_host}:{port}/api/v1"
@@ -143,6 +192,7 @@ async def serve_runtime(
             "pid": os.getpid(),
             "process_birth": process_birth(os.getpid()),
             "version": manifest.version,
+            "startup_id": startup_id,
         }
         write_private(root / CONNECTION_NAME, json.dumps(connection).encode())
         if print_ready:
@@ -175,7 +225,11 @@ async def serve_runtime(
     finally:
         listener.close()
         try:
-            await supervisor.close()
+            try:
+                if automatic is not None:
+                    await automatic.close()
+            finally:
+                await supervisor.close()
         finally:
             await database.dispose()
         if connection is not None:

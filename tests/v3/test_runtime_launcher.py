@@ -136,3 +136,91 @@ def test_unsupported_local_platform_is_explicit(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher.sys, "platform", "darwin")
     with pytest.raises(ValueError, match="configure a remote Core"):
         launcher.desktop_connection(tmp_path)
+
+
+def test_legacy_database_requires_explicit_adoption_and_is_preserved(tmp_path):
+    database = tmp_path / "nebula.db"
+    database.write_bytes(b"unchanged database")
+    with pytest.raises(ValueError, match="runtime-adopt"):
+        launcher.operator_token(tmp_path)
+    token = launcher.operator_token(tmp_path, adopt_legacy=True)
+    assert launcher.operator_token(tmp_path) == token
+    assert database.read_bytes() == b"unchanged database"
+
+
+def test_startup_nonce_accepts_the_actual_frozen_service_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        launcher, "retain_bundle", lambda *_a, **_kw: (tmp_path, "a" * 64)
+    )
+    monkeypatch.setattr(launcher, "same_process", lambda *_a: True)
+    monkeypatch.setattr(launcher, "health", lambda *_a: {"status": "ok"})
+
+    def spawn(command, **kwargs):
+        nonce = command[command.index("--startup-id") + 1]
+        assert kwargs["start_new_session"] is True
+        assert kwargs["stdin"] == launcher.subprocess.DEVNULL
+        launcher.write_private(
+            tmp_path / "runtime/connection.json",
+            json.dumps(
+                {
+                    "protocol": launcher.DESKTOP_PROTOCOL,
+                    "data_root": str(tmp_path),
+                    "pid": 10001,
+                    "process_birth": "child",
+                    "startup_id": nonce,
+                    "endpoint": "http://127.0.0.1:54321/api/v1",
+                }
+            ).encode(),
+        )
+        from types import SimpleNamespace
+
+        return SimpleNamespace(pid=10000, poll=lambda: None)
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
+    assert launcher.desktop_connection(tmp_path)["port"] == 54321
+
+
+def test_shutdown_requires_success_receipt_and_exact_service_exit(
+    tmp_path, monkeypatch
+):
+    launcher.operator_token(tmp_path)
+    launcher.write_private(
+        tmp_path / "runtime/connection.json",
+        json.dumps(
+            {
+                "protocol": launcher.DESKTOP_PROTOCOL,
+                "data_root": str(tmp_path),
+                "pid": 12345,
+                "process_birth": "original",
+                "endpoint": "http://127.0.0.1:54321/api/v1",
+            }
+        ).encode(),
+    )
+    states = iter([True, False])
+    monkeypatch.setattr(launcher, "same_process", lambda *_a: next(states))
+    from types import SimpleNamespace
+
+    def response(payload):
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def get(self, *_args, **_kwargs):
+            return response({"revision": 7})
+
+        def post(self, _url, **kwargs):
+            assert kwargs["json"]["parameters"] == {"expected_revision": 7}
+            return response(
+                {"state": "succeeded", "operation_id": "owned", "result": {}}
+            )
+
+    monkeypatch.setattr(launcher.httpx, "Client", Client)
+    assert launcher.shutdown_runtime(tmp_path)["observed_state"] == "stopped"

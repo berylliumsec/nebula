@@ -3,8 +3,8 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, SocketAddrV4, TcpStream},
     path::{Path, PathBuf},
-    process::{Child, ChildStderr, ChildStdin, Command, Stdio},
-    sync::{Mutex, mpsc},
+    process::{Child, ChildStderr, Command, Stdio},
+    sync::{Mutex, mpsc, atomic::{AtomicBool, Ordering}},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -15,11 +15,10 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::diagnostics::{DiagnosticLevel, DiagnosticsState, ERROR_MIRROR_PREFIX};
 
-const SIDECAR_PROTOCOL: &str = "nebula-sidecar-v1";
+const SIDECAR_PROTOCOL: &str = "nebula-desktop-runtime-v1";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const HEALTH_IO_TIMEOUT: Duration = Duration::from_secs(2);
-const LIFETIME_PIPE_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const TERMINATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const MAX_HANDSHAKE_BYTES: u64 = 16 * 1024;
 const MAX_HEALTH_RESPONSE_BYTES: u64 = 64 * 1024;
@@ -111,6 +110,7 @@ struct SidecarHandshake {
     protocol: String,
     host: String,
     port: u16,
+    ipc_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +125,7 @@ struct HealthResponse {
     database: String,
     api_version: String,
     schema_version: u64,
+    #[serde(default)]
     journal_mode: String,
 }
 
@@ -145,16 +146,15 @@ impl StartupLogCapture {
 }
 
 struct ManagedBackend {
-    child: Child,
     session: BackendSession,
-    startup_log: StartupLogCapture,
-    stdout_thread: Option<JoinHandle<Result<(), String>>>,
-    bootstrap_stdin: Option<ChildStdin>,
+    port: u16,
+    data_dir: PathBuf,
 }
 
 #[derive(Default)]
 pub(crate) struct BackendState {
     process: Mutex<Option<ManagedBackend>>,
+    operator_stopped: AtomicBool,
 }
 
 impl BackendState {
@@ -166,11 +166,9 @@ impl BackendState {
         let managed = process
             .as_mut()
             .ok_or_else(|| "Nebula Core is not running".to_string())?;
-        match managed.child.try_wait() {
-            Ok(None) => Ok(managed.session.clone()),
-            Ok(Some(_)) => Err("Nebula Core is not running".to_string()),
-            Err(error) => Err(format!("cannot inspect Nebula Core: {error}")),
-        }
+        let health = request_authenticated_health(managed.port, &managed.session.token, HEALTH_IO_TIMEOUT)?;
+        verify_health(&health)?;
+        Ok(managed.session.clone())
     }
 }
 
@@ -375,34 +373,6 @@ fn wait_for_child_exit(child: &mut Child, deadline: Instant) -> Result<bool, Str
     }
 }
 
-fn terminate_managed(managed: &mut ManagedBackend) -> Result<(), String> {
-    // Closing the lifetime pipe asks Core to stop even if signal delivery is
-    // delayed. The process-group signal remains the bounded fallback.
-    managed.bootstrap_stdin.take();
-    let process_result = match wait_for_child_exit(
-        &mut managed.child,
-        Instant::now() + LIFETIME_PIPE_GRACE_PERIOD,
-    ) {
-        Ok(true) => Ok(()),
-        Ok(false) => terminate(&mut managed.child),
-        Err(error) => Err(error),
-    };
-    let stdout_result = managed.stdout_thread.take().map_or(Ok(()), |thread| {
-        thread
-            .join()
-            .map_err(|_| "Nebula Core output drain stopped unexpectedly".to_string())?
-    });
-    let log_result = managed.startup_log.finish();
-    let errors: Vec<String> = [process_result, stdout_result, log_result]
-        .into_iter()
-        .filter_map(Result::err)
-        .collect();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
-}
 
 fn read_handshake(
     child: &mut Child,
@@ -461,6 +431,7 @@ fn read_handshake(
                 return Err("Nebula Core closed its handshake stream unexpectedly".to_string());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => match child.try_wait() {
+                Ok(Some(status)) if status.success() => {}
                 Ok(Some(status)) => {
                     return Err(format!(
                         "Nebula Core exited with {status} before completing its startup handshake"
@@ -743,101 +714,15 @@ fn request_authenticated_health(
 }
 
 fn verify_health(health: &HealthResponse) -> Result<(), String> {
-    let expected_version = env!("CARGO_PKG_VERSION");
-    let expected_commit = option_env!("NEBULA_BUILD_COMMIT");
-    let expected_target = option_env!("NEBULA_BUILD_TARGET");
-    let expected_timestamp = option_env!("NEBULA_BUILD_TIMESTAMP");
-    let expected_distribution = if cfg!(feature = "direct-updater") {
-        Some("direct")
-    } else {
-        option_env!("NEBULA_DISTRIBUTION")
-    };
-    if health.status != "ok"
-        || health.database != "ok"
-        || health.api_version != "v1"
-        || health.mode != "local"
+    // Desktop and API versions can differ during a supported update.
+    if !matches!(health.status.as_str(), "ok" | "degraded" | "starting")
+        || health.database != "ok" || health.api_version != "v1"
         || health.schema_version == 0
-        || !health.journal_mode.eq_ignore_ascii_case("wal")
-        || health.version != expected_version
-        || health.commit.trim().is_empty()
-        || health.target.trim().is_empty()
-        || health.build_timestamp.trim().is_empty()
-        || health.distribution_channel.trim().is_empty()
+        || (health.mode == "local" && !health.journal_mode.eq_ignore_ascii_case("wal"))
     {
-        return Err(format!(
-            "Nebula Core health validation failed (status={}, database={}, api_version={}, mode={}, schema_version={}, journal_mode={})",
-            health.status,
-            health.database,
-            health.api_version,
-            health.mode,
-            health.schema_version,
-            health.journal_mode
-        ));
-    }
-    for (label, actual, expected) in [
-        ("commit", health.commit.as_str(), expected_commit),
-        ("target", health.target.as_str(), expected_target),
-        (
-            "build timestamp",
-            health.build_timestamp.as_str(),
-            expected_timestamp,
-        ),
-        (
-            "distribution channel",
-            health.distribution_channel.as_str(),
-            expected_distribution,
-        ),
-    ] {
-        if let Some(expected) = expected
-            && actual != expected
-        {
-            return Err(format!(
-                "Nebula Core {label} {actual:?} does not match desktop {expected:?}"
-            ));
-        }
+        return Err("Nebula Core health or storage is unavailable; reconnect after resolving the runtime failure".to_string());
     }
     Ok(())
-}
-
-fn wait_for_authenticated_health(
-    child: &mut Child,
-    port: u16,
-    ipc_token: &str,
-    deadline: Instant,
-) -> Result<(), String> {
-    let mut last_error = "the health endpoint has not accepted a connection".to_string();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                return Err(format!(
-                    "Nebula Core exited with {status} before becoming healthy"
-                ));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return Err(format!(
-                    "cannot inspect Nebula Core while checking its health: {error}"
-                ));
-            }
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(format!(
-                "Nebula Core did not become healthy within 60 seconds: {last_error}"
-            ));
-        }
-        match request_authenticated_health(port, ipc_token, remaining.min(HEALTH_IO_TIMEOUT)) {
-            Ok(health) => return verify_health(&health),
-            Err(error) => last_error = error,
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            continue;
-        }
-        std::thread::sleep(remaining.min(STARTUP_POLL_INTERVAL));
-    }
 }
 
 fn startup_failure(
@@ -863,483 +748,126 @@ fn startup_failure(
 }
 
 fn launch(app: &AppHandle) -> Result<ManagedBackend, String> {
-    let diagnostics = DiagnosticsState::clone(&*app.state::<DiagnosticsState>());
-    diagnostics.record_desktop(
-        DiagnosticLevel::Info,
-        "desktop.sidecar.launch_started",
-        "Nebula Core sidecar launch started.",
-        Some("started"),
-        Some("discovery"),
-        None,
-        serde_json::Map::new(),
-    );
     let sidecar = sibling_sidecar_path()?;
-    diagnostics.record_desktop(
-        DiagnosticLevel::Debug,
-        "desktop.sidecar.discovered",
-        "The fixed Nebula Core sidecar was discovered.",
-        Some("success"),
-        Some("discovery"),
-        None,
-        serde_json::Map::new(),
-    );
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("cannot locate the Nebula data directory: {error}"))?;
-    fs::create_dir_all(&app_data_dir)
-        .map_err(|error| format!("cannot prepare the Nebula application directory: {error}"))?;
-    #[cfg(unix)]
-    {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = std::env::var_os("NEBULA_V3_DATA_DIR")
+        .map(PathBuf::from).unwrap_or_else(|| app_data.join("core"));
+    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
+    let data_dir = fs::canonicalize(&data_dir).map_err(|error| error.to_string())?;
+    #[cfg(unix)] {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&app_data_dir, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("cannot secure the Nebula application directory: {error}"))?;
-    }
-    let data_dir = app_data_dir.join("core");
-    fs::create_dir_all(&data_dir)
-        .map_err(|error| format!("cannot prepare the Nebula data directory: {error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("cannot secure the Nebula data directory: {error}"))?;
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700)).map_err(|error| error.to_string())?;
     }
     verify_writable_storage(&data_dir)?;
-
-    let token = secure_token()?;
-    let log_dir = app_data_dir.join("logs");
-    let settings_path = app_data_dir.join("diagnostics-settings.json");
-    let startup_log_path = log_dir.join(STARTUP_LOG_NAME);
-    let mut startup_log_file = open_startup_log(&startup_log_path)?;
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("cannot locate the Nebula resource directory: {error}"))?;
-    let playwright_browsers = bundled_playwright_browsers_path(&resource_dir)?;
-    let security_proxy_addon = bundled_security_proxy_addon_path(&resource_dir)?;
-    let notebook_runtime = resource_dir.join(NOTEBOOK_RESOURCE_DIRECTORY);
-
+    let log_path = data_dir.join("desktop-connect.log");
+    let output = open_startup_log(&log_path)?;
+    let resource_dir = app.path().resource_dir().map_err(|error| error.to_string())?;
     let mut command = Command::new(sidecar);
-    command
-        .env_clear()
-        .env("PATH", TRUSTED_SYSTEM_PATH)
-        .env("NEBULA_V3_DATA_DIR", &data_dir)
-        .env("NEBULA_V3_LOG_DIR", &log_dir)
-        .env("NEBULA_V3_DIAGNOSTICS_SETTINGS", &settings_path)
-        .env("NEBULA_V3_DIAGNOSTICS_PARENT", "desktop")
-        .args([
-            "serve",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--handshake-stdout",
-        ])
-        .current_dir(&data_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if let Some(path) = playwright_browsers {
-        command.env("PLAYWRIGHT_BROWSERS_PATH", path);
-    }
-    if notebook_runtime.join("nebula-notebook-runtime.json").is_file() {
-        command.env("NEBULA_NOTEBOOK_RUNTIME_DIR", notebook_runtime);
-    }
-
+    command.env_clear().env("PATH", TRUSTED_SYSTEM_PATH)
+        .env("NEBULA_V3_LOG_DIR", app_data.join("logs"))
+        .env("NEBULA_V3_DIAGNOSTICS_SETTINGS", app_data.join("diagnostics-settings.json"))
+        .env("NEBULA_V3_DIAGNOSTICS_PARENT", "runtime")
+        .args(["desktop-connect", "--bootstrap-stdin", "--data-dir"])
+        .arg(&data_dir).current_dir(&data_dir)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for name in SIDECAR_ENV_ALLOWLIST {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
+        if let Some(value) = std::env::var_os(name) { command.env(name, value); }
     }
-    if let Some(addon) = security_proxy_addon {
-        command.env("NEBULA_SECURITY_PROXY_ADDON", addon);
-    }
-    if std::env::var_os("NEBULA_MITMDUMP_EXECUTABLE").is_none() {
-        if let Some(executable) = trusted_mitmdump_path() {
-            command.env("NEBULA_MITMDUMP_EXECUTABLE", executable);
-        }
-    }
-
-    #[cfg(unix)]
-    {
+    command.env("NEBULA_RUNTIME_BUNDLE", resource_dir.join("nebula-runtime"));
+    #[cfg(unix)] {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-
     #[cfg(target_os = "windows")]
-    if let Some(system_root) = std::env::var_os("SystemRoot") {
-        command.env("SystemRoot", system_root);
-    }
-
-    let mut child = command.spawn().map_err(|error| {
-        let message = format!("cannot start Nebula Core: {error}");
-        let mut written = 0;
-        let mut truncated = false;
-        let write_result = write_bounded_log(
-            &mut startup_log_file,
-            message.as_bytes(),
-            &mut written,
-            &mut truncated,
-        )
-        .and_then(|_| startup_log_file.flush());
-        if let Err(log_error) = write_result {
-            diagnostics.record_desktop(
-                DiagnosticLevel::Critical,
-                "desktop.sidecar.emergency_log_failed",
-                "Nebula Core failed to start and its emergency startup log was unavailable.",
-                Some("failure"),
-                Some("spawn"),
-                Some(true),
-                serde_json::Map::new(),
-            );
-            eprintln!("NEBULA_DIAGNOSTICS_UNAVAILABLE sidecar spawn: {log_error}");
-        }
-        format!(
-            "{message}; startup diagnostics: {}",
-            startup_log_path.display()
-        )
-    })?;
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            let cleanup = terminate(&mut child)
-                .err()
-                .map(|error| format!("; sidecar cleanup also failed: {error}"))
-                .unwrap_or_default();
-            return Err(format!(
-                "Nebula Core did not expose its diagnostic stream{cleanup}; diagnostic path: {}",
-                startup_log_path.display(),
-            ));
-        }
-    };
-    let log_diagnostics = diagnostics.clone();
-    let log_thread =
-        std::thread::spawn(move || capture_startup_log(stderr, startup_log_file, log_diagnostics));
-    let mut startup_log = StartupLogCapture {
-        path: startup_log_path,
-        thread: Some(log_thread),
-    };
+    if let Some(root) = std::env::var_os("SystemRoot") { command.env("SystemRoot", root); }
+    let mut child = command.spawn().map_err(|error| format!("cannot connect to local Core: {error}"))?;
+    let stderr = child.stderr.take().ok_or("Core connector has no diagnostic stream")?;
+    let diagnostics = DiagnosticsState::clone(&*app.state::<DiagnosticsState>());
+    let thread = std::thread::spawn(move || capture_startup_log(stderr, output, diagnostics));
+    let mut capture = StartupLogCapture { path: log_path, thread: Some(thread) };
     let deadline = Instant::now() + STARTUP_TIMEOUT;
-
-    let bootstrap = BootstrapInput {
-        protocol: SIDECAR_PROTOCOL,
-        ipc_token: &token,
-    };
-    let Some(mut bootstrap_stdin) = child.stdin.take() else {
-        return Err(startup_failure(
-            &mut child,
-            &mut startup_log,
-            "Nebula Core did not expose its bootstrap input".to_string(),
-        ));
-    };
-    let write_result = serde_json::to_writer(&mut bootstrap_stdin, &bootstrap)
-        .map_err(|error| format!("cannot encode the sidecar bootstrap: {error}"))
-        .and_then(|_| {
-            bootstrap_stdin
-                .write_all(b"\n")
-                .and_then(|_| bootstrap_stdin.flush())
-                .map_err(|error| format!("cannot deliver the sidecar bootstrap: {error}"))
-        });
-    if let Err(error) = write_result {
-        return Err(startup_failure(&mut child, &mut startup_log, error));
+    let bootstrap = BootstrapInput { protocol: SIDECAR_PROTOCOL, ipc_token: "" };
+    let mut input = child.stdin.take().ok_or("Core connector has no bootstrap input")?;
+    serde_json::to_writer(&mut input, &bootstrap).map_err(|error| error.to_string())?;
+    input.write_all(b"\n").map_err(|error| error.to_string())?;
+    drop(input);
+    let (handshake, stdout_thread) = read_handshake(&mut child, deadline)
+        .map_err(|error| startup_failure(&mut child, &mut capture, error))?;
+    if !wait_for_child_exit(&mut child, deadline)? {
+        return Err(startup_failure(&mut child, &mut capture, "Core connector did not finish".into()));
     }
-
-    let (handshake, stdout_thread) = match read_handshake(&mut child, deadline) {
-        Ok(result) => result,
-        Err(error) => {
-            return Err(startup_failure(&mut child, &mut startup_log, error));
-        }
-    };
-    diagnostics.record_desktop(
-        DiagnosticLevel::Info,
-        "desktop.sidecar.handshake_completed",
-        "Nebula Core completed the supervised startup handshake.",
-        Some("success"),
-        Some("handshake"),
-        None,
-        serde_json::Map::new(),
-    );
-    if handshake.protocol != SIDECAR_PROTOCOL
-        || handshake.host != "127.0.0.1"
-        || handshake.port == 0
-    {
-        return Err(startup_failure(
-            &mut child,
-            &mut startup_log,
-            "Nebula Core did not bind an approved loopback endpoint".to_string(),
-        ));
+    if !child.wait().map_err(|error| error.to_string())?.success() {
+        return Err(startup_failure(&mut child, &mut capture, "Core connector failed".into()));
     }
-
-    if let Err(error) = wait_for_authenticated_health(&mut child, handshake.port, &token, deadline)
-    {
-        return Err(startup_failure(&mut child, &mut startup_log, error));
+    stdout_thread.join().map_err(|_| "Core connector output stopped unexpectedly")??;
+    capture.finish()?;
+    if handshake.protocol != SIDECAR_PROTOCOL || handshake.host != "127.0.0.1"
+        || handshake.port == 0 || handshake.ipc_token.len() < 32 {
+        return Err("Core connector returned an invalid local connection".into());
     }
-    diagnostics.record_desktop(
-        DiagnosticLevel::Info,
-        "desktop.sidecar.health_verified",
-        "Nebula Core passed authenticated health verification.",
-        Some("success"),
-        Some("health"),
-        None,
-        serde_json::Map::new(),
-    );
-
-    Ok(ManagedBackend {
-        child,
-        session: BackendSession {
-            endpoint: format!("http://127.0.0.1:{}/api/v1", handshake.port),
-            token,
-            protocol: SIDECAR_PROTOCOL,
-            source: "local",
-        },
-        startup_log,
-        stdout_thread: Some(stdout_thread),
-        bootstrap_stdin: Some(bootstrap_stdin),
-    })
+    let health = request_authenticated_health(handshake.port, &handshake.ipc_token, HEALTH_IO_TIMEOUT)?;
+    verify_health(&health)?;
+    Ok(ManagedBackend { port: handshake.port, data_dir, session: BackendSession {
+        endpoint: format!("http://127.0.0.1:{}/api/v1", handshake.port),
+        token: handshake.ipc_token, protocol: SIDECAR_PROTOCOL, source: "local",
+    }})
 }
 
-/// Run the complete packaged-Core startup check without leaving a server behind.
-///
-/// `launch` verifies writable application storage, the migrated SQLite schema,
-/// WAL mode, and an authenticated `/api/v1/health` response before returning.
-/// This primitive is intentionally independent of frontend state so the Tauri
-/// entry point can expose it through a command-line flag or a diagnostic command.
-#[allow(dead_code)]
+/// A self-test attaches without shutting down an existing user's Core.
 pub(crate) fn self_test_local_backend(app: &AppHandle) -> Result<(), String> {
-    let diagnostics = app.state::<DiagnosticsState>();
-    let mut managed = launch(app).inspect_err(|_error| {
-        diagnostics.record_desktop(
-            DiagnosticLevel::Error,
-            "desktop.self_test.startup_failed",
-            "The installed Core self-test could not start Nebula Core.",
-            Some("failure"),
-            Some("self-test-startup"),
-            Some(true),
-            serde_json::Map::new(),
-        );
-    })?;
-    terminate_managed(&mut managed).map_err(|error| {
-        diagnostics.record_desktop(
-            DiagnosticLevel::Error,
-            "desktop.self_test.cleanup_failed",
-            "The installed Core self-test passed but cleanup failed.",
-            Some("failure"),
-            Some("self-test-cleanup"),
-            Some(true),
-            serde_json::Map::new(),
-        );
-        format!("Nebula Core self-test passed but cleanup failed: {error}")
-    })
+    launch(app).map(|_| ())
 }
 
 #[tauri::command]
-pub(crate) fn start_local_backend(
-    app: AppHandle,
-    state: State<'_, BackendState>,
-    diagnostics: State<'_, DiagnosticsState>,
-) -> Result<BackendSession, String> {
-    let mut process = state.process.lock().map_err(|_| {
-        diagnostics.record_desktop(
-            DiagnosticLevel::Critical,
-            "desktop.sidecar.supervisor_unavailable",
-            "The Nebula Core supervisor lock is unavailable.",
-            Some("failure"),
-            Some("supervisor-lock"),
-            Some(false),
-            serde_json::Map::new(),
-        );
-        "the Nebula Core supervisor is unavailable".to_string()
-    })?;
-    if let Some(mut managed) = process.take() {
-        match managed.child.try_wait() {
-            Ok(None) => {
-                let session = managed.session.clone();
-                *process = Some(managed);
-                return Ok(session);
-            }
-            Ok(Some(_)) => {
-                if managed.startup_log.finish().is_err() {
-                    diagnostics.record_desktop(
-                        DiagnosticLevel::Error,
-                        "desktop.sidecar.log_capture_cleanup_failed",
-                        "The stopped Core diagnostic capture could not be joined.",
-                        Some("failure"),
-                        Some("restart-cleanup"),
-                        Some(true),
-                        serde_json::Map::new(),
-                    );
-                }
-            }
-            Err(_) => {
-                if terminate_managed(&mut managed).is_err() {
-                    diagnostics.record_desktop(
-                        DiagnosticLevel::Error,
-                        "desktop.sidecar.restart_cleanup_failed",
-                        "A prior Core process could not be cleaned up before restart.",
-                        Some("failure"),
-                        Some("restart-cleanup"),
-                        Some(true),
-                        serde_json::Map::new(),
-                    );
-                }
-            }
-        }
+pub(crate) fn start_local_backend(app: AppHandle, state: State<'_, BackendState>,
+    _diagnostics: State<'_, DiagnosticsState>) -> Result<BackendSession, String> {
+    if state.operator_stopped.load(Ordering::Acquire) {
+        return Err("Core is shut down. Reopen the desktop to start it again.".into());
     }
-    let managed = launch(&app).inspect_err(|_error| {
-        diagnostics.record_desktop(
-            DiagnosticLevel::Error,
-            "desktop.sidecar.launch_failed",
-            "Nebula Core could not complete supervised startup.",
-            Some("failure"),
-            Some("startup"),
-            Some(true),
-            serde_json::Map::new(),
-        );
-    })?;
-    let session = managed.session.clone();
-    *process = Some(managed);
-    diagnostics.record_desktop(
-        DiagnosticLevel::Info,
-        "desktop.sidecar.started",
-        "Nebula Core is ready.",
-        Some("success"),
-        Some("startup"),
-        None,
-        serde_json::Map::new(),
-    );
-    Ok(session)
+    if let Ok(session) = state.active_session() { return Ok(session); }
+    let mut current = state.process.lock().map_err(|_| "Core connection is unavailable")?;
+    if state.operator_stopped.load(Ordering::Acquire) {
+        return Err("Core is shut down. Reopen the desktop to start it again.".into());
+    }
+    let managed = launch(&app)?;
+    let result = managed.session.clone();
+    *current = Some(managed);
+    Ok(result)
 }
 
 #[tauri::command]
-pub(crate) fn backend_status(
-    state: State<'_, BackendState>,
-    diagnostics: State<'_, DiagnosticsState>,
-) -> BackendStatus {
-    let Ok(mut process) = state.process.lock() else {
-        diagnostics.record_desktop(
-            DiagnosticLevel::Critical,
-            "desktop.sidecar.status_unavailable",
-            "Nebula Core status could not be inspected.",
-            Some("failure"),
-            Some("supervisor-lock"),
-            Some(false),
-            serde_json::Map::new(),
-        );
-        return BackendStatus {
-            state: "unavailable",
-            endpoint: None,
-            message: Some("the Nebula Core supervisor lock is unavailable".to_string()),
-        };
-    };
-    if let Some(mut managed) = process.take() {
-        match managed.child.try_wait() {
-            Ok(None) => {
-                let endpoint = managed.session.endpoint.clone();
-                *process = Some(managed);
-                return BackendStatus {
-                    state: "running",
-                    endpoint: Some(endpoint),
-                    message: None,
-                };
-            }
-            Ok(Some(status)) => {
-                let diagnostic_path = managed.startup_log.path.display().to_string();
-                if managed.startup_log.finish().is_err() {
-                    diagnostics.record_desktop(
-                        DiagnosticLevel::Error,
-                        "desktop.sidecar.log_capture_cleanup_failed",
-                        "The stopped Core diagnostic capture could not be joined.",
-                        Some("failure"),
-                        Some("status-cleanup"),
-                        Some(true),
-                        serde_json::Map::new(),
-                    );
-                }
-                return BackendStatus {
-                    state: "stopped",
-                    endpoint: None,
-                    message: Some(format!(
-                        "Nebula Core exited with {status}; diagnostics: {diagnostic_path}"
-                    )),
-                };
-            }
-            Err(error) => {
-                let diagnostic_path = managed.startup_log.path.display().to_string();
-                if terminate_managed(&mut managed).is_err() {
-                    diagnostics.record_desktop(
-                        DiagnosticLevel::Error,
-                        "desktop.sidecar.status_cleanup_failed",
-                        "Nebula Core cleanup failed after status inspection failed.",
-                        Some("failure"),
-                        Some("status-cleanup"),
-                        Some(true),
-                        serde_json::Map::new(),
-                    );
-                }
-                diagnostics.record_desktop(
-                    DiagnosticLevel::Error,
-                    "desktop.sidecar.status_failed",
-                    "Nebula Core status inspection failed.",
-                    Some("failure"),
-                    Some("status"),
-                    Some(true),
-                    serde_json::Map::new(),
-                );
-                return BackendStatus {
-                    state: "unavailable",
-                    endpoint: None,
-                    message: Some(format!(
-                        "cannot inspect Nebula Core: {error}; diagnostics: {diagnostic_path}"
-                    )),
-                };
-            }
-        }
-    }
-    BackendStatus {
-        state: "stopped",
-        endpoint: None,
-        message: None,
+pub(crate) fn backend_status(state: State<'_, BackendState>,
+    _diagnostics: State<'_, DiagnosticsState>) -> BackendStatus {
+    match state.active_session() {
+        Ok(session) => BackendStatus { state: "running", endpoint: Some(session.endpoint), message: None },
+        Err(error) => BackendStatus { state: "unavailable", endpoint: None, message: Some(error) },
     }
 }
 
 #[tauri::command]
-pub(crate) fn stop_local_backend(
-    state: State<'_, BackendState>,
-    diagnostics: State<'_, DiagnosticsState>,
-) -> Result<(), String> {
-    stop_managed_backend(&state, &diagnostics)
+pub(crate) async fn stop_local_backend(_app: AppHandle, state: State<'_, BackendState>,
+    _diagnostics: State<'_, DiagnosticsState>) -> Result<(), String> {
+    let data_dir = state.process.lock().map_err(|_| "Core connection is unavailable")?
+        .as_ref().ok_or("No local Core connection is active")?.data_dir.clone();
+    let executable = sibling_sidecar_path()?;
+    if state.operator_stopped.swap(true, Ordering::AcqRel) {
+        return Err("Core shutdown is already pending or complete.".into());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new(executable).arg("runtime-stop").arg("--data-dir")
+            .arg(data_dir).stdin(Stdio::null()).output()
+            .map_err(|error| format!("Cannot request Core shutdown: {error}"))?;
+        if output.status.success() { return Ok(()); }
+        Err(format!("Core shutdown was not verified: {}", String::from_utf8_lossy(&output.stderr)))
+    }).await.map_err(|error| error.to_string()).and_then(|result| result);
+    if result.is_err() { state.operator_stopped.store(false, Ordering::Release); }
+    result
 }
 
-pub(crate) fn stop_managed_backend(
-    state: &State<'_, BackendState>,
-    diagnostics: &DiagnosticsState,
-) -> Result<(), String> {
-    let mut process = state.process.lock().map_err(|_| {
-        diagnostics.record_desktop(
-            DiagnosticLevel::Critical,
-            "desktop.sidecar.shutdown_lock_failed",
-            "Nebula Core shutdown could not acquire the supervisor lock.",
-            Some("failure"),
-            Some("shutdown"),
-            Some(false),
-            serde_json::Map::new(),
-        );
-        "the Nebula Core supervisor is unavailable during shutdown".to_string()
-    })?;
-    if let Some(mut managed) = process.take() {
-        return terminate_managed(&mut managed).inspect_err(|_error| {
-            diagnostics.record_desktop(
-                DiagnosticLevel::Error,
-                "desktop.sidecar.shutdown_failed",
-                "Nebula Core did not shut down cleanly.",
-                Some("failure"),
-                Some("shutdown"),
-                Some(true),
-                serde_json::Map::new(),
-            );
-        });
-    }
+/// Closing/restarting the desktop releases only its connection, never Core.
+pub(crate) fn stop_managed_backend(state: &State<'_, BackendState>,
+    _diagnostics: &DiagnosticsState) -> Result<(), String> {
+    state.process.lock().map_err(|_| "Core connection is unavailable")?.take();
     Ok(())
 }
 
@@ -1429,22 +957,6 @@ mod tests {
         fs::remove_dir_all(root).expect("security proxy test directory should be removed");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn lifetime_pipe_allows_graceful_shutdown_before_signaling() {
-        let mut child = Command::new("sh")
-            .args(["-c", "read -r _ || exit 0"])
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("test child should start");
-        child.stdin.take();
-
-        assert!(
-            wait_for_child_exit(&mut child, Instant::now() + Duration::from_secs(2))
-                .expect("graceful shutdown should be observable")
-        );
-    }
-
     #[test]
     fn startup_logs_preserve_stderr_content() {
         let token = "secret-sidecar-token";
@@ -1526,6 +1038,12 @@ mod tests {
             .expect("health request should succeed");
         verify_health(&health).expect("health payload should be accepted");
         server.join().expect("health server should finish");
+    }
+
+    #[test]
+    fn health_accepts_retained_api_version_and_recoverable_admission() {
+        let health: HealthResponse = serde_json::from_str(r#"{"status":"degraded","version":"previous-compatible-version","commit":"previous-commit","target":"linux","build_timestamp":"previous-build","distribution_channel":"managed","mode":"local","database":"ok","api_version":"v1","schema_version":5,"journal_mode":"wal"}"#).unwrap();
+        assert!(verify_health(&health).is_ok());
     }
 
     #[test]

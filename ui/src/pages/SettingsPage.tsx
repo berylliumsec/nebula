@@ -33,7 +33,7 @@ import { ShowMeHow } from "../guides/ShowMeHow";
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
-import { isTauriRuntime } from "../api/runtime";
+import { isTauriRuntime, isElectronRuntime, shutdownLocalRuntime } from "../api/runtime";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { CompactSettingsList } from "../components/CompactSettingsList";
@@ -168,6 +168,18 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [insecureTransport, setInsecureTransport] = useState(false);
   const [coreConnectionBusy, setCoreConnectionBusy] = useState(false);
   const [coreConnectionError, setCoreConnectionError] = useState<string>();
+  const [coreShutdownComplete, setCoreShutdownComplete] = useState(false);
+
+  const shutDownCore = async () => {
+    if (!await confirm({title: "Shut down Core?", message: "Closing this window leaves Core and saved work running. This action asks Core to stop once its work is safe to stop; active effects may block shutdown.", confirmLabel: "Shut down Core", tone: "danger"})) return;
+    setCoreConnectionBusy(true); setCoreConnectionError(undefined);
+    try {
+      await shutdownLocalRuntime();
+      setCoreShutdownComplete(true);
+    } catch (error) {
+      setCoreConnectionError(error instanceof Error ? error.message : String(error));
+    } finally { setCoreConnectionBusy(false); }
+  };
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -824,15 +836,16 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
         <HostCpuBudgetSettings api={api} previewMode={previewMode} />
         <HostPressureSettings api={api} previewMode={previewMode} />
-        {isTauriRuntime() && <section className="panel setup-card core-connection-settings" aria-labelledby="core-connection-title">
+        {(isTauriRuntime() || isElectronRuntime()) && <section id="core-connection-settings" className="panel setup-card core-connection-settings" aria-labelledby="core-connection-title">
           <header><span className={`status-dot ${coreConnection?.mode === "remote" ? "healthy" : "warning"}`} /><div><small>UI shell connection</small><h3 id="core-connection-title">{coreConnection?.mode === "remote" ? "Remote Core selected" : "Supervised local Core"}</h3></div></header>
-          <p>{coreConnection?.mode === "remote" ? `${coreConnection.endpoint ?? "Remote endpoint"} · this UI shell sends projects, terminals, chats, missions, events, and WebSockets to that Core.` : "This UI shell starts and uses its bundled local Core."}</p>
-          <form className="core-connection-form" onSubmit={(event) => void configureRemoteCore(event)}>
+          <p>{coreConnection?.mode === "remote" ? `${coreConnection.endpoint ?? "Remote endpoint"} · this UI shell sends projects, terminals, chats, missions, events, and WebSockets to that Core.` : "Core continues running when you close or update this window. Reopening reconnects to saved work."}</p>
+          {isTauriRuntime() && <form className="core-connection-form" onSubmit={(event) => void configureRemoteCore(event)}>
             <label><span>Remote Core origin</span><input value={remoteEndpoint} onChange={(event) => setRemoteEndpoint(event.target.value)} placeholder="https://nebula.example" autoComplete="url" /></label>
             <label><span>Bearer token</span><input value={remoteToken} onChange={(event) => setRemoteToken(event.target.value)} type="password" placeholder={coreConnection?.tokenAvailable ? "Saved token; enter a replacement" : "Remote Core token"} autoComplete="off" required /></label>
             <label className="core-connection-insecure"><input type="checkbox" checked={insecureTransport} onChange={(event) => setInsecureTransport(event.target.checked)} /><span><strong>Allow HTTP for this connection</strong><small>Bearer tokens can be intercepted on an insecure network.</small></span></label>
             <div className="core-connection-actions"><button className="button primary" type="submit" disabled={coreConnectionBusy}>{coreConnectionBusy ? "Testing…" : "Connect UI shell to remote Core"}</button>{coreConnection?.mode === "remote" && <button className="button secondary" type="button" disabled={coreConnectionBusy} onClick={() => void invoke("use_local_backend").then(() => window.location.reload()).catch((error) => { void logCaughtDiagnostic("interface.settings_page.local_core_switch_failed", "The UI shell could not switch back to its local Core.", error, "settings_page"); setCoreConnectionError(error instanceof Error ? error.message : String(error)); })}>Use local Core</button>}</div>
-          </form>
+          </form>}
+          {coreConnection?.mode !== "remote" && <div className="core-connection-actions"><button className="button secondary" type="button" disabled={coreConnectionBusy || coreShutdownComplete || (isTauriRuntime() && !coreConnection)} onClick={() => void shutDownCore()}>{coreConnectionBusy ? "Waiting for Core…" : "Shut down Core"}</button>{coreShutdownComplete && <p role="status">Core has shut down. Reopen the desktop to start it again.</p>}</div>}
           <p className="core-connection-boundary"><strong>Native execution stays on this desktop:</strong> Browser tabs, identity storage, proxy traffic, and keyring credentials run locally. Their sessions, commands, rules, receipts, and evidence synchronize with the selected Core.</p>
           {coreConnectionError && <DiagnosticErrorNotice error={coreConnectionError} fallback="The Core connection could not be updated." compact />}
         </section>}

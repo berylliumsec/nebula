@@ -7,6 +7,7 @@ import pytest
 
 from nebula.v3.runtime_bundle import build_frozen_bundle, build_source_bundle
 from nebula.v3.release_store import ReleaseIntegrityError, ReleaseStore
+from nebula.v3 import runtime_bundle
 
 
 def test_frozen_bundle_contains_and_checks_every_runtime_resource(tmp_path):
@@ -87,3 +88,18 @@ def test_runtime_bundle_rejects_tampering_and_symlink_resources(tmp_path):
     (ui / "alias").symlink_to(core)
     with pytest.raises(ValueError, match="symlinks"):
         build_frozen_bundle(core, ui, tmp_path / "other")
+
+
+def test_compatibility_requires_review_of_exact_migration_tree(tmp_path, monkeypatch):
+    source = runtime_bundle.Path(runtime_bundle.__file__).parent
+    shutil.copy2(
+        source / "runtime-compatibility.json", tmp_path / "runtime-compatibility.json"
+    )
+    shutil.copytree(source / "migrations/versions", tmp_path / "migrations/versions")
+    monkeypatch.setattr(runtime_bundle, "__file__", str(tmp_path / "runtime_bundle.py"))
+    assert runtime_bundle.load_compatibility()["additive_migrations"] is True
+    (tmp_path / "migrations/versions/9999_unreviewed.py").write_text(
+        "def upgrade(): pass\n"
+    )
+    with pytest.raises(ValueError, match="review runtime-compatibility"):
+        runtime_bundle.load_compatibility()

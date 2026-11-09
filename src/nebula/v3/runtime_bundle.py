@@ -8,6 +8,7 @@ Neither mode reads Nebula code or UI from the replaced application after launch.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import shutil
 import sys
@@ -17,7 +18,33 @@ from .deployment_protocol import ReleaseManifest
 from .release_store import MANIFEST_NAME, ReleaseStore
 from .version import __version__
 
-RUNTIME_FEATURES = ["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"]
+
+def load_compatibility() -> dict:
+    """Return reviewed ranges only while their exact migration tree matches.
+
+    A migration addition or edit requires a new explicit compatibility review;
+    a higher head number alone never establishes additive compatibility.
+    """
+    root = Path(__file__).parent
+    payload = json.loads((root / "runtime-compatibility.json").read_text())
+    digest = hashlib.sha256()
+    for path in sorted((root / "migrations/versions").glob("*.py")):
+        digest.update(path.name.encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    if payload.get(
+        "format"
+    ) != "nebula.runtime-compatibility/v1" or digest.hexdigest() != payload.get(
+        "migration_tree_sha256"
+    ):
+        raise ValueError(
+            "Runtime migrations changed; review runtime-compatibility.json before packaging"
+        )
+    manifest = payload["manifest"]
+    if manifest["schema_family"] != CURRENT_SCHEMA_VERSION:
+        raise ValueError("Runtime schema family requires a compatibility review")
+    return dict(manifest)
 
 
 def file_digest(path: Path) -> str:
@@ -56,22 +83,16 @@ def complete_bundle(
     files = {
         path.relative_to(directory).as_posix(): file_digest(path)
         for path in sorted(directory.rglob("*"))
-        if path.is_file() and path.name not in {MANIFEST_NAME, "nebula-runtime.sha256"}
+        if path.is_file()
+        and path.name not in {MANIFEST_NAME, "nebula-runtime.sha256", ".gitignore"}
     }
     identity = hashlib.sha256(repr(sorted(files.items())).encode()).hexdigest()[:16]
-    migrations = directory / "python/nebula/v3/migrations/versions"
-    heads = sorted(path.stem for path in migrations.glob("*.py"))
     manifest = ReleaseManifest(
         version=version or f"{__version__}+{identity}",
-        schema_family=CURRENT_SCHEMA_VERSION,
-        schema_min=CURRENT_SCHEMA_VERSION,
-        schema_max=CURRENT_SCHEMA_VERSION,
-        additive_migrations=True,
-        migration_head=heads[-1] if heads else "0040_runtime_chat_cursor",
+        **load_compatibility(),
         core_executable="bin/nebula-core",
         ui_directory="ui",
         files=files,
-        features=RUNTIME_FEATURES,
     )
     (directory / MANIFEST_NAME).write_text(manifest.model_dump_json() + "\n")
     digest = file_digest(directory / MANIFEST_NAME)
@@ -88,7 +109,11 @@ def build_frozen_bundle(
     resources: dict[str, Path] | None = None,
     version: str | None = None,
 ) -> tuple[ReleaseManifest, str]:
-    destination.mkdir(parents=True, exist_ok=False)
+    if destination.exists() and any(
+        path.name != ".gitignore" for path in destination.iterdir()
+    ):
+        raise ValueError("Build runtime bundles in an empty directory")
+    destination.mkdir(parents=True, exist_ok=True)
     (destination / "bin").mkdir()
     shutil.copy2(executable, destination / "bin/nebula-core")
     _copy_tree(ui_directory, destination / "ui")
@@ -117,6 +142,8 @@ def build_source_bundle(
         "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))\n"
         "if sys.argv[1:] == ['runtime-worker', '--bootstrap-stdin']:\n"
         "    from nebula.v3.runtime_worker import main\n"
+        "elif sys.argv[1:] == ['runtime-migrate', '--bootstrap-stdin']:\n"
+        "    from nebula.v3.runtime_worker import migration_main as main\n"
         "else:\n    from nebula.v3.cli import main\nmain()\n"
     )
     executable.chmod(0o755)

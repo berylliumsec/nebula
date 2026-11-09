@@ -25,6 +25,7 @@ export interface ElectronDesktopBridge {
   kind: "electron";
   resolveBackendConnection(): Promise<{ endpoint: string; token: string; source: "local"; protocol: string }>;
   deviceId(): Promise<string>;
+  shutdownCore(): Promise<void>;
   setZoom(scale: number): Promise<number>;
   browser: {
     open(projectId: string): Promise<ElectronBrowserState>;
