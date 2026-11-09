@@ -66,8 +66,14 @@ class ContinuityFixture:
                                        headers={"Authorization": "Bearer " + self.token},
                                        timeout=90, trust_env=False)
 
-    async def initialize(self, *, cold=False, pairing=False, memory=False):
+    async def initialize(self, *, cold=False, pairing=False, memory=False, scenario=None):
         self.root.mkdir(parents=True)
+        if scenario is not None:
+            if scenario != "provider-tools-context":
+                raise ValueError("unknown isolated acceptance scenario")
+            scenario_file = self.root / "acceptance-scenario.json"
+            scenario_file.write_text(json.dumps({"scenario": scenario}))
+            scenario_file.chmod(0o600)
         await self.database.initialize()
         self.database_ready = True
         await self.store.create(Engagement(id="continuity-project", name="Synthetic continuity"))

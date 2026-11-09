@@ -61,8 +61,8 @@ the packaged driver with distinct real artifacts for that separate gate.
 ## Pending gates
 
 The dedicated Playwright config permanently inherits desktop Chromium 1440/1024,
-Pixel 5 Chromium 320/390/430 and iPhone 13 WebKit 320/390/430. Its three
-journeys collect 24 cases; the physical live-apply journey requires an explicitly
+Pixel 5 Chromium 320/390/430 and iPhone 13 WebKit 320/390/430. Its four
+journeys collect 32 cases; the physical live-apply journey requires an explicitly
 selected disposable runtime and cached image. Collection is not execution evidence.
 
 The complete current production LAN matrix and packaged continuity remain
@@ -192,3 +192,25 @@ had foreground `#dae2e4` on `#6b6b6b`, ratio 4.05 against the required 4.5.
 The assertion remains intact. Evidence is preserved in
 `/tmp/nebula-acceptance-live-ui-contrast-failure`; no passing live-memory browser
 or complete responsive matrix is claimed from this attempt.
+
+The provider-tools journey is separately collected in all eight permanent
+profiles. It uses the standalone retained adapter from `1d05c49a` and preserves
+normal pairing, catalog, schema validation, policy, ledger and Core transport.
+Only provider/MCP output is inert. The test loads one exact deferred definition,
+uses it on later turns, creates real automatic compaction through bounded FILL
+turns, reloads, transfers to a different execution PID, and checks a historical
+fork. It reads the actual SQL manifest and verifies schema constraints, exact
+description digest, one canonical section, unchanged native declarations and
+one effect per requested use. Its browser execution remains pending the final
+combined source pin; collection and the adapter's own smoke test are not LAN
+execution evidence.
+
+For focused CI, the browser manager and Python bundle fixture now default to
+the selected interpreter's `sysconfig` dependency directory, and UI/source
+defaults resolve from the checkout. The existing Poetry in-project virtualenv
+and production build can supply these inputs. Set a real non-loopback fixture
+host for LAN evidence. The live-allocator case also requires an explicit local
+Docker executable/socket, a cached image, cgroup-v2 memory support and a static
+C compiler; without that environment its skip is a missing required gate.
+Official CI WebKit installation may provide the locally unavailable engine,
+but it does not replace physical-device or native installed-GUI evidence.

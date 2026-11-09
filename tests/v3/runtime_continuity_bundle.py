@@ -91,6 +91,10 @@ def build_bundle(
     worker = Path(__file__).with_name("runtime_continuity_worker.py")
     shutil.copy2(worker, directory / "acceptance_worker.py")
     shutil.copy2(Path(__file__).with_name("runtime_continuity_allocator.py"), directory / "acceptance_allocator.py")
+    tools_fixture = Path(os.environ.get("NEBULA_ACCEPTANCE_PROVIDER_TOOLS_FIXTURE", str(
+        Path(__file__).with_name("provider_tools_context_fixture.py"))))
+    if tools_fixture.is_file():
+        shutil.copy2(tools_fixture, directory / "acceptance_provider_tools_context.py")
     (directory / "entry.py").write_text(
         "import sys\nfrom pathlib import Path\n"
         "root=Path(__file__).resolve().parent\n"

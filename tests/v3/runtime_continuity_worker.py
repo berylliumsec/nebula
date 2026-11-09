@@ -73,6 +73,13 @@ async def project(context, lease):
         chat = app.state.control_assistant_work.chat
         chat.provider_factory = lambda profile: InertProvider(profile.id)
         chat.provider_scheduler.host_load = None
+        scenario_file = root / "acceptance-scenario.json"
+        if scenario_file.exists():
+            scenario = json.loads(scenario_file.read_text())["scenario"]
+            if scenario != "provider-tools-context":
+                raise RuntimeError("unknown retained acceptance scenario")
+            import acceptance_provider_tools_context
+            acceptance_provider_tools_context.configure_app(app, root=root, lease=lease, version=version)
         from acceptance_allocator import attach_allocator
         attach_allocator(app, root, lease.project_id)
 
@@ -215,6 +222,25 @@ async def serve(config):
                 return await client.call("execution.status/v1", {})
             finally:
                 await client.close()
+        if operation == "tool-context":
+            scenario = root / "acceptance-scenario.json"
+            if not scenario.is_file() or json.loads(scenario.read_text())["scenario"] != "provider-tools-context":
+                raise HTTPException(409, "select the explicit provider-tools fixture")
+            from nebula.v3.domain import ChatSession
+            from nebula.v3.provider_tool_manifest import read_manifest
+            from nebula.v3.storage import NebulaStore
+
+            observed_store = NebulaStore(database)
+            try:
+                owner = await observed_store.get(ChatSession, body["session_id"])
+                if owner.engagement_id != "continuity-project":
+                    raise HTTPException(403, "the fixture owns only its synthetic project")
+                async with database.session() as session:
+                    manifest = await read_manifest(session, project_id=owner.engagement_id, session_id=owner.id)
+                return {"manifest": {**manifest.model_dump(mode="json"), "digest": manifest.digest},
+                        "reference": owner.metadata.get("provider_tool_manifest")}
+            finally:
+                await observed_store.event_history.close()
         if operation == "inspect":
             async with database.session() as session:
                 processes = list(await session.scalars(select(RuntimeProcessRow)))

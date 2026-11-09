@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import sys
+import sysconfig
 import tempfile
 
 if __package__ in {None, ""}:
@@ -33,7 +35,7 @@ async def serve(root: Path):
     token = secrets.token_urlsafe(32)
     source = Path(os.environ.get("NEBULA_ACCEPTANCE_SOURCE", str(Path(__file__).resolve().parents[2] / "src")))
     ui = Path(os.environ.get("NEBULA_ACCEPTANCE_UI", str(Path(__file__).resolve().parents[2] / "ui" / "dist")))
-    dependencies = Path(os.environ.get("NEBULA_ACCEPTANCE_DEPENDENCIES", "/workspace/nebula/.venv/lib/python3.12/site-packages"))
+    dependencies = Path(os.environ.get("NEBULA_ACCEPTANCE_DEPENDENCIES", sysconfig.get_path("purelib")))
     retained = ReleaseStore(root / "retained")
     bundles = []
     for version in ("acceptance-v1", "acceptance-v2"):
@@ -99,6 +101,12 @@ async def serve(root: Path):
         nonlocal fixture
         authorize(request)
         body = await request.json()
+        scenario = body.get("scenario")
+        if scenario is not None and scenario != "provider-tools-context":
+            raise HTTPException(400, "unknown isolated acceptance scenario")
+        tools_adapter = bundles[-1].path / "acceptance_provider_tools_context.py"
+        if scenario is not None and not tools_adapter.is_file():
+            raise HTTPException(503, "selected retained bundles do not contain the provider-tools fixture")
         async with serial:
             await close_fixture()
             selected = root / ("installation-" + secrets.token_hex(8))
@@ -106,17 +114,26 @@ async def serve(root: Path):
             fixture = ContinuityFixture(selected / "data", selected / "core.db", bundles,
                                         host=host, port=port, listen_host="0.0.0.0")
             await fixture.initialize(cold=body.get("cold", False), pairing=True,
-                                     memory=body.get("memory", False))
+                                     memory=body.get("memory", False), scenario=scenario)
             await fixture.store.create(ChatSession(
                 id="continuity-chat", engagement_id="continuity-project",
                 title="Synthetic continuity conversation", provider_profile_id="continuity-provider",
                 model="model-a", metadata={"initial_title_state": "operator"},
             ))
+            scenario_receipt = None
+            if scenario is not None:
+                spec = importlib.util.spec_from_file_location("acceptance_provider_tools_initializer", tools_adapter)
+                adapter = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = adapter
+                spec.loader.exec_module(adapter)
+                scenario_receipt = await adapter.initialize(fixture.store, root=fixture.root,
+                                                            project_id="continuity-project", session_id="continuity-chat")
             if not body.get("cold", False):
                 await fixture.ready()
             return {"token": fixture.token, "index_sha256": bundles[0].index_sha256,
                     "source_sha256": bundles[0].source_sha256,
-                    "session_id": "continuity-chat", "origin": fixture.origin}
+                    "session_id": "continuity-chat", "origin": fixture.origin,
+                    "scenario": scenario, "scenario_receipt": scenario_receipt}
 
     @app.post("/control")
     async def control(request: Request):
@@ -128,6 +145,22 @@ async def serve(root: Path):
         if operation == "diagnostics":
             health = await fixture.client.get("/api/v1/health", timeout=5)
             memory = await fixture.client.get("/api/v1/memory-budgets", timeout=5)
+            tools = {}
+            scenario = fixture.root / "acceptance-scenario.json"
+            if scenario.is_file() and json.loads(scenario.read_text())["scenario"] == "provider-tools-context":
+                for session_id in dict.fromkeys(["continuity-chat", body.get("session_id")]):
+                    if not session_id:
+                        continue
+                    observed = await fixture.client.post("/__acceptance/control", json={
+                        "operation": "tool-context", "session_id": session_id,
+                    }, timeout=5)
+                    context = await fixture.client.get(f"/api/v1/chat/sessions/{session_id}/context", timeout=5)
+                    tools[session_id] = {
+                        "manifest_status": observed.status_code,
+                        "manifest": observed.json() if "application/json" in observed.headers.get("content-type", "") else observed.text[-4096:],
+                        "context_status": context.status_code,
+                        "context": context.json() if "application/json" in context.headers.get("content-type", "") else context.text[-4096:],
+                    }
             jobs = {}
             for identity, task in allocations.items():
                 job = await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity, timeout=5)
@@ -144,7 +177,7 @@ async def serve(root: Path):
             return {"status": health.status_code, "health": health.json(),
                     "runtime": await fixture.control("inspect"), "logs": logs,
                     "memory": {"status": memory.status_code, "settings": memory.json()},
-                    "allocations": jobs}
+                    "allocations": jobs, "provider_tools": tools}
         if operation in {"hold", "release"}:
             if body.get("name") not in {"hold-provider"}:
                 raise HTTPException(400, "unknown fixture barrier")

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 from uuid import uuid4
 
 import pytest
@@ -29,8 +30,8 @@ def anyio_backend():
 def continuity_bundles(tmp_path_factory):
     root = tmp_path_factory.mktemp("retained-continuity-bundles")
     source = Path(os.environ.get("NEBULA_ACCEPTANCE_SOURCE", str(Path(__file__).resolve().parents[2] / "src")))
-    ui = Path(os.environ.get("NEBULA_ACCEPTANCE_UI", "/workspace/nebula/ui/dist"))
-    dependencies = Path(os.environ.get("NEBULA_ACCEPTANCE_DEPENDENCIES", "/workspace/nebula/.venv/lib/python3.12/site-packages"))
+    ui = Path(os.environ.get("NEBULA_ACCEPTANCE_UI", str(Path(__file__).resolve().parents[2] / "ui/dist")))
+    dependencies = Path(os.environ.get("NEBULA_ACCEPTANCE_DEPENDENCIES", sysconfig.get_path("purelib")))
     retained = ReleaseStore(root / "retained")
     bundles = []
     try:

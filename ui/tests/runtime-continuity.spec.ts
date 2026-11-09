@@ -18,8 +18,8 @@ async function controller(request: APIRequestContext) {
   const {token, control_origin: origin} = JSON.parse(await readFile(authFile, "utf8"));
   const headers = {Authorization: `Bearer ${token}`};
   return {
-    reset: async (cold = false, memory = false) => {
-      const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory}});
+    reset: async (cold = false, memory = false, scenario?: "provider-tools-context") => {
+      const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario}});
       expect(response.ok(), await response.text()).toBe(true);
       return response.json();
     },
@@ -40,7 +40,7 @@ test.afterEach(async ({request, page}, info) => {
   const control = await controller(request);
   try {
     if (info.status !== info.expectedStatus) await page.screenshot({path: info.outputPath("before-cleanup.png"), fullPage: true});
-    const health = await control.control("diagnostics");
+    const health = await control.control("diagnostics", {session_id: new URL(page.url()).searchParams.get("session")});
     const evidence = info.outputPath("before-cleanup.json");
     await writeFile(evidence, JSON.stringify({health, httpErrors: observedErrors.get(page) ?? []}, null, 2));
     await info.attach("before-cleanup-health", {path: evidence, contentType: "application/json"});
@@ -221,4 +221,130 @@ test("production Settings applies a live memory reduction to the original physic
     const job = await read();
     return job?.state === "finished" && job.evidence?.group_empty && job.reserved_bytes === 0;
   }).toBe(true);
+});
+
+test("loaded provider tools survive compaction, reload, execution replacement and a historical fork", async ({page, request}, info) => {
+  test.setTimeout(300_000);
+  const control = await controller(request);
+  const fixture = await control.reset(false, false, "provider-tools-context");
+  expect(fixture.scenario).toBe("provider-tools-context");
+  const schema = fixture.scenario_receipt.input_schema;
+  const deferredName = fixture.scenario_receipt.deferred_tool;
+  const auth = {Authorization: `Bearer ${fixture.token}`};
+  const read = async (path: string) => {
+    const response = await request.get(fixture.origin + path, {headers: auth});
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  const manifest = async (session = fixture.session_id) => (await control.control("tool-context", {session_id: session})).manifest;
+  const checkDefinition = (value: {definitions: Record<string, unknown>[]}) => {
+    const definition = value.definitions.find(item => item.name === deferredName);
+    expect(definition).toBeDefined();
+    expect(definition!.representation).toBe("deferred");
+    expect(definition!.schema_present).toBe(true);
+    expect(definition!.input_schema).toEqual(schema);
+    expect(createHash("sha256").update(String(definition!.description)).digest("hex")).toBe(fixture.scenario_receipt.description_sha256);
+    return definition!;
+  };
+  await pair(page, request, fixture);
+  await page.goto(`/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`);
+  const composer = page.locator(".chat-composer textarea");
+  await expect(composer).toBeVisible();
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  const settings = page.getByRole("dialog", {name: "Assistant settings", exact: true});
+  await expect(settings.getByRole("combobox", {name: "Chat provider"})).toHaveValue("continuity-provider");
+  await expect(settings.getByRole("checkbox", {name: /Synthetic-native-source/})).toBeChecked();
+  await expect(settings.getByRole("checkbox", {name: /Synthetic-deferred-source/})).not.toBeChecked();
+  await settings.getByRole("button", {name: "Close assistant settings", exact: true}).click();
+  let submissions = 0;
+  let sent = 0;
+  page.on("request", value => {if (value.method() === "POST" && value.url().includes("/chat/completions")) submissions++;});
+  const send = async (content: string, answer: string, session = fixture.session_id) => {
+    const previous = await page.locator(".chat-message.assistant").count();
+    await composer.fill(content);
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    sent++;
+    await expect.poll(() => submissions).toBe(sent);
+    await expect(page.locator(".chat-message.assistant")).toHaveCount(previous + 1);
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText(answer, {timeout: 60_000});
+    await expect.poll(async () => read(`/api/v1/chat/sessions/${session}/pending-turn`), {timeout: 30_000}).toBeNull();
+    await expect(page.getByRole("button", {name: "Stop response", exact: true})).toBeHidden();
+  };
+  await send("[TOOLS_CONTEXT:LEARN]", "TOOLS_CONTEXT_LEARNED ABC");
+  const learned = await manifest();
+  const definition = checkDefinition(learned);
+  const native = learned.definitions.find((item: {source_id: string}) => item.source_id === "mcp:" + fixture.scenario_receipt.mcp_server_ids[0]);
+  expect(native?.representation).toBe("native");
+  expect(native?.schema_present).toBe(true);
+  await send("[TOOLS_CONTEXT:USE] before compaction", "TOOLS_CONTEXT_USED ABC");
+  expect(checkDefinition(await manifest()).definition_digest).toBe(definition.definition_digest);
+  let context = await read(`/api/v1/chat/sessions/${fixture.session_id}/context`);
+  for (let index = 1; index <= 6 && context.compacted_through === 0; index++) {
+    await send(`[TOOLS_CONTEXT:FILL] ${index}`, "TOOLS_CONTEXT_PADDING");
+    context = await read(`/api/v1/chat/sessions/${fixture.session_id}/context`);
+  }
+  expect(context.compacted_through).toBeGreaterThan(0);
+  expect(context.snapshot).toBeTruthy();
+  expect(checkDefinition(await manifest()).definition_digest).toBe(definition.definition_digest);
+  await page.getByRole("button", {name: /^Open context details/}).click();
+  const inspector = page.locator(".session-inspector");
+  await expect(inspector.getByRole("heading", {name: "Working context", exact: true})).toBeVisible();
+  await expect(inspector.getByText(`Compacted through message ${context.compacted_through}. The original messages are unchanged and searchable.`, {exact: true})).toBeVisible();
+  await inspector.getByRole("button", {name: "Close details", exact: true}).click();
+  await page.reload();
+  await expect(composer).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`session=${fixture.session_id}`));
+  await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "TOOLS_CONTEXT_LEARNED ABC"})).toBeVisible();
+  await send("[TOOLS_CONTEXT:USE] after reload", "TOOLS_CONTEXT_USED ABC");
+  const beforeHandoff = await manifest();
+  const beforeEvents = (await control.control("inspect")).events;
+  const oldProducer = beforeEvents.find((item: {event: string}) => item.event === "provider-tools-effect").pid;
+  const target = await control.control("handoff", {version: "acceptance-v2", project_id: "continuity-project"});
+  expect(target.pid).not.toBe(oldProducer);
+  await expect.poll(async () => {
+    const status = await read("/api/v1/deployment/status");
+    return status.projects.some((item: {project_id: string; runtime_id: string; phase: string}) =>
+      item.project_id === "continuity-project" && item.runtime_id === target.runtime_id && item.phase === "verified");
+  }, {timeout: 60_000}).toBe(true);
+  expect((await manifest()).digest).toBe(beforeHandoff.digest);
+  await send("[TOOLS_CONTEXT:USE] in the fresh execution worker", "TOOLS_CONTEXT_USED ABC");
+  const restored = await manifest();
+  expect(checkDefinition(restored).definition_digest).toBe(definition.definition_digest);
+  const originalEvents = (await control.control("inspect")).events;
+  const calls = originalEvents.filter((item: {event: string}) => item.event === "provider-tools-request");
+  const effects = originalEvents.filter((item: {event: string}) => item.event === "provider-tools-effect");
+  expect(calls.filter((item: {stage: string}) => item.stage === "load")).toHaveLength(1);
+  expect(calls.every((item: {canonical_sections: number}) => item.canonical_sections === 1)).toBe(true);
+  expect(calls.filter((item: {stage: string}) => item.stage !== "load").every((item: {complete_definition_count: number}) => item.complete_definition_count === 1)).toBe(true);
+  expect(calls.every((item: {load_result_schema_count: number}) => item.load_result_schema_count === 0)).toBe(true);
+  expect(new Set(calls.filter((item: {stage: string}) => item.stage !== "load").map((item: {canonical_sha256: string}) => item.canonical_sha256)).size).toBe(1);
+  expect(calls.every((item: {native_names: string[]}) => item.native_names.includes(native.name))).toBe(true);
+  expect(effects).toHaveLength(4);
+  expect(effects.at(-1).pid).toBe(target.pid);
+  expect(originalEvents.some((item: {event: string; stage: string}) => item.event === "provider-tools-operation" && item.stage === "summary")).toBe(true);
+  expect((await new AxeBuilder({page}).include(".chat-message.assistant").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({path: info.outputPath("provider-tools-restored.png"), fullPage: true});
+  const historical = page.locator(".chat-message.assistant").filter({hasText: "TOOLS_CONTEXT_LEARNED ABC"});
+  await historical.hover();
+  await historical.getByRole("button", {name: "Fork conversation here", exact: true}).click();
+  await expect.poll(() => {
+    const selected = new URL(page.url()).searchParams.get("session");
+    return Boolean(selected && selected !== fixture.session_id);
+  }).toBe(true);
+  const forkId = new URL(page.url()).searchParams.get("session");
+  expect(forkId).toBeTruthy();
+  await expect(page.locator(".chat-action-status").filter({hasText: "Branched conversation"})).toBeVisible();
+  await expect(page.locator(".chat-message.assistant").filter({hasText: "TOOLS_CONTEXT_PADDING"})).toHaveCount(0);
+  expect((await read(`/api/v1/chat/sessions/${forkId}`)).parent_session_id).toBe(fixture.session_id);
+  expect(checkDefinition(await manifest(forkId)).definition_digest).toBe(definition.definition_digest);
+  await send("[TOOLS_CONTEXT:USE] from the historical fork", "TOOLS_CONTEXT_USED ABC", forkId);
+  expect(submissions).toBe(sent);
+  const finalEvents = (await control.control("inspect")).events;
+  expect(finalEvents.filter((item: {event: string; stage: string}) => item.event === "provider-tools-request" && item.stage === "load")).toHaveLength(1);
+  expect(finalEvents.filter((item: {event: string}) => item.event === "provider-tools-effect")).toHaveLength(5);
+  const evidence = info.outputPath("provider-tools-context.json");
+  await writeFile(evidence, JSON.stringify({initialization: fixture.scenario_receipt, learned, context, restored,
+    forkId, forkManifest: await manifest(forkId), submissions, events: finalEvents}, null, 2));
+  await info.attach("durable-provider-tools", {path: evidence, contentType: "application/json"});
 });
