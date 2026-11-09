@@ -30,7 +30,8 @@ name collision and ruled out a runtime response problem. Qualifying the builtin
 preserves runtime behavior; no behavior repair or additional test run was needed.
 Raw collection, receipt and outputs are `/tmp/nebula-shared-memory-*`.
 
-This boundary still needs supervisor socket/lifetime wiring and a verified import
-of compatibility memories before enabling the full architecture. Shared knowledge
+Supervisor socket/lifetime wiring is now covered by the
+[host-services evidence](runtime-host-services.md). A verified import of
+compatibility memories is still required before enabling the full architecture. Shared knowledge
 index operations, production execution construction, production LAN/reconnect,
 mobile WebKit and packaged-desktop continuity evidence also remain pending.

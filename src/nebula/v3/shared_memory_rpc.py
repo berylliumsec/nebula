@@ -7,6 +7,7 @@ from dataclasses import asdict
 
 from pydantic import Field, ValidationError
 
+from .async_utils import finish_cleanup
 from .butler_memory import (
     ButlerMemoryItem,
     ButlerMemoryList,
@@ -71,7 +72,7 @@ def register_shared_memory(
 ):
     """Bind one authenticated peer to one immutable process incarnation."""
 
-    async def invoke(payload):
+    async def dispatch(payload):
         try:
             if set(payload) != {"lease", "action", "arguments"}:
                 raise ValueError("Invalid shared-memory envelope")
@@ -124,6 +125,11 @@ def register_shared_memory(
                 name for name, model in _ERRORS.items() if isinstance(error, model)
             )
             return {"ok": False, "error": kind, "detail": str(error)[:1000]}
+
+    async def invoke(payload):
+        # An accepted host operation owns SQL and index cleanup even if its
+        # socket disconnects or the supervisor's listener starts draining.
+        return await finish_cleanup(dispatch(payload))
 
     server.register(MEMORY_OPERATION, invoke)
 

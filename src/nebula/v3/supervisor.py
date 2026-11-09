@@ -24,6 +24,7 @@ from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
 from .runtime_routing import RuntimeRouting
 from .runtime_memory import RuntimeMemoryAdmission
+from .runtime_host_services import HostSharedServices
 from .storage import NebulaStore
 
 
@@ -77,10 +78,14 @@ class RuntimeSupervisor:
         retained_root: Path | None = None,
         worker_admission: Callable[[ReleaseManifest, str], Awaitable[None]]
         | None = None,
+        shared_services: HostSharedServices | None = None,
     ):
         if not operator_token:
             raise ValueError("supervisor requires normal Core authentication")
         self.host, self.coordinator = host, host.coordinator
+        self.shared_services = shared_services or HostSharedServices(host)
+        if self.shared_services.host is not host:
+            raise ValueError("Shared services must use this supervisor's process host")
         self.store = NebulaStore(self.coordinator.database)
         self.retained = ReleaseStore(retained_root or host.root / "releases")
         self.worker_admission = worker_admission
@@ -172,6 +177,12 @@ class RuntimeSupervisor:
                 raise RuntimeError("a closed supervisor cannot restart")
             if not self.started:
                 await self.host.start()
+                try:
+                    await self.shared_services.start()
+                except BaseException:
+                    await self.shared_services.close()
+                    await self.host.close()
+                    raise
                 self.started = True
 
     async def stage(self, source: Path, *, manifest_sha256: str) -> ReleaseManifest:
@@ -315,6 +326,7 @@ class RuntimeSupervisor:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
         for operation in (
+            self.shared_services.close,
             self.host.close,
             self.store.event_history.close,
             self.store.database.dispose,
