@@ -394,11 +394,14 @@ def select_project(app, project_name, atspi):
         except Exception as capture_error:
             # diagnostic-expected: a failed diagnostic must preserve the original
             # selection failure and never export an arbitrary exception body.
-            error_type = "".join(
-                character
-                for character in type(capture_error).__name__[:60]
-                if character.isascii() and (character.isalnum() or character == "_")
-            ) or "Error"
+            error_type = (
+                "".join(
+                    character
+                    for character in type(capture_error).__name__[:60]
+                    if character.isascii() and (character.isalnum() or character == "_")
+                )
+                or "Error"
+            )
             detail = '{"capture_error_type":"' + error_type + '"}'
         raise RuntimeError(
             "native project selection did not match: " + detail
