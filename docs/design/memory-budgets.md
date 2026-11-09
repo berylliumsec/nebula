@@ -21,9 +21,31 @@ Available-memory/host-pressure telemetry and CPU affinity are admission or CPU
 controls; they cannot enforce a job's lifetime memory ceiling. Fixed runtime
 inspection and cleanup operations are trusted administrative controls. Arbitrary
 shell or SSH commands cannot acquire that classification from a caller's label.
-Core, SQL, indexing, browser control and configured integration services use the
-service reserve; they are not represented as per-job protected compute. An
-external service's own work is outside this runner's containment scope.
+Core, SQL, indexing, browser control and external configured integration services
+use the service reserve; they are not represented as per-job protected compute.
+Nebula's managed local search service is an explicit exception: its one
+`web_search_service` job reserves aggregate capacity for the entire SearXNG
+process tree. Queries do not create additional reservations. It is not an
+API/execution runtime record and adds no second search-specific Core-reserve
+charge. The administrator's Core/SQL/other-services floor remains unchanged;
+Nebula never guesses how much of an old reserve an operator intended for search.
+An external service's own work is outside this runner's containment scope.
+
+The search service follows normal administrator, host, container-environment and
+profile precedence. Its request can only lower the selected ceiling, to at most
+512 MiB RAM and zero swap. Required memory.high still causes refusal on an adapter
+without that capability. The durable job snapshot, verified group and usage are
+visible through the same Memory budgets API and Butler actions as other jobs.
+The stable host owns the service; project tools query it through that host.
+
+Only a verified cached official image may start. Fixed image inspection and
+cached-image verification remain administrative controls. Image pull/build is
+held before any client starts: Docker/BuildKit does the work in daemon workers,
+so a memory limit on the CLI would not contain it. A provisioning runner must
+atomically reserve capacity, own immutable daemon/build-worker identities, apply
+and read back hard RAM/swap/pressure controls before work, report usage/OOM, and
+prove every descendant stopped before release. No such daemon adapter is
+implemented here; an absent or stale cached image reports that dependency.
 
 ## Operator contract
 

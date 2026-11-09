@@ -47,6 +47,24 @@ def test_product_search_finds_enforced_memory_budgets_and_butler_actions(monkeyp
     assert any("verify_memory_job" in item["text"] for item in actions)
 
 
+def test_product_search_explains_search_service_memory_and_daemon_dependency(
+    monkeypatch,
+):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "web_search_service persistent search per-query reservation"
+    )
+    content = "\n".join(item["text"] for item in matches)
+    assert "512 MiB" in content and "per-query" in content
+    matches = search_product_knowledge(
+        "search image download build daemon memory runner cached"
+    )
+    content = "\n".join(item["text"] for item in matches)
+    assert "cached" in content and "daemon" in content and "held" in content
+    matches = search_product_knowledge("searxng memory budget")
+    assert any("memory-budget-settings" in item["text"] for item in matches)
+
+
 def test_product_search_finds_core_performance_telemetry(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

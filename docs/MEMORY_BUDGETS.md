@@ -112,6 +112,24 @@ commands, background children and Notebook kernels share its frozen worker
 budget. Capacity remains reserved until that worker and every descendant are
 removed. New commands inside it do not create a fresh worker or reset its budget.
 
+The local search service is one persistent `web_search_service` job in the total
+job budget. Queries share its existing reservation; they add no per-query charge.
+Its selected profile/default may lower the service's 512 MiB RAM ceiling; swap
+is explicitly zero. It receives the same pre-launch kernel proof, live-limit
+controls and verified cleanup as other managed jobs. It has no additional
+search-specific runtime/Core-reserve charge; the administrator's Core/SQL floor
+is unchanged. Stop, idle retirement or host shutdown releases capacity only after
+the identified group is gone. Changing saved policy applies on the next service
+start; a running-limit change remains a separate explicit action.
+
+Search startup can use a verified cached official image. An uncached search image
+or workstation image requiring download/build is held: a daemon worker executes
+that work, so restricting its client would not enforce the worker's memory.
+Support requires a runner that owns and verifies the daemon/build-worker groups
+before starting computation. Fixed inspection and fully verified cached-image
+reuse remain available. No provisioning failure falls back to unrestricted
+Docker, BuildKit or a host shell.
+
 Host shells and Host Notebook kernels need a protected local memory-runner/v1
 agent; native vendor harnesses need a memory-managed adapter; PDF CPU work needs
 a contained CPU runner; raw SSH needs an authenticated remote agent that can

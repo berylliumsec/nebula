@@ -1,0 +1,572 @@
+{
+  "schema_version": 1,
+  "source_commit": "b2a69046",
+  "result": "passed",
+  "scope": "Isolated synthetic service on an explicitly assigned Docker daemon; actual cgroup enforcement, synthetic image/readiness contract. No live SearxNG or production runner certification.",
+  "fixture": {
+    "runtime": "/usr/local/bin/docker",
+    "socket": "unix:///var/run/docker.sock",
+    "image": "postgres@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139"
+  },
+  "focused_phases": [
+    {
+      "tests": 8,
+      "passed": 8,
+      "seconds": 11.1
+    },
+    {
+      "tests": 3,
+      "passed": 3,
+      "seconds": 8.43
+    },
+    {
+      "tests": 5,
+      "passed": 5,
+      "seconds": 6.41,
+      "repeat": "OOM case only after typed failure metadata was added"
+    }
+  ],
+  "distinct_adapter_and_integration_cases": 15,
+  "guidance_tests": {
+    "passed": 4,
+    "seconds": 2.04,
+    "passages": 411,
+    "source_digest_prefix": "f57356a8d5cc",
+    "chroma": "isolated actual collection synchronized and stale source replaced"
+  },
+  "owned_group_count": 6,
+  "owned_groups_verified_absent": [
+    "353082117dc6046e1d94fd50e32e3a9daef20caa66dd2b9c6cd62c7d008730c8",
+    "7afe2a82ebda41e1bd8870a93c65ae55c3c5905fc2abfc73c8142bb152bf6cf6",
+    "838cb50625ef5c84ebdc560bd2361b79f607836708a0fff845eec6ae43c69687",
+    "a4f36638f6665287e9f94bcf48fb46dbc3fe2f243108a912c14ec8d91e047b80",
+    "b1416fb5ac4ac29b650d74e295dec14c37a34590f6d26a31a0d2c53b29648384",
+    "bb715363a9a81b38376367ba9f755311abd7268d0d25de2ba7a25e8d93aed31c"
+  ],
+  "memory_jobs": [
+    {
+      "id": "search-26464016d9194b1ea0ba79a53d3429f9",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 2,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": {
+        "application_uncertain": false,
+        "protocol": "nebula.memory-runner/v1",
+        "group_id": "b1416fb5ac4ac29b650d74e295dec14c37a34590f6d26a31a0d2c53b29648384",
+        "job_id": "search-26464016d9194b1ea0ba79a53d3429f9",
+        "applied": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "protected_process_tree": true,
+        "peak_bytes": 4669440,
+        "current_bytes": 0,
+        "observed_at": "2026-11-09T14:00:05.402066+00:00",
+        "oom_kill_count": 1,
+        "oom_victim_confirmed": true,
+        "group_empty": true,
+        "auxiliary_group_ids": [],
+        "auxiliary_groups_empty": true,
+        "termination_reason": "memory_limit_exceeded",
+        "detail": "Kernel reported a memory-limit kill; descendants removed."
+      },
+      "launch_groups": {
+        "group_id": "b1416fb5ac4ac29b650d74e295dec14c37a34590f6d26a31a0d2c53b29648384",
+        "auxiliary_group_ids": []
+      },
+      "outcome": "memory_limit_exceeded",
+      "fixture": "test_real_service_oom_has_posi0/fixture.db",
+      "phase": "managed-search-d595"
+    },
+    {
+      "id": "search-b30e15cfbd04467ab25849259d192b26",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 2,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": {
+        "application_uncertain": false,
+        "protocol": "nebula.memory-runner/v1",
+        "group_id": "838cb50625ef5c84ebdc560bd2361b79f607836708a0fff845eec6ae43c69687",
+        "job_id": "search-b30e15cfbd04467ab25849259d192b26",
+        "applied": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "protected_process_tree": true,
+        "peak_bytes": null,
+        "current_bytes": 0,
+        "observed_at": "2026-11-09T14:00:01.404030+00:00",
+        "oom_kill_count": 0,
+        "oom_victim_confirmed": false,
+        "group_empty": true,
+        "auxiliary_group_ids": [],
+        "auxiliary_groups_empty": true,
+        "termination_reason": "cancelled",
+        "detail": "Container and descendants removed."
+      },
+      "launch_groups": {
+        "group_id": "838cb50625ef5c84ebdc560bd2361b79f607836708a0fff845eec6ae43c69687",
+        "auxiliary_group_ids": []
+      },
+      "outcome": "cancelled",
+      "fixture": "test_real_service_uses_one_res0/fixture.db",
+      "phase": "managed-search-d595"
+    },
+    {
+      "id": "search-c01341cc8f3042d28b68d8bf8264eb89",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 3,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": {
+        "application_uncertain": false,
+        "protocol": "nebula.memory-runner/v1",
+        "group_id": "353082117dc6046e1d94fd50e32e3a9daef20caa66dd2b9c6cd62c7d008730c8",
+        "job_id": "search-c01341cc8f3042d28b68d8bf8264eb89",
+        "applied": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "protected_process_tree": true,
+        "peak_bytes": null,
+        "current_bytes": 0,
+        "observed_at": "2026-11-09T14:00:07.985066+00:00",
+        "oom_kill_count": 0,
+        "oom_victim_confirmed": false,
+        "group_empty": true,
+        "auxiliary_group_ids": [],
+        "auxiliary_groups_empty": true,
+        "termination_reason": "cancelled",
+        "detail": "Container and descendants removed."
+      },
+      "launch_groups": {
+        "group_id": "353082117dc6046e1d94fd50e32e3a9daef20caa66dd2b9c6cd62c7d008730c8",
+        "auxiliary_group_ids": []
+      },
+      "outcome": "cancelled",
+      "fixture": "test_real_service_waits_at_agg0/fixture.db",
+      "phase": "managed-search-d595"
+    },
+    {
+      "id": "search-26310af995884873887c7f5c61d6efaf",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 3,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": null,
+      "launch_groups": null,
+      "outcome": "cancelled",
+      "fixture": "test_real_service_waits_at_agg0/fixture.db",
+      "phase": "managed-search-d595"
+    },
+    {
+      "id": "search-0adfec758a61485a8988f77221a0c3fe",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 2,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": {
+        "application_uncertain": false,
+        "protocol": "nebula.memory-runner/v1",
+        "group_id": "7afe2a82ebda41e1bd8870a93c65ae55c3c5905fc2abfc73c8142bb152bf6cf6",
+        "job_id": "search-0adfec758a61485a8988f77221a0c3fe",
+        "applied": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "protected_process_tree": true,
+        "peak_bytes": null,
+        "current_bytes": 0,
+        "observed_at": "2026-11-09T14:01:59.675936+00:00",
+        "oom_kill_count": 0,
+        "oom_victim_confirmed": false,
+        "group_empty": true,
+        "auxiliary_group_ids": [],
+        "auxiliary_groups_empty": true,
+        "termination_reason": "cancelled",
+        "detail": "Container and descendants removed."
+      },
+      "launch_groups": {
+        "group_id": "7afe2a82ebda41e1bd8870a93c65ae55c3c5905fc2abfc73c8142bb152bf6cf6",
+        "auxiliary_group_ids": []
+      },
+      "outcome": "cancelled",
+      "fixture": "test_real_service_refuses_chan0/fixture.db",
+      "phase": "managed-search-extra-d595"
+    },
+    {
+      "id": "search-ce41750a88d6417eae1959cab96aba34",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 2,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": {
+        "application_uncertain": false,
+        "protocol": "nebula.memory-runner/v1",
+        "group_id": "a4f36638f6665287e9f94bcf48fb46dbc3fe2f243108a912c14ec8d91e047b80",
+        "job_id": "search-ce41750a88d6417eae1959cab96aba34",
+        "applied": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "protected_process_tree": true,
+        "peak_bytes": null,
+        "current_bytes": 0,
+        "observed_at": "2026-11-09T14:02:02.039878+00:00",
+        "oom_kill_count": 0,
+        "oom_victim_confirmed": false,
+        "group_empty": true,
+        "auxiliary_group_ids": [],
+        "auxiliary_groups_empty": true,
+        "termination_reason": "cancelled",
+        "detail": "Container and descendants removed."
+      },
+      "launch_groups": {
+        "group_id": "a4f36638f6665287e9f94bcf48fb46dbc3fe2f243108a912c14ec8d91e047b80",
+        "auxiliary_group_ids": []
+      },
+      "outcome": "cancelled",
+      "fixture": "test_real_service_refuses_chan1/fixture.db",
+      "phase": "managed-search-extra-d595"
+    },
+    {
+      "id": "held-45e5747d30f343dc8c885a8af0bf2b64",
+      "project_id": null,
+      "resource_kind": "container_image_pull",
+      "state": "blocked",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 1,
+        "environment": "container",
+        "profile_id": null,
+        "source": "default",
+        "limits": {
+          "max_bytes": 2147483648,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 17179869184,
+          "maximum_job_bytes": 8589934592,
+          "maximum_aggregate_bytes": 15032385536,
+          "minimum_reserve_bytes": 2147483648,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": null,
+      "launch_groups": null,
+      "outcome": null,
+      "fixture": "test_image_daemon_compute_is_h0/core.db",
+      "phase": "managed-search-daemon-d595"
+    },
+    {
+      "id": "held-b87e571b5e864a4eab69cc726e5a4018",
+      "project_id": null,
+      "resource_kind": "container_image_build",
+      "state": "blocked",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 1,
+        "environment": "container",
+        "profile_id": null,
+        "source": "default",
+        "limits": {
+          "max_bytes": 2147483648,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 17179869184,
+          "maximum_job_bytes": 8589934592,
+          "maximum_aggregate_bytes": 15032385536,
+          "minimum_reserve_bytes": 2147483648,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": null,
+      "launch_groups": null,
+      "outcome": null,
+      "fixture": "test_image_daemon_compute_is_h1/core.db",
+      "phase": "managed-search-daemon-d595"
+    },
+    {
+      "id": "search-f6cee733469f4702ac59c5e7ae6a95e6",
+      "project_id": null,
+      "resource_kind": "web_search_service",
+      "state": "finished",
+      "reserved_bytes": 0,
+      "snapshot": {
+        "policy_revision": 2,
+        "environment": "container",
+        "profile_id": "local",
+        "source": "job",
+        "limits": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "administrator_limits": {
+          "capacity_bytes": 268435456,
+          "maximum_job_bytes": 67108864,
+          "maximum_aggregate_bytes": 134217728,
+          "minimum_reserve_bytes": 134217728,
+          "maximum_swap_bytes": 0
+        },
+        "runner_protocol": "nebula.memory-runner/v1",
+        "runner_overhead_bytes": 0
+      },
+      "evidence": {
+        "application_uncertain": false,
+        "protocol": "nebula.memory-runner/v1",
+        "group_id": "bb715363a9a81b38376367ba9f755311abd7268d0d25de2ba7a25e8d93aed31c",
+        "job_id": "search-f6cee733469f4702ac59c5e7ae6a95e6",
+        "applied": {
+          "max_bytes": 33554432,
+          "high_bytes": null,
+          "swap_bytes": 0
+        },
+        "protected_process_tree": true,
+        "peak_bytes": 4411392,
+        "current_bytes": 0,
+        "observed_at": "2026-11-09T14:07:23.663644+00:00",
+        "oom_kill_count": 1,
+        "oom_victim_confirmed": true,
+        "group_empty": true,
+        "auxiliary_group_ids": [],
+        "auxiliary_groups_empty": true,
+        "termination_reason": "memory_limit_exceeded",
+        "detail": "Kernel reported a memory-limit kill; descendants removed."
+      },
+      "launch_groups": {
+        "group_id": "bb715363a9a81b38376367ba9f755311abd7268d0d25de2ba7a25e8d93aed31c",
+        "auxiliary_group_ids": []
+      },
+      "outcome": "memory_limit_exceeded",
+      "fixture": "test_real_service_oom_has_posi0/fixture.db",
+      "phase": "managed-search-daemon-d595"
+    }
+  ],
+  "bounded_log_samples": [
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_oom_has_posi0/search/logs/search-26464016d9194b1ea0ba79a53d3429f9/stderr.log",
+      "bytes": 7,
+      "tail": "Killed\n"
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_oom_has_posi0/search/logs/search-26464016d9194b1ea0ba79a53d3429f9/stdout.log",
+      "bytes": 14,
+      "tail": "fixture-ready\n"
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_uses_one_res0/search/logs/search-b30e15cfbd04467ab25849259d192b26/stderr.log",
+      "bytes": 0,
+      "tail": ""
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_uses_one_res0/search/logs/search-b30e15cfbd04467ab25849259d192b26/stdout.log",
+      "bytes": 14,
+      "tail": "fixture-ready\n"
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_waits_at_agg0/first/search/logs/search-c01341cc8f3042d28b68d8bf8264eb89/stderr.log",
+      "bytes": 0,
+      "tail": ""
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_waits_at_agg0/first/search/logs/search-c01341cc8f3042d28b68d8bf8264eb89/stdout.log",
+      "bytes": 14,
+      "tail": "fixture-ready\n"
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_waits_at_agg0/second/search/logs/search-26310af995884873887c7f5c61d6efaf/stderr.log",
+      "bytes": 0,
+      "tail": ""
+    },
+    {
+      "phase": "managed-search-d595",
+      "path": "test_real_service_waits_at_agg0/second/search/logs/search-26310af995884873887c7f5c61d6efaf/stdout.log",
+      "bytes": 0,
+      "tail": ""
+    },
+    {
+      "phase": "managed-search-extra-d595",
+      "path": "test_real_service_refuses_chan0/search/logs/search-0adfec758a61485a8988f77221a0c3fe/stderr.log",
+      "bytes": 0,
+      "tail": ""
+    },
+    {
+      "phase": "managed-search-extra-d595",
+      "path": "test_real_service_refuses_chan0/search/logs/search-0adfec758a61485a8988f77221a0c3fe/stdout.log",
+      "bytes": 14,
+      "tail": "fixture-ready\n"
+    },
+    {
+      "phase": "managed-search-extra-d595",
+      "path": "test_real_service_refuses_chan1/search/logs/search-ce41750a88d6417eae1959cab96aba34/stderr.log",
+      "bytes": 0,
+      "tail": ""
+    },
+    {
+      "phase": "managed-search-extra-d595",
+      "path": "test_real_service_refuses_chan1/search/logs/search-ce41750a88d6417eae1959cab96aba34/stdout.log",
+      "bytes": 14,
+      "tail": "fixture-ready\n"
+    },
+    {
+      "phase": "managed-search-daemon-d595",
+      "path": "test_real_service_oom_has_posi0/search/logs/search-f6cee733469f4702ac59c5e7ae6a95e6/stderr.log",
+      "bytes": 7,
+      "tail": "Killed\n"
+    },
+    {
+      "phase": "managed-search-daemon-d595",
+      "path": "test_real_service_oom_has_posi0/search/logs/search-f6cee733469f4702ac59c5e7ae6a95e6/stdout.log",
+      "bytes": 14,
+      "tail": "fixture-ready\n"
+    }
+  ],
+  "remaining": [
+    "Canonical host binding and project query proxy are separate coordinated commits.",
+    "Official cached SearxNG application compatibility and production-rootless certification not exercised.",
+    "Daemon image pull/build needs an owned worker memory-runner protocol; currently refused.",
+    "No installed GUI or LAN/browser claim from this receipt."
+  ]
+}

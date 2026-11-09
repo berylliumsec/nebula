@@ -25,6 +25,14 @@ acknowledgement; a memory failure never authorizes automatic retry, a larger
 budget or goal resume. See [Compute memory budgets](../MEMORY_BUDGETS.md) for
 precedence, units, scope and runner dependencies.
 
+Local search has one persistent `web_search_service` entry in the aggregate job
+budget, with no per-query or additional runtime-reserve charge. Butler reports
+its frozen effective policy and observed kernel evidence, including failed or
+uncertain cleanup; it does not equate a saved limit with a running worker limit.
+The service request caps RAM at 512 MiB and swap at zero while preserving stricter
+administrator/environment/profile settings. Cached official images can start;
+image download/build needs a daemon-worker memory adapter and is otherwise held.
+
 Large memory inventories retain structured job summaries with explicit
 `at_limit` and `summary_only` flags. They are partial observations, not a complete
 job roster; use `verify_memory_job` for full saved evidence. Profile metadata
