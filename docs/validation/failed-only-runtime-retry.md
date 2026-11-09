@@ -4,6 +4,36 @@ The user explicitly requires pushes to select only specific failed cases, with
 passing cases excluded. This record supersedes the earlier combined test union
 for retry selection; it does not erase that run or expand its passing receipts.
 
+## Latest results at `2b4ff750`
+
+Browser run `42685160535` completed with both selected tools cases passing
+(desktop and compact, one case each) and all eight native-instruction cases
+failing. All eight tools profiles now have passing CI receipts across the two
+retries and must remain excluded. The packaged case in CI run `42685160515`,
+job `129390041028`, failed after both packages built and after the original
+typed-admission prerequisite succeeded. Its native GUI helper timed out finding
+the Project control during baseline `initial_setup`. That separate failure is
+under causal investigation and is deferred from the eight-browser-only push;
+it is not a passing or completed gate.
+
+Bounded diagnostics confirm the same first-turn native readback rejection in
+all eight profiles. The exact current system head is a single regular UTF-8
+file under the byte cap, with one occurrence of the expected text. Its
+filesystem-assigned modification time is slightly earlier than the preceding
+wall-clock barrier, although the fixture creates its fresh native UUID and
+writes the file after the session request. The guard rejects that timestamp,
+the turn is interrupted, and no native prompt is sent. Independent causal review
+confirmed the predicate and ordering; the precise lower-level clock mechanism
+is not established by this trace.
+
+A same-filesystem freshness repair passed independent final static review.
+It retains stale-artifact refusal, exact account/session identity and bounded
+readback. Probe and RPC cleanup are joined; grouped cancellation preserves the
+existing gateway cleanup and queued-turn settlement paths. No passing case was
+rerun to prepare this repair. The next selection contains only the eight failed
+native browser pairs. The single packaged case will have a separate retry after
+its cause and repair are reviewed; passing browser pairs must stay excluded.
+
 ## Current retry after `3c55e4b8`
 
 All five portable Python retries passed, as did frontend diagnostics and macOS

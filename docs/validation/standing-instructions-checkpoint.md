@@ -147,6 +147,33 @@ Update this checkpoint with exact file paths, evidence, test selections, commits
 and remaining blockers as work proceeds. Do not replace unknowns with inferred
 success.
 
+## Native CI freshness follow-up
+
+At combined PR candidate `2b4ff750`, browser run `42685160535` failed the native
+standing-instruction journey in all eight profiles. Bounded actual captures
+show the full expected head exactly once, but `grok_channel_is_confirmed` rejects
+its filesystem modification time against `_open`'s higher-resolution wall-clock
+barrier. The fresh UUID and file are created after `session/new`; no native
+prompt follows the rejection. Separate fresh-context review confirmed this
+cause before any repair. This is a readback false refusal, separate from the
+original duplicate-instruction defect.
+
+The implemented repair samples a strictly advancing timestamp on the same
+sessions filesystem before the RPC, preserving refusal of preexisting artifacts
+and every account/identity/content guard. Independent final static review of
+`codex/native-readback-freshness` passed, including device checks, owned probe
+cleanup, configured account-root compatibility and cancellation settlement.
+Actual selected CI execution remains required; no successful result is inferred
+from source.
+
+The user expressly forbids repeating passing cases. Both desktop tools cases
+passed this retry, completing all eight tools profiles across the CI receipts;
+they and the five successful portable Python retries must stay excluded from
+later runs and pushes. The packaged job subsequently failed its initial native
+Project-control observation and is independently investigated. Its retry is
+deferred from this eight-browser-only push rather than counted as successful.
+Reload the failed-only retry record alongside this checkpoint after compaction.
+
 ## Final provider integration follow-up
 
 The separate native instruction channel above is integrated on the main task

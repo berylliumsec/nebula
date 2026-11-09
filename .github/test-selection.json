@@ -1,8 +1,8 @@
 {
-  "change_digest": "1b965ac53ee154ad23cc69ad9d5e80c5a603f2c3a2585aa2cbf1964eb2c76fcb",
-  "reviewed_by": "Codex integration coordinator; fresh audit_final_failed_selection independently validated exact 3c55e4b8 failures, anchored selectors, runtime provisioning, single-case packaged routing, omission statuses and gates",
-  "reason": "Retry only the remaining failures from 3c55e4b8 CI runs 42674828758/42674828799: eight exact native-standing-instruction browser title/profile pairs, the two tools-browser desktop/compact pairs, and one packaged native continuity case. The five portable Python failures, six mobile tools profiles and both failed pre-test checks passed that retry and are excluded. Remaining reviewed host/global source repairs are integrated, with static verification and explicit runtime gaps; the user forbids adding other tests to this push.",
-  "exclusions": "No previously passing test or check is selected: exclude the prior 964 Python/32 browser passes, the subsequent five portable Python/six mobile tools passes, frontend audit, macOS build, frontend unit tests, Rust tests and migration tests. Newly committed host/global regression sources and additional operator journeys remain unrun under the explicit failed-case-only restriction. No feature-union or full-suite run, live providers, existing installation, deployment or release. The single packaged case runs exclusively in its artifact job, which must rebuild the two independently retained fixture packages. Browser jobs provision only their selected inert real-Core journeys. Source review and static checks do not establish missing runtime acceptance.",
+  "change_digest": "8ac1c4d5a4d0698429929d5f182b8d3046e8daacda1b616965bec9f4429600a2",
+  "reviewed_by": "Codex integration coordinator; validate_native_readback_freshness independently validated cause/design/final source; audit_final_failed_selection verified the exact eight failed captures, anchored selectors, runtime guards and omitted layers",
+  "reason": "Retry only the eight native standing-instruction browser title/profile pairs that failed run 42685160535 at 2b4ff750. Bounded captures and fresh independent review confirmed filesystem mtime versus wall-clock false refusal; the same-filesystem barrier and joined cancellation repair passed static review. Both desktop tools cases passed that run, completing all eight tools profiles, and are excluded. The sole packaged case also failed initial native GUI Project selection; its separate causal investigation is deferred from this browser-only push, not waived.",
+  "exclusions": "Every prior passing case remains excluded: original 964 Python/32 browser passes, subsequent five portable Python retries, all eight tools profiles, frontend audit, macOS UI build, frontend unit tests, Rust and migrations. No Python tests or packaged builds run on this push. The single packaged GUI failure will be selected separately only after its cause/repair is reviewed; no successful native package result is claimed. Additional global/operator regression sources remain unrun; negative probe/cancellation paths have static review only under the explicit failed-case-only restriction. No full suite, feature union, live provider, existing installation, deployment or release.",
   "python_versions": [
     "3.12"
   ],
@@ -10,18 +10,16 @@
   "python_browser": false,
   "checks": [],
   "expected_tests": {
-    "python": 1,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 10
+    "playwright": 8
   },
   "expected_python_jobs": {
     "portable": 0,
-    "packaged_native": 1
+    "packaged_native": 0
   },
-  "python": [
-    "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
@@ -32,8 +30,6 @@
     "runtime-standing-instructions/model-desktop",
     "runtime-standing-instructions/model-webkit-320",
     "runtime-standing-instructions/model-webkit-390",
-    "runtime-standing-instructions/model-webkit-430",
-    "runtime-tools-context/model-compact",
-    "runtime-tools-context/model-desktop"
+    "runtime-standing-instructions/model-webkit-430"
   ]
 }

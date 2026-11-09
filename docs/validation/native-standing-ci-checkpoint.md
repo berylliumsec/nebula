@@ -351,8 +351,8 @@ Older CI failures without equivalent metadata remain separately unproven.
   Cleanup failure also refuses the open.
 - Ordinary unmodified preexisting heads are at or below the first tick, which is
   strictly below the advanced barrier; they remain stale. Fresh new/load writes
-  can share the advanced filesystem tick and pass. Clock rollback or unsupported
-  nonadvancing storage fails closed.
+  can share the advanced filesystem tick and pass. Storage that does not advance
+  within the bound is refused, as is a head older than the established barrier.
 - Readback keeps mtime >= barrier plus scoped identity, no-follow child/file,
   unambiguous regular head, bounded scan/read, UTF-8 and exact text once. It also
   binds sessions root and head to the probe device, rejecting another mount.

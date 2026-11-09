@@ -21,6 +21,13 @@ rebuilt and verified at 419 passages. The full feature union and build-specific
 checkpoints below are historical, not the next execution plan. Do not rerun
 prior passes or present source integration as full architecture acceptance.
 
+At the following `2b4ff750` retry, both remaining desktop tools cases passed;
+all eight tools profiles are now excluded. Eight native-instruction profiles
+failed the same independently confirmed filesystem/wall-clock freshness check.
+Their repair has independent static review and is the only journey selected for
+the next eight-case browser push. The packaged case failed later in initial GUI
+Project selection and is deferred to a separate causal repair/retry, not waived.
+
 ## Current combined PR checkpoint
 
 All completed implementation tracks are combined on the integration branch,
