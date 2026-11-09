@@ -31,6 +31,7 @@ from .runtime_coordination import HEARTBEAT_SECONDS
 from .runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
+    PROVIDER_TOOLS_OWNERSHIP_FEATURE,
     STANDING_INSTRUCTIONS_FEATURE,
 )
 from .runtime_http import PrivateRuntimeHttp
@@ -187,6 +188,7 @@ async def run_worker(
             "project.participants/v1",
             "project.quiesce/v1",
             PROVIDER_TOOLS_FEATURE,
+            PROVIDER_TOOLS_OWNERSHIP_FEATURE,
             STANDING_INSTRUCTIONS_FEATURE,
             HOST_SEARCH_FEATURE,
         }:
@@ -217,7 +219,10 @@ async def run_worker(
                 raise RuntimeIpcError(
                     "The supervisor must apply additive handoff migrations before readiness"
                 ) from None
-        if PROVIDER_TOOLS_FEATURE in manifest.features:
+        if set(manifest.features) & {
+            PROVIDER_TOOLS_FEATURE,
+            PROVIDER_TOOLS_OWNERSHIP_FEATURE,
+        }:
             try:
                 async with database.session() as session:
                     await session.execute(select(ProviderToolManifestRow).limit(0))

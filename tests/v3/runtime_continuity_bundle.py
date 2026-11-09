@@ -162,6 +162,7 @@ def build_bundle(
     )
     for capability in (
         "provider.tools-context/v1",
+        "provider.tools-context-ownership/v1",
         "harness.standing-instructions/v1",
         "host.web-search-query/v1",
     ):

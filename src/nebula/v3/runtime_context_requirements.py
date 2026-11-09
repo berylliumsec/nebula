@@ -1,6 +1,6 @@
 """Execution capabilities required by durable project context, beyond SQL shape."""
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import aliased
 
 from .database import (
@@ -10,9 +10,11 @@ from .database import (
     RuntimeReleaseRow,
 )
 from .deployment_protocol import ReleaseManifest
+from .chat_snapshot_parts import TOOLS_OWNERSHIP_KEY
 from .runtime_coordination import CoordinationConflict
 
 PROVIDER_TOOLS_FEATURE = "provider.tools-context/v1"
+PROVIDER_TOOLS_OWNERSHIP_FEATURE = "provider.tools-context-ownership/v1"
 STANDING_INSTRUCTIONS_FEATURE = "harness.standing-instructions/v1"
 HOST_SEARCH_FEATURE = "host.web-search-query/v1"
 
@@ -30,6 +32,42 @@ async def required_context_features(session, project_id: str) -> set[str]:
         # Historical revisions also own fork/recovery knowledge, including an
         # empty current revision after source revocation.
         required.add(PROVIDER_TOOLS_FEATURE)
+    turn = aliased(EntityRow)
+    part = aliased(EntityRow)
+    snapshot = turn.payload["request_snapshot"]
+    if (
+        await session.scalar(
+            select(turn.id)
+            .outerjoin(
+                part,
+                and_(
+                    part.id == snapshot["snapshot_parts"]["model_request"].as_string(),
+                    part.kind == "chat_snapshot_parts",
+                    part.engagement_id == turn.engagement_id,
+                    part.payload["session_id"].as_string()
+                    == turn.payload["session_id"].as_string(),
+                ),
+            )
+            .where(
+                turn.kind == "chat_turns",
+                turn.engagement_id == project_id,
+                or_(
+                    snapshot[TOOLS_OWNERSHIP_KEY].as_integer() == 1,
+                    snapshot["model_request"]["core_tools_section"][
+                        "version"
+                    ].as_integer()
+                    == 1,
+                    part.payload["value"]["core_tools_section"]["version"].as_integer()
+                    == 1,
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        # The inline projection covers new writers; exact inline/referenced
+        # request proofs also fence previously stored unprojected snapshots.
+        required.add(PROVIDER_TOOLS_OWNERSHIP_FEATURE)
     if (
         await session.scalar(
             select(EntityRow.id)

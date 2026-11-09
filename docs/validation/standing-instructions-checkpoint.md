@@ -146,3 +146,29 @@ after compaction or resumption before continuing.
 Update this checkpoint with exact file paths, evidence, test selections, commits,
 and remaining blockers as work proceeds. Do not replace unknowns with inferred
 success.
+
+## Final provider integration follow-up
+
+The separate native instruction channel above is integrated on the main task
+branch. Final review also confirmed a provider-only instruction preservation
+defect: raw global-periodic `BUTLER.md` can contain text resembling the managed
+tools section. The old renderer removed or rejected that authority on first
+preparation. JSON project/skill/decision bodies are unaffected. A fresh independent
+agent reproduced the actual loader and ChatService path before repair.
+
+The repair and exact three sanitized assembled-request captures are recorded in
+[the provider boundary checkpoint](provider-tools-instruction-boundaries-checkpoint.md).
+It uses bounded durable ownership proof outside provider wire metadata and
+preserves arbitrary surrounding instructions through copies and recovery. The
+86-case local selection yielded 85 passes and one optional PostgreSQL skip; final
+combined CI must cover the omitted case. Proofless nonempty old feature snapshots
+remain paused only when no authoritative raw base survives; tool receipts are
+retained and no effects are replayed.
+
+Retained readers additionally require the new ownership capability, including
+when the model request lives in a snapshot part. All 58 focused compatibility
+cases passed across SQLite and PostgreSQL with no skips; see
+[the compatibility receipt](provider-tools-ownership-compatibility.md).
+The original full user goal remains in `standing-instructions-goal.md`. Final
+public browser, genuine native GUI, PR review and merge remain coordinator-owned
+and pending; do not infer them from these source receipts.

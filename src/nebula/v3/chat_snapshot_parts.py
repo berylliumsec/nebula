@@ -53,6 +53,9 @@ SKILL_PART_FIELDS = ("instructions",)
 MIN_PART_BYTES = 1024
 """Smaller values stay inline: a lookup would cost more than it saves."""
 
+TOOLS_OWNERSHIP_KEY = "provider_tools_ownership_version"
+"""Bounded compatibility projection retained beside split request parts."""
+
 
 def _canonical(value: Any) -> bytes:
     return json.dumps(
@@ -94,6 +97,14 @@ def split_request_snapshot(
     """
 
     compact = dict(snapshot)
+    request = compact.get("model_request")
+    if isinstance(request, Mapping) and request.get("core_tools_section") is not None:
+        from .providers import InstructionSectionProvenance
+
+        proof = InstructionSectionProvenance.model_validate(
+            request["core_tools_section"]
+        )
+        compact[TOOLS_OWNERSHIP_KEY] = proof.version
     references = dict(compact.get(SNAPSHOT_PARTS_KEY) or {})
     parts: list[ChatSnapshotPart] = []
     for key in REQUEST_SNAPSHOT_PART_KEYS:

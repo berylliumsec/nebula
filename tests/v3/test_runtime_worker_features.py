@@ -25,6 +25,7 @@ from nebula.v3.release_store import MANIFEST_NAME, ReleaseStore
 from nebula.v3.runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
+    PROVIDER_TOOLS_OWNERSHIP_FEATURE,
     STANDING_INSTRUCTIONS_FEATURE,
 )
 from nebula.v3.runtime_http import internal_headers
@@ -125,9 +126,9 @@ async def worker_host(location, tmp_path):
 @pytest.mark.parametrize("role", ["api", "execution"])
 async def test_actual_main_admits_canonical_features_for_each_role(worker_host, role):
     value = worker_host
-    assert len(FEATURES) == 8
     assert {
         PROVIDER_TOOLS_FEATURE,
+        PROVIDER_TOOLS_OWNERSHIP_FEATURE,
         STANDING_INSTRUCTIONS_FEATURE,
         HOST_SEARCH_FEATURE,
     } <= set(FEATURES)

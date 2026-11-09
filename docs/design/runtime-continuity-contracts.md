@@ -24,6 +24,12 @@ API readiness, prepared project restoration and activated execution are distinct
 Only verified restoration permits new producers. Unsupported live resources stay
 with their existing owner without an expiry-based kill deadline.
 
+Provider request snapshots with exact instruction ownership require
+`provider.tools-context-ownership/v1` in addition to historical tools knowledge.
+The turn retains a bounded version projection when large request values move
+into immutable parts. Admission also recognizes existing unprojected proofs;
+an older reader must not discard the proof and reinterpret operator text.
+
 The authenticated management interface accepts an operation ID, action and
 parameters. Its SQL ledger binds that exact request and actor to an observed
 outcome. A lost external response is uncertain until authoritative reconciliation.
