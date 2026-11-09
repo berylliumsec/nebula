@@ -15,14 +15,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import queue
 import shutil
+import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from uuid import uuid4
 
 import httpx
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def digest(path: Path) -> str:
@@ -43,7 +47,18 @@ def inert_provider():
             pass
 
         def do_GET(self):
-            payload = json.dumps({"object": "list", "data": [{"id": "continuity-model", "object": "model", "context_window": 32768}]}).encode()
+            payload = json.dumps(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "continuity-model",
+                            "object": "model",
+                            "context_window": 32768,
+                        }
+                    ],
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -57,7 +72,26 @@ def inert_provider():
                 return
             body = json.loads(self.rfile.read(length))
             if not body.get("stream"):
-                payload = json.dumps({"id": "inert-metadata", "model": "continuity-model", "choices": [{"message": {"role": "assistant", "content": "Synthetic continuity"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}).encode()
+                payload = json.dumps(
+                    {
+                        "id": "inert-metadata",
+                        "model": "continuity-model",
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "Synthetic continuity",
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "total_tokens": 2,
+                        },
+                    }
+                ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
@@ -70,10 +104,20 @@ def inert_provider():
             self.end_headers()
             try:
                 for text in ("Before desktop close. ", "After desktop reopen."):
-                    payload = {"id": "inert-stream", "model": "continuity-model", "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
+                    payload = {
+                        "id": "inert-stream",
+                        "model": "continuity-model",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": text},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
                     self.wfile.write(("data: " + json.dumps(payload) + "\n\n").encode())
                     self.wfile.flush()
-                    if text.startswith("Before") and not release.wait(120):
+                    if text.startswith("Before") and not release.wait(600):
                         return
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
@@ -94,36 +138,116 @@ def inert_provider():
 
 
 def connect(core: Path, data: Path, environment: dict) -> dict:
-    result = subprocess.run([str(core), "desktop-connect", "--data-dir", str(data)],
-                            check=True, capture_output=True, text=True, timeout=90, env=environment)
+    result = subprocess.run(
+        [str(core), "desktop-connect", "--data-dir", str(data)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env=environment,
+        cwd=Path(environment["HOME"]).parent,
+    )
     lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
     value = json.loads(lines[-1])
-    if value.get("protocol") != "nebula-desktop-runtime-v1" or value.get("host") != "127.0.0.1":
-        raise RuntimeError("packaged Core did not return the persistent desktop protocol")
-    if not isinstance(value.get("ipc_token"), str) or not 1 <= value.get("port", 0) <= 65535:
+    if (
+        value.get("protocol") != "nebula-desktop-runtime-v1"
+        or value.get("host") != "127.0.0.1"
+    ):
+        raise RuntimeError(
+            "packaged Core did not return the persistent desktop protocol"
+        )
+    if (
+        not isinstance(value.get("ipc_token"), str)
+        or not 1 <= value.get("port", 0) <= 65535
+    ):
         raise RuntimeError("invalid desktop connection identity")
     return value
 
 
 def api(connection: dict) -> httpx.Client:
-    return httpx.Client(base_url=f"http://{connection['host']}:{connection['port']}/api/v1",
-                        headers={"Authorization": "Bearer " + connection["ipc_token"]},
-                        timeout=90, trust_env=False)
+    return httpx.Client(
+        base_url=f"http://{connection['host']}:{connection['port']}/api/v1",
+        headers={"Authorization": "Bearer " + connection["ipc_token"]},
+        timeout=90,
+        trust_env=False,
+    )
 
 
 def require(response: httpx.Response, *codes):
     if response.status_code not in (codes or (200,)):
-        raise RuntimeError(f"{response.request.method} {response.request.url.path}: {response.status_code} {response.text[:1000]}")
+        raise RuntimeError(
+            f"{response.request.method} {response.request.url.path}: {response.status_code} {response.text[:1000]}"
+        )
     return response.json()
 
 
+def command_identity(response: httpx.Response, document=None):
+    value = document if document is not None else response.json()
+    receipt = value.get("receipt") or {}
+    identity = (
+        response.headers.get("x-nebula-command-id")
+        or value.get("command_id")
+        or receipt.get("command_id")
+    )
+    if not isinstance(identity, str) or not identity:
+        raise RuntimeError("accepted response omitted its saved command identity")
+    return identity
+
+
+def completed_response(client, response, *, timeout=90):
+    """Read one accepted mutation; never repeat its effect submission."""
+    deadline = time.monotonic() + timeout
+    identity = None
+    while response.status_code == 202:
+        observed = command_identity(response)
+        if identity is not None and identity != observed:
+            raise RuntimeError("saved request identity changed while observing it")
+        identity = observed
+        status = require(client.get(f"/runtime/requests/{identity}"))
+        if status["state"] in {"failed", "uncertain"}:
+            raise RuntimeError(
+                "saved request needs reconciliation: " + json.dumps(status)
+            )
+        if time.monotonic() >= deadline:
+            raise TimeoutError("saved request did not produce its response")
+        response = client.get(f"/runtime/requests/{identity}/response")
+        if response.status_code == 202:
+            time.sleep(0.05)
+    return response
+
+
+def mutate(client, method, path, body, *, key=None):
+    response = client.request(
+        method,
+        path,
+        json=body,
+        headers={"Idempotency-Key": key or "packaged-" + uuid4().hex},
+    )
+    return require(completed_response(client, response), 200, 201)
+
+
 def operation(client: httpx.Client, action: str, parameters: dict) -> dict:
-    value = require(client.post("/deployment/operations", json={
-        "operation_id": action + "-" + uuid4().hex,
-        "action": action, "parameters": parameters,
-    }))
+    identity = action + "-" + uuid4().hex
+    value = require(
+        client.post(
+            "/deployment/operations",
+            json={
+                "operation_id": identity,
+                "action": action,
+                "parameters": parameters,
+            },
+        )
+    )
+    deadline = time.monotonic() + 90
+    while value["state"] == "running":
+        if value.get("operation_id") != identity or time.monotonic() >= deadline:
+            raise RuntimeError(
+                "deployment operation identity or deadline was not confirmed"
+            )
+        time.sleep(0.05)
+        value = require(client.get("/deployment/operations/" + identity))
     if value["state"] != "succeeded":
-        raise RuntimeError(f"{action} was not confirmed: {value['state']}")
+        raise RuntimeError(f"{action} needs reconciliation: {json.dumps(value)}")
     return value["result"]
 
 
@@ -133,194 +257,805 @@ def wait_until(predicate, *, timeout=60):
         value = predicate()
         if value:
             return value
-        time.sleep(.05)
-    raise TimeoutError("packaged continuity condition was not observed before its deadline")
+        time.sleep(0.05)
+    raise TimeoutError(
+        "packaged continuity condition was not observed before its deadline"
+    )
+
+
+def wait_ready(client, version, *, timeout=90):
+    def ready():
+        health = require(client.get("/health"))
+        if health.get("api_ready") is not True:
+            return None
+        status = require(client.get("/deployment/status"))
+        return status if status["api_version"] == version else None
+
+    return wait_until(ready, timeout=timeout)
+
+
+def verify_bundle(bundle):
+    bundle = bundle.resolve(strict=True)
+    path = bundle / "nebula-runtime.json"
+    manifest = json.loads(path.read_bytes())
+    expected_manifest = (bundle / "nebula-runtime.sha256").read_text().strip()
+    if (
+        digest(path) != expected_manifest
+        or manifest.get("format") != "nebula.runtime-bundle/v1"
+    ):
+        raise ValueError("runtime manifest identity is invalid")
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("runtime bundle has no verified inventory")
+    for name, expected in files.items():
+        relative = Path(name)
+        selected = bundle / relative
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or selected.resolve().is_relative_to(bundle) is False
+        ):
+            raise ValueError("runtime inventory path leaves its bundle")
+        if not selected.is_file() or digest(selected) != expected:
+            raise ValueError("runtime inventory differs: " + name)
+    relative = manifest["core_executable"]
+    if relative not in files or manifest["ui_directory"] + "/index.html" not in files:
+        raise ValueError("runtime executable or UI is not in the verified inventory")
+    return manifest
+
+
+def served_ui(client, manifest, phase):
+    response = client.get(client.base_url.copy_with(path="/index.html"))
+    if response.status_code != 200:
+        raise RuntimeError("packaged production UI is unavailable")
+    observed = hashlib.sha256(response.content).hexdigest()
+    expected = manifest["files"][manifest["ui_directory"] + "/index.html"]
+    if observed != expected:
+        raise RuntimeError("served production UI differs from its verified bundle")
+    return {"phase": phase, "index_sha256": observed, "version": manifest["version"]}
+
+
+def fixture_environment(output, bundle):
+    allowed = {
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "AT_SPI_BUS_ADDRESS",
+        "GTK_MODULES",
+        "GTK_A11Y",
+        "GDK_BACKEND",
+        "LIBGL_ALWAYS_SOFTWARE",
+        "WEBKIT_INSPECTOR_SERVER",
+    }
+    environment = {name: value for name, value in os.environ.items() if name in allowed}
+    for name, relative in {
+        "HOME": "home",
+        "XDG_DATA_HOME": "desktop-profile",
+        "XDG_CONFIG_HOME": "desktop-config",
+        "XDG_CACHE_HOME": "desktop-cache",
+    }.items():
+        folder = output / relative
+        folder.mkdir(mode=0o700)
+        environment[name] = str(folder)
+    environment.update(
+        NEBULA_V3_DATA_DIR=str(output / "synthetic-core"),
+        NEBULA_RUNTIME_BUNDLE=str(bundle),
+        PYINSTALLER_RESET_ENVIRONMENT="1",
+    )
+    return environment
+
+
+def process_birth(pid):
+    """Linux kernel incarnation; no PID-only cleanup authorization."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if fields[0] == "Z":
+            return None
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return f"linux:{boot}:{fields[19]}"
+    except FileNotFoundError:
+        return None  # diagnostic-expected: this incarnation has exited.
+
+
+def registered_processes(data):
+    with sqlite3.connect(f"file:{data / 'nebula.db'}?mode=ro", uri=True) as database:
+        rows = [
+            dict(
+                zip(
+                    ("runtime_id", "role", "pid", "process_birth", "state"),
+                    row,
+                    strict=True,
+                )
+            )
+            for row in database.execute(
+                "SELECT runtime_id,role,pid,process_birth,state FROM runtime_processes"
+            )
+        ]
+    connection = json.loads((data / "runtime/connection.json").read_bytes())
+    rows.append(
+        {
+            "runtime_id": "supervisor",
+            "role": "supervisor",
+            "pid": connection["pid"],
+            "process_birth": connection["process_birth"],
+            "state": "observed",
+        }
+    )
+    return rows
+
+
+def verify_shutdown(receipt, rows):
+    if receipt.get("observed_state") != "stopped":
+        raise RuntimeError("shutdown did not confirm observed process exit")
+    if any(row["pid"] and not row["process_birth"] for row in rows):
+        raise RuntimeError("a registered process has no verifiable birth identity")
+    survivors = [
+        row
+        for row in rows
+        if row["pid"]
+        and row["process_birth"]
+        and process_birth(row["pid"]) == row["process_birth"]
+    ]
+    if survivors:
+        raise RuntimeError(
+            "registered processes survived shutdown: " + json.dumps(survivors)
+        )
+
+
+def sse_frames(lines):
+    data, event = [], None
+    for line in lines:
+        if not line:
+            if data and "\n".join(data) != "[DONE]":
+                value = json.loads("\n".join(data))
+                if event and "type" not in value:
+                    value["type"] = event
+                yield value
+            data, event = [], None
+        elif line.startswith("data:"):
+            data.append(line[5:].lstrip(" "))
+        elif line.startswith("event:"):
+            event = line[6:].strip()
+
+
+class AcceptedChat:
+    """Exactly one POST; disconnected viewers use only its saved GET routes."""
+
+    def __init__(self, client, body):
+        self.client, self.body = client, body
+        self.key = "packaged-chat-" + uuid4().hex
+        self.command_id = None
+        self.frames, self.responses = [], []
+        self.cursor, self.error = 0, None
+        self.finished = threading.Event()
+        self.worker = threading.Thread(target=self.follow, daemon=True)
+
+    def follow(self):
+        method, path = "POST", "/chat/completions"
+        deadline = time.monotonic() + 600
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    kwargs = (
+                        {"headers": {"Idempotency-Key": self.key}, "json": self.body}
+                        if method == "POST"
+                        else {"params": {"after": self.cursor}}
+                    )
+                    with self.client.stream(method, path, **kwargs) as response:
+                        self.responses.append(
+                            {
+                                "method": method,
+                                "path": path,
+                                "status": response.status_code,
+                            }
+                        )
+                        if response.status_code == 202:
+                            response.read()
+                            observed = command_identity(response)
+                        elif response.status_code == 200 and response.headers.get(
+                            "content-type", ""
+                        ).startswith("text/event-stream"):
+                            observed = response.headers.get("x-nebula-command-id")
+                        elif response.status_code in {429, 503} and method == "GET":
+                            response.read()
+                            observed = self.command_id
+                        else:
+                            response.read()
+                            raise RuntimeError(
+                                "saved chat view failed: " + response.text[:1000]
+                            )
+                        if observed and self.command_id and observed != self.command_id:
+                            raise RuntimeError("chat command identity changed")
+                        self.command_id = observed or self.command_id
+                        if response.status_code == 200:
+                            for frame in sse_frames(response.iter_lines()):
+                                self.cursor = max(self.cursor, frame.get("sequence", 0))
+                                self.frames.append(frame)
+                                if frame.get("type") == "error":
+                                    raise RuntimeError(
+                                        "chat stream error: " + json.dumps(frame)
+                                    )
+                                if frame.get("type") == "done":
+                                    return
+                except httpx.TransportError:
+                    # diagnostic-expected: API replacement may close a viewer;
+                    # recover the saved command, never submit another effect.
+                    if self.command_id is None:
+                        lookup = self.client.get(
+                            "/runtime/requests/lookup",
+                            params={"idempotency_key": self.key},
+                        )
+                        self.command_id = require(lookup)["command_id"]
+                if not self.command_id:
+                    raise RuntimeError("chat acceptance omitted saved command identity")
+                status = require(
+                    self.client.get(f"/runtime/requests/{self.command_id}")
+                )
+                if status["state"] in {"failed", "uncertain"}:
+                    raise RuntimeError(
+                        "saved chat needs reconciliation: " + json.dumps(status)
+                    )
+                method, path = "GET", f"/runtime/requests/{self.command_id}/response"
+                time.sleep(0.05)
+            raise TimeoutError("saved chat did not finish within600s")
+        except Exception as error:
+            self.error = error
+        finally:
+            self.finished.set()
+
+    def wait_frame(self, kind, timeout=90):
+        def observed():
+            if self.error:
+                raise self.error
+            return next(
+                (frame for frame in self.frames if frame.get("type") == kind), None
+            )
+
+        return wait_until(observed, timeout=timeout)
+
+
+def desktop_observe(args, child, environment, operation, **values):
+    birth = process_birth(child.pid)
+    if birth is None:
+        raise RuntimeError("native desktop exited before observation")
+    result = subprocess.run(
+        [sys.executable, str(args.desktop_fixture)],
+        input=json.dumps(
+            {"operation": operation, "pid": child.pid, "process_birth": birth, **values}
+        ),
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env=environment,
+        cwd=args.output,
+    )
+    (args.output / f"desktop-{operation}-{child.pid}.stderr").write_text(result.stderr)
+    if result.returncode:
+        raise RuntimeError("native GUI observation failed: " + result.stderr[-1500:])
+    value = json.loads(result.stdout)
+    if (
+        value.get("pid") != child.pid
+        or value.get("process_birth") != birth
+        or not value.get("window_id")
+    ):
+        raise RuntimeError("GUI fixture did not confirm the exact owned window")
+    if operation == "close":
+        child.wait(timeout=30)
+        if (
+            value.get("close_event") != "WM_DELETE_WINDOW"
+            or value.get("window_closed") is not True
+            or child.returncode != 0
+        ):
+            raise RuntimeError("native window close did not complete normally")
+    return value
 
 
 def run(args) -> dict:
-    # mkdir(exist_ok=False) establishes ownership before any process or write.
+    args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
-    data = args.output / "synthetic-core"
-    environment = {name: value for name, value in os.environ.items()
-                   if name in {"HOME", "PATH", "LANG", "LC_ALL", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR"}}
-    environment["NEBULA_V3_DATA_DIR"] = str(data)
-    environment["XDG_DATA_HOME"] = str(args.output / "desktop-profile")
-    environment["XDG_CONFIG_HOME"] = str(args.output / "desktop-config")
-    environment["XDG_CACHE_HOME"] = str(args.output / "desktop-cache")
-    desktops = []
-    clients = []
-    log_handles = []
-    stopped = False
+    manifests = {
+        prefix: verify_bundle(getattr(args, prefix + "_bundle"))
+        for prefix in ("baseline", "candidate")
+    }
+    if manifests["baseline"]["version"] == manifests["candidate"]["version"]:
+        raise ValueError(
+            "baseline and candidate must have distinct verified manifest versions"
+        )
+    from scripts.package_audit import (
+        inspect_pyinstaller_binary,
+        inspect_pyinstaller_directory,
+    )
 
-    def open_desktop(path, label):
+    archive_audits = {}
+    for prefix, manifest in manifests.items():
+        runtime_executable = (
+            getattr(args, prefix + "_bundle") / manifest["core_executable"]
+        )
+        archive_audits[prefix] = {
+            "connector": inspect_pyinstaller_binary(getattr(args, prefix + "_core")),
+            "retained_runtime": inspect_pyinstaller_directory(
+                runtime_executable.parent, runtime_executable.name
+            ),
+        }
+    data = args.output / "synthetic-core"
+    environment = fixture_environment(args.output, args.baseline_bundle)
+    environments = {
+        prefix: {
+            **environment,
+            "NEBULA_RUNTIME_BUNDLE": str(getattr(args, prefix + "_bundle")),
+        }
+        for prefix in manifests
+    }
+    cache = getattr(args, "public_model_cache", None)
+    if cache is not None:
+        destination = (
+            Path(environment["HOME"]) / ".cache/chroma/onnx_models/all-MiniLM-L6-v2"
+        )
+        shutil.copytree(cache, destination)
+    desktops, clients, log_handles, observations = [], [], [], []
+    stopped = False
+    chat = None
+    failure = None
+
+    def open_desktop(prefix, label):
         output = (args.output / (label + ".log")).open("wb")
         log_handles.append(output)
-        child = subprocess.Popen([str(path)], env=environment, stdin=subprocess.DEVNULL,
-                                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-        desktops.append(child)
+        child = subprocess.Popen(
+            [str(getattr(args, prefix + "_desktop"))],
+            env=environments[prefix],
+            cwd=args.output,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        desktops.append((child, environments[prefix]))
+        observations.append(desktop_observe(args, child, environments[prefix], "ready"))
         return child
+
+    def close_desktop(child, prefix):
+        observations.append(desktop_observe(args, child, environments[prefix], "close"))
 
     try:
         with inert_provider() as (provider_url, starts, release):
-            desktop = open_desktop(args.baseline_desktop, "baseline-desktop")
-            first = connect(args.baseline_core, data, environment)
+            desktop = open_desktop("baseline", "baseline-desktop")
+            first = connect(args.baseline_core, data, environments["baseline"])
             client = api(first)
             clients.append(client)
+            original_status = wait_ready(client, manifests["baseline"]["version"])
+            ui_observations = [served_ui(client, manifests["baseline"], "baseline")]
+            with httpx.Client(trust_env=False) as anonymous:
+                if anonymous.get(str(client.base_url) + "health").status_code != 401:
+                    raise AssertionError(
+                        "normal packaged authentication was not enforced"
+                    )
             original_identity = require(client.get("/runtime/identity"))
-            original_status = require(client.get("/deployment/status"))
-            project = require(client.post("/engagements", json={"name": "Packaged continuity fixture", "status": "active", "metadata": {}}), 200, 201)
-            provider = require(client.post("/providers", json={
-                "name": "Inert local continuity provider", "provider_type": "vllm", "endpoint": provider_url,
-                "is_local": True, "enabled": True, "model_allowlist": ["continuity-model"],
-                "metadata": {"default_model": "continuity-model", "options": {"context_window": 32768}},
-            }), 200, 201)
-            events = queue.Queue()
-            key = "packaged-continuity-" + uuid4().hex
+            project = mutate(
+                client,
+                "POST",
+                "/engagements",
+                {
+                    "name": "Packaged continuity fixture",
+                    "status": "active",
+                    "metadata": {},
+                },
+            )
+            provider = mutate(
+                client,
+                "POST",
+                "/providers",
+                {
+                    "name": "Inert local continuity provider",
+                    "provider_type": "vllm",
+                    "endpoint": provider_url,
+                    "is_local": True,
+                    "enabled": True,
+                    "model_allowlist": ["continuity-model"],
+                    "metadata": {
+                        "default_model": "continuity-model",
+                        "options": {"context_window": 32768},
+                    },
+                },
+            )
+            prompt = "Complete this one synthetic continuity check."
+            draft = "Unsent packaged draft stays on this device."
+            chat = AcceptedChat(
+                client,
+                {
+                    "provider_id": provider["id"],
+                    "engagement_id": project["id"],
+                    "model": "continuity-model",
+                    "include_knowledge": False,
+                    "stream": True,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            chat.worker.start()
+            chat.wait_frame("delta")
+            binding = require(client.get(f"/runtime/requests/{chat.command_id}"))
+            session_id, turn_id = binding["session_id"], binding["turn_id"]
+            session = require(client.get(f"/chat-sessions/{session_id}"))
+            view = {
+                "project_name": project["name"],
+                "session_id": session_id,
+                "session_title": session["title"],
+                "prompt": prompt,
+                "draft": draft,
+                "expected_text": "Before desktop close.",
+            }
+            observations.append(
+                desktop_observe(
+                    args, desktop, environments["baseline"], "select_and_write", **view
+                )
+            )
 
-            def submit():
-                try:
-                    with client.stream("POST", "/chat/completions", headers={"Idempotency-Key": key}, json={
-                        "provider_id": provider["id"], "engagement_id": project["id"], "model": "continuity-model",
-                        "include_knowledge": False, "stream": True,
-                        "messages": [{"role": "user", "content": "Complete this one synthetic continuity check."}],
-                    }) as response:
-                        events.put(("response", response.status_code, response.headers.get("x-nebula-command-id")))
-                        for line in response.iter_lines():
-                            if line.startswith("data: "):
-                                events.put(("frame", json.loads(line[6:])))
-                except Exception as error:
-                    events.put(("transport", type(error).__name__))
+            def assert_held(label):
+                if chat.error:
+                    raise chat.error
+                pending = require(
+                    client.get(
+                        f"/chat/sessions/{session_id}/pending-turn",
+                        params={"view": "status"},
+                    )
+                )
+                if (
+                    release.is_set()
+                    or chat.finished.is_set()
+                    or len(starts) != 1
+                    or not pending
+                    or (pending["id"], pending["session_id"], pending["status"])
+                    != (turn_id, session_id, "running")
+                ):
+                    raise AssertionError(
+                        "original provider turn was not held through " + label
+                    )
+                return {
+                    "phase": label,
+                    "turn_id": turn_id,
+                    "session_id": session_id,
+                    "provider_executions": len(starts),
+                    "status": pending["status"],
+                }
 
-            submission = threading.Thread(target=submit, daemon=True)
-            submission.start()
-            frame = None
-            command_id = None
-            deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                item = events.get(timeout=max(.1, deadline - time.monotonic()))
-                if item[0] == "response":
-                    if item[1] not in {200, 202}:
-                        raise RuntimeError("packaged chat submission was not accepted")
-                    command_id = item[2]
-                elif item[0] == "frame" and item[1].get("type") == "delta":
-                    frame = item[1]
-                    break
-            if frame is None or command_id is None:
-                raise RuntimeError("no durable streamed acceptance before closing desktop")
-            desktop.terminate()
-            desktop.wait(timeout=15)
-            require(client.get("/deployment/status"))
-            candidate_manifest = json.loads((args.candidate_bundle / "nebula-runtime.json").read_text())
-            operation(client, "stage", {"source": str(args.candidate_bundle),
-                      "manifest_sha256": digest(args.candidate_bundle / "nebula-runtime.json")})
-            prepared = operation(client, "prepare_api", {"version": candidate_manifest["version"]})
-            current_status = require(client.get("/deployment/status"))
-            operation(client, "promote_api", {"runtime_id": prepared["runtime_id"],
-                      "expected_revision": current_status["revision"]})
-            candidate_desktop = open_desktop(args.candidate_desktop, "candidate-desktop")
-            candidate = connect(args.candidate_core, data, environment)
-            if first != candidate:
-                raise AssertionError("desktop reopen changed the stable endpoint or authentication token")
-            candidate_identity = require(client.get("/runtime/identity"))
-            if candidate_identity != original_identity:
-                raise AssertionError("desktop update changed Core/principal identity")
-            upgraded_status = require(client.get("/deployment/status"))
-            if upgraded_status["api_version"] == original_status["api_version"]:
-                raise AssertionError("candidate packaged API was not promoted")
+            held = [assert_held("baseline GUI draft")]
+            close_desktop(desktop, "baseline")
+            held.append(assert_held("baseline window close"))
+            candidate_version = manifests["candidate"]["version"]
+            staged = operation(
+                client,
+                "stage",
+                {
+                    "source": str(args.candidate_bundle),
+                    "manifest_sha256": digest(
+                        args.candidate_bundle / "nebula-runtime.json"
+                    ),
+                },
+            )
+            if staged["version"] != candidate_version:
+                raise AssertionError("staging returned a different candidate version")
+            revision = require(client.get("/deployment/status"))["revision"]
+            migration = operation(
+                client,
+                "migrate",
+                {"version": candidate_version, "expected_revision": revision},
+            )
+            prepared = operation(client, "prepare_api", {"version": candidate_version})
+            revision = require(client.get("/deployment/status"))["revision"]
+            operation(
+                client,
+                "promote_api",
+                {"runtime_id": prepared["runtime_id"], "expected_revision": revision},
+            )
+            upgraded_status = wait_ready(client, candidate_version)
+            ui_observations.append(
+                served_ui(client, manifests["candidate"], "candidate")
+            )
+            candidate_desktop = open_desktop("candidate", "candidate-desktop")
+            candidate = connect(args.candidate_core, data, environments["candidate"])
+            if (
+                first != candidate
+                or require(client.get("/runtime/identity")) != original_identity
+            ):
+                raise AssertionError(
+                    "candidate reopen changed stable endpoint, principal or Core identity"
+                )
+            observations.append(
+                desktop_observe(
+                    args, candidate_desktop, environments["candidate"], "select", **view
+                )
+            )
+            held.append(assert_held("candidate promotion and GUI reopen"))
+            # Global creation runs under the currently selected API code. A
+            # project PATCH would remain with the original execution worker.
+            created = mutate(
+                client,
+                "POST",
+                "/engagements",
+                {"name": "Created under packaged candidate"},
+            )
+            close_desktop(candidate_desktop, "candidate")
+            held.append(assert_held("candidate window close"))
+            revision = require(client.get("/deployment/status"))["revision"]
+            operation(
+                client,
+                "rollback_code",
+                {
+                    "version": original_status["api_version"],
+                    "expected_revision": revision,
+                },
+            )
+            final_status = wait_ready(client, original_status["api_version"])
+            ui_observations.append(served_ui(client, manifests["baseline"], "rollback"))
+            rollback_desktop = open_desktop("baseline", "rollback-baseline-desktop")
+            rollback = connect(args.baseline_core, data, environments["baseline"])
+            if (
+                rollback != first
+                or require(client.get("/runtime/identity")) != original_identity
+            ):
+                raise AssertionError(
+                    "baseline GUI reopen after rollback changed runtime identity"
+                )
+            observations.append(
+                desktop_observe(
+                    args, rollback_desktop, environments["baseline"], "select", **view
+                )
+            )
+            held.append(assert_held("code rollback and baseline GUI reopen"))
+            if (
+                require(client.get("/engagements/" + created["id"]))["name"]
+                != created["name"]
+            ):
+                raise AssertionError("code rollback lost candidate-code global SQL")
             release.set()
-            response = client.get(f"/runtime/requests/{command_id}/response?after={frame['sequence']}")
-            if response.status_code != 200 or "event: done" not in response.text:
-                raise AssertionError("the original accepted turn did not finish after desktop reopen")
-            if len(starts) != 1:
-                raise AssertionError("desktop update resubmitted provider work")
-            submission.join(timeout=10)
-            current = require(client.get("/engagements/" + project["id"]))
-            saved = client.patch("/engagements/" + project["id"], json={
-                "expected_revision": current["revision"], "changes": {"name": "Committed under candidate"},
-            }, headers={"Idempotency-Key": "candidate-edit-" + uuid4().hex})
-            require(saved, 200, 202)
-            wait_until(lambda: require(client.get("/engagements/" + project["id"]))["name"] == "Committed under candidate")
-            candidate_desktop.terminate()
-            candidate_desktop.wait(timeout=15)
-            current_status = require(client.get("/deployment/status"))
-            operation(client, "rollback_code", {"version": original_status["api_version"],
-                      "expected_revision": current_status["revision"]})
-            rollback = connect(args.baseline_core, data, environment)
-            if rollback != first:
-                raise AssertionError("rollback changed the persistent endpoint")
-            final_status = require(client.get("/deployment/status"))
-            if final_status["api_version"] != original_status["api_version"]:
-                raise AssertionError("baseline launcher did not restore the compatible API")
-            if require(client.get("/engagements/" + project["id"]))["name"] != "Committed under candidate":
-                raise AssertionError("code rollback lost candidate-era data")
-            result = subprocess.run([str(args.candidate_core), "runtime-stop", "--data-dir", str(data)],
-                                    check=True, capture_output=True, text=True, timeout=60, env=environment)
-            shutdown = json.loads(result.stdout.strip())
-            if shutdown.get("state") not in {"succeeded", "stopped"}:
-                raise AssertionError("explicit runtime shutdown was not confirmed")
-
-            def endpoint_closed():
-                try:
-                    client.get("/health", timeout=1)
-                    return False
-                except httpx.TransportError:
-                    return True
-
-            wait_until(endpoint_closed, timeout=30)
+            done = chat.wait_frame("done")
+            chat.worker.join(timeout=15)
+            if (
+                chat.worker.is_alive()
+                or len(starts) != 1
+                or done.get("session_id") != session_id
+            ):
+                raise AssertionError(
+                    "the original accepted turn did not finish exactly once"
+                )
+            final_binding = require(client.get(f"/runtime/requests/{chat.command_id}"))
+            if (final_binding["session_id"], final_binding["turn_id"]) != (
+                session_id,
+                turn_id,
+            ):
+                raise AssertionError(
+                    "reconnected delivery changed the original chat or turn"
+                )
+            messages = require(client.get(f"/chat/sessions/{session_id}/messages"))
+            if (
+                sum(
+                    item.get("role") == "user" and item.get("content") == prompt
+                    for item in messages
+                )
+                != 1
+            ):
+                raise AssertionError(
+                    "GUI/update workflow duplicated the original submission"
+                )
+            completed = "Before desktop close. After desktop reopen."
+            if (
+                sum(
+                    item.get("role") == "assistant" and item.get("content") == completed
+                    for item in messages
+                )
+                != 1
+            ):
+                raise AssertionError(
+                    "the saved original reply was not complete exactly once"
+                )
+            observations.append(
+                desktop_observe(
+                    args,
+                    rollback_desktop,
+                    environments["baseline"],
+                    "observe",
+                    **{**view, "expected_text": completed},
+                )
+            )
+            close_desktop(rollback_desktop, "baseline")
+            process_rows = registered_processes(data)
+            result = subprocess.run(
+                [str(args.candidate_core), "runtime-stop", "--data-dir", str(data)],
+                capture_output=True,
+                text=True,
+                timeout=90,
+                env=environments["candidate"],
+                cwd=args.output,
+            )
+            (args.output / "shutdown.stderr").write_text(result.stderr)
+            (args.output / "shutdown.stdout").write_text(result.stdout)
+            if result.returncode:
+                raise RuntimeError(
+                    "explicit packaged shutdown failed; private data retained"
+                )
+            shutdown = json.loads(result.stdout)
+            verify_shutdown(shutdown, process_rows)
             stopped = True
-            return {"schema_version": 1, "result": "passed", "workflow": "desktop close/update/reopen/code rollback/explicit shutdown",
-                    "artifacts": {name: digest(getattr(args, name)) for name in ("baseline_core", "candidate_core", "baseline_desktop", "candidate_desktop")},
-                    "origin": str(client.base_url), "core_id": original_identity["core_id"],
-                    "versions": {"baseline": original_status["api_version"], "candidate": upgraded_status["api_version"], "rollback": final_status["api_version"]},
-                    "provider_executions": len(starts), "physical_desktop_input": False,
-                    "installation": "prebuilt artifact paths; no system package installation performed"}
+            receipt = {
+                "schema_version": 2,
+                "result": "passed",
+                "workflow": "real native window close/candidate promotion/reopen/code rollback/baseline GUI reopen/held-turn completion/verified shutdown",
+                "artifacts": {
+                    name: digest(getattr(args, name))
+                    for name in (
+                        "baseline_core",
+                        "candidate_core",
+                        "baseline_desktop",
+                        "candidate_desktop",
+                    )
+                },
+                "bundles": {
+                    prefix: {
+                        "version": manifest["version"],
+                        "manifest_sha256": digest(
+                            getattr(args, prefix + "_bundle") / "nebula-runtime.json"
+                        ),
+                        "retained_core_sha256": manifest["files"][
+                            manifest["core_executable"]
+                        ],
+                        "ui_index_sha256": manifest["files"][
+                            manifest["ui_directory"] + "/index.html"
+                        ],
+                        "verified_files": len(manifest["files"]),
+                    }
+                    for prefix, manifest in manifests.items()
+                },
+                "origin": str(client.base_url),
+                "identity": original_identity,
+                "versions": {
+                    "baseline": original_status["api_version"],
+                    "candidate": upgraded_status["api_version"],
+                    "rollback": final_status["api_version"],
+                },
+                "migration": migration,
+                "provider_executions": len(starts),
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "command_id": chat.command_id,
+                "held_observations": held,
+                "native_gui": observations,
+                "accepted_responses": chat.responses,
+                "actual_frames": chat.frames,
+                "runtime_processes": process_rows,
+                "shutdown_observed_state": shutdown["observed_state"],
+                "physical_desktop_input": False,
+                "installation": "prebuilt artifacts in owned fixture; no existing installation changed",
+            }
+            receipt["archive_audits"] = archive_audits
+            receipt["served_production_ui"] = ui_observations
+            (args.output / "continuity-receipt.json").write_text(
+                json.dumps(receipt, indent=2) + "\n"
+            )
+            return receipt
+    except Exception as error:
+        failure = {
+            "result": "failed",
+            "error_type": type(error).__name__,
+            "detail": str(error),
+            "native_gui": observations,
+            "accepted_responses": chat.responses if chat else [],
+            "actual_frames": chat.frames if chat else [],
+        }
+        raise
     finally:
-        for child in desktops:
+        cleanup_errors = []
+        for child, selected_environment in desktops:
             if child.poll() is None:
-                child.terminate()
-                child.wait(timeout=15)
+                try:
+                    desktop_observe(args, child, selected_environment, "close")
+                except Exception as error:
+                    cleanup_errors.append("GUI cleanup: " + str(error))
+                    # Fixture-only failure cleanup, never GUI-close evidence.
+                    child.terminate()
+                    child.wait(timeout=15)
         if data.exists() and not stopped:
-            subprocess.run([str(args.candidate_core), "runtime-stop", "--data-dir", str(data)],
-                           capture_output=True, text=True, timeout=60, env=environment)
+            try:
+                rows = registered_processes(data)
+                cleanup = subprocess.run(
+                    [str(args.candidate_core), "runtime-stop", "--data-dir", str(data)],
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                    env=environments["candidate"],
+                    cwd=args.output,
+                )
+                (args.output / "cleanup.stderr").write_text(cleanup.stderr)
+                (args.output / "cleanup.stdout").write_text(cleanup.stdout)
+                if cleanup.returncode:
+                    raise RuntimeError(
+                        "fallback runtime-stop returned " + str(cleanup.returncode)
+                    )
+                verify_shutdown(json.loads(cleanup.stdout), rows)
+                stopped = True
+            except Exception as error:
+                cleanup_errors.append("Runtime cleanup unconfirmed: " + str(error))
         for client in clients:
             client.close()
         for output in log_handles:
             output.close()
-        # This private tree contains ephemeral credentials; retain only the
-        # sanitized receipt and desktop diagnostics after exact runtime stop.
+        supervisor_log = data / "runtime/supervisor.log"
+        if supervisor_log.is_file():
+            text = supervisor_log.read_text(errors="replace")
+            if "first" in locals():
+                text = text.replace(first["ipc_token"], "<redacted fixture credential>")
+            (args.output / "supervisor.log").write_text(text)
+        if failure is not None:
+            failure["cleanup_confirmed"] = stopped
+            failure["cleanup_errors"] = cleanup_errors
+            (args.output / "continuity-failure.json").write_text(
+                json.dumps(failure, indent=2) + "\n"
+            )
+        # Keep private diagnostic state whenever exact process exit is unknown.
         if stopped:
-            for directory, _children, _files in os.walk(data):
-                Path(directory).chmod(0o700)
-            shutil.rmtree(data)
+            for selected in (
+                data,
+                *(
+                    Path(environment[key])
+                    for key in (
+                        "HOME",
+                        "XDG_DATA_HOME",
+                        "XDG_CONFIG_HOME",
+                        "XDG_CACHE_HOME",
+                    )
+                ),
+            ):
+                if selected.exists():
+                    for directory, _children, _files in os.walk(selected):
+                        Path(directory).chmod(0o700)
+                    shutil.rmtree(selected)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("baseline-core", "candidate-core", "baseline-desktop", "candidate-desktop"):
+    for name in (
+        "baseline-core",
+        "candidate-core",
+        "baseline-desktop",
+        "candidate-desktop",
+    ):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--baseline-bundle", type=Path, required=True)
     parser.add_argument("--candidate-bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--desktop-fixture",
+        type=Path,
+        default=Path(__file__).resolve().parents[1]
+        / "tests/v3/packaged_continuity_desktop_fixture.py",
+    )
+    parser.add_argument("--public-model-cache", type=Path)
     args = parser.parse_args()
-    for name in ("baseline_core", "candidate_core", "baseline_desktop", "candidate_desktop"):
+    for name in (
+        "baseline_core",
+        "candidate_core",
+        "baseline_desktop",
+        "candidate_desktop",
+    ):
         selected = getattr(args, name)
-        if selected.is_symlink() or not selected.is_file() or not os.access(selected, os.X_OK):
+        if (
+            selected.is_symlink()
+            or not selected.is_file()
+            or not os.access(selected, os.X_OK)
+        ):
             parser.error(name + " must name an existing executable artifact")
         setattr(args, name, selected.resolve())
     for prefix in ("baseline", "candidate"):
         bundle = getattr(args, prefix + "_bundle").resolve()
-        manifest = json.loads((bundle / "nebula-runtime.json").read_text())
-        relative = Path(manifest["core_executable"])
-        if relative.is_absolute() or ".." in relative.parts:
-            parser.error("bundle Core path must stay inside its artifact")
-        expected = manifest["files"][relative.as_posix()]
-        if digest(bundle / relative) != expected or digest(getattr(args, prefix + "_core")) != expected:
-            parser.error(prefix + " Core does not match its runtime manifest")
         setattr(args, prefix + "_bundle", bundle)
-    if digest(args.baseline_core) == digest(args.candidate_core):
-        parser.error("baseline and candidate must be distinct built artifacts")
-    receipt = run(args)
-    (args.output / "continuity-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    args.desktop_fixture = args.desktop_fixture.resolve(strict=True)
+    if args.public_model_cache is not None:
+        args.public_model_cache = args.public_model_cache.resolve(strict=True)
+    run(args)
 
 
 if __name__ == "__main__":
