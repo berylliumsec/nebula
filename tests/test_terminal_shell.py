@@ -1351,3 +1351,50 @@ def test_connect_accepts_ready_supervisor_and_legacy_health(
         await shell.api.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", [404, 409, 503])
+def test_restore_scopes_missing_chat_and_only_recovers_missing_selection(
+    tmp_path, status
+):
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("engagements/project-a"):
+            return response(PROJECT)
+        assert request.url.params["engagement_id"] == "project-a"
+        return response({"detail": "unavailable"}, status=status)
+
+    async def run():
+        shell = make_shell(tmp_path, handler)
+        shell.settings.entry["selection"] = {
+            "project_id": "project-a",
+            "session_id": "missing-chat",
+        }
+        recovered = []
+
+        async def connect(*args):
+            pass
+
+        async def select_project(*args, **kwargs):
+            recovered.append(True)
+            raise CancelledInput()
+
+        shell.connect = connect
+        shell.select_project = select_project
+        if status == 503:
+            with pytest.raises(ApiError):
+                await shell.run()
+            assert not recovered
+        else:
+            await shell.run()
+            assert recovered == [True]
+            assert any(
+                "remembered conversation is unavailable" in line
+                for line in shell.ui.output
+            )
+        assert all(method == "GET" for method, path in calls)
+        assert len(calls) == 2
+
+    asyncio.run(run())

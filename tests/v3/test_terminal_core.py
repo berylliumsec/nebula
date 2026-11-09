@@ -1456,3 +1456,27 @@ def test_terminal_queue_detach_approval_and_ctrl_c_use_core_state(lan_core):
             }
         )
     )
+
+
+def test_paired_tui_recovers_missing_remembered_chat(lan_core):
+    data = lan_core
+    config = json.loads(data["config"].read_text())
+    origin = config["active_core"]
+    config["cores"][origin]["selection"] = {
+        "project_id": "terminal-project",
+        "session_id": "removed-chat",
+    }
+    data["config"].write_text(json.dumps(config))
+    terminal = data["start"]("shell", tty=True, columns=100, rows=32)
+    terminal.expect_screen("Choose a project", "Terminal Project")
+    terminal.send("Terminal Project")
+    terminal.expect_screen("New conversation")
+    terminal.send("New conversation")
+    terminal.expect_screen("Message or /command", "/help for commands")
+    terminal.close()
+    saved = json.loads(data["config"].read_text())["cores"][origin]["selection"]
+    assert saved == {"project_id": "terminal-project", "session_id": None}
+    terminal = data["start"]("shell", tty=True, columns=100, rows=32)
+    terminal.expect_screen("Message or /command", "/help for commands")
+    terminal.close()
+    print("Synthetic TLS LAN origin:", origin)

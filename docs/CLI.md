@@ -286,3 +286,7 @@ The Assistant shell supports protocol 1 Core health and the supervisor API v1
 health envelope. A supervisor reports API readiness separately; if it is not
 ready, wait for Core recovery and reconnect. An explicit incompatible shell
 protocol is rejected. Endpoint errors remain visible when a Core feature is unavailable.
+
+On startup, remembered chats are resolved within their saved project. If a chat
+was removed, the shell offers selection again; choosing another chat or New
+conversation replaces the stale device-local selection without sending a message.

@@ -1,8 +1,8 @@
 {
-  "change_digest": "405ff815671fd00a1733028b117403fbbcf1acfc52bd5c16703709d98fbb2e7e",
-  "reviewed_by": "Codex; reviewed supervisor and legacy health contracts and connection cleanup",
-  "reason": "Seven handshake variants, paired TLS TUI with supervisor health and real Core chat routes, client packaging, and help synchronization. Includes a behavior-neutral baseline lint correction: remove unused time import and explicitly import the Python 3.11 builtin exception group. Also corrects baseline test-fixture formatting with verified identical AST.",
-  "exclusions": "Python terminal handshake only; browser, frontend and native UI unchanged. No broad regression suites.",
+  "change_digest": "5511903a9e889dbb54c47c8505e65406b61528910a797b95124c44edcf9e6e06",
+  "reviewed_by": "Codex; reviewed stale selection routing, authoritative404 and no-replay startup behavior",
+  "reason": "Three startup status cases, actual TLS LAN TUI missing-selection recovery and reconnect, client package boundary, product help sync.",
+  "exclusions": "Only terminal startup restoration changes; browser, frontend and native UI excluded. No Core execution or protocol changes.",
   "python_versions": [
     "3.12"
   ],
@@ -10,7 +10,7 @@
   "python_browser": false,
   "checks": [],
   "expected_tests": {
-    "python": 10,
+    "python": 6,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -20,8 +20,8 @@
     "packaged_native": 0
   },
   "python": [
-    "tests/test_terminal_shell.py::test_connect_accepts_ready_supervisor_and_legacy_health",
-    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
+    "tests/test_terminal_shell.py::test_restore_scopes_missing_chat_and_only_recovers_missing_selection",
+    "tests/v3/test_terminal_core.py::test_paired_tui_recovers_missing_remembered_chat",
     "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies",
     "tests/v3/test_terminal_message_recall_knowledge.py::test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core"
   ],
