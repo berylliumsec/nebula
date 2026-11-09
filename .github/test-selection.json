@@ -1,20 +1,18 @@
 {
-  "change_digest": "39166eba144cc6c0341706a3aa81d95ba67c149f5fd0c6676f4955c8a8bd1f32",
+  "change_digest": "940028563921e055f02c668eb73d1fe26b9598e0809bcb7cada9126fc9f0a289",
   "reviewed_by": "Codex",
-  "reason": "Twenty-four collected cases integrate explicit global route ownership, guide IDs colliding with project IDs, storage reads/paging, paired operator progress, and production API transaction ownership. Covers both SQL backends without an execution owner. All twenty-four cases passed in14.37s; explicit global ownership and factory atomicity verified.",
-  "exclusions": "No full suite, real provider, browser execution or deployment. UI unit/build and production LAN are separate track receipts.",
+  "reason": "Expose authenticated host diagnostic ingress through the compatibility CLI and runtime service, and apply the existing accessible primary button variant to live Memory Settings. Two diagnostics cases cover SQLite/PostgreSQL and six component cases cover saved settings, conflicts, unsupported capability and retry. Production build and final LAN continuity matrix are separate acceptance receipts.",
+  "exclusions": "No full suite, live providers or deployments. Native packaging and production browser journeys retain separate pinned-build evidence; WebKit and installed GUI gates remain unavailable.",
   "expected_tests": {
-    "python": 24,
-    "frontend": 0,
+    "python": 2,
+    "frontend": 6,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_global_reads.py",
-    "tests/v3/test_runtime_global_api.py::test_project_creation_and_global_catalogs_need_no_execution_owner",
-    "tests/v3/test_api_worker_composition.py"
+    "tests/v3/test_runtime_host_observations.py::test_diagnostic_settings_files_errors_and_direct_bounded_telemetry"
   ],
-  "frontend": [],
+  "frontend": ["ui/src/components/MemoryBudgetSettings.test.tsx"],
   "native": [],
   "playwright": []
 }

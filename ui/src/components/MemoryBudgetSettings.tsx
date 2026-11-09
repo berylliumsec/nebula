@@ -37,7 +37,7 @@ function RunningLimits({api, job, settings, onApplied}: {api: ApiClient; job: Me
     {error && <p role="alert">{error}</p>}
     <form onSubmit={event => void submit(event)}><fieldset className={styles.fields} disabled={busy || !capability?.live_update}><LimitsFields name="Running job" value={limits} onChange={setLimits} maximum={settings.administrator_limits.maximum_job_bytes} swapMaximum={settings.administrator_limits.maximum_swap_bytes} pressure={!!capability?.pressure_threshold} /></fieldset>
       <label className={styles.ack}><input type="checkbox" checked={ack} disabled={busy || !capability?.live_update} onChange={event => setAck(event.target.checked)} />I understand that lowering a limit can terminate this job.</label>
-      <button className="button" type="submit" disabled={busy || !capability?.live_update}>{busy ? "Checking application…" : "Apply to this job"}</button>
+      <button className="button primary" type="submit" disabled={busy || !capability?.live_update}>{busy ? "Checking application…" : "Apply to this job"}</button>
     </form>
   </details>;
 }

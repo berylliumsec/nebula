@@ -113,6 +113,7 @@ async def serve_runtime(
     tls_cert: Path | None = None,
     tls_key: Path | None = None,
     allow_insecure_device_pairing: bool = False,
+    allow_browser_diagnostics: bool = False,
     open_browser: bool = False,
     print_ready: bool = False,
     diagnostics_level: str | None = None,
@@ -158,6 +159,7 @@ async def serve_runtime(
         shared_services=shared,
         recovery_version=None,
         allow_insecure_device_pairing=allow_insecure_device_pairing,
+        allow_browser_diagnostics=allow_browser_diagnostics,
         shutdown_requested=shutdown_requested,
     )
     listener = socket.socket(

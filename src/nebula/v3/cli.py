@@ -512,10 +512,6 @@ async def serve(
         raise typer.BadParameter(
             "independent Core requires authentication; use normal device pairing"
         )
-    if allow_browser_diagnostics:
-        raise typer.BadParameter(
-            "remote browser diagnostic ingress is not available in the independent runtime"
-        )
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as probe:
         try:
             probe.bind((host, port))
@@ -535,6 +531,7 @@ async def serve(
         tls_cert=tls_cert,
         tls_key=tls_key,
         allow_insecure_device_pairing=allow_insecure_device_pairing,
+        allow_browser_diagnostics=allow_browser_diagnostics,
         open_browser=open_browser,
         print_ready=True,
         diagnostics_level=diagnostics_level,
