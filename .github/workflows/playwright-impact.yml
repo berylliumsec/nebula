@@ -188,6 +188,18 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/nebula-security-proxy"
           "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
+      - name: Prepare the owned continuity memory fixture
+        if: matrix.test_match == 'tests/runtime-continuity.spec.ts'
+        shell: bash
+        run: |
+          command -v gcc
+          test -S /var/run/docker.sock
+          continuity_runtime="$(command -v docker)"
+          continuity_image='postgres@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139'
+          env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH "$continuity_runtime" --host unix:///var/run/docker.sock info --format '{{.CgroupVersion}}' | grep -Fx 2
+          env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH "$continuity_runtime" --host unix:///var/run/docker.sock pull "$continuity_image"
+          printf 'NEBULA_TEST_MEMORY_RUNTIME=%s\nNEBULA_TEST_MEMORY_SOCKET=unix:///var/run/docker.sock\nNEBULA_TEST_MEMORY_IMAGE=%s\n' "$continuity_runtime" "$continuity_image" >> "$GITHUB_ENV"
+          printf 'NEBULA_ACCEPTANCE_PYTHON=%s\n' "$(poetry env info --executable)" >> "$GITHUB_ENV"
       - name: Run selected entry serially
         shell: bash
         env:
@@ -221,7 +233,7 @@ jobs:
             done
             test "$release_ready" = true
           fi
-          if test "$TEST_MATCH" = tests/universal-agents.spec.ts; then
+          if test "$TEST_MATCH" = tests/universal-agents.spec.ts || test "$TEST_MATCH" = tests/runtime-continuity.spec.ts; then
             export NEBULA_MODEL_TEST_HOST="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"
             export NEBULA_REQUIRE_LAN_TESTS=1
           fi

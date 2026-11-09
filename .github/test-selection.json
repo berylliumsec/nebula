@@ -1,21 +1,17 @@
 {
-  "change_digest": "d6dc524928dc5b5a03c9391ca53e6667115813106dba9ab55dadca8e2de52b8f",
+  "change_digest": "e02d220265de5ca20153714461849e6d1b7bc0d847035d9d4feb707aefa706c9",
   "reviewed_by": "Codex",
-  "reason": "Independent review confirmed terminal reservation project identity fault and required-CI typing/export/packaging narrowing gaps. Seven collected cases cover real service reconnect/cancellation with inert terminal process, exact frozen launch identity, SQLite/PostgreSQL quiescence, complete tool definition updates and historical fork persistence. Static Core Mypy covers 341 modules and passes.",
-  "exclusions": "No full suite, real provider, browser or deployment. Operator production journeys and final focused union selection remain separate integration gates.",
+  "reason": "Nineteen collected cases verify semantic context capability fencing at initial ownership, post-preflight transfer and expired recovery on SQLite/PostgreSQL, plus exact migration-tree review. Additive 0046 creates only immutable manifest storage/index with session cascade and keeps schema family5; code rollback must retain context-aware project execution. Scoped CI continuity preparation is reviewed alongside this integration and does not trigger full testing.",
+  "exclusions": "No full suite, operational provider, deployment or browser execution. Production UI matrix and installed desktop have separate selected acceptance receipts.",
   "expected_tests": {
-    "python": 7,
+    "python": 19,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_container_terminal.py::test_terminal_process_survives_detach_and_replays_only_missed_output",
-    "tests/v3/test_container_terminal.py::test_cancelled_attach_releases_a_launching_session",
-    "tests/v3/test_runtime_launcher.py::test_startup_nonce_accepts_the_actual_frozen_service_pid",
-    "tests/v3/test_runtime_quiescence.py::test_used_idle_project_quiesces_preserving_paused_work_and_fence",
-    "tests/v3/test_provider_tool_manifest.py::test_reconcile_update_disable_reenable_and_order_are_deterministic",
-    "tests/v3/test_provider_tools_context.py::test_older_forks_inherit_only_their_boundary_revision_and_survive_source_deletion"
+    "tests/v3/test_runtime_context_requirements.py",
+    "tests/v3/test_runtime_bundle.py::test_compatibility_requires_review_of_exact_migration_tree"
   ],
   "frontend": [],
   "native": [],

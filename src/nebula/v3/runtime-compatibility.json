@@ -1,12 +1,12 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "553887b2ab27dff99612101bc7ae9df3141c9401168655f76acdc2d3983bbbcf",
+  "migration_tree_sha256": "98678c4df2cd968bf164a08d7e0ab507612e085d9070d0a7094fdd1a80b0d0e1",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,
     "schema_max": 5,
     "additive_migrations": true,
-    "migration_head": "0045_runtime_shutdown",
+    "migration_head": "0046_provider_tool_manifest",
     "api_protocol_min": 1,
     "api_protocol_max": 1,
     "execution_protocol_min": 1,
@@ -16,7 +16,10 @@
       "chat.resume/v1",
       "project.handoff/v1",
       "project.participants/v1",
-      "project.quiesce/v1"
+      "project.quiesce/v1",
+      "provider.tools-context/v1",
+      "harness.standing-instructions/v1",
+      "host.web-search-query/v1"
     ]
   }
 }

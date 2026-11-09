@@ -956,6 +956,9 @@ class DeploymentCoordinator:
             return await self._has_participants(session, project_id)
 
     async def _participants_supported(self, session, project_id, *runtime_ids):
+        from .runtime_context_requirements import require_runtime_context
+
+        await require_runtime_context(session, project_id, runtime_ids[-1])
         if not await self._has_participants(session, project_id):
             return True
         for runtime_id in runtime_ids:

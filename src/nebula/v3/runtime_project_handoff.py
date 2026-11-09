@@ -12,6 +12,7 @@ from .database import (
     EntityRow,
     MemoryJobRow,
     ProjectHandoffRow,
+    ProviderToolManifestRow,
     ProviderTurnQueueRow,
     RuntimeResourceRow,
     RuntimeRecoveryRow,
@@ -90,13 +91,28 @@ async def project_sql_checkpoint(session, project_id):
             .limit(MAX_CHECKPOINT_ROWS + 1)
         )
     )
-    if len(rows) > MAX_CHECKPOINT_ROWS or len(queues) > MAX_CHECKPOINT_ROWS:
+    manifests = list(
+        await session.execute(
+            select(
+                ProviderToolManifestRow.session_id,
+                ProviderToolManifestRow.revision,
+                ProviderToolManifestRow.digest,
+            )
+            .where(ProviderToolManifestRow.project_id == project_id)
+            .order_by(
+                ProviderToolManifestRow.session_id, ProviderToolManifestRow.revision
+            )
+            .limit(MAX_CHECKPOINT_ROWS + 1)
+        )
+    )
+    if max(len(rows), len(queues), len(manifests)) > MAX_CHECKPOINT_ROWS:
         raise CoordinationConflict(
             "This project exceeds the bounded handoff checkpoint; retain its current runtime until a paged adapter is available"
         )
-    raw = json.dumps(
-        [list(map(list, rows)), list(map(list, queues))], separators=(",", ":")
-    ).encode()
+    parts = [list(map(list, rows)), list(map(list, queues))]
+    if manifests:
+        parts.append(list(map(list, manifests)))
+    raw = json.dumps(parts, separators=(",", ":")).encode()
     return {
         "format": CHECKPOINT_FORMAT,
         "project_id": project_id,

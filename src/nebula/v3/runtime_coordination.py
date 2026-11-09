@@ -279,6 +279,9 @@ class RuntimeCoordination:
             )
             now = await self._clock_ms(session)
             now = await self._live_execution(session, runtime_id, now)
+            from .runtime_context_requirements import require_runtime_context
+
+            await require_runtime_context(session, project_id, runtime_id)
             token = await session.scalar(
                 update(ProjectOwnershipRow)
                 .where(
