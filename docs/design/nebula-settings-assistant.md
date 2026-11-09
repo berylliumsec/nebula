@@ -672,6 +672,24 @@ and external setup effects. Butler's allowed Settings requests reach the same
 canonical host state as the browser. A pending durable receipt is not a saved or
 applied result; follow it and read back the authoritative value.
 
+Runtime discovery and selection belong to the host. Image preparation, its
+status, cancellation and retry belong to the selected Project and exact accepted
+operation. A host runtime repair must become visible to that Project without
+replacing an existing image operation. Terminal capacity is observed for that
+Project; unknown or unavailable capacity offers a check or retry and never
+implies an available terminal slot.
+
+Account observations use the same protected reader from Settings, Butler and
+automatic quota updates. An unsupported native reader reports unavailable and
+retains its blocked memory job; it must not start an unrestricted account process.
+A configured account endpoint remains an observation of that endpoint.
+
+The host owns global Library uploads, derived-index publication and verified
+artifact downloads. An indexed result is ready only for the matching saved
+request and content digest. Removing a Library entry removes it from retrieval
+while retaining its immutable artifact. These operations do not create a global
+execution Project or grant an API worker host execution authority.
+
 Project policy's Web Search opt-in uses one host-managed service and the host's
 saved engines. Queries create no project-owned service or duplicate reservation.
 A memory-admission or readiness refusal remains visible; an explicit retry uses

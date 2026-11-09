@@ -3084,7 +3084,7 @@
         "ui/src/pages/SettingsPage.tsx::setupStatus",
         "ui/src/state/WorkspaceContext.tsx::setupStatus"
       ],
-      "core_owner": "Core SetupService status and current operation metadata",
+      "core_owner": "Host runtime discovery and exact Project image preparation status and operation metadata",
       "butler": {
         "discover": "nebula.settings.api_schema",
         "read": "nebula.data.system",
