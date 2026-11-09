@@ -47,8 +47,9 @@ Collection, receipts and results are `/tmp/nebula-shared-knowledge-*` and
 `/tmp/nebula-shared-relevance-*`. Relevance transport used a deterministic host-only
 scorer; it does not validate neural model accuracy.
 
-Remaining integration is explicit. Production execution construction and host
-product-guidance synchronization still need wiring. Crash-orphan bulk payload
+Remaining integration is explicit. Host product-guidance synchronization is now
+covered by the [host ownership evidence](runtime-host-services.md).
+Production execution construction still needs wiring. Crash-orphan bulk payload
 retention needs lifecycle cleanup. Deleting a legacy derived source without a
 publication receipt defers physical cleanup; SQL-deleted sources remain excluded
 from retrieval and the adapter reports that cleanup limitation. Full client,

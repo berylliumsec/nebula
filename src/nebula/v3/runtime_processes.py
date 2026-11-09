@@ -13,7 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import BinaryIO, IO, Literal
+from typing import BinaryIO, IO, Literal, TYPE_CHECKING
 from uuid import uuid4
 
 import httpx
@@ -35,6 +35,9 @@ from .process_identity import (
 from .release_store import ReleaseStore
 from .runtime_coordination import CoordinationConflict
 from .runtime_ipc import RuntimeCredentials, RuntimeIpcError, RuntimeRpcClient
+
+if TYPE_CHECKING:
+    from .runtime_host_services import HostSharedServices
 
 
 class WorkerBootstrap(NebulaModel):
@@ -246,6 +249,7 @@ class RuntimeProcessHost:
         self.socket_root: Path | None = None
         self.launch_origin: str | None = None
         self.closed = False
+        self.shared_services: HostSharedServices | None = None
 
     async def start(self):
         async with self._launch:
@@ -303,6 +307,8 @@ class RuntimeProcessHost:
         self.closed = True
 
         async def drain_launch():
+            if self.shared_services is not None:
+                await self.shared_services.close()
             async with self._launch:
                 for identity, child in list(self.children.items()):
                     if child.poll() is not None:

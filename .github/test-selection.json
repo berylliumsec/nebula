@@ -1,27 +1,18 @@
 {
-  "change_digest": "41ed7dcf5a8f0406083ac528f3b09cce67bf15e8431c264b01de1566b1aa54ce",
+  "change_digest": "ae451509ceccc78d9f3b9692743d3cfff7537f699e87ff1f81ab5156bdb38f9a",
   "reviewed_by": "Codex",
-  "reason": "71 collected shared-index cases:18 new SQLite/PostgreSQL authenticated host-index cases,34 attempt-identity/context cases (32 race permutations plus2 warmup contexts),2 actual Unix-service index journeys,9 focused vault cases,6 exact existing knowledge ingest/migration/reindex/failure cases and2 exact conversation-search regressions. One host Chroma with deterministic fixture embeddings; provenance filtering after lease/request/digest changes, project/library scopes, thread/context bridging, encrypted bounded bulk inputs/cleanup, cancellation ownership and old-attempt result isolation. Independent static validator confirmed reload-current CAS could overwrite a newer indexing status before the guarded attempt repair. Final73-case union:71 passed in42.41s plus2 new relevance-transport cases in3.51s. The fake initially lacked its typed status property; independent static diagnosis preceded fixture-only repair. Ruff and targeted mypy passed. Evidence notes added after validation; final union is collected only, not rerun.",
-  "exclusions": "No full suite, live installation, operational service/provider, SSH, deployment, benchmark, embedding/reranker download or compute allocation. Only synthetic small text and one explicitly bounded2-4MiB text fixture, local Chroma deterministic vectors, private Unix/ASGI and disposable SQL. Full execution/client/desktop/deployer integration, bulk-orphan retention, legacy derived-index cleanup and final LAN/WebKit/packaged acceptance remain pending.",
+  "reason": "34 collected host-owner cases:28 source-specific private-service cases (14 new/14 affected) across SQLite/PostgreSQL,2 exact supervisor replacement cases and4 actual inert-worker retirement cases. Independent causal validation showed shared instances bypass the same host flock and Unix loop removes an existing socket before bind; direct host.close had no service drain. Register one owner, serialize initialization/close and drain host services before lock release. Add races, strict empty admission initialization, exact packaged product digest/Chroma sync and reported degraded mirror with retained packaged help. All34 passed in51.43s; Ruff and targeted mypy passed. Evidence notes added after source validation; no broader rerun.",
+  "exclusions": "No full suite, existing installation, live provider/service, SSH, deployment, benchmark, model download or compute allocation. Disposable SQL, private sockets, inert retained workers and deterministic local Chroma only. Product vectors come from the existing packaged index. Full execution/client/desktop/deployer work, API-promotion guidance versioning and final LAN/WebKit/packaged gates remain pending.",
   "expected_tests": {
-    "python": 73,
+    "python": 34,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_shared_knowledge.py",
-    "tests/v3/test_index_attempts.py",
-    "tests/v3/test_runtime_vault.py",
-    "tests/v3/test_runtime_host_services.py::test_real_private_listener_serves_one_host_knowledge_index",
-    "tests/v3/test_knowledge_index.py::test_chroma_index_persists_semantic_chunks_and_isolates_engagements",
-    "tests/v3/test_knowledge_index.py::test_global_library_persists_scripts_and_retrieves_across_engagements",
-    "tests/v3/test_knowledge_index.py::test_startup_migrates_inline_chunks_to_chroma",
-    "tests/v3/test_knowledge_index.py::test_spreadsheet_with_repeated_rows_indexes_and_reindexes",
-    "tests/v3/test_knowledge_index.py::test_startup_migrates_inline_library_chunks_to_chroma",
-    "tests/v3/test_knowledge.py::test_ingest_returns_the_recorded_source_when_the_index_write_fails",
-    "tests/v3/test_conversation_search.py::test_search_reads_only_this_sessions_archived_active_messages",
-    "tests/v3/test_conversation_search.py::test_semantic_ranking_uses_only_an_already_ready_local_model"
+    "tests/v3/test_runtime_host_services.py",
+    "tests/v3/test_supervisor.py::test_supervisor_close_leaves_ready_api_alive_and_new_host_rediscovers_it",
+    "tests/v3/test_runtime_processes.py::test_graceful_retirement_reaps_only_an_empty_worker"
   ],
   "frontend": [],
   "native": [],

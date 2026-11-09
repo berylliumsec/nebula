@@ -115,6 +115,185 @@ async def test_real_private_listener_serves_one_host_knowledge_index(managed, tm
             await memory.client.close()
 
 
+async def test_second_service_owner_cannot_replace_a_live_socket(shared):
+    original = Path(shared.services.endpoint[7:]).stat().st_ino
+    other = HostSharedServices(shared.managed.host)
+    try:
+        with pytest.raises(RuntimeIpcError, match="owner is already active"):
+            await other.start()
+        assert shared.managed.host.shared_services is shared.services
+        assert Path(shared.services.endpoint[7:]).stat().st_ino == original
+        with execution_context(shared.lease):
+            assert (await remember(shared.remote, "admitted-project")).revision == 1
+    finally:
+        await other.close()
+    assert shared.managed.host.shared_services is shared.services
+
+
+async def test_concurrent_starts_use_one_service_task_and_socket(managed):
+    services = HostSharedServices(managed.host, capacity_limits=_LIMITS)
+    try:
+        await asyncio.gather(services.start(), services.start())
+        task, inode = services.task, Path(services.endpoint[7:]).stat().st_ino
+        await services.start()
+        assert (
+            services.task is task and Path(services.endpoint[7:]).stat().st_ino == inode
+        )
+        assert managed.host.shared_services is services
+    finally:
+        await services.close()
+    assert managed.host.shared_services is None
+
+
+async def test_direct_host_close_drains_an_accepted_index_operation(
+    shared, monkeypatch
+):
+    entered, release = threading.Event(), threading.Event()
+    original = shared.services.memory._index_one
+
+    def held(row):
+        entered.set()
+        release.wait(10)
+        return original(row)
+
+    monkeypatch.setattr(shared.services.memory, "_index_one", held)
+    accepted, closing = None, None
+    try:
+        with execution_context(shared.lease):
+            accepted = asyncio.create_task(remember(shared.remote, "admitted-project"))
+        assert await asyncio.to_thread(entered.wait, 3)
+        closing = asyncio.create_task(shared.managed.host.close())
+        async with asyncio.timeout(3):
+            while not shared.services.closed:
+                await asyncio.sleep(0.01)
+        assert not closing.done() and shared.managed.host.lock.descriptor is not None
+        assert shared.managed.host.shared_services is shared.services
+        release.set()
+        assert (await asyncio.wait_for(accepted, 5)).revision == 1
+        await asyncio.wait_for(closing, 5)
+        assert shared.managed.host.lock.descriptor is None
+        assert shared.managed.host.shared_services is None
+        assert same_process(shared.identity.pid, shared.identity.process_birth)
+    finally:
+        release.set()
+        if accepted is not None:
+            await asyncio.gather(accepted, return_exceptions=True)
+        if closing is not None:
+            await closing
+
+
+async def test_direct_close_during_service_initialization_prevents_late_socket_publication(
+    managed, monkeypatch
+):
+    from nebula.v3.shared_memory_import import CompatibilityMemoryImport
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = CompatibilityMemoryImport.run
+
+    async def held(importer):
+        result = await original(importer)
+        entered.set()
+        await release.wait()
+        return result
+
+    monkeypatch.setattr(CompatibilityMemoryImport, "run", held)
+    services = HostSharedServices(managed.host)
+    starting = asyncio.create_task(services.start())
+    closing = None
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        closing = asyncio.create_task(managed.host.close())
+        async with asyncio.timeout(3):
+            while not services.closed:
+                await asyncio.sleep(0.01)
+        assert not closing.done() and managed.host.lock.descriptor is not None
+        release.set()
+        with pytest.raises(RuntimeError, match="startup was detached"):
+            await starting
+        await asyncio.wait_for(closing, 5)
+        assert services.task is None and managed.host.shared_services is None
+        assert managed.host.lock.descriptor is None
+    finally:
+        release.set()
+        await asyncio.gather(starting, return_exceptions=True)
+        await services.close()
+        if closing is not None:
+            await closing
+
+
+async def test_empty_explicit_capacity_is_held_without_claiming_a_service_owner(
+    managed,
+):
+    services = HostSharedServices(managed.host, capacity_limits={})
+    try:
+        with pytest.raises(ValueError, match="explicit supported dimensions"):
+            await services.start()
+        assert managed.host.shared_services is None and services.task is None
+        assert (await services.capacity.status())["revision"] == 0
+    finally:
+        await services.close()
+
+
+async def test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart(
+    managed, tmp_path
+):
+    from nebula.v3.knowledge_index import ChromaKnowledgeIndex
+    from nebula.v3.product_knowledge import packaged_product_passages
+    from tests.v3.test_knowledge_index import SecurityEmbeddingFunction
+
+    index = ChromaKnowledgeIndex(
+        tmp_path / "product-index", embedding_function=SecurityEmbeddingFunction()
+    )
+    digest, rows = packaged_product_passages()
+    first = HostSharedServices(managed.host, knowledge_index=index)
+    try:
+        await first.start()
+        assert first.product_guidance == {
+            "state": "ready",
+            "source_digest": digest,
+            "passage_count": len(rows),
+            "updated": True,
+        }
+        assert index._product_collection.count() == len(rows)
+        assert index._product_collection.metadata["source_digest"] == digest
+    finally:
+        await first.close()
+    second = HostSharedServices(managed.host, knowledge_index=index)
+    try:
+        await second.start()
+        assert second.product_guidance["source_digest"] == digest
+        assert second.product_guidance["updated"] is False
+    finally:
+        await second.close()
+
+
+async def test_guidance_mirror_failure_is_reported_while_packaged_help_remains_available(
+    managed, tmp_path, monkeypatch
+):
+    from nebula.v3.knowledge_index import ChromaKnowledgeIndex, KnowledgeIndexError
+    from nebula.v3.product_knowledge import search_product_knowledge
+    from tests.v3.test_knowledge_index import SecurityEmbeddingFunction
+
+    index = ChromaKnowledgeIndex(
+        tmp_path / "product-index", embedding_function=SecurityEmbeddingFunction()
+    )
+
+    def failed():
+        raise KnowledgeIndexError("Synthetic unavailable mirror")
+
+    monkeypatch.setattr(index, "sync_product_knowledge", failed)
+    services = HostSharedServices(managed.host, knowledge_index=index)
+    try:
+        await services.start()
+        assert (
+            services.product_guidance == {"state": "degraded"}
+            and services.server.started
+        )
+        assert search_product_knowledge("memory budgets", limit=2)
+    finally:
+        await services.close()
+
+
 async def test_private_host_socket_requires_both_peer_identity_and_its_credential(
     shared,
 ):

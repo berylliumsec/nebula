@@ -15,6 +15,8 @@ from starlette.responses import JSONResponse
 
 from .async_utils import finish_cleanup
 from .database import RuntimeInstanceRow, RuntimeProcessRow
+from .diagnostics import record_diagnostic
+from .knowledge_index import KnowledgeIndexError
 from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
@@ -64,11 +66,13 @@ class HostSharedServices:
         self.task = None
         self.closed = False
         self._close_task = None
+        self._start_lock = asyncio.Lock()
         self._peers = {}
         self._peer_lock = asyncio.Lock()
         self._slots = asyncio.Semaphore(8)
         self._requests: set[asyncio.Task] = set()
         self._socket_identity = None
+        self.product_guidance = {"state": "unavailable"}
 
     async def _peer(self, runtime_id):
         async with self._peer_lock:
@@ -119,7 +123,12 @@ class HostSharedServices:
                 scope, receive, send
             )
             return
-        if self.closed or self._slots.locked():
+        if (
+            self.closed
+            or self.host.closed
+            or self.host.lock.descriptor is None
+            or self._slots.locked()
+        ):
             await JSONResponse(
                 {"detail": "Shared host services are reconnecting or busy"},
                 status_code=503,
@@ -158,12 +167,34 @@ class HostSharedServices:
             self._requests.discard(task)
 
     async def start(self):
-        if self.closed:
-            raise RuntimeError("Create a new host-services instance after detachment")
-        if self.task is not None:
-            return
-        if self.host.lock.descriptor is None or self.host.socket_root is None:
-            raise RuntimeError("Shared services require exclusive supervisor ownership")
+        async with self._start_lock:
+            if self.closed:
+                raise RuntimeError(
+                    "Create a new host-services instance after detachment"
+                )
+            if self.task is not None:
+                return
+            if (
+                self.host.closed
+                or self.host.lock.descriptor is None
+                or self.host.socket_root is None
+            ):
+                raise RuntimeError(
+                    "Shared services require exclusive supervisor ownership"
+                )
+            if self.host.shared_services not in (None, self):
+                raise RuntimeIpcError(
+                    "Another shared-service owner is already active on this host"
+                )
+            self.host.shared_services = self
+            try:
+                await self._start_owned()
+            except BaseException:
+                self.closed = True
+                await finish_cleanup(self._stop_owned())
+                raise
+
+    async def _start_owned(self):
         await CompatibilityMemoryImport(self.host).run()
         path = self.host.socket_root / HOST_SOCKET_NAME
         if path.exists() or path.is_symlink():
@@ -176,13 +207,33 @@ class HostSharedServices:
             config = ProviderSchedulerConfig.from_environment()
             await self.capacity.configure(
                 self.capacity_limits
-                or {
+                if self.capacity_limits is not None
+                else {
                     "provider": config.provider_limit,
                     "background": config.background_limit,
                     "tool": config.global_tool_limit,
                     "cpu": max(1, min(4096, (os.cpu_count() or 1) - 1)),
                 }
             )
+        if self.knowledge is not None:
+            sync = getattr(self.knowledge.index, "sync_product_knowledge", None)
+            if callable(sync):
+                try:
+                    result = await finish_cleanup(asyncio.to_thread(sync))
+                    self.product_guidance = {"state": "ready", **result}
+                except KnowledgeIndexError:
+                    self.product_guidance = {"state": "degraded"}
+                    record_diagnostic(
+                        "warning",
+                        "knowledge",
+                        "knowledge.product_chroma_sync_failed",
+                        "Packaged product guidance remains available; restart shared services to retry its Chroma mirror.",
+                        outcome="degraded",
+                        stage="startup",
+                        retryable=True,
+                    )
+        if self.closed or self.host.closed:
+            raise RuntimeError("Shared-service startup was detached")
         self.endpoint = "unix://" + str(path)
         self.server = _HostServer(
             uvicorn.Config(
@@ -198,48 +249,45 @@ class HostSharedServices:
         self.task = asyncio.create_task(
             self.server.serve(), name="nebula-host-services"
         )
+        async with asyncio.timeout(10):
+            while not self.server.started:
+                if self.task.done():
+                    await self.task
+                    raise RuntimeIpcError("Shared host listener did not start")
+                await asyncio.sleep(0.01)
+        details = path.stat()
+        self._socket_identity = (details.st_dev, details.st_ino)
+
+    async def _stop_owned(self):
+        if self.server is not None:
+            self.server.should_exit = True
         try:
-            async with asyncio.timeout(10):
-                while not self.server.started:
-                    if self.task.done():
-                        await self.task
-                        raise RuntimeIpcError("Shared host listener did not start")
-                    await asyncio.sleep(0.01)
-            details = path.stat()
-            self._socket_identity = (details.st_dev, details.st_ino)
-        except BaseException:
-            await self.close()
-            raise
+            if self.task is not None:
+                await self.task
+        finally:
+            # Accepted host work ends before another owner can bind its socket
+            # or load this host's model/index files.
+            if self._requests:
+                await asyncio.gather(*tuple(self._requests), return_exceptions=True)
+            if self.endpoint and self._socket_identity:
+                path = Path(self.endpoint[7:])
+                if path.exists():
+                    details = path.lstat()
+                    if (details.st_dev, details.st_ino) != self._socket_identity:
+                        raise RuntimeIpcError(
+                            "Shared-service socket changed during cleanup"
+                        )
+                    path.unlink()
+            if self.host.shared_services is self:
+                self.host.shared_services = None
 
     async def close(self):
         if self._close_task is None:
             self.closed = True
 
             async def cleanup():
-                if self.server is not None:
-                    self.server.should_exit = True
-                try:
-                    if self.task is not None:
-                        await self.task
-                finally:
-                    # A cancelled server must not leave host SQL/index work
-                    # running after its exclusive supervisor lock is released.
-                    if self._requests:
-                        await asyncio.gather(
-                            *tuple(self._requests), return_exceptions=True
-                        )
-                    if self.endpoint and self._socket_identity:
-                        path = Path(self.endpoint[7:])
-                        if path.exists():
-                            details = path.lstat()
-                            if (
-                                details.st_dev,
-                                details.st_ino,
-                            ) != self._socket_identity:
-                                raise RuntimeIpcError(
-                                    "Shared-service socket changed during cleanup"
-                                )
-                            path.unlink()
+                async with self._start_lock:
+                    await self._stop_owned()
 
             self._close_task = asyncio.create_task(
                 cleanup(), name="nebula-host-services-detach"

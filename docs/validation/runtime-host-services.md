@@ -32,3 +32,24 @@ now validated, as are [shared knowledge-index operations](shared-knowledge-index
 Production execution-factory wiring remains pending. These are
 backend lifetime checks; production LAN/reconnect, mobile WebKit and packaged
 desktop acceptance evidence are still required for deployment continuity.
+
+## One owner and guidance synchronization
+
+A further 34 collected cases passed in 51.43 seconds on SQLite/PostgreSQL: 28
+private-service cases, two supervisor replacement cases and four inert-worker
+retirement cases. Fresh independent source diagnosis identified two lifecycle
+gaps: a second service using the same host did not acquire another flock, and
+both installed Unix loop implementations unlink an existing socket before bind;
+direct process-host close also omitted service draining. The host now registers
+one service owner, serializes service initialization/detachment, rejects calls
+after host detachment, and drains its service even through direct host close.
+Regressions cover duplicate/concurrent starts, socket identity, accepted index
+work and close during initialization. Empty explicit capacity fails closed.
+
+The host also mirrors its current packaged product guidance into Chroma without
+downloading a model. Actual collection count and source digest were verified;
+restart reused them without rewriting. A simulated mirror failure reports
+`degraded` while packaged product search remains available. This validates the
+current host bundle's guidance; promotion-time guidance versioning remains part
+of the deployment integration. Ruff and targeted mypy passed. Raw evidence is
+`/tmp/nebula-host-owner-*`. No operational installation or service was contacted.
