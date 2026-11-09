@@ -20,6 +20,25 @@ worker-dispatch and reviewed-migration tests remain selected. All 12 selected
 source/package checks passed in 3.43 seconds; Ruff also passed. These checks do not
 replace the required actual frozen-process acceptance.
 
-Actual build, default SQLite startup, worker IPC, reconnect and shutdown evidence
-will be recorded after the source change is committed and the independently
-owned SQLite startup fix is included. No installed native GUI result is implied.
+Actual dual builds completed at `e2468085` and the assembled `48077146` candidate.
+The first clean-profile frozen run reached authenticated API readiness with the
+exact worker PID/birth checks intact. Project creation then failed with
+`sqlite3.OperationalError: database is locked` while inserting its default scope;
+the API subsequently lost its runtime lease. This is an incomplete acceptance
+result. The separate runtime owner is reviewing the transaction boundary before
+another candidate is built. Normal explicit shutdown succeeded, and a read-only
+check found no registered or fixture-owned processes alive afterward.
+
+The installer follow-up verifies every retained file and the manifest digest
+before allowing only `bin/_internal/playwright/driver/node`. A Node binary at any
+other path remains forbidden. Existing top-level browser and notebook resources
+remain available to their current consumers; duplicate retained copies must match
+every file, including legal and nonexecutable data. Dependency test packages are
+excluded from the freezer and rejected by both archive and installer audits.
+All 20 selected installer/archive checks passed in 0.55 seconds; Ruff passed.
+
+The frozen driver records registered worker PID/birth identities and verifies
+that they are gone after normal explicit shutdown. A native installed GUI, its
+viewer close/update flow, and the required browser acceptance remain unverified;
+this environment lacks the GTK3/WebKit2GTK development packages needed to build
+the native shell.

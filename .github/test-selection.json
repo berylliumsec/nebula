@@ -1,18 +1,21 @@
 {
-  "change_digest": "8334c126fd65fff6a95ee7c1db3d5fde9d87bda41e29da3ccdb1d23920b139d5",
-  "reviewed_by": "Codex",
-  "reason": "Four collected SQL-backend cases exercise the actual api_application factory: one task-owned connection for atomic project/receipt writes, replay and rollback, worker-owned database cleanup, and rejection of mismatched transaction owners. Independent actual-factory reproduction established the prior two-connection deadlock. All four cases passed in3.47s on SQLite/PostgreSQL; rollback and cleanup ownership verified.",
-  "exclusions": "No full suite, real provider or deployment. Actual frozen artifact is retested after source commit by packaging acceptance.",
+  "reviewed_by": "Codex packaging agent",
+  "reason": "Twenty collected packaging cases cover exact retained Playwright driver permission after whole-bundle verification, tampered/missing/unlisted/link assets, matching legacy and retained resources, dependency-test rejection, existing legal/toolchain gates, and required async database modules. Actual frozen acceptance is separately blocked by the independently reviewed runtime SQLite transaction failure; its driver now observes every recorded worker after shutdown.",
+  "exclusions": "No full suite, running installation, operational providers, deployment, native GUI/browser/mobile flow, or actual frozen runtime rerun in this source phase. Builder runtime dependency completeness requires the next real dual build and private IPC acceptance; no package/GUI completion is claimed.",
   "expected_tests": {
-    "python": 4,
+    "python": 20,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_api_worker_composition.py"
+    "tests/v3/test_retained_installer_audit.py",
+    "tests/v3/test_onedir_package_audit.py",
+    "tests/v3/test_packaging.py::test_installer_tree_gate_requires_legal_files_and_rejects_toolchains",
+    "tests/v3/test_packaging.py::test_core_archive_requires_native_async_database_runtime"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "change_digest": "1910647d375989d07478cff6faa08f9d6c95e527f506fd722b985de4f7da0828"
 }
