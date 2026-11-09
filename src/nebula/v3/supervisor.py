@@ -17,15 +17,17 @@ from .async_utils import finish_cleanup
 from .authentication import CoreAuthentication
 from .authentication_api import AuthenticationApi
 from .database import (
+    DeploymentHostRow,
     ProjectOwnershipRow,
     ProjectHandoffRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
+    RuntimeRecoveryRow,
 )
 from .deployment_protocol import ReleaseManifest, WorkerIdentity
 from .diagnostics import record_caught_exception
-from .deployments import _RESIDENT
+from .deployments import _RESIDENT, checkpoint_digest
 from .release_store import ReleaseStore
 from .runtime_coordination import CoordinationConflict, ProjectLease
 from .runtime_bootstrap import RuntimeBootstrap
@@ -326,10 +328,17 @@ class RuntimeSupervisor:
                     )
                 rows = list(await session.scalars(query.limit(64)))
             for row in rows:
-                if row.checkpoint.get("format") != "nebula.project-checkpoint/v1":
+                checkpoint_format = row.checkpoint.get("format")
+                if checkpoint_format not in {
+                    "nebula.project-checkpoint/v1",
+                    "nebula.project-recovery/v1",
+                }:
                     continue
                 try:
-                    await self._advance_project_handoff(row)
+                    if checkpoint_format == "nebula.project-recovery/v1":
+                        await self._advance_project_recovery(row)
+                    else:
+                        await self._advance_project_handoff(row)
                 except Exception as error:
                     # A blocked target must not starve transfers for other projects.
                     record_caught_exception(
@@ -374,6 +383,140 @@ class RuntimeSupervisor:
         if status.get("state") == "prepared":
             await self.activate_execution(lease)
         self._activated_handoffs.add(row.target_runtime_id)
+
+    async def _recovery_grant(self, row, *, check_blockers=False):
+        """Read the original recovery identity; this path never claims an owner."""
+        operation_id = row.checkpoint.get("operation_id")
+        async with self.coordinator.database.session() as session:
+            recovery = (
+                await session.get(RuntimeRecoveryRow, operation_id)
+                if operation_id
+                else None
+            )
+            if recovery is None:
+                raise CoordinationConflict(
+                    "The saved recovery operation is unavailable"
+                )
+            lease = ProjectLease(
+                recovery.project_id,
+                recovery.target_runtime_id,
+                recovery.target_fencing_token,
+            )
+        async with self.coordinator.coordination.fenced(lease) as session:
+            recovery = await session.get(RuntimeRecoveryRow, operation_id)
+            current = await session.get(ProjectHandoffRow, row.project_id)
+            if (
+                recovery is None
+                or current is None
+                or (
+                    recovery.project_id,
+                    recovery.target_runtime_id,
+                    recovery.source_runtime_id,
+                    recovery.source_fencing_token,
+                )
+                != (
+                    row.project_id,
+                    row.target_runtime_id,
+                    row.source_runtime_id,
+                    row.source_fencing_token,
+                )
+                or (
+                    current.target_runtime_id,
+                    current.source_runtime_id,
+                    current.source_fencing_token,
+                )
+                != (
+                    recovery.target_runtime_id,
+                    recovery.source_runtime_id,
+                    recovery.source_fencing_token,
+                )
+                or recovery.checkpoint.get("format") != "nebula.project-recovery/v1"
+                or recovery.checkpoint.get("operation_id") != operation_id
+                or current.checkpoint != recovery.checkpoint
+                or recovery.phase not in {"held", "prepared", "verified"}
+                or (
+                    recovery.project_id,
+                    recovery.target_runtime_id,
+                    recovery.target_fencing_token,
+                )
+                != (lease.project_id, lease.runtime_id, lease.fencing_token)
+                or (current.phase, current.admission_held)
+                != (
+                    ("verified", False)
+                    if recovery.phase == "verified"
+                    else ("transferred", True)
+                )
+            ):
+                raise CoordinationConflict(
+                    "The saved recovery operation, target or checkpoint changed"
+                )
+            host = await session.get(DeploymentHostRow, "host")
+            if host is not None and host.shutdown_requested:
+                raise CoordinationConflict(
+                    "Core is holding recovery for coordinated shutdown"
+                )
+            if check_blockers:
+                blockers = await self.coordinator._recovery_blockers(
+                    session, lease.project_id, lease.runtime_id
+                )
+                if blockers:
+                    raise CoordinationConflict("; ".join(blockers[:10]))
+            return (
+                lease,
+                operation_id,
+                recovery.phase,
+                checkpoint_digest(recovery.checkpoint),
+            )
+
+    async def _recovery_status(self, lease):
+        client = await self.host.rpc(lease.runtime_id)
+        try:
+            status = await client.call("execution.status/v1", {}, timeout=5)
+        finally:
+            await client.close()
+        if status.get("runtime_id") != lease.runtime_id:
+            raise RuntimeIpcError("Recovery status belongs to another incarnation")
+        return status
+
+    async def _advance_project_recovery(self, row, *, expected_lease=None):
+        lease, operation_id, phase, digest = await self._recovery_grant(row)
+        if expected_lease is not None and lease != expected_lease:
+            raise CoordinationConflict("The original recovery grant changed")
+        status = await self._recovery_status(lease)
+        if status.get("state") in {"unassigned", "starting"} and phase != "verified":
+            await self._recovery_grant(row, check_blockers=True)
+            await self.attach_execution(
+                lease.project_id,
+                lease.runtime_id,
+                allow_prepared=True,
+                expected_lease=lease,
+            )
+            status = await self._recovery_status(lease)
+        current, current_operation, phase, digest = await self._recovery_grant(
+            row,
+            check_blockers=status.get("state") != "ready",
+        )
+        if (
+            current != lease
+            or current_operation != operation_id
+            or status.get("lease") != asdict(lease)
+            or status.get("recovery_operation_id") != operation_id
+            or status.get("restored_checkpoint_digest") != digest
+            or status.get("state") not in {"prepared", "ready"}
+            or (status.get("state") == "ready" and phase != "verified")
+        ):
+            raise CoordinationConflict(
+                "The target has not prepared this exact recovery checkpoint"
+            )
+        await self.coordinator.verify_recovery(
+            lease,
+            operation_id=operation_id,
+            restored_checkpoint_digest=digest,
+        )
+        if status.get("state") == "prepared":
+            await self.activate_execution(lease)
+        self._activated_handoffs.add(lease.runtime_id)
+        return lease
 
     async def _handoff_loop(self):
         while not self.closed and not self.host.closed:
@@ -515,7 +658,13 @@ class RuntimeSupervisor:
             return spawned
 
     async def attach_execution(
-        self, project_id: str, runtime_id: str, *, timeout=30, allow_prepared=False
+        self,
+        project_id: str,
+        runtime_id: str,
+        *,
+        timeout=30,
+        allow_prepared=False,
+        expected_lease: ProjectLease | None = None,
     ):
         """Attach fresh work, or resume an interrupted assignment response.
 
@@ -548,9 +697,15 @@ class RuntimeSupervisor:
                         else None
                     )
                 if lease is None:
+                    if expected_lease is not None:
+                        raise CoordinationConflict(
+                            "The original recovery grant is no longer owned"
+                        )
                     lease = await self.coordinator.coordination.claim_project(
                         project_id, runtime_id
                     )
+                if expected_lease is not None and lease != expected_lease:
+                    raise CoordinationConflict("The original recovery grant changed")
                 await client.call("execution.attach/v1", asdict(lease), timeout=5)
                 async with asyncio.timeout(timeout):
                     while True:
@@ -601,26 +756,12 @@ class RuntimeSupervisor:
                 operation_id=operation_id,
                 actor_id=actor_id,
             )
-        await self.attach_execution(project_id, target_runtime_id, allow_prepared=True)
-        client = await self.host.rpc(target_runtime_id)
-        try:
-            status = await client.call("execution.status/v1", {}, timeout=5)
-        finally:
-            await client.close()
-        if status.get("state") not in {"prepared", "ready"} or not status.get(
-            "restored_checkpoint_digest"
-        ):
-            raise CoordinationConflict(
-                "Recovery target has not verified its restored state"
-            )
-        await self.coordinator.verify_recovery(
-            lease,
-            operation_id=operation_id,
-            restored_checkpoint_digest=status["restored_checkpoint_digest"],
-        )
-        if status.get("state") == "prepared":
-            await self.activate_execution(lease)
-        return lease
+        async with self._handoff_serial:
+            async with self.coordinator.database.session() as session:
+                row = await session.get(ProjectHandoffRow, project_id)
+            if row is None or row.checkpoint.get("operation_id") != operation_id:
+                raise CoordinationConflict("The original recovery operation changed")
+            return await self._advance_project_recovery(row, expected_lease=lease)
 
     async def activate_execution(self, lease: ProjectLease, *, timeout=30):
         """Start restored controllers only after their durable verification."""
