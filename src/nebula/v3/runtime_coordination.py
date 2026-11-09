@@ -616,6 +616,19 @@ class RuntimeCoordination:
             row.sequence, row.event_type[len(_STREAM_PREFIX) :], row.payload["data"]
         )
 
+    async def stream_head(self, turn_id: str) -> StreamFrame | None:
+        async with self.database.session() as session:
+            row = await session.scalar(
+                select(RunEventRow)
+                .where(
+                    RunEventRow.run_id == turn_id,
+                    RunEventRow.event_type.startswith(_STREAM_PREFIX, autoescape=True),
+                )
+                .order_by(RunEventRow.sequence.desc())
+                .limit(1)
+            )
+            return self._frame(row) if row is not None else None
+
     async def replay_stream(
         self, turn_id: str, *, after_sequence: int = 0, limit: int = MAX_STREAM_BATCH
     ) -> list[StreamFrame]:

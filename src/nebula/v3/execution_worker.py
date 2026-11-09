@@ -37,6 +37,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .execution_kernel import create_execution_kernel
     from .remote_knowledge import RemoteKnowledgeIndex
     from .runtime_platform import default_runtime_platform
+    from .runtime_chat_stream import RuntimeChatJournal
     from .storage import NebulaStore
 
     bootstrap = context.bootstrap
@@ -88,6 +89,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             memory_budget_service=ExecutionMemoryBudget(
                 context.coordinator.coordination, lease
             ),
+            stream_journal=RuntimeChatJournal(context.coordinator.coordination, store),
         )
         async with app.router.lifespan_context(app):
             yield app

@@ -1,24 +1,21 @@
 {
-  "change_digest": "207ae00aeb917a07dc181f1f6f25ebaf60c696d781a13586aa9605be2b293efe",
+  "change_digest": "54c3808b601bfbfccbc6a93327410480597c0dcf87a0f9be3eb7a0d542228de6",
   "reviewed_by": "Codex",
-  "reason": "64 distinct passing cases collected as final CI union. Initial40:38pass2kernel failures; scope repair22:20pass2diagnostic failures; diagnostic repair8:allpass; strengthened receipt/settings2:allpass. Every case in union passed; unaffected cases were not repeated. Exact immutable grants, inherited task authority, separate control delivery, one retry receipt, SQLite/PostgreSQL shared memory accounting, real private retained kernel/API and supervisor replacement. Independent fresh-context validators confirmed factory annotation inference, derived SQL column traversal and unsupported diagnostic feature causes before repairs. Ruff and targeted mypy passed. Evidence-only notes added and digest rebound after validated source.",
-  "exclusions": "No full suite, live provider/service, existing installation, deployment, SSH, benchmark, model download, browser or compute allocator. Actual kernel startup may inspect only the disposable runner metadata. This source integration does not claim final client/turn streaming, safe handoff, desktop or launcher continuity. No visible control changed; final LAN/WebKit and packaged gates remain pending.",
+  "reason": "36 distinct passing cases collected as final CI union. Initial20pass14.19s; cursor/process24:22pass2fixture failures; corrected actual-process2pass20.93s; resume/close14pass29.15s; prestart stop/legacy4pass4.21s. Every final case passed in a focused run; unchanged passing cases not repeated. Actual kernel producer survives API promotion/retirement and reconnect with durable cursor on SQLite/PostgreSQL. Independent causal validators checked fixture delta identity, producer type invariant, old-segment replay/prefix import, close ordering and pre-first-step stop before repairs. Ruff and targeted mypy passed. Evidence-only notes added after source validation.",
+  "exclusions": "No full suite, live provider/harness/service, existing installation, deployment, model download, browser, SSH or compute workload. Inert local model fixtures, disposable SQL, retained source wrappers and private Unix listeners only. No visible controls changed; final production LAN/mobile WebKit and packaged desktop gates remain pending. Accepted-turn detachment and complete project handoff remain separate integration stages.",
   "expected_tests": {
-    "python": 64,
+    "python": 36,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_execution_memory.py",
-    "tests/v3/test_execution_worker_process.py",
-    "tests/v3/test_runtime_host_services.py::test_shared_service_capabilities_require_a_valid_private_peer",
-    "tests/v3/test_runtime_processes.py::test_real_api_role_requires_both_private_channel_and_public_auth",
-    "tests/v3/test_execution_scope.py::test_recovery_query_handles_derived_columns_and_keeps_project_scope",
-    "tests/v3/test_execution_scope.py::test_unscoped_query_forms_fail_closed",
-    "tests/v3/test_memory_recovery.py::test_reconciliation_diagnostics_preserve_charge_and_join_callbacks",
-    "tests/v3/test_memory_recovery.py::test_normal_cleanup_does_not_free_capacity_on_a_replacement_daemon"
+    "tests/v3/test_runtime_chat_stream.py",
+    "tests/v3/test_chat_stream_follow.py::test_a_cursor_from_another_runtime_replays_this_runtime_from_its_first_frame",
+    "tests/v3/test_chat_stream_follow.py::test_a_reconnecting_viewer_receives_the_retained_pause_frame",
+    "tests/v3/test_execution_worker_process.py::test_api_promotion_reconnects_durable_chat_without_restarting_producer",
+    "tests/v3/test_chat_api.py::test_stopping_provider_chat_cancels_the_core_owned_turn",
+    "tests/v3/test_chat_api.py::test_stopping_provider_chat_ends_followers_with_a_cancelled_event"
   ],
   "frontend": [],
   "native": [],

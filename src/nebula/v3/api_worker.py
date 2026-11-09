@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import re
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, StreamingResponse
@@ -23,6 +23,8 @@ from starlette.staticfiles import StaticFiles
 from .authentication import CoreAuthentication
 from .authentication_api import AuthenticationApi
 from .deployments import DeploymentCoordinator
+from .domain import ChatTurn
+from .runtime_chat_stream import RuntimeChatJournal
 from .runtime_coordination import CoordinationConflict
 from .runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, RuntimeDelivery
 from .runtime_http import HttpUpstream, RuntimeHttpProxy
@@ -95,6 +97,7 @@ def create_api_worker(
     proxy = RuntimeHttpProxy(upstream_for)
     work_slots = asyncio.Semaphore(maximum_waiting_views)
     control_slots = asyncio.Semaphore(maximum_control_views)
+    journal = RuntimeChatJournal(delivery.coordination, store)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -267,6 +270,29 @@ def create_api_worker(
         if after < 0:
             raise HTTPException(422, "Response cursor must be nonnegative")
         return await response_view(_actor, command_id, after=after)
+
+    @app.get("/api/v1/chat/turns/{turn_id}/events")
+    async def chat_events(
+        turn_id: str,
+        after: int = Query(default=0, ge=0),
+        epoch: str | None = Query(default=None, min_length=1, max_length=64),
+        _actor=Depends(principal),
+    ):
+        turn = await store.get(ChatTurn, turn_id)
+        if turn.harness_turn_id or not await journal.has_history(turn_id):
+            return _Forward(proxy)
+        await journal.validate_cursor(turn_id, after_sequence=after, epoch=epoch)
+        if work_slots.locked():
+            raise HTTPException(
+                429, "Viewer capacity is busy; reconnect with the same cursor"
+            )
+        await work_slots.acquire()
+        return _ViewerResponse(
+            journal.sse(turn_id, after_sequence=after, epoch=epoch),
+            slots=work_slots,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.api_route(
         "/api/v1/{path:path}",

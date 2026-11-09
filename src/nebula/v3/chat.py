@@ -1065,6 +1065,9 @@ class _ActiveProviderTurn:
     done: bool = False
     error: BaseException | None = None
     admission: ProviderAdmission | None = None
+    journal_closed: bool = False
+    journal_prior_history: bool = False
+    journal_start_sequence: int = 0
 
 
 # Session markers that describe the source conversation's own lifecycle, not
@@ -2677,6 +2680,7 @@ class ChatService:
         tool_suggestion_client: MaybeAsync[[], JevClient | None] | None = None,
         provider_usage_observer: Callable[[str], None] | None = None,
         runtime_capacity: RuntimeCapacity | None = None,
+        stream_journal=None,
     ) -> None:
         self.store = store
         from .runtime_switching import RuntimeSwitchService
@@ -2714,6 +2718,7 @@ class ChatService:
         self._sealed_reasoning: OrderedDict[str, str] = OrderedDict()
         self._sealed_reasoning_lock = threading.Lock()
         self.runtime_capacity = runtime_capacity
+        self.stream_journal = stream_journal
         self.provider_scheduler = ProviderScheduler(
             store, worker_id=self.worker_id, runtime_capacity=runtime_capacity
         )
@@ -4121,8 +4126,15 @@ class ChatService:
         (await self.provider_scheduler.enqueue(turn))
         if existing is not None and existing.cleanup_task is not None:
             existing.cleanup_task.cancel()
-        runtime = _ActiveProviderTurn(
-            events=[
+        runtime = _ActiveProviderTurn()
+        if self.stream_journal is not None:
+            runtime.journal_prior_history = await self.stream_journal.has_history(
+                turn.id
+            )
+        initial_frames = await self._publish_provider_events(
+            turn.id,
+            runtime,
+            [
                 (
                     "queued",
                     {
@@ -4136,8 +4148,10 @@ class ChatService:
                         "detail": turn.admission_reason or "Waiting for Core capacity",
                     },
                 )
-            ]
+            ],
         )
+        if initial_frames:
+            runtime.journal_start_sequence = initial_frames[0].sequence - 1
         self._active_provider_turns[turn.id] = runtime
         runtime.task = create_diagnostic_task(
             self._run_provider_turn(
@@ -4190,8 +4204,10 @@ class ChatService:
                     continue
                 last_position = position
                 last_reason = detail
-                async with runtime.condition:
-                    runtime.events.append(
+                await self._publish_provider_events(
+                    prepared.turn.id,
+                    runtime,
+                    [
                         (
                             "queued",
                             {
@@ -4205,14 +4221,16 @@ class ChatService:
                                 "detail": detail,
                             },
                         )
-                    )
-                    runtime.condition.notify_all()
+                    ],
+                )
             admission = await admission_task
             runtime.admission = admission
             prepared.turn = await self.store.get(ChatTurn, prepared.turn.id)
             await finish_cleanup(self._claim_execution(prepared))
-            async with runtime.condition:
-                runtime.events.append(
+            await self._publish_provider_events(
+                prepared.turn.id,
+                runtime,
+                [
                     (
                         "admitted",
                         {
@@ -4224,8 +4242,8 @@ class ChatService:
                             "capacity_lane": prepared.turn.capacity_lane,
                         },
                     )
-                )
-                runtime.condition.notify_all()
+                ],
+            )
             producing = True
             await self._produce_provider_turn(prepared, runtime)
         except asyncio.CancelledError:
@@ -4281,6 +4299,8 @@ class ChatService:
                 finally:
                     if recovery_slot:
                         self._automatic_recovery_slots.release()
+                    if prepared.turn is not None:
+                        await self._close_provider_journal(prepared.turn.id, runtime)
                     if not runtime.done:
                         async with runtime.condition:
                             runtime.done = True
@@ -4402,8 +4422,24 @@ class ChatService:
         return turn_id in self._active_provider_turns
 
     async def follow_provider_turn(
-        self, turn_id: str, *, after_sequence: int = 0, epoch: str | None = None
+        self,
+        turn_id: str,
+        *,
+        after_sequence: int | None = None,
+        epoch: str | None = None,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        if self.stream_journal is not None:
+            current = self._active_provider_turns.get(turn_id)
+            cursor = (
+                current.journal_start_sequence
+                if after_sequence is None and current is not None
+                else after_sequence or 0
+            )
+            async for frame in self.stream_journal.follow(
+                turn_id, after_sequence=cursor, epoch=epoch
+            ):
+                yield frame
+            return
         runtime = self._active_provider_turns.get(turn_id)
         if runtime is None:
             raise ChatHistoryConflict("provider chat turn is not active")
@@ -4415,7 +4451,7 @@ class ChatService:
             await asyncio.gather(cleanup_task, return_exceptions=True)
         # A cursor from another runtime of this turn counts that runtime's
         # frames, not these: replay this runtime from its first frame.
-        index = after_sequence if epoch is None or epoch == runtime.epoch else 0
+        index = (after_sequence or 0) if epoch is None or epoch == runtime.epoch else 0
         try:
             while True:
                 async with runtime.condition:
@@ -4477,11 +4513,33 @@ class ChatService:
             # A task cancelled before its first step never ran the cleanup
             # that marks its work done; without this the stopped turn would
             # read as active forever and refuse to resume or restart.
+            if self.stream_journal is None:
+                async with runtime.condition:
+                    runtime.done = True
+                    runtime.condition.notify_all()
+        (await self.provider_scheduler.cancel(turn_id))
+        cancelled = await self.cancel_turn(turn_id)
+        if runtime is not None and self.stream_journal is not None:
+            if not runtime.journal_closed:
+                if cancelled.status == ChatTurnStatus.CANCELLED:
+                    await self._publish_provider_events(
+                        turn_id,
+                        runtime,
+                        [
+                            (
+                                "cancelled",
+                                {
+                                    "type": "cancelled",
+                                    "turn_id": turn_id,
+                                    "detail": "response stopped",
+                                },
+                            )
+                        ],
+                    )
+                await self._close_provider_journal(turn_id, runtime)
             async with runtime.condition:
                 runtime.done = True
                 runtime.condition.notify_all()
-        (await self.provider_scheduler.cancel(turn_id))
-        cancelled = await self.cancel_turn(turn_id)
         await self._stop_callback_producers(cancelled)
         await self.subagents.stop_for_parent_turn(turn_id, reason=PARENT_STOPPED_NOTE)
         # Reports that finished while the turn was parked (waiting for
@@ -4984,9 +5042,26 @@ class ChatService:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._active_provider_turns.clear()
 
+    async def _publish_provider_events(self, turn_id, runtime, events):
+        if self.stream_journal is not None:
+            # Durable followers read SQL; no second unbounded frame list.
+            return await self.stream_journal.publish(turn_id, events)
+        async with runtime.condition:
+            runtime.events.extend(events)
+            runtime.condition.notify_all()
+
+    async def _close_provider_journal(self, turn_id, runtime):
+        if self.stream_journal is not None and not runtime.journal_closed:
+            await self.stream_journal.close(
+                turn_id, runtime.epoch, failed=runtime.error is not None
+            )
+            runtime.journal_closed = True
+
     async def _produce_provider_turn(
         self, prepared: PreparedChat, runtime: _ActiveProviderTurn
     ) -> None:
+        assert prepared.turn is not None
+        producer_turn_id = prepared.turn.id
         stopped = False
         # Turn-ending hooks run after the handlers below, not inside them: a
         # hook failing inside ``except CancelledError`` would carry the stop
@@ -4998,44 +5073,47 @@ class ChatService:
         try:
             try:
                 replay_saved = bool(prepared.inputs_persisted and prepared.turn)
+                if replay_saved and self.stream_journal is not None:
+                    replay_saved = not runtime.journal_prior_history
                 async for event in self.stream(prepared):
-                    async with runtime.condition:
-                        runtime.events.append(event)
-                        if replay_saved and event[0] == "started":
-                            # A new Core process has no prior in-memory stream.
-                            # Recreate the saved prefix once before new deltas.
-                            saved_turn = prepared.turn
-                            assert saved_turn is not None
-                            common = {
-                                "turn_id": saved_turn.id,
-                                "provider_id": prepared.provider_profile.id,
-                                "model": prepared.resolved_model,
-                            }
-                            saved_reasoning = await self.turn_reasoning(saved_turn)
-                            if saved_reasoning:
-                                runtime.events.append(
-                                    (
-                                        "reasoning_delta",
-                                        {
-                                            "type": "reasoning_delta",
-                                            **common,
-                                            "delta": saved_reasoning,
-                                        },
-                                    )
+                    events = [event]
+                    if replay_saved and event[0] == "started":
+                        # A new Core process has no prior in-memory stream.
+                        # Recreate the saved prefix once before new deltas.
+                        saved_turn = prepared.turn
+                        assert saved_turn is not None
+                        common = {
+                            "turn_id": saved_turn.id,
+                            "provider_id": prepared.provider_profile.id,
+                            "model": prepared.resolved_model,
+                        }
+                        saved_reasoning = await self.turn_reasoning(saved_turn)
+                        if saved_reasoning:
+                            events.append(
+                                (
+                                    "reasoning_delta",
+                                    {
+                                        "type": "reasoning_delta",
+                                        **common,
+                                        "delta": saved_reasoning,
+                                    },
                                 )
-                            if saved_turn.content:
-                                runtime.events.append(
-                                    (
-                                        "delta",
-                                        {
-                                            "type": "delta",
-                                            **common,
-                                            "delta": saved_turn.content,
-                                        },
-                                    )
+                            )
+                        if saved_turn.content:
+                            events.append(
+                                (
+                                    "delta",
+                                    {
+                                        "type": "delta",
+                                        **common,
+                                        "delta": saved_turn.content,
+                                    },
                                 )
-                            replay_saved = False
-                        runtime.condition.notify_all()
+                            )
+                        replay_saved = False
+                    await self._publish_provider_events(
+                        producer_turn_id, runtime, events
+                    )
             except asyncio.CancelledError as exc:
                 record_caught_exception(
                     "chat",
@@ -5093,9 +5171,7 @@ class ChatService:
                 # forward, not as a CancelledError re-raised inside a task
                 # nobody cancelled; runtime.error stays reserved for real
                 # failures.
-                async with runtime.condition:
-                    runtime.events.append(frame)
-                    runtime.condition.notify_all()
+                await self._publish_provider_events(producer_turn_id, runtime, [frame])
         finally:
             turn = prepared.turn
             if runtime.admission is not None and turn is not None:
@@ -5104,9 +5180,10 @@ class ChatService:
                 # child's question closed while its parent was idle) and
                 # continue its goal; neither may queue behind this finished run.
                 await runtime.admission.release(turn.id)
-            async with runtime.condition:
-                runtime.done = True
-                runtime.condition.notify_all()
+            if self.stream_journal is None:
+                async with runtime.condition:
+                    runtime.done = True
+                    runtime.condition.notify_all()
             if turn is not None and (stopped or runtime.error is not None):
                 latest = await self.store.get(ChatTurn, turn.id)
                 if (
@@ -5161,6 +5238,11 @@ class ChatService:
                     )
                 )
             if turn is not None:
+                await self._close_provider_journal(turn.id, runtime)
+                if self.stream_journal is not None:
+                    async with runtime.condition:
+                        runtime.done = True
+                        runtime.condition.notify_all()
                 try:
                     await self.subagents.turn_settled(turn.id)
                 except Exception as exc:
