@@ -366,6 +366,9 @@ class DeploymentHostRow(Base):
     target_version: Mapped[str | None] = mapped_column(String(200))
     rollback_version: Mapped[str | None] = mapped_column(String(200))
     detail: Mapped[str] = mapped_column(String(4000), nullable=False)
+    shutdown_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
 
 class RuntimeCoreIdentityRow(Base):
