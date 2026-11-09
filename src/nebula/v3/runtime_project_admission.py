@@ -5,6 +5,7 @@ from sqlalchemy import select
 from .database import EntityRow, ProjectHandoffRow
 
 HANDOFF_FEATURE = "project.handoff/v1"
+PARTICIPANT_FEATURE = "project.participants/v1"
 HANDOFF_WAIT = "Waiting for the project update; this response remains queued"
 
 

@@ -244,28 +244,63 @@ class ProjectHandoffAgent:
                 return
             held = handoff.admission_held
         if held:
+            prepare_callbacks = getattr(self.chat, "prepare_handoff_callbacks", None)
+            if prepare_callbacks is not None:
+                await prepare_callbacks()
             await self.chat.park_queued_for_handoff()
         else:
             await self.chat.restore_locally_parked_turns()
         found = self.handles()
+        callback_blockers = getattr(self.chat, "handoff_callback_blockers", None)
+        if callback_blockers is not None:
+            found.update(await callback_blockers())
         async with self.coordinator.coordination.fenced(self.lease) as session:
             rows = await session.execute(
                 select(
                     EntityRow.id,
                     EntityRow.kind,
                     EntityRow.payload["status"].as_string(),
+                    EntityRow.payload["execution_claim_id"].as_string(),
                 )
                 .where(
                     EntityRow.engagement_id == self.lease.project_id,
-                    EntityRow.kind.in_(tuple(_LIVE_SQL)),
+                    EntityRow.kind.in_((*_LIVE_SQL, "chat_turns", "chat_goals")),
                 )
                 .limit(MAX_CHECKPOINT_ROWS + 1)
             )
-            for identity, kind, state in rows:
-                if state in _LIVE_SQL[kind]:
+            claims = rows.all()
+            is_active = getattr(
+                self.chat, "has_active_provider_turn", lambda _identity: False
+            )
+            active_claims = {
+                claim
+                for identity, kind, _state, claim in claims
+                if kind == "chat_turns" and claim and is_active(identity)
+            }
+            for identity, kind, state, execution_claim in claims:
+                if execution_claim and execution_claim not in active_claims:
+                    found["claim/" + identity] = (
+                        f"{kind} {identity} still owns an execution claim; finish its admitted work before transfer"
+                    )
+                if state in _LIVE_SQL.get(kind, ()):
                     found["sql/" + identity] = (
                         f"{kind} {identity} remains {state}; its restoration is unavailable"
                     )
+            deliveries = await session.scalars(
+                select(EntityRow.id)
+                .where(
+                    EntityRow.engagement_id == self.lease.project_id,
+                    EntityRow.kind == "approvals",
+                    EntityRow.payload["continuation"]["adapter_status"]
+                    .as_string()
+                    .in_(("pending", "unknown")),
+                )
+                .limit(101)
+            )
+            for identity in deliveries:
+                found["approval/" + identity] = (
+                    f"Approval {identity} has unconfirmed adapter delivery; retain its owner without replay"
+                )
             jobs = list(
                 await session.scalars(
                     select(MemoryJobRow.id)

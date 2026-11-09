@@ -39,7 +39,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_platform import default_runtime_platform
     from .runtime_chat_stream import RuntimeChatJournal
     from .runtime_chat_acceptance import CHAT_ACCEPT_FEATURE
-    from .runtime_project_admission import HANDOFF_FEATURE
+    from .runtime_project_admission import HANDOFF_FEATURE, PARTICIPANT_FEATURE
     from .runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
     from .runtime_memory_control import RemoteMemorySettings
     from .storage import NebulaStore
@@ -63,6 +63,15 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     store = NebulaStore(database)
     knowledge = None
     try:
+        if (
+            PARTICIPANT_FEATURE not in context.manifest.features
+            and await context.coordinator.project_requires_participants(
+                lease.project_id
+            )
+        ):
+            raise RuntimeIpcError(
+                "This release cannot restore the project's durable participants"
+            )
         services = await client.call("host.services/v1", {})
         if (
             not isinstance(services, dict)
@@ -295,6 +304,11 @@ class ProjectExecution:
                         await activation_allowed(self.context.coordinator, lease)
                         self.activation_started = True
                         await deferred()
+                        state = getattr(app, "state", None)
+                        work = getattr(state, "control_assistant_work", None)
+                        chat = getattr(work, "chat", None)
+                        if chat is not None:
+                            chat.restoring_handoff = False
                     self.state = "ready"
                     delivery = RuntimeDelivery(
                         self.context.coordinator.coordination,

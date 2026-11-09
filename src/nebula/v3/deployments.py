@@ -718,6 +718,44 @@ class DeploymentCoordinator:
             )
         return turns
 
+    @staticmethod
+    async def _has_participants(session, project_id):
+        return (
+            await session.scalar(
+                select(EntityRow.id)
+                .where(
+                    EntityRow.engagement_id == project_id,
+                    EntityRow.kind.in_(
+                        ("approvals", "chat_schedules", "chat_goals", "chat_subagents")
+                    ),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    async def project_requires_participants(self, project_id: str) -> bool:
+        async with self.database.session() as session:
+            return await self._has_participants(session, project_id)
+
+    async def _participants_supported(self, session, project_id, *runtime_ids):
+        if not await self._has_participants(session, project_id):
+            return True
+        for runtime_id in runtime_ids:
+            process = await session.get(RuntimeProcessRow, runtime_id)
+            release = (
+                await session.get(RuntimeReleaseRow, process.version)
+                if process
+                else None
+            )
+            if (
+                release is None
+                or "project.participants/v1"
+                not in ReleaseManifest.model_validate(release.manifest).features
+            ):
+                return False
+        return True
+
     async def request_handoff(self, project_id: str, target_runtime_id: str) -> None:
         async with self.coordination._write() as session:
             await self._host(session)
@@ -736,6 +774,12 @@ class DeploymentCoordinator:
                 )
             if target is None or target.role != "execution" or target.state != "ready":
                 raise CoordinationConflict("target execution worker is not ready")
+            if not await self._participants_supported(
+                session, project_id, owner.runtime_id, target_runtime_id
+            ):
+                raise CoordinationConflict(
+                    "This project needs participant restoration support on both execution versions"
+                )
             await self.coordination._live_execution(session, target_runtime_id, now)
             existing = await session.get(ProjectHandoffRow, project_id)
             if owner.runtime_id == target_runtime_id:
@@ -830,6 +874,13 @@ class DeploymentCoordinator:
             ).restorable_resources
             observed = list(blockers)
             pinned = False
+            if not await self._participants_supported(
+                session, lease.project_id, lease.runtime_id, row.target_runtime_id
+            ):
+                observed.append(
+                    "Both execution versions must support durable participant restoration"
+                )
+                pinned = True
             for resource in await session.scalars(
                 select(RuntimeResourceRow).where(
                     RuntimeResourceRow.project_id == lease.project_id,
@@ -941,6 +992,15 @@ class DeploymentCoordinator:
             await self.coordination._live_execution(
                 session, handoff.target_runtime_id, now
             )
+            if not await self._participants_supported(
+                session,
+                project_id,
+                handoff.source_runtime_id,
+                handoff.target_runtime_id,
+            ):
+                raise CoordinationConflict(
+                    "The target cannot restore this project's durable participants"
+                )
             target_release = await session.get(
                 RuntimeReleaseRow, handoff.target_version
             )
@@ -1076,6 +1136,30 @@ class DeploymentCoordinator:
 
     async def _recovery_blockers(self, session, project_id, target_runtime_id):
         reasons = []
+        for identity in await session.scalars(
+            select(EntityRow.id)
+            .where(
+                EntityRow.engagement_id == project_id,
+                EntityRow.kind == "approvals",
+                EntityRow.payload["continuation"]["adapter_status"]
+                .as_string()
+                .in_(("pending", "unknown")),
+            )
+            .limit(101)
+        ):
+            reasons.append(f"Approval {identity} has unconfirmed adapter delivery")
+        for identity in await session.scalars(
+            select(EntityRow.id)
+            .where(
+                EntityRow.engagement_id == project_id,
+                EntityRow.kind.in_(("chat_turns", "chat_goals")),
+                EntityRow.payload["execution_claim_id"].as_string().is_not(None),
+            )
+            .limit(101)
+        ):
+            reasons.append(
+                f"Conversation work {identity} retains an execution claim requiring reconciliation"
+            )
         for row in await session.scalars(
             select(RuntimeCommandRow).where(
                 RuntimeCommandRow.project_id == project_id,
@@ -1231,6 +1315,12 @@ class DeploymentCoordinator:
             if target is None:
                 raise CoordinationConflict(
                     "recovery requires a retained execution worker"
+                )
+            if not await self._participants_supported(
+                session, project_id, target_runtime_id
+            ):
+                raise CoordinationConflict(
+                    "The recovery target cannot restore this project's durable participants"
                 )
             release = await session.get(RuntimeReleaseRow, target.version)
             if (
@@ -1727,7 +1817,19 @@ class DeploymentCoordinator:
                 if host.api_runtime_id is not None
                 else None
             )
-            degraded = any(row.state == "unreachable" for row in processes.values())
+            now = await self.coordination._clock_ms(session)
+            live_runtimes = set(
+                await session.scalars(
+                    select(RuntimeInstanceRow.id).where(
+                        RuntimeInstanceRow.lease_expires_at_ms > now
+                    )
+                )
+            )
+            degraded = any(
+                row.state == "unreachable"
+                or (row.state in _RESIDENT and row.runtime_id not in live_runtimes)
+                for row in processes.values()
+            )
             return DeploymentStatus(
                 revision=host.revision,
                 api_version=api.version if api else None,

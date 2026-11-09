@@ -5121,6 +5121,11 @@ class SubagentService:
 
         turn = await self._child_turn(record)
         if getattr(self.chat, "restoring_handoff", False) and turn is not None:
+            if turn.status in {
+                ChatTurnStatus.WAITING_APPROVAL,
+                ChatTurnStatus.WAITING_CALLBACK,
+            }:
+                return
             from .database import ProviderTurnQueueRow
 
             async with self.store.database.session() as session:

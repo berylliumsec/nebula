@@ -2815,6 +2815,10 @@ class ChatService:
     async def startup(self) -> None:
         """Pause turns orphaned by restart without replaying uncertain effects."""
 
+        if self.restoring_handoff:
+            await self.restore_handoff_participants()
+            return
+
         active_statuses = {
             ChatTurnStatus.ROUTING,
             ChatTurnStatus.FINALIZING,
@@ -2832,9 +2836,13 @@ class ChatService:
         ]
         if self.restoring_handoff:
             async with self.store.database.session() as session:
-                queued_ids = set(await session.scalars(select(
-                    ProviderTurnQueueRow.turn_id
-                ).where(ProviderTurnQueueRow.state == "queued")))
+                queued_ids = set(
+                    await session.scalars(
+                        select(ProviderTurnQueueRow.turn_id).where(
+                            ProviderTurnQueueRow.state == "queued"
+                        )
+                    )
+                )
             # A positively verified handoff checkpoint contains no executing
             # producer. These are accepted resume intents, not orphaned effects.
             turns = [turn for turn in turns if turn.id not in queued_ids]
@@ -2901,6 +2909,47 @@ class ChatService:
         await self._settle_ended_admissions()
         (await self._restore_queued_turns())
         (await self.reconcile_waiting_callbacks())
+
+    async def restore_handoff_participants(self) -> None:
+        """Restore a verified safe boundary without applying crash-pause policy.
+
+        The execution worker enters this path only after SQL verification.
+        Source inventory proved that no turn or goal still holds an execution
+        claim. Pending approvals, callback receipts, goal pause state and child
+        links remain the authoritative records; nothing creates a new intent
+        in place of an already accepted turn.
+        """
+        await self._settle_ended_admissions()
+        await self._restore_queued_turns()
+        await self.reconcile_waiting_callbacks()
+        await self.subagents.reconcile_after_restart(preserve_graceful=True)
+        await self.reconcile_idle_running_goals()
+        await self.fire_due_schedules()
+
+    async def prepare_handoff_callbacks(self) -> None:
+        """Commit received callback results before taking a transfer boundary.
+
+        A terminal process alone is not an effect receipt. Only callbacks whose
+        durable result was received can materialize and queue their existing
+        turn here; unknown producers continue to pin the source runtime.
+        """
+        confirmed = [
+            candidate
+            for candidate in await self._callback_wait_candidates()
+            if candidate[2] is not None
+            and candidate[2].metadata.get("results_received") is True
+        ]
+        if confirmed:
+            await self.reconcile_waiting_callbacks(confirmed)
+
+    async def handoff_callback_blockers(self) -> dict[str, str]:
+        return {
+            "callback/" + turn.id: (
+                f"Callback for response {turn.id} has no confirmed result; retain its owner for reconciliation"
+            )
+            for turn, _entry, producer in await self._callback_wait_candidates()
+            if producer is None or producer.metadata.get("results_received") is not True
+        }
 
     async def _pause_goal_orphaned_by_restart(self, goal: ChatGoal) -> None:
         """Pause a running goal whose worker or turn the previous Core held."""
@@ -3005,8 +3054,13 @@ class ChatService:
                     ChatTurnStatus.WAITING_CALLBACK,
                 }
                 if self.restoring_handoff:
-                    restorable_states.update({ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING})
-                if turn.status not in restorable_states or self.has_active_provider_turn(turn_id):
+                    restorable_states.update(
+                        {ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING}
+                    )
+                if (
+                    turn.status not in restorable_states
+                    or self.has_active_provider_turn(turn_id)
+                ):
                     continue
                 (await self.start_provider_turn((await self.prepare_resume(turn_id))))
             except Exception as exc:
@@ -5123,7 +5177,9 @@ class ChatService:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._active_provider_turns.clear()
 
-    async def _publish_provider_events(self, turn_id, runtime, events, *, command_id=None):
+    async def _publish_provider_events(
+        self, turn_id, runtime, events, *, command_id=None
+    ):
         if self.stream_journal is not None:
             # Durable followers read SQL; no second unbounded frame list.
             return await self.stream_journal.publish(

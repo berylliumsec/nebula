@@ -620,6 +620,40 @@ class RuntimeProcessHost:
             stopped.append(runtime_id)
         return {"state": "stopped", "retired_runtime_ids": stopped}
 
+    async def reconcile_processes(self) -> dict:
+        """Release only unspawned or positively absent, unowned incarnations."""
+        async with self._launch:
+            observed = await self.rediscover()
+            retired, retained = [], []
+            for worker in observed:
+                try:
+                    if worker.process_state == "unspawned":
+                        await self.coordinator.abort_start(worker.runtime_id)
+                        retired.append(worker.runtime_id)
+                    elif worker.process_state == "gone" and worker.identity is not None:
+                        identity = await self.coordinator.begin_retirement(
+                            worker.runtime_id
+                        )
+                        await self.coordinator.retired(identity)
+                        retired.append(worker.runtime_id)
+                    else:
+                        retained.append(
+                            {
+                                "runtime_id": worker.runtime_id,
+                                "state": worker.process_state,
+                                "detail": worker.detail,
+                            }
+                        )
+                except CoordinationConflict as error:
+                    retained.append(
+                        {
+                            "runtime_id": worker.runtime_id,
+                            "state": worker.process_state,
+                            "detail": str(error)[:4000],
+                        }
+                    )
+            return {"retired_runtime_ids": retired, "retained": retained}
+
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:
             raise RuntimeError("rediscovery requires the active supervisor host lock")

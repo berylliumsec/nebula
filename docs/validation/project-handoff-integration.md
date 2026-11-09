@@ -101,3 +101,39 @@ approval/schedule/callback/goal journeys, orchestration crashes in every phase,
 expired-owner recovery, or packaged cross-version compatibility. Those cases,
 client reconnect/drafts, launchers/deployer and the required production LAN,
 mobile WebKit and packaged desktop continuity gates remain outstanding.
+
+## Durable participant restoration
+
+The optional `project.participants/v1` execution capability covers saved approval
+and callback waits, schedules, goals and child rounds. A project containing those
+records requires support on both execution versions before transfer; compatible
+API forwarding does not require that execution capability. Missing callback
+results, unconfirmed approval delivery and unresolved execution claims retain
+their current owner with explicit blockers.
+
+The target prepares controllers without entering the application lifespan.
+`execution.activate/v1` starts it only after durable checkpoint verification.
+The handoff startup path restores existing accepted turns, materializes received
+callback results once, preserves approval receipts and prior goal pauses, keeps
+waiting child links/rounds, and fires due schedules using the existing occurrence
+ledger. Unsupported native/vendor handles remain pinned.
+
+The focused participant fixtures exercise real ChatService and SQL state on
+SQLite and PostgreSQL with inert providers. They verify one scheduled occurrence,
+pending/acknowledged approval receipts, paused/running goals, a disabled schedule,
+waiting children, same-turn callback continuation, unknown-outcome pins, and
+explicit legacy execution rejection while a compatible API still promotes.
+The first fixture run revealed a reused global entity ID and an assertion before
+the separate schedule-outcome task committed. Independent causal review confirmed
+both fixture faults; unique IDs and authoritative outcome polling repaired them.
+The 18 distinct participant cases pass: 16 in the capability run and the two
+API compatibility cases after the same validated ID-collision fixture repair.
+Raw results are in `/tmp/nebula-handoff-participants-feature.txt`,
+`/tmp/nebula-handoff-participants-rerun.txt`, and
+`/tmp/nebula-participant-api-feature.txt`.
+
+Eight additional inert-process reconstruction cases passed on both databases.
+They retire only never-spawned or positively absent unowned workers, preserve
+owned dead workers, and retain a live worker whose control socket disappeared.
+Results: `/tmp/nebula-process-reconciliation.txt`. These fixtures do not replace
+the packaged, production LAN/mobile, or physical vendor-restoration rollout gates.
