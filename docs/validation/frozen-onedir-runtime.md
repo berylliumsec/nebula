@@ -82,6 +82,14 @@ These are genuine distinct code artifacts; the earlier failed artifacts remain
 diagnostic evidence only. Settings UI behavior across an older retained host is
 outside this Core-only receipt.
 
+The candidate's own cold-host path was checked separately because promotion keeps
+the original supervisor alive. The same one-case selection passed once in 39.82
+seconds with the candidate connector and bundle, default SQLite and normal auth.
+It covered the newer supervisor's startup, private API/execution bindings,
+project persistence, reconnect and complete shutdown; the profile was removed.
+The [candidate cold-host receipt](frozen-core-candidate-cold-receipt.json) matches
+the candidate artifact hashes in the promotion receipt.
+
 The frozen driver records registered worker PID/birth identities and verifies
 that they are gone after normal explicit shutdown. A native installed GUI, its
 viewer close/update flow, and the required browser acceptance remain unverified;
