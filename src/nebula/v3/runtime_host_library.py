@@ -13,7 +13,6 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, Response
 from pydantic import Field
-from starlette.background import BackgroundTask
 from starlette.responses import FileResponse, StreamingResponse
 
 from .artifacts import ArtifactStore, ArtifactStoreError
@@ -87,6 +86,31 @@ class _LibraryIndex:
         ).result()
 
 
+class _ArtifactStream(StreamingResponse):
+    def __init__(self, library, source, headers):
+        self.library, self.source = library, source
+
+        def content():
+            while chunk := source.read(256 * 1024):
+                yield chunk
+
+        super().__init__(content(), headers=headers)
+        library._downloads.add(self)
+
+    async def close(self):
+        async def release():
+            await asyncio.to_thread(self.source.close)
+            self.library._downloads.discard(self)
+
+        await finish_cleanup(release())
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self.close()
+
+
 class HostLibrary:
     def __init__(self, settings):
         self.settings = settings
@@ -94,6 +118,22 @@ class HostLibrary:
         self.coordination = settings.host.coordinator.coordination
         self.artifacts = ArtifactStore(settings.host.data_root / "artifacts")
         self._without_index = asyncio.Lock()
+        self._downloads: set[_ArtifactStream] = set()
+        self.closed = False
+
+    async def start(self):
+        self.ensure_active()
+
+    async def close(self):
+        self.closed = True
+        # HostSettings joins accepted index publications before detaching us.
+        for response in tuple(self._downloads):
+            await response.close()
+
+    def ensure_active(self):
+        host = self.settings.host
+        if self.closed or host.closed or host.lock.descriptor is None:
+            raise HTTPException(503, "Host Library is reconnecting")
 
     @property
     def knowledge(self):
@@ -229,6 +269,7 @@ class HostLibrary:
 
     async def artifact_content(self, artifact_id):
         await self.settings._authorized()
+        self.ensure_active()
         artifact = await self._artifact(artifact_id)
 
         def verified_file():
@@ -286,31 +327,26 @@ class HostLibrary:
             raise
         path, source, details = verified
 
-        def content():
-            try:
-                while chunk := source.read(256 * 1024):
-                    yield chunk
-            finally:
-                source.close()
-
-        headers = FileResponse(
-            path,
-            media_type=artifact.media_type,
-            filename=artifact.filename,
-            stat_result=details,
-            headers={
-                "Cache-Control": "private, no-store",
-                "Content-Security-Policy": "sandbox; default-src 'none'",
-                "X-Content-Type-Options": "nosniff",
-                "X-Nebula-Artifact-SHA256": artifact.sha256,
-                "X-Nebula-Artifact-Bytes": str(artifact.size),
-                "X-Nebula-Artifact-Truncated": "false",
-            },
-        ).headers
-        del headers["accept-ranges"]
-        return StreamingResponse(
-            content(), headers=headers, background=BackgroundTask(source.close)
-        )
+        try:
+            headers = FileResponse(
+                path,
+                media_type=artifact.media_type,
+                filename=artifact.filename,
+                stat_result=details,
+                headers={
+                    "Cache-Control": "private, no-store",
+                    "Content-Security-Policy": "sandbox; default-src 'none'",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Nebula-Artifact-SHA256": artifact.sha256,
+                    "X-Nebula-Artifact-Bytes": str(artifact.size),
+                    "X-Nebula-Artifact-Truncated": "false",
+                },
+            ).headers
+            del headers["accept-ranges"]
+            return _ArtifactStream(self, source, headers)
+        except BaseException:  # diagnostic-expected: a response-construction failure must release its verified descriptor.
+            source.close()
+            raise
 
     async def delete(self, item_id, *, expected_revision=None):
         service = self.knowledge
@@ -343,7 +379,12 @@ class HostLibrary:
                     )
 
     def mount(self, app, authorized):
-        auth = [Depends(authorized)]
+        async def active_authority():
+            actor = await authorized()
+            self.ensure_active()
+            return actor
+
+        auth = [Depends(active_authority)]
 
         @app.get(
             "/api/v1/knowledge/index-status",
