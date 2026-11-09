@@ -191,7 +191,18 @@ class Shell:
             candidate = self._api or AsyncApi(candidate_settings)
         try:
             health = await candidate.request("GET", "health")
-            if health.get("terminal_client_protocol") != 1:
+            protocol = health.get("terminal_client_protocol")
+            supervisor = (
+                "terminal_client_protocol" not in health
+                and health.get("api_version") == "v1"
+                and type(health.get("api_ready")) is bool
+            )
+            if supervisor and not health["api_ready"]:
+                raise ClientError(
+                    "Core is reachable, but its API is not ready. "
+                    "Wait for recovery, then reconnect."
+                )
+            if protocol != 1 and not supervisor:
                 raise ClientError(
                     "This Core does not support Assistant shell protocol 1. Upgrade Core or use the legacy 'nebula-chat chat' Butler command."
                 )

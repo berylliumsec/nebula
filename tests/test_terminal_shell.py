@@ -1301,3 +1301,53 @@ def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
         await shell.api.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "health,accepted",
+    [
+        ({"terminal_client_protocol": 1}, True),
+        ({"api_version": "v1", "api_ready": True}, True),
+        ({"api_version": "v1", "api_ready": False}, False),
+        (
+            {"api_version": "v1", "api_ready": True, "terminal_client_protocol": 2},
+            False,
+        ),
+        ({"api_version": "v1"}, False),
+        (
+            {"api_version": "v1", "api_ready": True, "terminal_client_protocol": None},
+            False,
+        ),
+        ({"api_version": "v1", "api_ready": "true"}, False),
+    ],
+)
+def test_connect_accepts_ready_supervisor_and_legacy_health(
+    tmp_path, monkeypatch, health, accepted
+):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return response(health)
+
+    async def run():
+        shell = make_shell(tmp_path, handler)
+        api = shell.api
+        monkeypatch.setattr("nebula.terminal.shell.AsyncApi", lambda settings: api)
+        if accepted:
+            await shell.connect(CORE)
+            assert shell.view is None
+        else:
+            prior = shell.view
+            with pytest.raises(
+                ClientError,
+                match="API is not ready"
+                if health.get("api_ready") is False
+                else "protocol 1",
+            ):
+                await shell.connect(CORE)
+            assert shell.view is prior
+        assert calls == ["/api/v1/health"]
+        await shell.api.close()
+
+    asyncio.run(run())
