@@ -458,7 +458,14 @@ test("native standing instructions survive lossy compaction, reconnect and API r
     expect(createHash("sha256").update(value.system_head).digest("hex")).toBe(value.system_head_sha256);
     expect(createHash("sha256").update(value.standing_snapshot.text).digest("hex")).toBe(value.standing_snapshot.sha256);
     expect(value.system_head.split(value.standing_snapshot.text)).toHaveLength(2);
-    expect(value.channel_receipt.sha256).toBe(value.standing_snapshot.sha256);
+    const opened = value.native.requests.filter((item: Record<string, any>) => item.managed
+      && item.method === "session/new" && item.native_session_id === value.active_native_session_id);
+    expect(opened).toHaveLength(1);
+    const channel = opened[0].params._meta.rules;
+    expect(typeof channel).toBe("string");
+    expect(channel.split(value.standing_snapshot.text)).toHaveLength(2);
+    expect(value.system_head.split(channel)).toHaveLength(2);
+    expect(createHash("sha256").update(channel).digest("hex")).toBe(value.channel_receipt.sha256);
     expect(value.channel_receipt.external_session_id).toBe(value.active_native_session_id);
   };
   await pair(page, request, fixture);
@@ -469,14 +476,25 @@ test("native standing instructions survive lossy compaction, reconnect and API r
   let sent = 0;
   let submissions = 0;
   page.on("request", value => {if (value.method() === "POST" && value.url().includes("/chat/completions")) submissions++;});
+  const assistantReplies = async () => {
+    const messages = await read(`/api/v1/chat/sessions/${fixture.session_id}/messages?include_replaced=true`) as {id: string; role: string; content: string}[];
+    return messages.filter(item => item.role === "assistant");
+  };
   const send = async (text: string, answer: string) => {
-    const previous = await page.locator(".chat-message.assistant").count();
+    const previous = await assistantReplies();
     await composer.fill(text);
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     sent++;
     await expect.poll(() => submissions).toBe(sent);
-    await expect(page.locator(".chat-message.assistant")).toHaveCount(previous + 1);
-    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toHaveText(answer, {timeout: 60_000});
+    let current = await assistantReplies();
+    await expect.poll(async () => {
+      current = await assistantReplies();
+      return current.length;
+    }).toBe(previous.length + 1);
+    const added = current.filter(item => !previous.some(saved => saved.id === item.id));
+    expect(added).toHaveLength(1);
+    expect(added[0].content).toBe(answer);
+    await expect(page.locator(`#chat-message-${added[0].id} .assistant-markdown`)).toHaveText(answer, {timeout: 60_000});
     await expect(page.getByRole("button", {name: "Stop response", exact: true})).toBeHidden();
     return capture();
   };
