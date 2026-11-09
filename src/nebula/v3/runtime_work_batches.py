@@ -11,6 +11,7 @@ import json
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
@@ -61,6 +62,10 @@ _ACTIVE = ("queued", "running", "uncertain")
 
 class _Waiting(Exception):
     """No final SQL effects committed; authoritative readiness may change."""
+
+
+class _InvalidBatch(Exception):
+    """Accepted input cannot construct a domain record; no SQL effects commit."""
 
 
 @dataclass(frozen=True)
@@ -323,6 +328,14 @@ class RuntimeWorkBatches:
         try:
             body = _parse(intent)
             if isinstance(body, WorkImportBatch):
+                if any(
+                    project.workspace_path is not None
+                    and not project.workspace_path.strip()
+                    for project in body.projects
+                ):
+                    raise HTTPException(
+                        422, "project workspace folder must not be blank"
+                    )
                 body = body.model_copy(
                     update={
                         "projects": [
@@ -333,7 +346,7 @@ class RuntimeWorkBatches:
                                     )
                                 }
                             )
-                            if project.workspace_path
+                            if project.workspace_path is not None
                             else project
                             for project in body.projects
                         ]
@@ -913,7 +926,15 @@ class RuntimeWorkBatches:
                 raise HTTPException(
                     401, "The accepting device session expired or was revoked"
                 )
-            result = await self._apply(body)
+            try:
+                result = await self._apply(body)
+            except ValidationError:
+                # diagnostic-expected: an older accepted plan can pass the
+                # import DTO but fail domain construction. Roll back the whole
+                # final transaction before publishing a typed 422 response.
+                raise _InvalidBatch(
+                    "The saved Work batch does not match its project or Work record schema"
+                ) from None
             # Newly imported metadata becomes eligible for ordinary admission
             # only with its complete default scope, Work and response frames.
             for participant in participants:
@@ -984,6 +1005,8 @@ class RuntimeWorkBatches:
                     parent.result = {"detail": str(error)}
         except HTTPException as error:
             await self._failure(batch_id, error.status_code, str(error.detail))
+        except _InvalidBatch as error:
+            await self._failure(batch_id, 422, str(error))
         except (NotFoundError, ConflictError) as error:
             await self._failure(
                 batch_id, 404 if isinstance(error, NotFoundError) else 409, str(error)

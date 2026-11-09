@@ -78,3 +78,35 @@ provider, harness, worker process or external service was started. Ruff and
 coordinator-only mypy pass. Root owns the separately selected signed host RPC,
 production LAN and browser acceptance evidence; this backend slice alone does
 not claim those unrun gates.
+
+## Blank workspace and saved invalid-plan recovery
+
+Fresh independent review `review_work_batch_coordination` confirmed a second
+fault after the original 36-case pass: the import DTO accepts and strips an
+explicitly empty or whitespace workspace. A truthiness check skipped folder
+validation, so the host could commit its queued barriers before Engagement
+construction rejected the empty path. The uncaught domain validation error
+aborted reconciliation and repeatedly held following batches.
+
+Acceptance now rejects an explicitly blank workspace with a durable 422 before
+creating participants. It never resolves an empty path against Core's current
+directory; optional `None` is preserved. A legacy staged plan failing domain
+construction is translated to a private typed validation failure only around
+the final SQL operation. The final transaction rolls back before the host
+publishes the saved 422 and completes only that batch's own barriers as failed.
+Unexpected database errors, stale leases and uncertain unrelated commands keep
+their existing handling.
+
+Six added SQLite/PostgreSQL regression cases cover empty and whitespace input,
+corrected optional workspace import, receipt replay, no premature participants,
+and recovery of a real staged legacy barrier followed by a valid batch in the
+same reconciliation call. The latter retains an unrelated uncertain command.
+The original 36-case first-pass evidence above is unchanged.
+
+The expanded selection collected exactly 42 cases and passed its first execution:
+**42 passed in 26.53 seconds**. Raw results are
+`/tmp/nebula-work-batches-poison-tests.txt`; collection is
+`/tmp/nebula-work-batches-poison-collect.txt`. The diff-bound follow-up selection
+is `/tmp/nebula-work-batches-poison-selection.json`, baseline `9116318d`.
+Ruff, coordinator-only mypy and whitespace checks pass. No selected behavior
+failure required a repair during this verification.

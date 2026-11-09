@@ -6,6 +6,7 @@ provider, harness, OCI runtime or external service is invoked.
 
 import asyncio
 from datetime import timedelta
+from hashlib import sha256
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,8 +39,13 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
-from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS, LeaseLost
-from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
+from nebula.v3.runtime_coordination import (
+    CommandReceipt,
+    CoordinationConflict,
+    LEASE_MS,
+    LeaseLost,
+)
+from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery, _json
 from nebula.v3.runtime_processes import RuntimeProcessHost
 from nebula.v3.runtime_routing import RuntimeRouting
 from nebula.v3.runtime_ipc import RuntimeIpcError
@@ -49,9 +55,10 @@ from nebula.v3.runtime_work_batches import (
     WORK_BATCH_BARRIER,
     WORK_BATCH_COMMAND,
     WORK_BATCH_FEATURE,
+    _import_id,
 )
 from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
-from nebula.v3.work import WorkProjectBatchUpdate
+from nebula.v3.work import WorkImportBatch, WorkProjectBatchUpdate
 from tests.v3.test_deployment_lifecycle import manifest
 from tests.v3.test_runtime_coordination import location as location
 
@@ -766,3 +773,168 @@ async def test_revoked_actor_cannot_apply_and_receipt_lookup_stays_actor_scoped(
     assert not (await batch.store.get(Engagement, "one")).work_enabled
     with pytest.raises(NotFoundError):
         await batch.delivery.page("operator", receipt.command_id)
+
+
+@pytest.mark.parametrize("workspace", ["", "   "])
+async def test_blank_workspace_fails_before_participants_and_corrected_import_progresses(
+    batch, workspace, monkeypatch
+):
+    import nebula.v3.runtime_work_batches as batches
+
+    def reject_cwd_resolution(_value):
+        pytest.fail("A blank or omitted workspace must never resolve to Core's cwd")
+
+    monkeypatch.setattr(
+        batches, "_resolve_engagement_workspace_path", reject_cwd_resolution
+    )
+    client = await batch.client()
+    body = {
+        "source": "blank-workspace",
+        "projects": [
+            {
+                "external_id": "project",
+                "name": "Imported project",
+                "workspace_path": workspace,
+            }
+        ],
+    }
+    headers = {**AUTH, "Idempotency-Key": "blank"}
+    invalid = await client.post("/api/v1/work/import", headers=headers, json=body)
+    assert invalid.status_code == 422 and "must not be blank" in invalid.text
+    failed_id = invalid.headers["x-nebula-command-id"]
+    async with batch.database.session() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(RuntimeWorkBatchProjectRow)
+            )
+            == 0
+        )
+        assert (
+            await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
+            == 0
+        )
+    body["projects"][0]["workspace_path"] = None
+    pending = await client.post(
+        "/api/v1/work/import",
+        headers={**AUTH, "Idempotency-Key": "corrected"},
+        json=body,
+    )
+    assert pending.status_code == 202
+    await batch.service.reconcile()
+    response = await client.get(
+        f"/api/v1/runtime/requests/{pending.headers['x-nebula-command-id']}/response",
+        headers=AUTH,
+    )
+    assert response.status_code == 200, response.text
+    project = await batch.store.get(
+        Engagement, response.json()["projects"][0]["engagement_id"]
+    )
+    assert project.workspace_path is None
+    replay = await client.get(
+        f"/api/v1/runtime/requests/{failed_id}/response", headers=AUTH
+    )
+    assert replay.status_code == 422 and replay.json() == invalid.json()
+
+
+async def test_legacy_staged_invalid_domain_fails_and_next_batch_advances(batch):
+    # Seed exactly the immutable encrypted parent/participant projection left
+    # by the old acceptance code, then use real staging to commit its barrier.
+    body = {
+        "source": "legacy-invalid",
+        "projects": [
+            {
+                "external_id": "bad",
+                "name": "Never appears",
+                "workspace_path": "",
+            }
+        ],
+    }
+    request = intent("POST", body)
+    request_reference = batch.delivery.vault.put(
+        _json(request.model_dump(mode="json")),
+        purpose="intent:operator",
+    )
+    normalized_reference = batch.delivery.vault.put(
+        _json(WorkImportBatch.model_validate(body).model_dump(mode="json")),
+        purpose="work-batch-plan:operator",
+    )
+    original = {"format": 1, "request_reference": request_reference}
+    batch_id = str(uuid4())
+    project_id = _import_id(body["source"], "bad")
+    async with batch.coordination._write() as session:
+        session.add(
+            RuntimeCommandRow(
+                id=batch_id,
+                project_id=GLOBAL_EXECUTION_PROJECT,
+                actor_id="operator",
+                idempotency_key="legacy-invalid",
+                sequence=1,
+                name=WORK_BATCH_COMMAND,
+                lane="work",
+                payload={**original, "normalized_reference": normalized_reference},
+                payload_hash=sha256(
+                    _json(
+                        {
+                            "project_id": GLOBAL_EXECUTION_PROJECT,
+                            "name": WORK_BATCH_COMMAND,
+                            "payload": original,
+                            "expected_revision": None,
+                        }
+                    )
+                ).hexdigest(),
+                accepted_at_ms=batch.clock[0],
+                state="queued",
+            )
+        )
+        await session.flush()
+        session.add(
+            RuntimeWorkBatchProjectRow(
+                batch_id=batch_id, project_id=project_id, state="waiting"
+            )
+        )
+    assert await batch.service._stage(batch_id, WorkImportBatch.model_validate(body))
+    async with batch.database.session() as session:
+        participant = await session.get(
+            RuntimeWorkBatchProjectRow, (batch_id, project_id)
+        )
+        barrier_id = participant.barrier_command_id
+        assert participant.state == "barrier"
+        assert (await session.get(RuntimeCommandRow, barrier_id)).state == "queued"
+    await runtime(batch, "worker")
+    lease = await batch.coordination.claim_project("one", "worker")
+    unknown = await batch.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="unrelated",
+        name="inert",
+        payload={},
+    )
+    await batch.coordination.claim_next(lease)
+    await batch.coordination.finish_command(
+        lease,
+        unknown.command_id,
+        state="uncertain",
+        result={"detail": "Unknown unrelated fixture effect"},
+    )
+    valid = await accepted(batch, body={"project_ids": ["two"], "work_enabled": True})
+    await batch.service.reconcile()
+    failed = CommandReceipt(batch_id, GLOBAL_EXECUTION_PROJECT, 1, batch.clock[0])
+    result, status, detail = await page(batch, failed)
+    assert (
+        result.state == "failed"
+        and status == 422
+        and "record schema" in detail["detail"]
+    )
+    assert (await page(batch, valid))[1] == 200
+    assert (await batch.store.get(Engagement, "two")).work_enabled
+    assert await batch.store.count(Engagement) == 3
+    assert await batch.store.count(ScopePolicy) == 0
+    async with batch.database.session() as session:
+        assert (await session.get(RuntimeCommandRow, barrier_id)).state == "failed"
+        assert (
+            await session.get(RuntimeWorkBatchProjectRow, (batch_id, project_id))
+        ).state == "failed"
+        assert (
+            await session.get(RuntimeCommandRow, unknown.command_id)
+        ).state == "uncertain"
+    assert await accepted(batch, "POST", body, key="legacy-invalid") == failed
