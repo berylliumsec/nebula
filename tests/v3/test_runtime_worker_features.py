@@ -16,7 +16,12 @@ from pydantic import SecretStr
 import pytest
 from sqlalchemy import inspect, text
 
-from nebula.v3.database import Database, ProviderToolManifestRow, RuntimeProcessRow
+from nebula.v3.database import (
+    Database,
+    ProviderToolManifestRow,
+    RuntimeProcessRow,
+    RuntimeWorkBatchProjectRow,
+)
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployment_protocol import ReleaseManifest, WorkerIdentity
 from nebula.v3.deployments import DeploymentCoordinator
@@ -174,7 +179,9 @@ async def test_actual_main_admits_canonical_features_for_each_role(worker_host, 
 
 
 @pytest.mark.parametrize("role", ["api", "execution"])
-@pytest.mark.parametrize("refusal", ["unknown-feature", "missing-provider-table"])
+@pytest.mark.parametrize(
+    "refusal", ["unknown-feature", "missing-provider-table", "missing-work-batch-table"]
+)
 async def test_actual_worker_refuses_before_factory_or_readiness(
     worker_host, role, refusal, monkeypatch
 ):
@@ -185,11 +192,13 @@ async def test_actual_worker_refuses_before_factory_or_readiness(
         else FEATURES
     )
     release = await value.stage("refused-" + role, features=features)
-    if refusal == "missing-provider-table":
+    missing = {
+        "missing-provider-table": ProviderToolManifestRow,
+        "missing-work-batch-table": RuntimeWorkBatchProjectRow,
+    }.get(refusal)
+    if missing is not None:
         async with value.database.engine.begin() as connection:
-            await connection.run_sync(
-                lambda sync: ProviderToolManifestRow.__table__.drop(sync)
-            )
+            await connection.run_sync(lambda sync: missing.__table__.drop(sync))
     async with value.database.session() as session:
         head = await session.scalar(text("SELECT version_num FROM alembic_version"))
     reference = str(uuid4())
@@ -231,11 +240,11 @@ async def test_actual_worker_refuses_before_factory_or_readiness(
         yield  # pragma: no cover
 
     monkeypatch.setattr(runtime_worker, "api_application", forbidden_factory)
-    detail = (
-        "declared release features"
-        if refusal == "unknown-feature"
-        else "additive provider tool migrations"
-    )
+    detail = {
+        "unknown-feature": "declared release features",
+        "missing-provider-table": "additive provider tool migrations",
+        "missing-work-batch-table": "additive Work batch migrations",
+    }[refusal]
     with pytest.raises(RuntimeIpcError, match=detail):
         await runtime_worker.run_worker(bootstrap, execution_factory=forbidden_factory)
     assert not factories and not endpoint.exists()
@@ -247,10 +256,8 @@ async def test_actual_worker_refuses_before_factory_or_readiness(
             await session.scalar(text("SELECT version_num FROM alembic_version"))
             == head
         )
-    if refusal == "missing-provider-table":
+    if missing is not None:
         async with value.database.engine.connect() as connection:
             assert not await connection.run_sync(
-                lambda sync: inspect(sync).has_table(
-                    ProviderToolManifestRow.__tablename__
-                )
+                lambda sync: inspect(sync).has_table(missing.__tablename__)
             )
