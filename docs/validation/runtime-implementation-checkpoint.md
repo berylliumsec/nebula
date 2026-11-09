@@ -104,6 +104,41 @@ selection before pushing the updated PR. Product guidance is currently verified
 at 417 passages with source digest
 `4cc8b1f32983bf7231cdc63d5e4af7f862cfbb937124a5dd7f95a78d153c269e`.
 PR #960 is still the older draft foundation; later implementation commits are
-local until the final integration push. Browser/native gates, final PR review and
-CI block merge. Existing installations and live services have not been changed.
-Continue from these receipts; do not relabel earlier builds as final acceptance.
+on the integration branch, pushed through `997df212`, pending the final PR-head
+push. Browser/native gates, final PR review and CI block merge. Existing
+installations and live services have not been changed. Continue from these
+receipts; do not relabel earlier builds as final acceptance.
+
+## Fresh integration review before merge
+
+The independent review of `997df212` found three further defects. Separate
+fresh-context agents confirmed each cause before repair assignments:
+
+- Successful quiescence preserves a nonzero project fence and clears its owner,
+  but automatic admission selected only fence-zero projects. A real authenticated
+  SQL/routing probe confirmed that reopening left used projects queued, while
+  explicit attachment incremented the fence correctly. Repair eligibility must
+  use verified unowned state without resetting the counter; uncertain non-NULL
+  owners remain on the explicit recovery path. The host track owns the repair
+  and actual process shutdown/reopen evidence.
+- A controller killed after memory reservation but before recording its launch
+  owner leaves capacity charged forever. A subprocess SIGKILL probe reproduced
+  this on both host and project controllers, with zero runner launches and three
+  fresh reconciliation passes. Durable prelaunch ownership must be atomic with
+  reservation; release requires positive owner-death evidence and a CAS proving
+  no launch boundary was crossed. Unacknowledged starting effects remain held.
+  The compute track owns the repair and focused crash/race evidence.
+- Contextless runtime usage and Work reads fell through to the absent synthetic
+  global execution owner after extraction. Actual API routing returned 503 for
+  runtime usage, Work items/updates/agents/events and the static harness catalog;
+  provider and harness profile catalogs were healthy controls. Runtime usage
+  belongs to canonical host observation; Work reads need global SQL authority.
+  Work event invalidation must observe distinct producer stores, since its old
+  in-memory feed is process-local. The global API track owns these repairs.
+
+The newer-chat fixture setup now uses the supported draft-goal conversation API;
+20 packaged driver contracts pass without launching an extra provider turn.
+Seven CI export/ownership contracts pass, including nested JSON credential
+sanitization after private cleanup. These receipts certify the fixture and
+orchestration boundaries only. The final browser/native execution pin must
+include all reviewed repairs above.
