@@ -6193,10 +6193,16 @@ export class ApiClient {
     }));
   }
 
-  setupStatus(signal?: AbortSignal): Promise<SetupStatus> {
-    return this.request<WireSetupStatus>("setup/status", { signal }).then(
-      mapSetupStatus,
-    );
+  setupStatus(signal?: AbortSignal, projectId?: string): Promise<SetupStatus> {
+    const query = projectId === undefined ? "" : `?${new URLSearchParams({project_id: projectId})}`;
+    return this.request<WireSetupStatus>(`setup/status${query}`, { signal }).then(value => {
+      const status = mapSetupStatus(value);
+      if (projectId !== undefined && status.terminal.imagePreparation.projectId
+        && status.terminal.imagePreparation.projectId !== projectId) {
+        throw new Error("Core returned image preparation for another Project. Refresh this Project's setup before continuing.");
+      }
+      return status;
+    });
   }
 
   refreshSetupRuntime(signal?: AbortSignal): Promise<SetupStatus> {
@@ -6233,11 +6239,12 @@ export class ApiClient {
 
   cancelSetupImage(
     operationId: string,
+    projectId: string,
     signal?: AbortSignal,
   ): Promise<SetupControlResponse> {
     return this.request<WireSetupControlResponse>("setup/image/cancel", {
       method: "POST",
-      body: JSON.stringify({ operation_id: operationId }),
+      body: JSON.stringify({ project_id: projectId, operation_id: operationId }),
       signal,
     }).then(mapSetupControlResponse);
   }
@@ -9102,10 +9109,11 @@ export class ApiClient {
   }
 
   containerTerminalCapacity(
+    engagementId: string,
     signal?: AbortSignal,
   ): Promise<ContainerTerminalCapacity> {
     return this.request<WireContainerTerminalCapacity>(
-      "container-terminal/capacity",
+      `container-terminal/capacity?${new URLSearchParams({engagement_id: engagementId})}`,
       { signal },
     ).then((value) => ({
       activeSessions: value.active_sessions,

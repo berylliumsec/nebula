@@ -439,7 +439,7 @@ function StartingTerminalPanel({
 }: {
   engagementName: string;
   tab: StartingTerminalTab;
-  onCancelPreparation: () => void;
+  onCancelPreparation?: () => void;
   onClose: () => void;
   onRetry: () => void;
 }) {
@@ -484,7 +484,7 @@ function StartingTerminalPanel({
         aria-valuemax={100}
         aria-valuenow={progressIndeterminate ? undefined : progressPercent}
         aria-valuetext={progressIndeterminate ? status : `${progressPercent}%`}
-      ><span style={progressIndeterminate ? undefined : { width: `${progressPercent}%` }} /></div><small className="terminal-start-detail">{progressDetail}</small>{tab.imagePreparation?.canCancel && <button className="button secondary" type="button" onClick={onCancelPreparation}><CircleStop size={15} /> Cancel</button>}</>}
+      ><span style={progressIndeterminate ? undefined : { width: `${progressPercent}%` }} /></div><small className="terminal-start-detail">{progressDetail}</small>{tab.imagePreparation?.canCancel && onCancelPreparation && <button className="button secondary" type="button" onClick={onCancelPreparation}><CircleStop size={15} /> Cancel</button>}</>}
     </section>
   </div>;
 }
@@ -522,11 +522,7 @@ export function ContainerTerminalPanel({
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeKey, setActiveKey] = useState<string>();
-  const [capacity, setCapacity] = useState<ContainerTerminalCapacity>({
-    activeSessions: 0,
-    availableSessions: 32,
-    maxActiveSessions: 32,
-  });
+  const [capacity, setCapacity] = useState<ContainerTerminalCapacity>();
   const [initializing, setInitializing] = useState(true);
   const [initialError, setInitialError] = useState<string>();
   const [launchingKey, setLaunchingKey] = useState<string>();
@@ -564,7 +560,7 @@ export function ContainerTerminalPanel({
 
   const refreshCapacity = async (signal?: AbortSignal) => {
     try {
-      const current = await api.containerTerminalCapacity(signal);
+      const current = await api.containerTerminalCapacity(engagementId, signal);
       if (!signal?.aborted) setCapacity(current);
     } catch (reason) {
       void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_04", "A handled interface operation failed.", reason, "container_terminal_panel");
@@ -573,13 +569,13 @@ export function ContainerTerminalPanel({
 
   const ensureSetup = async (key: string, signal: AbortSignal) => {
     if (setupReadyRef.current) return;
-    let setup = await api.setupStatus(signal);
+    let setup = await api.setupStatus(signal, engagementId);
     let terminalStatus = setup.terminal.status;
     let terminalDetail = setup.terminal.detail;
     while (terminalStatus === "detecting_runner") {
       updateStartingTab(key, { phase: "detecting", phaseDetail: terminalDetail });
       await waitForSetupPoll(signal);
-      setup = await api.setupStatus(signal);
+      setup = await api.setupStatus(signal, engagementId);
       terminalStatus = setup.terminal.status;
       terminalDetail = setup.terminal.detail;
     }
@@ -608,7 +604,7 @@ export function ContainerTerminalPanel({
         imagePreparation: preparation,
       });
       await waitForSetupPoll(signal, 500);
-      setup = await api.setupStatus(signal);
+      setup = await api.setupStatus(signal, engagementId);
       preparation = setup.terminal.imagePreparation;
     }
     updateStartingTab(key, { imagePreparation: preparation });
@@ -643,7 +639,7 @@ export function ContainerTerminalPanel({
       setTerminalCapabilities(capabilities);
       let readinessChecks = 0;
       while (!capabilities.ready && readinessChecks < 12) {
-        const setup = await api.setupStatus(controller.signal);
+        const setup = await api.setupStatus(controller.signal, engagementId);
         const terminalStatus = setup.terminal.status;
         const terminalDetail = setup.terminal.detail;
         if (terminalStatus === "needs_runner" || terminalStatus === "disabled" || terminalStatus === "error") {
@@ -710,7 +706,7 @@ export function ContainerTerminalPanel({
   };
 
   const addTerminal = () => {
-    if (launchingKeyRef.current || capacity.availableSessions <= 0) return;
+    if (launchingKeyRef.current || !capacity || capacity.availableSessions <= 0) return;
     let publishedPorts: ContainerTerminalPublishedPort[];
     try {
       publishedPorts = requestedPublishedPorts();
@@ -750,6 +746,7 @@ export function ContainerTerminalPanel({
     setLaunchingKey(undefined);
     setInitializing(true);
     setTerminalCapabilities(undefined);
+    setCapacity(undefined);
     setOverflowOpen(false);
 
     const bootstrap = async () => {
@@ -887,10 +884,11 @@ export function ContainerTerminalPanel({
   };
 
   const cancelImagePreparation = async (tab: StartingTerminalTab) => {
-    if (!tab.imagePreparation?.operationId || !tab.imagePreparation.canCancel) return;
+    if (!tab.imagePreparation?.operationId || !tab.imagePreparation.canCancel
+      || tab.imagePreparation.projectId !== engagementId) return;
     updateStartingTab(tab.key, { phaseDetail: "Cancelling workstation image preparation…" });
     try {
-      const control = await api.cancelSetupImage(tab.imagePreparation.operationId);
+      const control = await api.cancelSetupImage(tab.imagePreparation.operationId, engagementId);
       updateStartingTab(tab.key, { imagePreparation: control.setup.terminal.imagePreparation });
     } catch (reason) {
       void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_09", "A handled interface operation failed.", reason, "container_terminal_panel");
@@ -951,7 +949,7 @@ export function ContainerTerminalPanel({
   }
 
   const launchInProgress = Boolean(launchingKey);
-  const canAdd = !launchInProgress && capacity.availableSessions > 0;
+  const canAdd = !launchInProgress && (capacity?.availableSessions ?? 0) > 0;
   const activeTab = tabs.find((tab) => tab.key === activeKey);
 
   const toolbar = <header className="terminal-tab-bar">
@@ -987,11 +985,11 @@ export function ContainerTerminalPanel({
             disabled={launchInProgress}
           />
         </label>
-        <p>{capacity.activeSessions} / {capacity.maxActiveSessions} terminal containers active across all Projects.</p>
+        <p>{capacity ? `${capacity.activeSessions} / ${capacity.maxActiveSessions} terminal containers active in this Project.` : "Checking Project terminal capacity…"}</p>
         </TerminalToolbarDetails>
         {publishedPortsError && <span className="terminal-port-error" role="alert">{publishedPortsError}</span>}
         {activeTab && <button className="icon-button subtle terminal-tab-close" type="button" aria-label={`Close Terminal ${activeTab.ordinal}`} onClick={() => void closeTab(activeTab)}><X size={14} /></button>}
-        <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
+        <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : !capacity ? "Checking terminal capacity" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
         <div className="terminal-overflow">
           <button className="icon-button subtle" type="button" aria-label="List all terminals" aria-expanded={overflowOpen} onClick={() => setOverflowOpen((value) => !value)}><ChevronDown size={16} /></button>
           {overflowOpen && <div className="terminal-overflow-menu" role="menu">
@@ -1014,7 +1012,7 @@ export function ContainerTerminalPanel({
       {tab.kind === "starting" ? <StartingTerminalPanel
         engagementName={engagementName}
         tab={tab}
-        onCancelPreparation={() => void cancelImagePreparation(tab)}
+        onCancelPreparation={tab.imagePreparation?.projectId === engagementId ? () => void cancelImagePreparation(tab) : undefined}
         onClose={() => removeTab(tab.key)}
         onRetry={() => retryTab(tab)}
       /> : <LiveContainerTerminal

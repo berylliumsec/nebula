@@ -235,6 +235,9 @@ describe("ContainerTerminalPanel", () => {
       recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [] }),
       containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(0)),
       terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+      cancelSetupImage: vi.fn().mockResolvedValue({setup: {terminal: {imagePreparation: {
+        phase: "cancelling", projectId: "engagement-1", operationId: "operation-1", canCancel: false,
+      }}}}),
       setupStatus: vi.fn().mockResolvedValue({
         core: { status: "ready" },
         scratchProjectId: "engagement-1",
@@ -244,6 +247,8 @@ describe("ContainerTerminalPanel", () => {
           candidates: [],
           imagePreparation: {
             phase: "preparing_image",
+            projectId: "engagement-1",
+            operationId: "operation-1",
             progressIndeterminate: true,
             canCancel: true,
             canRetry: false,
@@ -262,6 +267,8 @@ describe("ContainerTerminalPanel", () => {
     expect(progress).toHaveAttribute("aria-valuetext", "Preparing Kali runtime");
     expect(progress).not.toHaveAttribute("aria-valuenow");
     expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(api.cancelSetupImage).toHaveBeenCalledWith("operation-1", "engagement-1");
   });
 
   it("copies highlighted terminal text and polls Project audit health only once", async () => {
@@ -452,6 +459,9 @@ describe("ContainerTerminalPanel", () => {
     await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
     expect(api.recoverContainerTerminals).toHaveBeenCalledTimes(1);
     expect(api.prepareSetupImage).toHaveBeenCalledTimes(1);
+    expect(api.prepareSetupImage).toHaveBeenCalledWith("engagement-1", expect.any(AbortSignal));
+    expect(api.setupStatus).toHaveBeenCalledWith(expect.any(AbortSignal), "engagement-1");
+    expect(api.containerTerminalCapacity).toHaveBeenCalledWith("engagement-1", expect.any(AbortSignal));
     expect(api.startContainerTerminal).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("tab", { name: /Terminal 1/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByText(/Outbound bridge permitted · root · writable/)).not.toBeInTheDocument();
@@ -670,7 +680,26 @@ describe("ContainerTerminalPanel", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("disables New Terminal when the global capacity is full", async () => {
+  it("waits for observed Project capacity instead of showing a global total", async () => {
+    let finish!: (value: ReturnType<typeof capacity>) => void;
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1", getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({sessions: [{session: session("terminal-capacity"), runtime}]}),
+      containerTerminalCapacity: vi.fn().mockImplementation(() => new Promise(resolve => {finish = resolve;})),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+    renderPanel(api);
+    await userEvent.click(await screen.findByRole("button", {name: "Terminal network settings"}));
+    expect(screen.getByText("Checking Project terminal capacity…")).toBeVisible();
+    expect(screen.queryByText(/across all Projects/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "New terminal"})).toBeDisabled();
+    await act(async () => finish(capacity(2)));
+    expect(screen.getByText("2 / 32 terminal containers active in this Project.")).toBeVisible();
+    expect(screen.getByRole("button", {name: "New terminal"})).toBeEnabled();
+    expect(api.containerTerminalCapacity).toHaveBeenCalledWith("engagement-1", expect.any(AbortSignal));
+  });
+
+  it("disables New Terminal when the selected Project capacity is full", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
       getToken: () => "test-token",
