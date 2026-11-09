@@ -1,18 +1,18 @@
 {
-  "change_digest": "4e66f64311509a6e5cf0f6e4b75dd013cfd72c24204e5261eacbfb6328996dd5",
+  "change_digest": "39166eba144cc6c0341706a3aa81d95ba67c149f5fd0c6676f4955c8a8bd1f32",
   "reviewed_by": "Codex",
-  "reason": "Eighteen collected SQLite/PostgreSQL checks for independently validated missing-API recovery and mapped aggregate faults. Tests preserve active project ownership, last promoted API version, unknown/live process retention, current cleanup guards, and filtered counts constrained to owned project. All eighteen cases passed in28.36s; isolation guards remain unchanged.",
-  "exclusions": "No full suite or live services. Inert exact-PID workers and isolated SQL only; actual Butler and frozen workflow rechecks are separate acceptance.",
+  "reason": "Twenty-four collected cases integrate explicit global route ownership, guide IDs colliding with project IDs, storage reads/paging, paired operator progress, and production API transaction ownership. Covers both SQL backends without an execution owner. All twenty-four cases passed in14.37s; explicit global ownership and factory atomicity verified.",
+  "exclusions": "No full suite, real provider, browser execution or deployment. UI unit/build and production LAN are separate track receipts.",
   "expected_tests": {
-    "python": 18,
+    "python": 24,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_reconciliation.py",
-    "tests/v3/test_execution_scope.py::test_filtered_count_retains_mapped_project_scope",
-    "tests/v3/test_execution_scope.py::test_column_only_reads_and_raw_connections_are_scoped"
+    "tests/v3/test_runtime_global_reads.py",
+    "tests/v3/test_runtime_global_api.py::test_project_creation_and_global_catalogs_need_no_execution_owner",
+    "tests/v3/test_api_worker_composition.py"
   ],
   "frontend": [],
   "native": [],

@@ -30,7 +30,6 @@ from .runtime_ipc import RuntimeIpcError
 from .runtime_routes import command_lane
 from .runtime_identity import mount_runtime_identity
 from .runtime_static import RuntimeStatic
-from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from .storage import NebulaStore, NotFoundError
 
 
@@ -385,14 +384,15 @@ def create_api_worker(
                 422, "The request cannot be represented as a bounded durable command"
             ) from None
         lane = command_lane(intent.path)
-        project_id = await project_for(intent)
-        if project_id == GLOBAL_EXECUTION_PROJECT and global_api.supports(
-            request.scope
-        ):
+        # Only explicitly mounted SQL-global routes enter this path. Their
+        # parameters can contain project references without changing ownership
+        # (for example a guide ID equal to a project ID).
+        if global_api.supports(request.scope):
             receipt = await global_delivery.execute(
                 intent, actor_id=actor, idempotency_key=key
             )
             return await response_view(actor, receipt.command_id, slots=control_slots)
+        project_id = await project_for(intent)
         chat_acceptance = False
         chat_resume = False
         if (

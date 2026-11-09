@@ -27,7 +27,6 @@ from nebula.v3.runtime_coordination import RuntimeCoordination
 from nebula.v3.runtime_delivery import RuntimeDelivery
 from nebula.v3.runtime_global_api import RuntimeGlobalApi
 from nebula.v3.runtime_global_delivery import GlobalSqlDelivery
-from nebula.v3.runtime_global_reads import mount_global_reads
 from nebula.v3.runtime_routing import RuntimeRouting
 from nebula.v3.runtime_vault import RuntimeVault
 from nebula.v3.storage import NebulaStore
@@ -55,7 +54,6 @@ async def reads(location, tmp_path, monkeypatch):
     )
     delivery = RuntimeDelivery(coordination, RuntimeVault(tmp_path / "payloads"))
     global_api = RuntimeGlobalApi(database)
-    mount_global_reads(global_api.app, global_api.store, global_api.actor)
 
     async def forbidden_owner(_scope):
         pytest.fail("A contextless read attempted to contact an execution owner")
@@ -167,6 +165,22 @@ async def test_guide_lifecycle_uses_one_atomic_receipt_and_preserves_completion_
     assert (
         await reads.client.get("/api/v1/guides/progress", headers=AUTH)
     ).json() == []
+
+
+async def test_guide_id_matching_project_does_not_change_global_route_ownership(reads):
+    await reads.store.create(Engagement(id="shortcuts", name="Synthetic collision"))
+    response = await reads.client.put(
+        "/api/v1/guides/progress/shortcuts",
+        headers={**AUTH, "Idempotency-Key": "global-guide"},
+        json={"status": "in_progress", "step_index": 1, "expected_revision": 0},
+    )
+    assert response.status_code == 200, response.text
+    assert await reads.store.count(GuideProgress) == 1
+    async with reads.database.session() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
+            == 0
+        )
 
 
 async def test_paired_device_progress_follows_active_operator_and_revocation(reads):
