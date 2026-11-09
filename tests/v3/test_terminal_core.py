@@ -366,7 +366,7 @@ class TerminalProcess:
 
 
 @pytest_asyncio.fixture
-async def lan_core(tmp_path, monkeypatch):
+async def lan_core(tmp_path, monkeypatch, request):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.connect(("192.0.2.1", 9))
         address = probe.getsockname()[0]
@@ -563,9 +563,17 @@ async def lan_core(tmp_path, monkeypatch):
     }
     observed_state_reads: list[str] = []
 
+    supervisor_health = getattr(request, "param", None) == "supervisor"
+
     @app.middleware("http")
     async def delay_selected_read(request, call_next):
         path = request.url.path
+        if path == "/api/v1/health" and supervisor_health:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                {"status": "ok", "api_version": "v1", "api_ready": True}
+            )
         if request.method == "GET" and (
             path in {"/api/v1/chat/session-activity", "/api/v1/chat/attention"}
             or path.startswith("/api/v1/chat/sessions/")
@@ -925,6 +933,7 @@ def test_paired_tui_settings_stays_open_for_multiple_changes(lan_core):
     )
 
 
+@pytest.mark.parametrize("lan_core", ["supervisor"], indirect=True)
 def test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback(lan_core):
     data = lan_core
     second = data["workspace"] / ".agents" / "skills" / "summarize" / "SKILL.md"

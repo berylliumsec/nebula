@@ -281,3 +281,8 @@ leaves the credentials available so revocation can be retried.
 Unencrypted test networks require both Core's existing explicit insecure-pairing
 option and `pair --allow-http`. The new headless command requires HTTPS for
 remote clients and does not enable insecure pairing.
+
+The Assistant shell supports protocol 1 Core health and the supervisor API v1
+health envelope. A supervisor reports API readiness separately; if it is not
+ready, wait for Core recovery and reconnect. An explicit incompatible shell
+protocol is rejected. Endpoint errors remain visible when a Core feature is unavailable.

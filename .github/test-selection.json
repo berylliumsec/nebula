@@ -1,8 +1,8 @@
 {
-  "change_digest": "32335e2885b12e6f06b3531a6cf5d837ad17e27e1f319dc93409e7711b6efb84",
-  "reviewed_by": "Codex coordinator; fresh validate_held_item_cause confirmed the API/scheduler status distinction and reviewed the exact helper extraction; diagnose_held_item independently audited zero-test PR/main workflow routing",
-  "reason": "The user explicitly requested fixing and running only the failed held-turn assertion locally, no more CI tests, then merging when normal required checks permit. The exact local schema-backed item reproduced the impossible running expectation (1 failed in 3.26s), then passed with the correct ChatTurn routing state (1 passed in 2.44s). Every original guard is retained. No further tests are selected; this is an explicit local-only verification scope, not a passing full desktop receipt.",
-  "exclusions": "All CI tests and test-related builds are excluded on this push and main: portable Python, packaged/native desktop, browser, frontend, Rust, migrations and every previously passing case. Empty arrays intentionally route only normal selection/security metadata/omission/empty-browser gate checks. The full packaged journey last failed at 29766d18 and is not rerun or relabeled as passing; later native lifecycle phases and the separately documented host/global/operator/platform gaps remain unverified. No full suite, extra journey, live provider, existing installation, deployment or release.",
+  "change_digest": "a2bff41d3a3101d8ec8ea80946bb1895c540cbb41810525b719d821bb859138a",
+  "reviewed_by": "Codex; reviewed supervisor and legacy health contracts and connection cleanup",
+  "reason": "Seven handshake variants, paired TLS TUI with supervisor health and real Core chat routes, client packaging, and help synchronization.",
+  "exclusions": "Python terminal handshake only; browser, frontend and native UI unchanged. No broad regression suites.",
   "python_versions": [
     "3.12"
   ],
@@ -10,7 +10,7 @@
   "python_browser": false,
   "checks": [],
   "expected_tests": {
-    "python": 0,
+    "python": 10,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -19,7 +19,12 @@
     "portable": 0,
     "packaged_native": 0
   },
-  "python": [],
+  "python": [
+    "tests/test_terminal_shell.py::test_connect_accepts_ready_supervisor_and_legacy_health",
+    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
+    "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies",
+    "tests/v3/test_terminal_message_recall_knowledge.py::test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core"
+  ],
   "frontend": [],
   "native": [],
   "playwright": []
