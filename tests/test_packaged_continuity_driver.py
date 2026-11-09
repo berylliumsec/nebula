@@ -414,3 +414,97 @@ def test_native_bootstrap_observes_desktop_created_release_before_connector(tmp_
         ]
         == manifest["files"]["bin/core"]
     )
+
+
+def test_actual_source_pin_and_staged_build_graph_generate_audited_inputs(tmp_path):
+    import shutil
+    from tests.v3 import packaged_continuity_artifacts as artifacts
+
+    records = {}
+    for prefix in ("baseline", "candidate"):
+        source = tmp_path / prefix / "source"
+        (source / "ui/src-tauri").mkdir(parents=True)
+        (source / "src").mkdir()
+        (source / "src/build_marker.py").write_text(f"fixture_label = {prefix!r}\n")
+        (source / "ui/src-tauri/tauri.conf.json").write_text(
+            json.dumps({"build": {"frontendDist": "../dist"}})
+        )
+        (source / "ui/dist").mkdir()
+        (source / "ui/dist/index.html").write_bytes(b"verified UI")
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(
+            ["git", "-C", str(source), "add", "src", "ui/src-tauri/tauri.conf.json"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source),
+                "-c",
+                "user.name=Synthetic fixture",
+                "-c",
+                "user.email=synthetic@example.invalid",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "-qm",
+                "Synthetic " + prefix,
+            ],
+            check=True,
+        )
+        commit = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        layout = tmp_path / prefix / "extracted"
+        binary = layout / "usr/bin/nebula-ui"
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes((prefix + " synthetic native fixture").encode())
+        binary.chmod(0o755)
+        connector = tmp_path / prefix / "public-connector"
+        connector.write_bytes((prefix + " synthetic public connector").encode())
+        connector.chmod(0o755)
+        shutil.copy2(connector, binary.with_name("nebula-core"))
+        resources = layout / "usr/lib/Nebula"
+        manifest = make_bundle(resources / "nebula-runtime")
+        retained = resources / "nebula-runtime/bin/core"
+        retained.write_bytes((prefix + " synthetic retained code").encode())
+        manifest["version"] = prefix
+        manifest["files"]["bin/core"] = driver.digest(retained)
+        manifest_path = resources / "nebula-runtime/nebula-runtime.json"
+        manifest_path.write_text(json.dumps(manifest))
+        manifest_path.with_name("nebula-runtime.sha256").write_text(
+            driver.digest(manifest_path)
+        )
+        command = tmp_path / prefix / "build-command.json"
+        command.write_text(json.dumps(["synthetic-fixture-compiler", str(source)]))
+        log = tmp_path / prefix / "build.log"
+        log.write_text("Synthetic test graph only; no native compiler executed.\n")
+        receipt = tmp_path / prefix / "receipt.json"
+        arguments = dict(
+            source=source,
+            desktop=binary,
+            connector=connector,
+            resources=resources,
+            build_command=command,
+            build_log=log,
+        )
+        with pytest.raises(ValueError, match="differs from its build pin"):
+            artifacts.record_build(**arguments, source_commit="0" * 40, output=receipt)
+        record = artifacts.record_build(
+            **arguments, source_commit=commit, output=receipt
+        )
+        assert record["source_commit"] == commit
+        assert record["connector_sha256"] != manifest["files"]["bin/core"]
+        records[prefix] = receipt
+    inputs = artifacts.write_inputs(**records, output=tmp_path / "inputs.json")
+    assert inputs["baseline_core"].endswith("extracted/usr/bin/nebula-core")
+    assert inputs["candidate_resources"].endswith("extracted/usr/lib/Nebula")
+    (source / "ui/dist/index.html").write_bytes(b"changed native frontend input")
+    with pytest.raises(ValueError, match="frontendDist differs"):
+        artifacts.record_build(
+            **arguments, source_commit=commit, output=tmp_path / "rejected.json"
+        )
