@@ -34,8 +34,28 @@ and no SQL session or scan lock remains held while sending a frame. SSE retains
 `ready`, `change` with `work`/`projects`, 25-second keep-alive and `no-store`.
 Its new `id` is a current-state fingerprint, not historical event replay.
 
-Remaining slices must add host-owned runtime usage/diagnostic effects. Work's
-process-local feed cannot observe
+Host Settings now owns `GET /runtime-usage`, including `refresh=true`, using a
+shared canonical `RuntimeUsageService` and credential store. Reads serialize
+within the existing bounded host read admission; the normal 120-second vendor
+cache and explicit refresh remain. Credential-store replacement reconstructs
+the service rather than keeping a stale resolver. No profiles are seeded, and
+local providers keep honest unavailable vendor balances while showing recorded
+SQL token usage. An inert `settings.usage_transport` supplies account fixtures.
+
+`POST /harnesses/{id}/test-turn` now enters existing authenticated host-effect
+delivery, with the same immutable key, actor-owned receipt, pending response
+and lost-viewer replay behavior as other host effects. Its canonical diagnostic
+body was extracted from `HarnessRuntimeService.test_turn`; the legacy method
+delegates to that helper. The host constructs no project runtime service. It
+passes the same host credential store and memory controller, requires the
+adapter's protected opener, disables tools/MCP, bounds opens/resume to 15
+seconds, close to five seconds, the fixed turn to 90 seconds and its reply to
+4 KiB. The whole helper remains below the host effect's timeout. Unsupported
+native adapters create a host-owned blocked memory record (`project_id=None`)
+without an unprotected launch or durable diagnostic project/session. Test
+fixtures may use `settings.harness_factory` with an inert protected adapter.
+
+Work's process-local feed cannot observe
 retained execution workers, and the buffered host JSON proxy cannot carry an
 indefinite event stream. Shared SQL observations must capture their baseline
 before `ready`, bound scan memory/time/concurrency, publish only complete
@@ -55,3 +75,16 @@ checkpoint-noise suppression, subscriber/cooldown bounds and reconstruction of
 the API app against existing SQL. No live provider, CLI, browser or deployment
 acceptance is claimed. Root integration owns the existing Work/Settings UI
 journey and the final product-guidance update.
+
+The host slice collected 22 distinct cases across SQLite and PostgreSQL. Eight
+passed in the initial selection; constructor, empty-capability and inherited
+project-inventory fixture faults were independently reviewed before correction.
+Failure-only retries passed two configuration guards, eight diagnostic cases,
+and the final four unchanged-inventory cases. No product behavior was changed
+for those fixture repairs. The tests cover canonical credentials, account-cache
+refresh and recorded tokens, paired-device revocation, protected diagnostic
+turn/replay and delayed receipts, memory refusal without a project owner, and
+tool/reply-size refusal. Ruff passed and mypy passed on four changed source
+files. Raw logs, XML, selection receipts and the combined case inventory remain
+under `/tmp/nebula-host-*`. These inert fixtures do not establish live vendor
+compatibility, native memory enforcement or the production LAN/browser journey.

@@ -24,6 +24,7 @@ from .memory_policy import (
 )
 from .sandbox import SandboxUnavailable
 from .runtime_integration_effects import HOST_INTEGRATION_WRITES, HostIntegrationEffects
+from .runtime_usage import RuntimeUsageResponse, RuntimeUsageService
 
 HOST_OBSERVATION_ROUTES = {
     ("GET", "/api/v1/host-cpu-budget"),
@@ -45,6 +46,7 @@ HOST_OBSERVATION_ROUTES = {
     ("GET", "/api/v1/vpn-profiles"),
     ("GET", "/api/v1/integrations/typesafe"),
     ("GET", "/api/v1/integrations/web-search"),
+    ("GET", "/api/v1/runtime-usage"),
 }
 HOST_OBSERVATION_ROUTES |= HOST_INTEGRATION_WRITES
 
@@ -69,6 +71,21 @@ class HostObservations:
         self.integrations = HostIntegrationEffects(self)
         self.diagnostics = None
         self.allow_browser_diagnostics = False
+        self._usage = None
+        self._usage_lock = asyncio.Lock()
+
+    def runtime_usage(self):
+        # Tests and host replacement may supply another canonical credential
+        # store. Never keep an independent or stale credential resolver.
+        if (
+            self._usage is None
+            or self._usage.credentials is not self.settings.credentials
+        ):
+            self._usage = RuntimeUsageService(
+                self.settings.store, self.settings.credentials
+            )
+        self._usage.transport = self.settings.usage_transport
+        return self._usage
 
     async def start(self):
         await self.pressure.startup()
@@ -123,6 +140,16 @@ class HostObservations:
 
         dependencies = [Depends(auth)]
         self.integrations.mount(app, auth)
+
+        @app.get(
+            "/api/v1/runtime-usage",
+            response_model=RuntimeUsageResponse,
+            dependencies=dependencies,
+        )
+        async def runtime_usage(response: Response, refresh: bool = False):
+            response.headers["Cache-Control"] = "no-store"
+            async with self._usage_lock:
+                return await self.runtime_usage().read(refresh=refresh)
 
         @app.exception_handler(SandboxUnavailable)
         async def sandbox_unavailable(_request, error):

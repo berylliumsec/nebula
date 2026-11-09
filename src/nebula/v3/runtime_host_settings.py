@@ -125,6 +125,7 @@ class HostSettings:
         )
         self.runner_factory, self.harness_factory = runner_factory, harness_factory
         self.directory_transport = self.credit_transport = None
+        self.usage_transport = None
         self.ssh_discover = None
         self._directory = None
         self._directory_at = 0.0
@@ -430,6 +431,21 @@ class HostSettings:
                 }
             )
 
+        @app.post("/api/v1/harnesses/{profile_id}/test-turn", dependencies=auth)
+        async def harness_test_turn(profile_id: str):
+            from .harness_diagnostics import run_host_harness_test_turn
+            from .harnesses import HarnessConfigurationError
+
+            try:
+                return await run_host_harness_test_turn(self, profile_id)
+            except HarnessConfigurationError as error:
+                raise HTTPException(422, str(error)) from None
+            except TimeoutError:
+                raise HTTPException(
+                    503,
+                    "The bounded harness diagnostic timed out; read its saved status before retrying",
+                ) from None
+
     async def provider_health(self, provider_id):
         profile = await self.store.get(ProviderProfile, provider_id)
         health = await _provider_health(profile, self.provider_factory)
@@ -528,6 +544,7 @@ class HostSettings:
             ("/api/v1/provider-health/refresh", ["POST"]),
             ("/api/v1/runner-profiles/{profile_id}/probe", ["POST"]),
             ("/api/v1/harnesses/{profile_id}/health", ["POST"]),
+            ("/api/v1/harnesses/{profile_id}/test-turn", ["POST"]),
             ("/api/v1/memory-budgets/jobs/{job_id}/apply", ["POST"]),
             ("/api/v1/credentials", ["POST"]),
             ("/api/v1/credentials/{path:path}", ["GET", "DELETE"]),
