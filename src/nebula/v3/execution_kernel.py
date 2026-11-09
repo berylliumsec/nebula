@@ -1818,6 +1818,7 @@ def create_execution_kernel(
     stream_journal=None,
     durable_chat_acceptance: bool = False,
     durable_chat_resume: bool = False,
+    settings_memory_request=None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -2785,7 +2786,10 @@ def create_execution_kernel(
     )
     from .settings_assistant_api import SettingsAssistantApi
 
-    settings_assistant_api = SettingsAssistantApi(app, token)
+    settings_assistant_api = SettingsAssistantApi(
+        app, token, memory_request=settings_memory_request
+    )
+    app.state.settings_assistant_api = settings_assistant_api
     from .control_assistant_work import ControlAssistantWork
 
     control_assistant_work = ControlAssistantWork(

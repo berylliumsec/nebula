@@ -41,6 +41,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_chat_acceptance import CHAT_ACCEPT_FEATURE
     from .runtime_project_admission import HANDOFF_FEATURE
     from .runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
+    from .runtime_memory_control import RemoteMemorySettings
     from .storage import NebulaStore
 
     bootstrap = context.bootstrap
@@ -100,6 +101,9 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             stream_journal=RuntimeChatJournal(context.coordinator.coordination, store),
             durable_chat_acceptance=CHAT_ACCEPT_FEATURE in context.manifest.features,
             durable_chat_resume="chat.resume/v1" in context.manifest.features,
+            settings_memory_request=RemoteMemorySettings(client).request
+            if services.get("memory_control") is True
+            else None,
         )
         if HANDOFF_FEATURE in context.manifest.features:
             app.state.control_assistant_work.chat.restoring_handoff = (

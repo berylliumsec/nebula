@@ -1,23 +1,26 @@
 {
-  "change_digest": "7b7921a426cd31f5b2d7c4c7401959e0ee674f10234406ecfd02d2ac33fac626",
+  "change_digest": "99b57b5941691b520e0acd45ed6cd7161701187d2bc10853577e88766f64afb2",
   "reviewed_by": "Codex",
-  "reason": "65 distinct passing cases:63initial and2 retained-process cases50.95s after independently validated inert-provider installation timing corrected in fixture only. Source inventory, bounded revision proof, held-capacity safety and target verification pass; queued/routing/finalizing restore, permanent grants and durable phase reconstruction pass on SQLite/PostgreSQL. Actual kernels complete v1 admitted work and exactly2 v2 queued producers while another project remains pinned usable on v1, then retire empty source. Independent active-provider classification review and regression keep new roots held while original producer finishes. Ruff and targeted mypy pass. Final CI union65 collected; evidence-only docs added.",
-  "exclusions": "No full suite, live provider/harness, existing installation, operational deployment, browser, SSH or compute workload. Disposable SQLite/PostgreSQL schemas, private retained source processes and inert model barriers only. New physical-resource inventory is conservative; final production LAN/mobile WebKit/packaged desktop and crash orchestration acceptance remain separate work.",
+  "reason": "63 distinct passing cases:58 role-boundary cases75.71s plus5 capability/actualChroma source-sync cases8.91s. Stable host repairs valid saved floor-only reserve before API admission; bound private project Butler and actual retained Kernel typed action use same validation/audit/readback; job IDs select current owner, public actors/CAS/body bounds and private forged/stale requests hold. Direct execution global-policy isolation remains. Existing memory/routing/admission cases pass. Canonical Settings model import preserves runtime identity and fixes static alias diagnostic; mypy8sourcefiles and Ruff pass. Bundled product knowledge regenerated/verified407passages4a6d31863ed9 and actual host Chroma synchronization/restart verified. Final union63 collected; evidence-only doc followed.",
+  "exclusions": "No full suite, live services/provider/harness, existing installation, deployment, SSH, compute or browser workload. Disposable SQL, source wrapper processes and private Unix RPC only. UI no-API asset/auth bootstrap and final production LAN/WebKit/desktop gates remain subsequent integration. Direct execution global-policy restrictions remain verified; kernel enforcement is not inferred from saved configuration.",
   "expected_tests": {
-    "python": 65,
+    "python": 63,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_project_handoff_admission.py",
-    "tests/v3/test_execution_worker_process.py::test_active_execution_handoff_preserves_queued_turns_while_another_project_is_pinned",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_deployment_lifecycle.py::test_supervisor_reconstruction_preserves_every_handoff_phase",
-    "tests/v3/test_deployment_lifecycle.py::test_controls_after_checkpoint_require_a_fresh_boundary",
-    "tests/v3/test_runtime_capacity.py::test_held_capacity_prevents_worker_retirement",
-    "tests/v3/test_chat_throughput.py::test_startup_restores_a_resume_the_previous_core_never_admitted"
+    "tests/v3/test_runtime_memory_control.py",
+    "tests/v3/test_memory_api.py",
+    "tests/v3/test_execution_memory.py",
+    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_runtime_host_services.py::test_private_host_socket_requires_both_peer_identity_and_its_credential",
+    "tests/v3/test_runtime_host_services.py::test_api_peers_and_expired_execution_peers_cannot_call_host_memory",
+    "tests/v3/test_runtime_memory.py::test_architecture_defaults_only_initialize_an_unsaved_policy",
+    "tests/v3/test_runtime_memory.py::test_supervisor_binds_real_process_admission_to_saved_memory_policy",
+    "tests/v3/test_runtime_host_services.py::test_shared_service_capabilities_require_a_valid_private_peer",
+    "tests/v3/test_runtime_host_services.py::test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [],
   "native": [],

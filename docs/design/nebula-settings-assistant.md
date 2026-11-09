@@ -6,6 +6,14 @@ Core reserve below resident requirements or describe declared service capacity a
 measured job usage or kernel enforcement; retire unused runtimes or increase the
 reserve when new admissions are held.
 
+In supervisor mode, the stable host serves memory policy, usage and runner
+checks independently of replaceable API workers. Project Butler uses that same
+validated API through its authenticated, lease-bound host channel; direct
+project execution services cannot edit global policy. Running-job changes go
+to the project's current execution owner and require its observed runner
+application. An unavailable owning runner leaves the job charged and the
+application unresolved.
+
 Memory budgets are a host-wide Settings destination (`memory-budgets`, target
 `memory-budget-settings`). Butler discovers typed `nebula.settings.memory_budget`,
 `memory_usage`, `set_memory_budget`, `verify_memory_job` and `apply_memory_limit`

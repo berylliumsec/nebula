@@ -136,6 +136,7 @@ async def test_shared_service_capabilities_require_a_valid_private_peer(shared):
         "protocol": "nebula.host-services/v1",
         "memory": True,
         "capacity": True,
+        "memory_control": True,
         "knowledge": False,
         "product_guidance": {"state": "unavailable"},
     }

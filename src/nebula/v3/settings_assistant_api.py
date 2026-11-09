@@ -462,7 +462,7 @@ async def _check_runtime_mutation(
     if family == "runner-profiles":
         # Match the route's effective defaults, including omitted fields that clear
         # an existing context/socket/seccomp selection. Import after API startup.
-        from .api import RunnerProfileRequest
+        from .execution_kernel import RunnerProfileRequest
 
         try:
             candidate = RunnerProfileRequest.model_validate(body).model_dump(
@@ -1058,9 +1058,10 @@ async def execute_settings_api(
 class SettingsAssistantApi:
     """Core-owned gateway; bearer token and selected project remain server-side."""
 
-    def __init__(self, app: FastAPI, token: str) -> None:
+    def __init__(self, app: FastAPI, token: str, *, memory_request=None) -> None:
         self.app = app
         self.token = token
+        self.memory_request = memory_request
 
     def schema(
         self, *, path: str | None = None, method: str | None = None
@@ -1078,6 +1079,22 @@ class SettingsAssistantApi:
     ) -> dict[str, Any]:
         if not isinstance(method, str) or not isinstance(path, str):
             raise ValueError("provide a Settings method and path")
+        candidate = _clean_path(path)
+        if (
+            self.memory_request is not None
+            and (
+                candidate == "/api/v1/memory-budgets"
+                or candidate.startswith("/api/v1/memory-budgets/")
+            )
+            and not re.fullmatch(r"/api/v1/memory-budgets/jobs/[^/]+/apply", candidate)
+        ):
+            return await self.memory_request(
+                project_id,
+                method=method.upper(),
+                path=candidate,
+                body=body,
+                expected_revision=expected_revision,
+            )
         attribution = memory_actor.set(f"butler:{project_id}")
         try:
             return await execute_settings_api(

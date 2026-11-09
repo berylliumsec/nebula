@@ -100,6 +100,7 @@ class RuntimeSupervisor:
         if self.shared_services.host is not host:
             raise ValueError("Shared services must use this supervisor's process host")
         self.store = NebulaStore(self.coordinator.database)
+        self.shared_services.configure_memory_control(operator_token)
         self.retained = ReleaseStore(retained_root or host.root / "releases")
         self.worker_admission = worker_admission
         if isinstance(worker_admission, RuntimeMemoryAdmission):
@@ -167,6 +168,13 @@ class RuntimeSupervisor:
                 }
                 for row in rows
             ]
+
+        @api.api_route("/api/v1/memory-budgets", methods=["GET", "PUT"])
+        @api.api_route("/api/v1/memory-budgets/{path:path}", methods=["GET", "POST"])
+        async def memory_control(request: Request):
+            if request.url.path.endswith("/apply"):
+                return _Forward(self.proxy)
+            return _Forward(self.shared_services.memory_control.app)
 
         @api.api_route(
             "/{path:path}",

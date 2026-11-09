@@ -52,6 +52,7 @@ class MemoryApi:
         runner_factory: Callable[[RunnerProfile], Any] | None = None,
         apply_running: Callable[[str, MemoryRunningUpdate, str], Awaitable[MemoryJob]]
         | None = None,
+        register_running_apply: bool = True,
     ):
         self.store, self.service, self.runner_factory, self.apply_running = (
             store,
@@ -157,12 +158,6 @@ class MemoryApi:
             self.capabilities[profile_id], self.runners[profile_id] = capability, runner
             return capability
 
-        @app.post(
-            prefix + "/jobs/{job_id}/apply",
-            response_model=MemoryJob,
-            tags=["system"],
-            dependencies=dependencies,
-        )
         async def apply(job_id: str, body: MemoryRunningUpdate, request: Request):
             if self.apply_running is None:
                 raise HTTPException(
@@ -180,6 +175,16 @@ class MemoryApi:
             except MemoryBudgetError as error:
                 # diagnostic-expected: explicit impact acknowledgement and bounds are validated before application.
                 raise HTTPException(422, str(error)) from error
+
+        if register_running_apply:
+            app.add_api_route(
+                prefix + "/jobs/{job_id}/apply",
+                apply,
+                methods=["POST"],
+                response_model=MemoryJob,
+                tags=["system"],
+                dependencies=dependencies,
+            )
 
     @staticmethod
     def _actor(request: Request) -> str:

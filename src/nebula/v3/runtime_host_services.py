@@ -21,6 +21,8 @@ from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
 from .runtime_memory_recovery import HostMemoryRecovery
+from .runtime_memory_control import HostMemoryControl
+from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
 from .shared_memory_import import CompatibilityMemoryImport
@@ -85,6 +87,17 @@ class HostSharedServices:
         self._requests: set[asyncio.Task] = set()
         self._socket_identity = None
         self.product_guidance = {"state": "unavailable"}
+        self.memory_control = None
+        if getattr(host, "operator_token", None):
+            self.configure_memory_control(host.operator_token)
+
+    def configure_memory_control(self, token):
+        if self.memory_control is None:
+            self.memory_control = HostMemoryControl(self.host, self.recovery, token)
+        elif not secret_matches(self.memory_control.token, token):
+            raise ValueError(
+                "Host memory controls must use the supervisor's Core authentication"
+            )
 
     async def _peer(self, runtime_id):
         async with self._peer_lock:
@@ -129,12 +142,15 @@ class HostSharedServices:
                             "protocol": "nebula.host-services/v1",
                             "memory": True,
                             "capacity": True,
+                            "memory_control": self.memory_control is not None,
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
                         }
 
                     rpc.register("host.services/v1", capabilities)
                     register_shared_memory(rpc, self.memory, runtime_id=runtime_id)
+                    if self.memory_control is not None:
+                        self.memory_control.register(rpc, runtime_id)
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)
                     self._peers[runtime_id] = rpc

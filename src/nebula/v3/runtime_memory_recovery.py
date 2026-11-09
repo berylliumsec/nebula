@@ -39,6 +39,9 @@ class HostMemoryRecovery:
                 "Reconnect this job's original execution profile before verifying cleanup"
             )
         profile = await self.store.get(RunnerProfile, profile_id)
+        return self.runner_for_profile(profile)
+
+    def runner_for_profile(self, profile):
         # Disabled profiles still describe an old job's cleanup authority. No
         # workload is launched here. The reconciler additionally checks the
         # original process namespace, fingerprint, daemon and immutable groups.

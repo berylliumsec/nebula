@@ -12,6 +12,7 @@ from sqlalchemy import select
 from .database import (
     DeploymentHostRow,
     EntityRow,
+    MemoryJobRow,
     ProjectOwnershipRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
@@ -100,6 +101,14 @@ class RuntimeRouting:
                     select(RuntimeResourceRow.project_id).where(
                         RuntimeResourceRow.id.in_(references),
                         RuntimeResourceRow.state != "closed",
+                    )
+                )
+            )
+            projects.update(
+                await session.scalars(
+                    select(MemoryJobRow.project_id).where(
+                        MemoryJobRow.id.in_(references),
+                        MemoryJobRow.project_id.is_not(None),
                     )
                 )
             )
