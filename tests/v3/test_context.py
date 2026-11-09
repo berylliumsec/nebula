@@ -327,13 +327,17 @@ def test_known_model_limits_fold_provider_spellings(model: str, window: int):
 
 
 @pytest.mark.parametrize("output", [None, 2_048, 128_000])
-@pytest.mark.parametrize("model", ["gpt-6-sol", "openai/gpt-6-sol", "gpt-6-sol-2026-11-01"])
+@pytest.mark.parametrize(
+    "model", ["gpt-6-sol", "openai/gpt-6-sol", "gpt-6-sol-2026-11-01"]
+)
 def test_gpt6_sol_published_limits_keep_working_ceiling(model, output):
     profile = _profile()
     profile.provider_type = "openai"
     profile.is_local = False
 
-    limits = resolve_context_limits(profile, model=model, requested_output_tokens=output)
+    limits = resolve_context_limits(
+        profile, model=model, requested_output_tokens=output
+    )
 
     assert limits.context_window == 1_050_000
     assert limits.max_output_tokens == (output or 128_000)

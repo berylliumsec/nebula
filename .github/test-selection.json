@@ -1,8 +1,8 @@
 {
-  "change_digest": "333916058ebf230cfa8927fc61d85f2051e0ef8620ce146a425f390750855899",
-  "reviewed_by": "Codex; independent validate_openai_metadata root-cause review",
-  "reason": "Fix OpenAI metadata contract failure and retain already deployed runtime admission and GPT-6 classification fixes. User explicitly requests merge/deployment with no tests.",
-  "exclusions": "All automated tests and browser/device suites excluded by explicit operator instruction. Regression cases written but unexecuted. Production builds and authenticated deployment/readback only; end-to-end operator journey remains unverified.",
+  "change_digest": "ac0fd21dc38e6fc74ef5c02dee849b0d7f936332a0d5e067780a62feb79e07fc",
+  "reviewed_by": "Codex; independently validated API-worker header admission and every sync/async terminal transport path",
+  "reason": "Two transport cases cover mutation methods, safe reads, explicit keys, streams, auth retention and no retries. TLS LAN TUI covers paired sends, MCP settings and goal changes under mutation-key admission. Package and product guidance sync remain selected. Includes formatter-only corrections to two baseline tests with verified identical AST; no behavioral test expansion.",
+  "exclusions": "Shared Python terminal HTTP transport only. Browser/frontend/native UI not changed; no broad suites.",
   "python_versions": [
     "3.12"
   ],
@@ -10,7 +10,7 @@
   "python_browser": false,
   "checks": [],
   "expected_tests": {
-    "python": 0,
+    "python": 5,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -19,7 +19,12 @@
     "portable": 0,
     "packaged_native": 0
   },
-  "python": [],
+  "python": [
+    "tests/test_terminal_transport.py",
+    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
+    "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies",
+    "tests/v3/test_terminal_message_recall_knowledge.py::test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core"
+  ],
   "frontend": [],
   "native": [],
   "playwright": []

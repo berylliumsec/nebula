@@ -563,11 +563,30 @@ async def lan_core(tmp_path, monkeypatch, request):
     }
     observed_state_reads: list[str] = []
 
-    supervisor_health = getattr(request, "param", None) == "supervisor"
+    mutation_keys_required = getattr(request, "param", None) == "idempotency"
+    supervisor_health = getattr(request, "param", None) in {"supervisor", "idempotency"}
 
     @app.middleware("http")
     async def delay_selected_read(request, call_next):
         path = request.url.path
+        if (
+            mutation_keys_required
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and not path.startswith("/api/v1/auth/")
+            and not request.headers.get("authorization")
+        ):
+            from fastapi.responses import JSONResponse
+            from uuid import UUID
+
+            try:
+                UUID(request.headers.get("Idempotency-Key", ""))
+            except ValueError:
+                return JSONResponse(
+                    {
+                        "detail": "A client-generated Idempotency-Key is required for this mutation"
+                    },
+                    status_code=428,
+                )
         if path == "/api/v1/health" and supervisor_health:
             from fastapi.responses import JSONResponse
 
@@ -933,9 +952,10 @@ def test_paired_tui_settings_stays_open_for_multiple_changes(lan_core):
     )
 
 
-@pytest.mark.parametrize("lan_core", ["supervisor"], indirect=True)
+@pytest.mark.parametrize("lan_core", ["idempotency"], indirect=True)
 def test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback(lan_core):
     data = lan_core
+    print("Synthetic TLS LAN origin:", data["origin"])
     second = data["workspace"] / ".agents" / "skills" / "summarize" / "SKILL.md"
     second.parent.mkdir(parents=True)
     second.write_text(
