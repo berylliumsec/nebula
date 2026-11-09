@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 
 from .async_utils import finish_cleanup
 from .authentication import CoreAuthentication
+from .authentication_api import AuthenticationApi
 from .database import (
     ProjectOwnershipRow,
     ProjectHandoffRow,
@@ -27,6 +28,7 @@ from .diagnostics import record_caught_exception
 from .deployments import _RESIDENT
 from .release_store import ReleaseStore
 from .runtime_coordination import CoordinationConflict, ProjectLease
+from .runtime_bootstrap import RuntimeBootstrap
 from .runtime_http import RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
@@ -87,6 +89,9 @@ class RuntimeSupervisor:
         worker_admission: Callable[[ReleaseManifest, str], Awaitable[None]]
         | None = None,
         shared_services: HostSharedServices | None = None,
+        recovery_version: str | None = None,
+        allow_insecure_device_pairing: bool = False,
+        shutdown_requested: Callable[[], Awaitable[None]] | None = None,
     ):
         if not operator_token:
             raise ValueError("supervisor requires normal Core authentication")
@@ -113,6 +118,9 @@ class RuntimeSupervisor:
             self.coordinator.coordination, host.credentials.directory
         )
         self.proxy = RuntimeHttpProxy(self.routing.api_upstream)
+        self.bootstrap = RuntimeBootstrap(self.coordinator, self.routing)
+        self._recovery_version = recovery_version
+        self._shutdown_requested = shutdown_requested
         self.started, self.closed = False, False
         self._operations = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
@@ -120,6 +128,7 @@ class RuntimeSupervisor:
         self._handoff_serial = asyncio.Lock()
         self.viewers: set[asyncio.Task] = set()
         authentication = CoreAuthentication(self.store, operator_token)
+        self.authentication = authentication
 
         @asynccontextmanager
         async def lifespan(_app):
@@ -132,6 +141,20 @@ class RuntimeSupervisor:
         api = FastAPI(
             lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
         )
+        self.http_api = api
+        api.state.authentication_api = AuthenticationApi(
+            api,
+            self.store,
+            authentication,
+            allow_insecure_pairing=allow_insecure_device_pairing,
+        )
+
+        @api.get("/api/v1/health", dependencies=[Depends(authentication.require_auth)])
+        async def health():
+            return JSONResponse(
+                await self.bootstrap.health(),
+                headers={"Cache-Control": "private, no-store"},
+            )
 
         @api.exception_handler(RuntimeIpcError)
         async def disconnected(_request, _error):
@@ -181,8 +204,17 @@ class RuntimeSupervisor:
             methods=["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
         )
         async def forward(request: Request):
-            if request.url.path.startswith("/internal/"):
+            path = request.url.path
+            if path == "/internal" or path.startswith("/internal/"):
                 return JSONResponse({"detail": "Not found"}, status_code=404)
+            if (
+                request.method in {"GET", "HEAD"}
+                and path != "/api"
+                and not path.startswith("/api/")
+                and not await self.bootstrap.api_ready()
+                and self.bootstrap.assets is not None
+            ):
+                return _Forward(self.bootstrap.assets.app)
             return _Forward(self.proxy)
 
         @api.websocket("/{path:path}")
@@ -201,6 +233,8 @@ class RuntimeSupervisor:
             if not self.started:
                 await self.host.start()
                 try:
+                    if self._recovery_version is not None:
+                        await self.bootstrap.select_release(self._recovery_version)
                     await self.shared_services.start()
                 except BaseException:
                     await self.shared_services.close()
@@ -210,6 +244,12 @@ class RuntimeSupervisor:
                 self._handoff_task = asyncio.create_task(
                     self._handoff_loop(), name="nebula-host-handoffs"
                 )
+
+    async def select_recovery_release(self, version: str) -> None:
+        async with self._operations:
+            self._active()
+            await self.bootstrap.select_release(version)
+            self._recovery_version = version
 
     async def request_project_handoff(self, project_id, target_runtime_id):
         async with self._operations:
