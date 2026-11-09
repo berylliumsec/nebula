@@ -19,6 +19,55 @@ def client_for(handler):
     )
 
 
+def test_held_provider_turn_uses_core_pending_status():
+    from threading import Event
+    from types import SimpleNamespace
+
+    from nebula.v3.domain import ChatTurnStatus
+    from nebula.v3.execution_kernel import PendingChatTurnStatus
+
+    pending = PendingChatTurnStatus(
+        id="original-turn",
+        session_id="original-session",
+        status=ChatTurnStatus.ROUTING,
+        revision=1,
+    )
+    reads = []
+
+    def serve(request):
+        reads.append((request.method, request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=pending.model_dump(mode="json"))
+
+    release = Event()
+    chat = SimpleNamespace(error=None, finished=Event())
+    with client_for(serve) as client:
+        observed = driver.held_provider_turn(
+            client,
+            chat,
+            release,
+            [1.0],
+            pending.session_id,
+            pending.id,
+            "before bootstrap window close",
+        )
+
+    assert reads == [
+        (
+            "GET",
+            "/api/v1/chat/sessions/original-session/pending-turn",
+            {"view": "status"},
+        )
+    ]
+    assert observed == {
+        "phase": "before bootstrap window close",
+        "turn_id": pending.id,
+        "session_id": pending.session_id,
+        "provider_executions": 1,
+        "status": ChatTurnStatus.ROUTING.value,
+    }
+    assert not release.is_set() and not chat.finished.is_set()
+
+
 def test_mutation_follows_accepted_receipt_without_another_submission():
     calls = []
     responses = 0

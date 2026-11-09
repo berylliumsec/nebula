@@ -658,6 +658,37 @@ class AcceptedChat:
         return wait_until(observed, timeout=timeout)
 
 
+def held_provider_turn(client, chat, release, starts, session_id, turn_id, label):
+    """Observe the original provider turn without starting another producer."""
+    if chat.error:
+        raise chat.error
+    pending = require(
+        client.get(
+            f"/chat/sessions/{session_id}/pending-turn",
+            params={"view": "status"},
+        )
+    )
+    # The status API exposes ChatTurnStatus; "running" is only its queue state.
+    if (
+        release.is_set()
+        or chat.finished.is_set()
+        or len(starts) != 1
+        or not pending
+        or (pending["id"], pending["session_id"], pending["status"])
+        != (turn_id, session_id, "routing")
+    ):
+        raise AssertionError(
+            "original provider turn was not held through " + label
+        )
+    return {
+        "phase": label,
+        "turn_id": turn_id,
+        "session_id": session_id,
+        "provider_executions": len(starts),
+        "status": pending["status"],
+    }
+
+
 def desktop_observe(args, child, environment, operation, **values):
     birth = process_birth(child.pid)
     if birth is None:
@@ -971,32 +1002,9 @@ def run(args) -> dict:
             }
 
             def assert_held(label):
-                if chat.error:
-                    raise chat.error
-                pending = require(
-                    client.get(
-                        f"/chat/sessions/{session_id}/pending-turn",
-                        params={"view": "status"},
-                    )
+                return held_provider_turn(
+                    client, chat, release, starts, session_id, turn_id, label
                 )
-                if (
-                    release.is_set()
-                    or chat.finished.is_set()
-                    or len(starts) != 1
-                    or not pending
-                    or (pending["id"], pending["session_id"], pending["status"])
-                    != (turn_id, session_id, "running")
-                ):
-                    raise AssertionError(
-                        "original provider turn was not held through " + label
-                    )
-                return {
-                    "phase": label,
-                    "turn_id": turn_id,
-                    "session_id": session_id,
-                    "provider_executions": len(starts),
-                    "status": pending["status"],
-                }
 
             held = []
 
