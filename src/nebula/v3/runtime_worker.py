@@ -118,8 +118,10 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
     # execution kernel or constructs any producer or shared host service.
     from .api_worker import create_api_worker
     from .runtime_delivery import RuntimeDelivery
+    from .runtime_host_services import host_service_client
     from .runtime_routing import RuntimeRouting
     from .runtime_vault import RuntimeVault
+    from .runtime_work_batches import RuntimeWorkBatches, WORK_BATCH_CAPABILITY
     from .storage import NebulaStore
 
     bootstrap = context.bootstrap
@@ -138,19 +140,32 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
         context.coordinator.coordination,
         RuntimeVault(Path(bootstrap.data_root) / "runtime" / "payloads"),
     )
-    app = create_api_worker(
-        store,
-        delivery,
-        operator_token=bootstrap.operator_token.get_secret_value(),
-        project_for=routing.project_for,
-        chat_acceptance_for=routing.supports_chat_acceptance,
-        chat_resume_for=routing.supports_chat_resume,
-        upstream_for=routing.upstream_for,
-        static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
-        dispose_database=False,
-    )
-    async with app.router.lifespan_context(app):
-        yield app
+    host_services = host_service_client(bootstrap, context.secret)
+
+    async def batch_availability():
+        return await host_services.call(WORK_BATCH_CAPABILITY, {}, timeout=3)
+
+    work_batches = RuntimeWorkBatches(delivery, availability=batch_availability)
+    try:
+        app = create_api_worker(
+            store,
+            delivery,
+            operator_token=bootstrap.operator_token.get_secret_value(),
+            project_for=routing.project_for,
+            chat_acceptance_for=routing.supports_chat_acceptance,
+            chat_resume_for=routing.supports_chat_resume,
+            upstream_for=routing.upstream_for,
+            static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
+            dispose_database=False,
+            work_batches=work_batches,
+        )
+        async with app.router.lifespan_context(app):
+            yield app
+    finally:
+        try:
+            await work_batches.close()
+        finally:
+            await host_services.close()
 
 
 async def run_worker(

@@ -79,14 +79,17 @@ class HostEffectDelivery(GlobalSqlDelivery):
         ).hexdigest()
         try:
             async with coordinator._write() as session:
-                if authority is not None:
-                    await coordinator._check(session, authority, lock=True)
                 if coordinator.database.engine.dialect.name == "postgresql":
                     await session.execute(
                         text(
                             "SELECT pg_advisory_xact_lock(hashtext(current_schema()), hashtext('nebula:global-sql:v1'))"
                         )
                     )
+                host = await session.get(
+                    DeploymentHostRow, "host", with_for_update=True
+                )
+                if authority is not None:
+                    await coordinator._check(session, authority, lock=True)
                 existing = await session.scalar(
                     select(RuntimeCommandRow).where(
                         RuntimeCommandRow.actor_id == actor,
@@ -108,9 +111,6 @@ class HostEffectDelivery(GlobalSqlDelivery):
                     raise CoordinationConflict(
                         "Host Settings capacity is busy; retry before submitting new work"
                     )
-                host = await session.get(
-                    DeploymentHostRow, "host", with_for_update=True
-                )
                 if host is not None and host.shutdown_requested:
                     raise CoordinationConflict(
                         "Core shutdown is in progress; new work is not accepted"

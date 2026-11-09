@@ -241,7 +241,14 @@ class RuntimeWorkBatches:
         elif self.availability is not None:
             try:
                 value = await self.availability()
-            except (RuntimeIpcError, OSError, TimeoutError):
+            except (RuntimeIpcError, OSError, TimeoutError) as error:
+                record_caught_exception(
+                    "runtime",
+                    "work.batch_capability_unavailable",
+                    "Work batch coordination is unavailable; existing project work continues.",
+                    error,
+                    stage="admission",
+                )
                 value = None
         else:
             value = None
@@ -1004,10 +1011,16 @@ class RuntimeWorkBatches:
                 if parent is not None and parent.state == "queued":
                     parent.result = {"detail": str(error)}
         except HTTPException as error:
+            # diagnostic-expected: expired/revoked accepting actors receive a
+            # durable authentication response after the SQL attempt rolls back.
             await self._failure(batch_id, error.status_code, str(error.detail))
         except _InvalidBatch as error:
+            # diagnostic-expected: invalid saved input receives a durable 422;
+            # this type excludes stored-record corruption and runner failures.
             await self._failure(batch_id, 422, str(error))
         except (NotFoundError, ConflictError) as error:
+            # diagnostic-expected: missing metadata and revision/source/hierarchy
+            # conflicts receive durable 404/409 responses without partial writes.
             await self._failure(
                 batch_id, 404 if isinstance(error, NotFoundError) else 409, str(error)
             )

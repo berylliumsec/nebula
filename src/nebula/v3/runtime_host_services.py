@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+from typing import TYPE_CHECKING
 
 import uvicorn
 from sqlalchemy import select
@@ -37,6 +38,9 @@ from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
 from .shared_memory_import import CompatibilityMemoryImport
 from .shared_knowledge_rpc import SharedKnowledge
+
+if TYPE_CHECKING:
+    from .runtime_work_batches import RuntimeWorkBatches
 
 HOST_SOCKET_NAME = "host-services.sock"
 PEER_HEADER = b"x-nebula-ipc-worker"
@@ -113,6 +117,7 @@ class HostSharedServices:
         self.memory_control = None
         self.browser_bridge = HostBrowserBridge(self.coordination)
         self.host_settings = HostSettings(host)
+        self.work_batches: RuntimeWorkBatches | None = None
         if getattr(host, "operator_token", None):
             self.configure_memory_control(host.operator_token)
 
@@ -133,8 +138,8 @@ class HostSharedServices:
                 if (
                     process is None
                     or runtime is None
-                    or process.role != "execution"
-                    or runtime.role != "execution"
+                    or process.role not in {"execution", "api"}
+                    or runtime.role != process.role
                     or process.state != "ready"
                     or runtime.lease_expires_at_ms <= now
                 ):
@@ -157,6 +162,28 @@ class HostSharedServices:
                         raise RuntimeIpcError("Shared host peer capacity is busy")
                     secret = self.host.credentials.read(process.credential_reference)
                     rpc = RuntimeRpcServer(secret)
+
+                    if process.role == "api":
+                        from .runtime_work_batches import WORK_BATCH_CAPABILITY
+
+                        async def work_batch_capability(payload):
+                            if payload:
+                                raise RuntimeIpcError(
+                                    "Work batch capability accepts no arguments"
+                                )
+                            if self.work_batches is None:
+                                return {
+                                    "protocol": "nebula.work-batches/v1",
+                                    "feature": "project.work-batch/v1",
+                                    "ready": False,
+                                }
+                            return self.work_batches.capability()
+
+                        # API peers can inspect only this one capability. They
+                        # receive none of the execution-only host operations.
+                        rpc.register(WORK_BATCH_CAPABILITY, work_batch_capability)
+                        self._peers[runtime_id] = rpc
+                        return rpc
 
                     async def capabilities(payload):
                         if payload:
@@ -241,7 +268,7 @@ class HostSharedServices:
         ]
         if len(peers) != 1 or re.fullmatch(rb"[A-Za-z0-9_-]{1,200}", peers[0]) is None:
             await JSONResponse(
-                {"detail": "Authenticated execution peer required"}, status_code=401
+                {"detail": "Authenticated runtime peer required"}, status_code=401
             )(scope, receive, send)
             return
         task = asyncio.current_task()
@@ -338,6 +365,12 @@ class HostSharedServices:
             raise RuntimeError("Shared-service startup was detached")
         await self.recovery.start()
         await self.host_settings.start()
+        from .runtime_work_batches import RuntimeWorkBatches
+
+        self.work_batches = RuntimeWorkBatches(
+            self.host_settings.effect.delivery, host=self.host
+        )
+        await self.work_batches.start()
         self.endpoint = "unix://" + str(path)
         self.server = _HostServer(
             uvicorn.Config(
@@ -394,6 +427,8 @@ class HostSharedServices:
         await finish_cleanup(initialize())
 
     async def _stop_owned(self):
+        if self.work_batches is not None:
+            await self.work_batches.close()
         await self.host_settings.close()
         await self.recovery.close()
         if self.server is not None:

@@ -47,8 +47,6 @@ class GlobalSqlDelivery:
         ).hexdigest()
         try:
             async with coordinator._write() as session:
-                if authority is not None:
-                    await coordinator._check(session, authority, lock=True)
                 if coordinator.database.engine.dialect.name == "postgresql":
                     await session.execute(
                         text(
@@ -56,6 +54,13 @@ class GlobalSqlDelivery:
                             "hashtext('nebula:global-sql:v1'))"
                         )
                     )
+                # Batch progress takes the shared sequence lock before project
+                # fences. Shutdown also takes host admission before its owners.
+                host = await session.get(
+                    DeploymentHostRow, "host", with_for_update=True
+                )
+                if authority is not None:
+                    await coordinator._check(session, authority, lock=True)
                 existing = await session.scalar(
                     select(RuntimeCommandRow).where(
                         RuntimeCommandRow.actor_id == actor_id,
@@ -73,9 +78,6 @@ class GlobalSqlDelivery:
                         existing.sequence,
                         existing.accepted_at_ms,
                     )
-                host = await session.get(
-                    DeploymentHostRow, "host", with_for_update=True
-                )
                 if host is not None and host.shutdown_requested:
                     raise CoordinationConflict(
                         "Core shutdown is in progress; new work is not accepted"
