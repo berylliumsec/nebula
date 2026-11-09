@@ -169,7 +169,9 @@ def packaged_bundle() -> tuple[Path, str] | None:
         executable.parent.parent / "lib/Nebula/nebula-runtime",
     ]
     if getattr(sys, "frozen", False):
-        candidates.append(Path(sys._MEIPASS) / "nebula-runtime")
+        frozen_root = getattr(sys, "_MEIPASS", None)
+        if frozen_root is not None:
+            candidates.append(Path(frozen_root) / "nebula-runtime")
     for candidate in candidates:
         if (candidate / MANIFEST_NAME).is_file():
             digest = (candidate / "nebula-runtime.sha256").read_text().strip()

@@ -4236,8 +4236,9 @@ class ChatService:
                 turn.id
             )
             await self.stream_journal.begin(turn.id, runtime.epoch)
-        if command_id is None and getattr(prepared, "source_request", None) is not None:
-            command_id = prepared.source_request._runtime_command_id
+        source_request = prepared.source_request
+        if command_id is None and source_request is not None:
+            command_id = source_request._runtime_command_id
         initial_frames = await self._publish_provider_events(
             turn.id,
             runtime,
@@ -15672,11 +15673,14 @@ class ChatService:
                 transaction, fork, copied.model_copy(update={"revision": 1})
             )
         for message in inherited:
-            reference = message.metadata.get(MANIFEST_KEY)
-            if isinstance(reference, dict) and reference.get("revision") in mapped:
+            message_reference = message.metadata.get(MANIFEST_KEY)
+            if (
+                isinstance(message_reference, dict)
+                and message_reference.get("revision") in mapped
+            ):
                 message.metadata = {
                     **message.metadata,
-                    MANIFEST_KEY: mapped[reference["revision"]],
+                    MANIFEST_KEY: mapped[message_reference["revision"]],
                 }
 
     async def rewind_session(

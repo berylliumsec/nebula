@@ -160,7 +160,7 @@ def reconcile(
         )
         introduction = (
             prior.introduction_reason
-            if same and prior.schema_present
+            if prior is not None and same and prior.schema_present
             else "definition_update"
             if prior and prior.schema_present
             else "native_selection"
@@ -410,7 +410,13 @@ def managed_load_result(
     if not isinstance(loaded, list):
         return result
     present = manifest.present_digests
-    names = [item.get("name") for item in loaded if isinstance(item, dict)]
+    names: list[str] = []
+    for item in loaded:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if not isinstance(name, str):
+                return result
+            names.append(name)
     if not names or any(name not in present for name in names):
         return result
     return result.model_copy(

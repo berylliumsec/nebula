@@ -712,6 +712,7 @@ class DeploymentCoordinator:
             leases = [
                 ProjectLease(row.project_id, row.runtime_id, row.fencing_token)
                 for row in owners
+                if row.runtime_id is not None
             ]
             for lease in leases:
                 await self.coordination._check(session, lease, lock=False)
@@ -801,6 +802,7 @@ class DeploymentCoordinator:
                 )
             await self.coordination._check(session, lease, lock=False)
             owner = await session.get(ProjectOwnershipRow, lease.project_id)
+            assert owner is not None
             owner.runtime_id, owner.lease_expires_at_ms = None, 0
             await self._receipt(
                 session,

@@ -9,7 +9,6 @@ import json
 import re
 import socket
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import httpx
 from typer.testing import CliRunner

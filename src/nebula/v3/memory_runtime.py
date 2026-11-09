@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
 from .async_utils import finish_cleanup
@@ -454,7 +454,7 @@ class MemoryComputeController:
         resource_kind: str,
         resource_id: str,
         detail: str,
-    ):
+    ) -> NoReturn:
         identity = "held-" + uuid4().hex
         await self.service.create_job(
             identity,

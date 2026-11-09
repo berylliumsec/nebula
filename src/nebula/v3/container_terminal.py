@@ -1612,7 +1612,7 @@ class ContainerTerminalService:
             from .memory_runtime import managed_compute
 
             with managed_compute(
-                session.engagement_id, "interactive_terminal", session.id
+                session.request.engagement_id, "interactive_terminal", session.id
             ):
                 process = await prepared.resolution.runner.open_terminal(
                     sandbox_request,
