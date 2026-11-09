@@ -116,12 +116,10 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
     bootstrap = context.bootstrap
     if bootstrap.operator_token is None:
         raise RuntimeIpcError("API worker requires the private operator bootstrap")
-    settings = (
-        PoolSettings(**bootstrap.pool_settings) if bootstrap.pool_settings else None
-    )
-    store = NebulaStore(
-        Database(bootstrap.database, bootstrap=False, pool_settings=settings)
-    )
+    # Global SQL handlers and their command receipts must share the exact
+    # task-owned Session. A second Database for the same URL is a different
+    # transaction owner and deadlocks SQLite's outer writer.
+    store = NebulaStore(context.database)
     routing = RuntimeRouting(
         context.coordinator.coordination,
         Path(bootstrap.credential_directory),
@@ -140,6 +138,7 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
         chat_resume_for=routing.supports_chat_resume,
         upstream_for=routing.upstream_for,
         static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
+        dispose_database=False,
     )
     async with app.router.lifespan_context(app):
         yield app

@@ -1,17 +1,16 @@
 {
-  "change_digest": "ae677abc08bd29e2d52f4611a4ec384475ca218b6de76b9f020ef85469085327",
+  "change_digest": "8334c126fd65fff6a95ee7c1db3d5fde9d87bda41e29da3ccdb1d23920b139d5",
   "reviewed_by": "Codex",
-  "reason": "Three collected Node-backed Python cases exercise the real Electron renewal function: conflicting attachment stays permanently fenced, transient failure retains request identity, and success renews the same lease. Dedicated runtime browser catalog registered and desktop two-case listing verified; browser execution owned by acceptance. All three cases passed in0.10s; node syntax and exact browser test listing passed.",
-  "exclusions": "No full suite or Electron GUI. Browser catalog listing only; full production journey receipt remains with acceptance. No liveCore or provider.",
+  "reason": "Four collected SQL-backend cases exercise the actual api_application factory: one task-owned connection for atomic project/receipt writes, replay and rollback, worker-owned database cleanup, and rejection of mismatched transaction owners. Independent actual-factory reproduction established the prior two-connection deadlock. All four cases passed in3.47s on SQLite/PostgreSQL; rollback and cleanup ownership verified.",
+  "exclusions": "No full suite, real provider or deployment. Actual frozen artifact is retested after source commit by packaging acceptance.",
   "expected_tests": {
-    "python": 3,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python_node": true,
   "python": [
-    "tests/test_desktop_browser_registration.py"
+    "tests/v3/test_api_worker_composition.py"
   ],
   "frontend": [],
   "native": [],

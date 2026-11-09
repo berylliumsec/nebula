@@ -74,6 +74,7 @@ def create_api_worker(
     poll_interval: float = 0.25,
     allow_insecure_device_pairing: bool = False,
     global_api=None,
+    dispose_database: bool = True,
 ) -> FastAPI:
     if (
         not operator_token
@@ -112,7 +113,8 @@ def create_api_worker(
             await proxy.close()
             await global_api.close()
             await store.event_history.close()
-            await store.database.dispose()
+            if dispose_database:
+                await store.database.dispose()
 
     app = FastAPI(
         title="Nebula public API worker",

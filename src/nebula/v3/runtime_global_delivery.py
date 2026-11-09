@@ -20,6 +20,10 @@ MAX_GLOBAL_RESPONSE = 8 * 1024 * 1024
 
 class GlobalSqlDelivery:
     def __init__(self, delivery, application):
+        if application.store.database is not delivery.coordination.database:
+            raise ValueError(
+                "Global handlers and receipts must share one database transaction owner"
+            )
         self.delivery, self.application = delivery, application
 
     async def execute(self, intent, *, actor_id, idempotency_key):
