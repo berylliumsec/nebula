@@ -13,7 +13,10 @@ from pydantic import SecretStr, ValidationError
 
 from nebula.v3.domain import ProviderProfile
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
-from nebula.v3.product_knowledge import packaged_product_passages, search_product_knowledge
+from nebula.v3.product_knowledge import (
+    packaged_product_passages,
+    search_product_knowledge,
+)
 from nebula.v3.providers import (
     ModelMessage,
     ModelRequest,
@@ -38,7 +41,12 @@ async def test_openai_responses_sends_requested_daybreak_blue(daybreak_blue):
                 "id": "resp_daybreak",
                 "model": "gpt-daybreak-blue-latest",
                 "status": "completed",
-                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ready"}]}],
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "ready"}],
+                    }
+                ],
             },
         )
 
@@ -47,7 +55,9 @@ async def test_openai_responses_sends_requested_daybreak_blue(daybreak_blue):
         flavor=ProviderFlavor.OPENAI,
         api_key_value=SecretStr("synthetic-key"),
         default_model="gpt-daybreak-blue-latest",
-        options={"openai_cyber_access_program": "daybreak_blue"} if daybreak_blue else {},
+        options={"openai_cyber_access_program": "daybreak_blue"}
+        if daybreak_blue
+        else {},
     )
     provider = OpenAIResponsesProvider(config, transport=httpx.MockTransport(handler))
     response = await provider.complete(
@@ -83,14 +93,18 @@ def test_daybreak_blue_is_only_a_direct_openai_provider_option():
             )
 
 
-def test_bundled_product_guidance_finds_openai_daybreak_and_syncs_digest(tmp_path, monkeypatch):
+def test_bundled_product_guidance_finds_openai_daybreak_and_syncs_digest(
+    tmp_path, monkeypatch
+):
     from scripts.build_product_knowledge import ensure, source_digest, source_paths
 
     ensure()
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     digest, _ = packaged_product_passages()
     assert digest == source_digest(source_paths())
-    matches = search_product_knowledge("Where do I set an OpenAI API key and Daybreak Blue?")
+    matches = search_product_knowledge(
+        "Where do I set an OpenAI API key and Daybreak Blue?"
+    )
     assert any(item["heading"] == "Model providers" for item in matches)
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     result = index.sync_product_knowledge()

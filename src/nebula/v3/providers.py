@@ -3456,7 +3456,8 @@ class OpenAIResponsesProvider(ModelProvider):
         }
         if (
             self.config.flavor == ProviderFlavor.OPENAI
-            and self.config.options.get("openai_cyber_access_program") == "daybreak_blue"
+            and self.config.options.get("openai_cyber_access_program")
+            == "daybreak_blue"
         ):
             payload["access_programs"] = {"cyber": "daybreak_blue"}
         for batch, state in _replayed_batches(request, self.config.id, model):

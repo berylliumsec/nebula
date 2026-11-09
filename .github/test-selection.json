@@ -1,5 +1,5 @@
 {
-  "change_digest": "09b410e7386950819a251b5a4ca39fb6853546f505fc5aafd152cdf7424ae804",
+  "change_digest": "f0560c63834d522c82a15de6d8720aedbe1800e75b67d863f15d35f7760f72ed",
   "reviewed_by": "Codex",
   "reason": "OpenAI Responses now sends the optional Daybreak Blue access program saved on an OpenAI provider. Four focused Python cases cover wire payload, profile validation, and bundled guidance; 22 selected frontend cases cover key entry, option persistence, provider status, and assistant discovery; eight real-Core production-browser cases exercise the Settings save/retry, reload, provider chat, key use, and outbound Responses payload on the permanent desktop and mobile profiles. The changed real-core.spec.ts is a shared test file, so its new exact case is selected through the reviewed openai-daybreak catalog area.",
   "exclusions": "Native Rust is unchanged. Unrelated provider, harness, workspace, and broad interface suites are excluded. External OpenAI entitlement and a physical mobile device are outside synthetic acceptance; the live fixture verifies the request contract without sending a real key to OpenAI.",
