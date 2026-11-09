@@ -30,11 +30,13 @@ from .release_store import ReleaseStore
 from .runtime_coordination import CoordinationConflict, ProjectLease
 from .runtime_bootstrap import RuntimeBootstrap
 from .runtime_http import RuntimeHttpProxy
+from .runtime_identity import mount_runtime_identity
 from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
 from .runtime_routing import RuntimeRouting
 from .runtime_memory import RuntimeMemoryAdmission
 from .runtime_host_services import HostSharedServices
+from .runtime_management import RuntimeManagement
 from .storage import NebulaStore
 
 
@@ -121,11 +123,13 @@ class RuntimeSupervisor:
         self.bootstrap = RuntimeBootstrap(self.coordinator, self.routing)
         self._recovery_version = recovery_version
         self._shutdown_requested = shutdown_requested
+        self._shutdown_committed = False
         self.started, self.closed = False, False
         self._operations = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._handoff_task = None
         self._handoff_serial = asyncio.Lock()
+        self._activated_handoffs: set[str] = set()
         self.viewers: set[asyncio.Task] = set()
         authentication = CoreAuthentication(self.store, operator_token)
         self.authentication = authentication
@@ -148,6 +152,8 @@ class RuntimeSupervisor:
             authentication,
             allow_insecure_pairing=allow_insecure_device_pairing,
         )
+        self.management = RuntimeManagement(self, api, authentication)
+        mount_runtime_identity(api, self.store, authentication)
 
         @api.get("/api/v1/health", dependencies=[Depends(authentication.require_auth)])
         async def health():
@@ -294,15 +300,18 @@ class RuntimeSupervisor:
         async with self._handoff_serial:
             self._active()
             async with self.coordinator.database.session() as session:
-                rows = list(
-                    await session.scalars(
-                        select(ProjectHandoffRow)
-                        .where(
-                            ProjectHandoffRow.phase.in_(("transferable", "transferred"))
-                        )
-                        .limit(64)
+                query = select(ProjectHandoffRow).where(
+                    ProjectHandoffRow.phase.in_(
+                        ("transferable", "transferred", "verified")
                     )
                 )
+                if self._activated_handoffs:
+                    query = query.where(
+                        ProjectHandoffRow.target_runtime_id.not_in(
+                            self._activated_handoffs
+                        )
+                    )
+                rows = list(await session.scalars(query.limit(64)))
             for row in rows:
                 if row.checkpoint.get("format") != "nebula.project-checkpoint/v1":
                     continue
@@ -332,13 +341,15 @@ class RuntimeSupervisor:
             async with self._operations:
                 self._active()
                 await self.coordinator.transfer(row.project_id)
-        lease = await self.attach_execution(row.project_id, row.target_runtime_id)
+        lease = await self.attach_execution(
+            row.project_id, row.target_runtime_id, allow_prepared=True
+        )
         client = await self.host.rpc(row.target_runtime_id)
         try:
             status = await client.call("execution.status/v1", {}, timeout=5)
         finally:
             await client.close()
-        if status.get("state") != "ready" or not status.get(
+        if status.get("state") not in {"prepared", "ready"} or not status.get(
             "restored_checkpoint_digest"
         ):
             raise CoordinationConflict(
@@ -347,6 +358,9 @@ class RuntimeSupervisor:
         await self.coordinator.verified(
             lease, restored_checkpoint_digest=status["restored_checkpoint_digest"]
         )
+        if status.get("state") == "prepared":
+            await self.activate_execution(lease)
+        self._activated_handoffs.add(row.target_runtime_id)
 
     async def _handoff_loop(self):
         while not self.closed and not self.host.closed:
@@ -374,6 +388,8 @@ class RuntimeSupervisor:
     def _active(self):
         if self.closed or not self.started:
             raise RuntimeError("the active supervisor host lock is required")
+        if self._shutdown_committed:
+            raise CoordinationConflict("Host shutdown is committed")
 
     async def prepare_api(self, version: str) -> WorkerIdentity:
         async with self._operations:
@@ -481,7 +497,9 @@ class RuntimeSupervisor:
                 raise CoordinationConflict("The execution candidate remains staged")
             return spawned
 
-    async def attach_execution(self, project_id: str, runtime_id: str, *, timeout=30):
+    async def attach_execution(
+        self, project_id: str, runtime_id: str, *, timeout=30, allow_prepared=False
+    ):
         """Attach fresh work, or resume an interrupted assignment response.
 
         Live transfers and expired-owner recovery use their dedicated protocols;
@@ -524,11 +542,88 @@ class RuntimeSupervisor:
                             raise RuntimeIpcError(
                                 "Execution attachment does not match the committed grant"
                             )
-                        if status.get("state") == "ready":
+                        if status.get("state") == "ready" or (
+                            allow_prepared and status.get("state") == "prepared"
+                        ):
                             return lease
                         if status.get("state") != "starting":
                             raise CoordinationConflict(
                                 "Project startup needs reconciliation; its saved work remains held"
+                            )
+                        await asyncio.sleep(0.05)
+            finally:
+                await client.close()
+
+    async def recover_project(
+        self,
+        project_id: str,
+        target_runtime_id: str,
+        *,
+        expected_owner: ProjectLease,
+        expected_handoff_revision: int | None,
+        operation_id: str,
+        actor_id: str,
+    ):
+        async with self._operations:
+            self._active()
+            client = await self.host.rpc(target_runtime_id)
+            try:
+                status = await client.call("execution.status/v1", {}, timeout=5)
+                binding = status.get("lease")
+                if status.get("state") != "unassigned" and (
+                    not binding or binding.get("project_id") != project_id
+                ):
+                    raise CoordinationConflict("Prepare an unassigned recovery target")
+            finally:
+                await client.close()
+            lease = await self.coordinator.begin_recovery(
+                project_id,
+                target_runtime_id,
+                expected_owner=expected_owner,
+                expected_handoff_revision=expected_handoff_revision,
+                operation_id=operation_id,
+                actor_id=actor_id,
+            )
+        await self.attach_execution(project_id, target_runtime_id, allow_prepared=True)
+        client = await self.host.rpc(target_runtime_id)
+        try:
+            status = await client.call("execution.status/v1", {}, timeout=5)
+        finally:
+            await client.close()
+        if status.get("state") not in {"prepared", "ready"} or not status.get(
+            "restored_checkpoint_digest"
+        ):
+            raise CoordinationConflict(
+                "Recovery target has not verified its restored state"
+            )
+        await self.coordinator.verify_recovery(
+            lease,
+            operation_id=operation_id,
+            restored_checkpoint_digest=status["restored_checkpoint_digest"],
+        )
+        if status.get("state") == "prepared":
+            await self.activate_execution(lease)
+        return lease
+
+    async def activate_execution(self, lease: ProjectLease, *, timeout=30):
+        """Start restored controllers only after their durable verification."""
+        async with self._operations:
+            self._active()
+            client = await self.host.rpc(lease.runtime_id)
+            try:
+                await client.call("execution.activate/v1", {}, timeout=5)
+                async with asyncio.timeout(timeout):
+                    while True:
+                        status = await client.call("execution.status/v1", {}, timeout=5)
+                        if status.get("lease") != asdict(lease):
+                            raise RuntimeIpcError(
+                                "Activation does not match the committed grant"
+                            )
+                        if status.get("state") == "ready":
+                            return lease
+                        if status.get("state") not in {"prepared", "starting"}:
+                            raise CoordinationConflict(
+                                "Restored project activation requires reconciliation"
                             )
                         await asyncio.sleep(0.05)
             finally:
@@ -540,6 +635,23 @@ class RuntimeSupervisor:
             await self.coordinator.promote_api(
                 runtime_id, expected_revision=expected_revision
             )
+
+    async def rollback_code(self, version: str, *, expected_revision: int):
+        async with self._operations:
+            self._active()
+            await self.coordinator.rollback_code(
+                version, expected_revision=expected_revision
+            )
+        identity = await self.prepare_api(version)
+        status = await self.coordinator.status()
+        await self.promote_api(identity.runtime_id, expected_revision=status.revision)
+
+    async def shutdown(self, *, expected_revision: int):
+        async with self._operations:
+            self._active()
+            result = await self.host.shutdown(expected_revision=expected_revision)
+            self._shutdown_committed = True
+            return result
 
     async def close(self):
         if self._close_task is None:

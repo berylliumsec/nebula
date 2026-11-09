@@ -171,12 +171,19 @@ async def test_recovery_selection_rejects_missing_or_changed_bundle(recovery):
 async def test_paired_browser_repairs_memory_before_real_api_admission(recovery):
     await select_release(recovery)
     root, client = recovery.root, recovery.client
+    identity = await client.get("/api/v1/runtime/identity", headers=AUTH)
+    assert identity.status_code == 200 and identity.json()["principal_id"] == "operator"
     with pytest.raises(MemoryBudgetError, match="Core reserve"):
         await root.prepare_api("v1")
     offer = await invite(client)
     paired = await client.post("/api/v1/auth/pairings/redeem", json=redeem(offer))
     assert paired.status_code == 200, paired.text
     device_id = paired.json()["device"]["id"]
+    device_identity = (await client.get("/api/v1/runtime/identity")).json()
+    assert device_identity == {
+        "core_id": identity.json()["core_id"],
+        "principal_id": "device:" + device_id,
+    }
     assert (await client.get("/api/v1/health")).json()["api_ready"] is False
     policy = (await client.get(MEMORY)).json()
     body = {"expected_revision": policy["revision"], "policy": reserve_policy(policy)}
