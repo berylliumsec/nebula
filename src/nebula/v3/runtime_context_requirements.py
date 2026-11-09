@@ -1,6 +1,6 @@
 """Execution capabilities required by durable project context, beyond SQL shape."""
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import aliased
 
 from .database import (
@@ -46,22 +46,24 @@ async def required_context_features(session, project_id: str) -> set[str]:
         # Historical revisions also own fork/recovery knowledge, including an
         # empty current revision after source revocation.
         required.add(PROVIDER_TOOLS_FEATURE)
-    turn = aliased(EntityRow)
+    turn = EntityRow
     part = aliased(EntityRow)
     snapshot = turn.payload["request_snapshot"]
+    referenced_proof = (
+        select(part.id)
+        .where(
+            part.id == snapshot["snapshot_parts"]["model_request"].as_string(),
+            part.kind == "chat_snapshot_parts",
+            part.engagement_id == turn.engagement_id,
+            part.payload["session_id"].as_string()
+            == turn.payload["session_id"].as_string(),
+            part.payload["value"]["core_tools_section"]["version"].as_integer() == 1,
+        )
+        .exists()
+    )
     if (
         await session.scalar(
             select(turn.id)
-            .outerjoin(
-                part,
-                and_(
-                    part.id == snapshot["snapshot_parts"]["model_request"].as_string(),
-                    part.kind == "chat_snapshot_parts",
-                    part.engagement_id == turn.engagement_id,
-                    part.payload["session_id"].as_string()
-                    == turn.payload["session_id"].as_string(),
-                ),
-            )
             .where(
                 turn.kind == "chat_turns",
                 turn.engagement_id == project_id,
@@ -71,8 +73,7 @@ async def required_context_features(session, project_id: str) -> set[str]:
                         "version"
                     ].as_integer()
                     == 1,
-                    part.payload["value"]["core_tools_section"]["version"].as_integer()
-                    == 1,
+                    referenced_proof,
                 ),
             )
             .limit(1)
