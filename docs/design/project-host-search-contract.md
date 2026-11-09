@@ -42,3 +42,16 @@ final combined source pin must additionally exercise a real retained execution
 worker against the private host listener, then the authenticated production LAN
 journey. Browser/device and installed-runtime acceptance are separate gates; the
 focused protocol checks do not claim those outcomes.
+
+The retained-worker regression is
+`tests/v3/test_runtime_host_search_process.py::test_retained_worker_queries_one_host_owner_for_two_project_grants`
+and collects exactly two cases for SQLite and PostgreSQL. It archives and hashes
+the candidate package, deletes its staging source, and starts that immutable
+execution bundle. The child uses an execution-scoped database and the actual
+platform broker, checks the host query capability, and sends queries through the
+private host listener for two separately fenced project grants. The host's only
+query owner returns inert results; no upstream engine or container is started.
+Assertions read each completed durable tool receipt and require that both calls
+hit the same host object after each borrowed project adapter closes. Run this on
+the combined HostSharedServices/worker binding source, not an older branch that
+does not advertise the query capability.
