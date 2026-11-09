@@ -434,24 +434,7 @@ def test_serve_reports_a_busy_port_without_a_traceback(tmp_path, monkeypatch):
         busy.bind(("127.0.0.1", 0))
         busy.listen(1)
         port = busy.getsockname()[1]
-        monkeypatch.setattr(
-            "nebula.v3.cli._services",
-            lambda value=None, **_kwargs: (
-                tmp_path,
-                NebulaStore(tmp_path / "busy-port.db"),
-                None,
-            ),
-        )
-        monkeypatch.setattr(
-            "nebula.v3.cli.ChromaKnowledgeIndex", lambda path, *, reranker: None
-        )
-        monkeypatch.setattr(
-            "nebula.v3.cli.default_runtime_platform", lambda **_kwargs: None
-        )
-        monkeypatch.setattr(
-            "nebula.v3.cli.create_app",
-            lambda *_args, **_kwargs: SimpleNamespace(state=SimpleNamespace()),
-        )
+        monkeypatch.setattr("nebula.v3.cli._data_dir", lambda _value=None: tmp_path)
         result = CliRunner().invoke(
             app, ["serve", "--host", "127.0.0.1", "--port", str(port)]
         )

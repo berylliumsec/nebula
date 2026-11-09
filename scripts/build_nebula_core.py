@@ -304,6 +304,22 @@ def main() -> None:
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+    # The replaceable desktop carries a complete immutable runtime payload.
+    # Core copies it into the private retained store before any process starts.
+    from nebula.v3.runtime_bundle import build_frozen_bundle
+
+    runtime_bundle = root / "ui" / "src-tauri" / "resources" / "nebula-runtime"
+    if runtime_bundle.exists():
+        shutil.rmtree(runtime_bundle)
+    resources = {
+        name: root / "ui" / "src-tauri" / "resources" / name
+        for name in ("playwright-browsers", "notebook-runtime")
+        if (root / "ui" / "src-tauri" / "resources" / name).is_dir()
+    }
+    resources["security-proxy"] = root / "security-proxy"
+    manifest, manifest_digest = build_frozen_bundle(
+        source, frontend, runtime_bundle, resources=resources
+    )
     print(
         json.dumps(
             {
@@ -311,6 +327,9 @@ def main() -> None:
                 "audit": audit,
                 "build": identity,
                 "third_party_distributions": notice_count,
+                "runtime_bundle": str(runtime_bundle),
+                "runtime_version": manifest.version,
+                "manifest_sha256": manifest_digest,
             },
             indent=2,
             sort_keys=True,
