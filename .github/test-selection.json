@@ -1,16 +1,20 @@
 {
-  "change_digest": "0a0d8fddfeab19fb4d7d32e999039f1ce36b487a4c07fda0357395a7579c801a",
+  "change_digest": "09b410e7386950819a251b5a4ca39fb6853546f505fc5aafd152cdf7424ae804",
   "reviewed_by": "Codex",
-  "reason": "Operator requested PR, merge and direct deployment using the same no-tests procedure. The change narrows admission to runnable tasks and Core-cgroup I/O PSI while retaining host-wide load and I/O as telemetry. Focused regression cases were updated but intentionally not executed.",
-  "exclusions": "No Python, frontend, Playwright or native tests selected or run under the operator no-tests instruction. Production-build and live-health checks are separate and do not establish the operator journey.",
+  "reason": "OpenAI Responses now sends the optional Daybreak Blue access program saved on an OpenAI provider. Four focused Python cases cover wire payload, profile validation, and bundled guidance; 22 selected frontend cases cover key entry, option persistence, provider status, and assistant discovery; eight real-Core production-browser cases exercise the Settings save/retry, reload, provider chat, key use, and outbound Responses payload on the permanent desktop and mobile profiles. The changed real-core.spec.ts is a shared test file, so its new exact case is selected through the reviewed openai-daybreak catalog area.",
+  "exclusions": "Native Rust is unchanged. Unrelated provider, harness, workspace, and broad interface suites are excluded. External OpenAI entitlement and a physical mobile device are outside synthetic acceptance; the live fixture verifies the request contract without sending a real key to OpenAI.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 4,
+    "frontend": 22,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python": [],
-  "frontend": [],
+  "python": ["tests/v3/test_openai_daybreak.py"],
+  "frontend": [
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/ProviderHealthCard.test.tsx",
+    "ui/src/settingsCatalog.openai.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": ["area:openai-daybreak"]
 }

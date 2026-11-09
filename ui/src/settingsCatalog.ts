@@ -81,11 +81,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.providers",
     label: "Model providers",
-    description: "Add providers, credentials, discovered models, and capability limits",
+    description: "Add model providers, including OpenAI API keys and optional Daybreak Blue access, then discover models and verify capabilities",
     category: "Models",
     scope: "Workspace",
     target: "provider-settings",
-    keywords: ["provider", "model", "models", "openai", "anthropic", "gemini", "ollama", "vllm", "credential", "api key", "api keys"],
+    keywords: ["provider", "model", "models", "openai", "openai api", "daybreak", "daybreak blue", "cyber access", "anthropic", "gemini", "ollama", "vllm", "credential", "api key", "api keys"],
   },
   {
     id: "settings.skills",

@@ -2526,6 +2526,34 @@ interface LocalModelStub {
   responseContent?: string;
 }
 
+async function startOpenaiResponsesStub(): Promise<LocalModelStub & { authorizations: string[] }> {
+  const requests: Array<Record<string, unknown>> = [];
+  const authorizations: string[] = [];
+  const server = createServer(async (request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.end(JSON.stringify({object: "list", data: [{id: "gpt-daybreak-blue-latest", object: "model"}]}));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/v1/responses") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      authorizations.push(request.headers.authorization ?? "");
+      response.end(JSON.stringify({
+        id: "resp_synthetic_daybreak", object: "response", model: "gpt-daybreak-blue-latest",
+        status: "completed", output: [{type: "message", content: [{type: "output_text", text: "Synthetic Daybreak reply."}]}],
+        usage: {input_tokens: 5, output_tokens: 4, total_tokens: 9},
+      }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({error: {message: "Unknown synthetic OpenAI route"}}));
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  return {origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests, authorizations, server, fail: false};
+}
+
 async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; goalResponseDelayMs?: number; delayedMessage?: string; matchingDelayMs?: number; models?: string[]; responseContent?: string; beforeResponse?: (body: Record<string, unknown>) => Promise<void>; toolCall?: (body: Record<string, unknown>) => {name: string; arguments: Record<string, unknown>} | undefined } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true, responseContent: options.responseContent };
@@ -8240,6 +8268,88 @@ test("assistant upgrade first-time user configures a provider uploads a document
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
+});
+
+test("assistant upgrade OpenAI API Daybreak Blue profile sends its saved key and program on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const stub = await startOpenaiResponsesStub();
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), env: {OPENAI_API_KEY: ""}});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const createdProject = await api.post("engagements", {data: {name: "OpenAI Daybreak fixture", status: "active", metadata: {}}});
+    expect(createdProject.ok(), await createdProject.text()).toBe(true);
+    const projectId = (await createdProject.json() as {id: string}).id;
+    const createdProvider = await api.post("providers", {data: {
+      name: "OpenAI API fixture", provider_type: "openai", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["gpt-daybreak-blue-latest"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "gpt-daybreak-blue-latest"},
+    }});
+    expect(createdProvider.ok(), await createdProvider.text()).toBe(true);
+    const providerId = (await createdProvider.json() as {id: string}).id;
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await pairRealCoreBrowser(page, core, "OpenAI Daybreak acceptance");
+    await page.goto(`${core.origin}/settings#provider-settings`);
+    const card = page.locator("article.provider-card").filter({has: page.getByRole("heading", {name: "OpenAI API fixture"})});
+    await expect(card).toBeVisible();
+    await card.getByRole("button", {name: "Edit OpenAI API fixture"}).click();
+    const dialog = page.getByRole("dialog", {name: "Edit OpenAI API fixture"});
+    const program = dialog.getByRole("checkbox", {name: /Request Daybreak Blue/});
+    await expect(program).not.toBeChecked();
+    await dialog.getByRole("textbox", {name: "Credential", exact: true}).fill("synthetic-daybreak-key");
+    await program.check();
+    let failedOnce = false;
+    await page.route(`**/api/v1/providers/${providerId}`, async route => {
+      if (route.request().method() === "PATCH" && !failedOnce) {
+        failedOnce = true;
+        await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic profile save failure"})});
+      } else await route.continue();
+    });
+    await dialog.getByRole("button", {name: "Save provider"}).click();
+    await expect(dialog).toContainText("Synthetic profile save failure");
+    await expect(program).toBeChecked();
+    await page.unroute(`**/api/v1/providers/${providerId}`);
+    await dialog.getByRole("button", {name: "Save provider"}).click();
+    await expect(dialog).toBeHidden();
+    await expect(card.getByText("Daybreak Blue requested")).toBeVisible();
+    const saved = await (await api.get(`providers/${providerId}`)).json() as {secret_ref?: string; metadata: {options: Record<string, unknown>}};
+    expect(saved.metadata.options.openai_cyber_access_program).toBe("daybreak_blue");
+    expect(saved.secret_ref).toMatch(/^(vault|session):[0-9a-f]{32}$/);
+    expect(JSON.stringify(saved)).not.toContain("synthetic-daybreak-key");
+    expect((await new AxeBuilder({page}).include("#provider-settings").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.reload();
+    await expect(card.getByText("Daybreak Blue requested")).toBeVisible();
+    await card.getByRole("button", {name: "Edit OpenAI API fixture"}).click();
+    await expect(program).toBeChecked();
+    await dialog.getByRole("button", {name: "Close provider dialog"}).click();
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    await page.getByRole("button", {name: "Start new chat", exact: true}).click();
+    await clickAssistantSettings(page);
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("provider");
+    await settings.getByRole("combobox", {name: "Chat provider"}).selectOption(providerId);
+    await expect(settings.getByRole("combobox", {name: "Chat model"})).toHaveValue("gpt-daybreak-blue-latest");
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Reply from the synthetic OpenAI endpoint");
+    await page.getByRole("button", {name: "Send message"}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Synthetic Daybreak reply.", {timeout: 30_000});
+    expect(stub.requests.length).toBeGreaterThan(0);
+    expect(stub.requests.every(request => JSON.stringify(request.access_programs) === JSON.stringify({cyber: "daybreak_blue"}))).toBe(true);
+    expect(stub.authorizations.every(value => value === "Bearer synthetic-daybreak-key")).toBe(true);
+    const session = new URL(page.url()).searchParams.get("session");
+    expect(session).toBeTruthy();
+    await page.reload();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Synthetic Daybreak reply.");
+    await testInfo.attach("openai-daybreak-lan", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, project: testInfo.project.name, viewport: page.viewportSize(), providerId, session, requests: stub.requests.length}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "OpenAI response fixture", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
   ]);
 });
 

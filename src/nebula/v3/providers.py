@@ -3454,6 +3454,11 @@ class OpenAIResponsesProvider(ModelProvider):
             # engagement data is not kept server-side by default.
             "store": False,
         }
+        if (
+            self.config.flavor == ProviderFlavor.OPENAI
+            and self.config.options.get("openai_cyber_access_program") == "daybreak_blue"
+        ):
+            payload["access_programs"] = {"cyber": "daybreak_blue"}
         for batch, state in _replayed_batches(request, self.config.id, model):
             # Encrypted reasoning goes back ahead of the calls it led to; with
             # nothing stored server-side it is the only copy (Codex, Vercel).
