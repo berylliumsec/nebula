@@ -28,7 +28,7 @@ from .domain import (
     ProviderProfile,
     RunBackend,
 )
-from .harnesses import CodexAppServerAdapter, GrokAcpAdapter
+from .harness_account_reader import guarded_harness_account_read
 from .harness_quota import (
     HarnessQuotaSnapshot,
     codex_quota_snapshots,
@@ -36,6 +36,7 @@ from .harness_quota import (
 )
 from .storage import NebulaStore
 from .memory_policy import MemoryEnforcementUnavailable
+from .runtime_coordination import LeaseLost
 
 
 class RecordedUsage(BaseModel):
@@ -446,12 +447,8 @@ class RuntimeUsageService:
                     payload = await self.harness_account_reader(
                         profile, self.credentials
                     )
-                elif profile.kind.value == "grok_acp":
-                    payload = await GrokAcpAdapter().read_account_usage(
-                        profile, self.credentials
-                    )
                 else:
-                    payload = await CodexAppServerAdapter().read_account_usage(
+                    payload = await guarded_harness_account_read(
                         profile, self.credentials
                     )
                 if profile.kind.value == "grok_acp":
@@ -488,6 +485,10 @@ class RuntimeUsageService:
                     if profile.provider_type == "openrouter"
                     else parse_deepseek_usage(payload)
                 )
+        except LeaseLost:
+            # A retired project must not turn a lost ownership grant into an
+            # ordinary vendor error or retain the account observation.
+            raise
         except MemoryEnforcementUnavailable as error:
             # This message comes from the admission boundary, never a vendor
             # response or credential. Its retained held job explains recovery.

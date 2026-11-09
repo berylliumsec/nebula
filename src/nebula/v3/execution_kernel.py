@@ -3164,6 +3164,24 @@ def create_execution_kernel(
     app.state.memory_budget = memory_budgets
     app.state.memory_compute = memory_compute
 
+    from .harness_account_reader import guarded_harness_account_read
+
+    async def read_harness_account(profile, account_credentials):
+        from .execution_scope import current_execution_lease
+
+        lease = current_execution_lease()
+        return await guarded_harness_account_read(
+            profile,
+            account_credentials,
+            controller=memory_compute,
+            adapter_factory=harness_runtime.adapter_factory,
+            project_id=lease.project_id if lease is not None else None,
+        )
+
+    # Butler's closed observations and automatic quota reads use this same
+    # service, after its canonical fenced memory controller has been installed.
+    runtime_usage.harness_account_reader = read_harness_account
+
     async def resolve_memory_cleanup_runner(job):
         if automation_runtime is None or job.snapshot.profile_id is None:
             from .memory_policy import MemoryEnforcementUnavailable
@@ -4896,6 +4914,8 @@ def create_execution_kernel(
         project_id: str | None = Query(None, min_length=1, max_length=200),
     ) -> SetupStatus:
         await require_operator_project(project_id)
+        if project_id is not None:
+            return await setup.reconcile_configured_runner()
         return await setup.status()
 
     @app.get(

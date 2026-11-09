@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 
 from fastapi import Depends, HTTPException, Query
 
-from .domain import HarnessConnectionMode, HarnessKind, RunnerProfile, utc_now
+from .domain import RunnerProfile, utc_now
+from .harness_account_reader import guarded_harness_account_read
 from .host_workspace_folders import (
     HostWorkspaceFolderCreateRequest,
     create_host_workspace_folder,
     list_host_workspace_folders,
 )
-from .memory_policy import MemoryEnforcementUnavailable
 from .runner_profiles import container_runner_profile
 from .runtime_usage import HarnessQuotaRead
 from .sandbox import ContainerSandboxRunner
@@ -94,38 +93,15 @@ class HostOperator:
 
     async def read_harness_account(self, profile, credentials):
         """Never use a native process account reader without verified admission."""
-        from .harnesses import HarnessRuntimeService
-
         self.ensure_active()
-        adapter = (
-            self.settings.harness_factory(profile.kind)
-            if self.settings.harness_factory
-            else HarnessRuntimeService._default_adapter(profile.kind)
+        result = await guarded_harness_account_read(
+            profile,
+            credentials,
+            controller=getattr(self.settings.observations, "memory_compute", None),
+            adapter_factory=self.settings.harness_factory,
         )
-        if (
-            profile.kind == HarnessKind.CODEX_APP_SERVER
-            and profile.connection_mode == HarnessConnectionMode.ENDPOINT
-        ):
-            # Endpoint connections inspect an existing service, without a child
-            # process, a project workspace, or a model turn.
-            async with asyncio.timeout(45):
-                return await adapter.read_account_usage(profile, credentials)
-        controller = getattr(self.settings.observations, "memory_compute", None)
-        if controller is None:
-            raise MemoryEnforcementUnavailable(
-                "Host memory enforcement is not initialized; retry account refresh after Core reconnects."
-            )
-        reader = getattr(adapter, "read_account_usage_memory_managed", None)
-        if not callable(reader):
-            await controller.reject_unsupported(
-                "local",
-                project_id=None,
-                resource_kind="harness_account",
-                resource_id=profile.id,
-                detail="This harness account reader has no protected memory-runner/v1 launch contract. Connect a supported account endpoint or memory-managed harness reader, then retry. No account process was started.",
-            )
-        async with asyncio.timeout(45):
-            return await reader(profile, credentials, controller)
+        self.ensure_active()
+        return result
 
     def mount(self, app, auth):
         async def authorized():
