@@ -1,18 +1,15 @@
 {
-  "reviewed_by": "Codex packaging agent",
-  "reason": "Twenty collected packaging cases cover exact retained Playwright driver permission after whole-bundle verification, tampered/missing/unlisted/link assets, matching legacy and retained resources, dependency-test rejection, existing legal/toolchain gates, and required async database modules. Actual frozen acceptance is separately blocked by the independently reviewed runtime SQLite transaction failure; its driver now observes every recorded worker after shutdown.",
-  "exclusions": "No full suite, running installation, operational providers, deployment, native GUI/browser/mobile flow, or actual frozen runtime rerun in this source phase. Builder runtime dependency completeness requires the next real dual build and private IPC acceptance; no package/GUI completion is claimed.",
+  "reviewed_by": "Codex frozen-package agent",
+  "reason": "Exactly one collected opt-in frozen Core case will run against this17ec988e plus581cb18a assembly after the canonical production UI and dual freezer build. It proves clean default SQLite, authenticated stable discovery/reconnect, global project persistence, exact API/execution worker private IPC/retirement, and observed complete shutdown. Twenty packaging source cases passed separately before integration.",
+  "exclusions": "No full suite, real installation, providers, deployment, GUI or browser/mobile flow. Genuine two-artifact promotion/rollback follows only after a working baseline and distinct candidate are available. Native GTK/WebKit development libraries unavailable.",
   "expected_tests": {
-    "python": 20,
+    "python": 1,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_retained_installer_audit.py",
-    "tests/v3/test_onedir_package_audit.py",
-    "tests/v3/test_packaging.py::test_installer_tree_gate_requires_legal_files_and_rejects_toolchains",
-    "tests/v3/test_packaging.py::test_core_archive_requires_native_async_database_runtime"
+    "tests/v3/test_frozen_core_runtime.py"
   ],
   "frontend": [],
   "native": [],
