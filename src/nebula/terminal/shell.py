@@ -1338,7 +1338,9 @@ class Shell:
                         await self.select_chat(chat, project=selected)
                     elif prefs.get("session_id"):
                         session = await self.api.request(
-                            "GET", f"chat-sessions/{key(prefs['session_id'])}"
+                            "GET",
+                            f"chat-sessions/{key(prefs['session_id'])}",
+                            params={"engagement_id": selected["id"]},
                         )
                         await self.open_view(selected, session)
                     else:
