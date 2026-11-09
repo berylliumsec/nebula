@@ -258,6 +258,7 @@ class RuntimeSupervisor:
                     await self.host.close()
                     raise
                 self.started = True
+                # diagnostic-expected: the owned handoff loop records operation failures and is cancelled and joined on detach.
                 self._handoff_task = asyncio.create_task(
                     self._handoff_loop(), name="nebula-host-handoffs"
                 )
@@ -679,6 +680,7 @@ class RuntimeSupervisor:
                 async with self._operations:
                     await self._detach_resources(caller)
 
+            # diagnostic-expected: this detach task is shielded and joined by finish_cleanup below.
             self._close_task = asyncio.create_task(
                 cleanup(), name="nebula-supervisor-detach"
             )
@@ -699,6 +701,7 @@ class RuntimeSupervisor:
         try:
             await self.proxy.close()
         except BaseException as error:
+            # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup after every resource is attempted.
             failures.append(error)
         pending = {task for task in self.viewers if task is not caller}
         if pending:
@@ -715,6 +718,7 @@ class RuntimeSupervisor:
             try:
                 await operation()
             except BaseException as error:
+                # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup after every resource is attempted.
                 failures.append(error)
         if failures:
             raise BaseExceptionGroup(

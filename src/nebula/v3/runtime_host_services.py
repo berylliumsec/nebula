@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 
 from .async_utils import finish_cleanup
 from .database import RuntimeInstanceRow, RuntimeProcessRow
-from .diagnostics import record_diagnostic
+from .diagnostics import create_diagnostic_task, record_diagnostic
 from .knowledge_index import KnowledgeIndexError
 from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity
@@ -224,6 +224,7 @@ class HostSharedServices:
             try:
                 peer = await self._peer(peers[0].decode("ascii"))
             except (RuntimeIpcError, OSError):
+                # diagnostic-expected: a missing or rejected private peer yields a bounded unavailable response.
                 await JSONResponse(
                     {"detail": "Shared host peer is unavailable"}, status_code=503
                 )(scope, receive, send)
@@ -321,8 +322,12 @@ class HostSharedServices:
                 timeout_graceful_shutdown=None,
             )
         )
-        self.task = asyncio.create_task(
-            self.server.serve(), name="nebula-host-services"
+        self.task = create_diagnostic_task(
+            self.server.serve(),
+            feature="runtime",
+            event_code="runtime.host_services",
+            failure_message="The private shared host listener could not continue.",
+            name="nebula-host-services",
         )
         async with asyncio.timeout(10):
             while not self.server.started:
@@ -367,6 +372,7 @@ class HostSharedServices:
                 async with self._start_lock:
                     await self._stop_owned()
 
+            # diagnostic-expected: this detach task is shielded and joined by finish_cleanup below.
             self._close_task = asyncio.create_task(
                 cleanup(), name="nebula-host-services-detach"
             )

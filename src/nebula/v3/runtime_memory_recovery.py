@@ -67,6 +67,7 @@ class HostMemoryRecovery:
                 "Memory recovery requires the exclusive host-services owner"
             )
         if self.task is None:
+            # diagnostic-expected: the owned loop records reconciliation failures and is joined before host authority is released.
             self.task = asyncio.create_task(
                 self._loop(), name="nebula-host-memory-recovery"
             )
@@ -88,6 +89,7 @@ class HostMemoryRecovery:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.interval)
             except TimeoutError:
+                # diagnostic-expected: the polling interval expired; perform the next reconciliation pass.
                 pass
         self.state = "closed"
 
@@ -104,6 +106,7 @@ class HostMemoryRecovery:
                 await self.store.event_history.close()
                 self.state = "closed"
 
+            # diagnostic-expected: this cleanup task is shielded and joined by finish_cleanup below.
             self._close_task = asyncio.create_task(
                 cleanup(), name="nebula-host-memory-recovery-close"
             )

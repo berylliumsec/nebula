@@ -23,6 +23,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from .async_utils import finish_cleanup
 from .deployment_protocol import IPC_PROTOCOL
+from .diagnostics import record_caught_exception
 
 _PREFIX = b"x-nebula-internal-"
 _HOPS = {
@@ -202,6 +203,7 @@ class PrivateRuntimeHttp:
         try:
             client = _client_address(address)
         except (ValueError, TypeError):
+            # diagnostic-expected: malformed authenticated client metadata fails private-channel authentication closed.
             valid = False
         for seen in self.seen.values():
             for old, timestamp in list(seen.items()):
@@ -429,6 +431,7 @@ class RuntimeHttpProxy:
             )
             response = await client.send(upstream_request, stream=True)
         except (httpx.HTTPError, OSError):
+            # diagnostic-expected: local runtime transport loss becomes the bounded reconnect response.
             await JSONResponse(
                 {
                     "detail": "The runtime connection is unavailable. Reconnect to read durable progress."
@@ -461,6 +464,7 @@ class RuntimeHttpProxy:
             if len(self.websocket_tasks) >= self.max_websockets:
                 raise httpx.PoolTimeout("the viewer WebSocket budget is occupied")
         except httpx.PoolTimeout:
+            # diagnostic-expected: viewer capacity exhaustion closes this connection with the retryable capacity code.
             await send(
                 {
                     "type": "websocket.close",
@@ -551,7 +555,9 @@ class RuntimeHttpProxy:
                         )
 
                 tasks = [
+                    # diagnostic-expected: this viewer pump is cancelled, joined, and its failure classified below.
                     asyncio.create_task(incoming()),
+                    # diagnostic-expected: this viewer pump is cancelled, joined, and its failure classified below.
                     asyncio.create_task(outgoing_frames()),
                 ]
                 try:
@@ -559,11 +565,29 @@ class RuntimeHttpProxy:
                 finally:
                     for pump in tasks:
                         pump.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for error in results:
+                        if isinstance(error, BaseException) and not isinstance(
+                            error,
+                            (
+                                asyncio.CancelledError,
+                                OSError,
+                                ConnectionClosed,
+                                TimeoutError,
+                            ),
+                        ):
+                            record_caught_exception(
+                                "api",
+                                "api.runtime.websocket_pump_failed",
+                                "A runtime viewer connection could not continue.",
+                                error,
+                                stage="stream",
+                            )
                 await send(
                     {"type": "websocket.close", "code": upstream.close_code or 1001}
                 )
         except InvalidStatus as error:
+            # diagnostic-expected: upstream authentication or readiness rejection becomes a bounded close code.
             status = error.response.status_code
             await send(
                 {
@@ -572,6 +596,7 @@ class RuntimeHttpProxy:
                 }
             )
         except (OSError, ConnectionClosed, TimeoutError):
+            # diagnostic-expected: known local transport loss closes the viewer for cursor-based reconnect.
             await send(
                 {
                     "type": "websocket.close",

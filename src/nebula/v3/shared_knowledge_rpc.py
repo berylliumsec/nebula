@@ -258,6 +258,7 @@ class SharedKnowledge:
                 try:
                     current = self._source(rows.get(item.source_id), lease, body.kind)
                 except CoordinationConflict:
+                    # diagnostic-expected: stale or foreign index hits cannot authorize retrieval after SQL source changes.
                     continue
                 digest, request = (
                     current.metadata.get("runtime_index_digest"),
@@ -392,24 +393,28 @@ class SharedKnowledge:
                 )
                 return {"ok": True, "value": value, "metadata": self.metadata()}
             except LeaseLost:
+                # diagnostic-expected: expected lease loss crosses the private protocol as a typed rejection.
                 return {
                     "ok": False,
                     "error": "lease_lost",
                     "detail": "Project ownership changed or expired",
                 }
             except CoordinationConflict:
+                # diagnostic-expected: expected source/revision conflicts cross the private protocol as a typed rejection.
                 return {
                     "ok": False,
                     "error": "conflict",
                     "detail": "The index request changed or is unavailable in this project",
                 }
             except (ValueError, ValidationError, FileNotFoundError):
+                # diagnostic-expected: reject bounded input or absent encrypted payload without exposing private content.
                 return {
                     "ok": False,
                     "error": "invalid",
                     "detail": "Shared index arguments or encrypted input exceed the supported bounds",
                 }
             except (KnowledgeIndexError, RuntimeIpcError):
+                # diagnostic-expected: domain index failures cross the private protocol as safe errors raised by the worker adapter.
                 return {
                     "ok": False,
                     "error": "index",

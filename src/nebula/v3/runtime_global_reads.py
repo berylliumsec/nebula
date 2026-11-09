@@ -138,6 +138,7 @@ async def storage_dashboard(
             try:
                 source_cache[identity] = await store.get(StorageSource, identity)
             except NotFoundError:
+                # diagnostic-expected: deleted source metadata produces an unavailable dashboard entry.
                 source_cache[identity] = None
         return source_cache[identity]
 
@@ -162,6 +163,7 @@ async def storage_dashboard(
         try:
             incident = await store.get(StorageIncident, dispatch["incident_id"])
         except NotFoundError:
+            # diagnostic-expected: deleted incident metadata produces the explicit unavailable queue state.
             incident = None
         source = await source_for(dispatch["source_id"])
         if incident is None or source is None or incident.source_id != source.id:

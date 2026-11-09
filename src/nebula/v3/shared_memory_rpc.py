@@ -114,6 +114,7 @@ def register_shared_memory(
                 value = value.model_dump(mode="json")
             return {"ok": True, "value": value}
         except ValidationError:
+            # diagnostic-expected: input-rich validation failures become a fixed private-protocol rejection.
             # Pydantic's input-rich exception can contain memory candidates.
             return {
                 "ok": False,
@@ -121,6 +122,7 @@ def register_shared_memory(
                 "detail": "Shared-memory arguments exceed the supported bounds",
             }
         except tuple(_ERRORS.values()) as error:
+            # diagnostic-expected: reviewed memory and ownership errors cross the private protocol as typed rejections.
             kind = next(
                 name for name, model in _ERRORS.items() if isinstance(error, model)
             )

@@ -176,12 +176,14 @@ class HostMemoryControl:
                 )
                 return {"ok": True, "value": value}
             except ValidationError:
+                # diagnostic-expected: reject bounded protocol input without exposing input-rich validation details.
                 return {
                     "ok": False,
                     "error": "invalid",
                     "detail": "Memory Settings arguments exceed the supported bounds",
                 }
             except (CoordinationConflict, ValueError) as error:
+                # diagnostic-expected: expected ownership and argument errors cross the private protocol as typed rejections.
                 return {
                     "ok": False,
                     "error": "lease_lost"

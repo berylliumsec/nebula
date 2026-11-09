@@ -215,6 +215,7 @@ class RuntimeChatJournal:
         try:
             while True:
                 if pending is None:
+                    # diagnostic-expected: the result is read below; iterator exhaustion is expected and cleanup joins pending work.
                     pending = asyncio.create_task(anext(iterator))
                 done, _ = await asyncio.wait({pending}, timeout=15)
                 if not done:
@@ -223,6 +224,7 @@ class RuntimeChatJournal:
                 try:
                     kind, payload = pending.result()
                 except StopAsyncIteration:
+                    # diagnostic-expected: the committed stream end exhausts the iterator normally.
                     return
                 pending = None
                 encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

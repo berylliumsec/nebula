@@ -157,6 +157,7 @@ class HostSettings:
             try:
                 device = await self.store.get(PairedDeviceSession, actor[7:])
             except NotFoundError:
+                # diagnostic-expected: a removed accepting device is denied by the authorization check below.
                 device = None
             now = utc_now()
             if (

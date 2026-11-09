@@ -74,6 +74,7 @@ class RuntimeVault:
                 # can never observe a partially written key or ciphertext.
                 os.link(temporary, path, follow_symlinks=False)
             except FileExistsError:
+                # diagnostic-expected: another publisher already installed the complete immutable key or ciphertext.
                 pass
             directory = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
             try:
@@ -138,5 +139,6 @@ class RuntimeVault:
         try:
             self.get(reference, purpose=purpose)
         except FileNotFoundError:
+            # diagnostic-expected: discard is idempotent when an owned payload was already removed.
             return
         (self.root / reference).unlink(missing_ok=True)

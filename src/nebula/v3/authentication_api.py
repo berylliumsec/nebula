@@ -251,6 +251,7 @@ class AuthenticationApi:
             try:
                 local = ipaddress.ip_address(host).is_loopback
             except ValueError:
+                # diagnostic-expected: a non-IP local hostname is checked explicitly before pairing is allowed.
                 local = host == "localhost"
             if not local:
                 raise HTTPException(

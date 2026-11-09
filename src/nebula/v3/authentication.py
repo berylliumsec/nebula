@@ -95,6 +95,7 @@ class CoreAuthentication:
                     PairedDeviceSession, actor.removeprefix("device:")
                 )
             except NotFoundError:
+                # diagnostic-expected: a removed paired device is unauthenticated; other storage failures propagate.
                 return None
         if device is None:
             return None

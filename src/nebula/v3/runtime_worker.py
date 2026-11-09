@@ -277,6 +277,7 @@ async def run_worker(
                         server.should_exit = True
                     raise
 
+        # diagnostic-expected: heartbeat failure requests server exit and is awaited before the worker returns.
         heartbeat = asyncio.create_task(pulse(), name="nebula-worker-heartbeat")
         async with factory(context) as application:
             private = PrivateRuntimeHttp(application, secret)

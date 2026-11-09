@@ -132,6 +132,7 @@ def _stored_models(profile: ProviderProfile) -> tuple[list[dict[str, Any]], bool
         try:
             model = ModelDescriptor.model_validate(value)
         except ValidationError:
+            # diagnostic-expected: invalid stored display metadata is omitted and explicitly marks the catalog partial.
             partial = True
             continue
         if not model.id or len(model.id) > 500:

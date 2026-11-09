@@ -181,6 +181,7 @@ async def _write_bootstrap(pipe: IO[bytes], frame: bytes) -> None:
             written = os.write(descriptor, remaining)
             remaining = remaining[written:]
         except BlockingIOError:
+            # diagnostic-expected: nonblocking bootstrap backpressure waits for writability before retrying.
             ready = loop.create_future()
 
             def writable():
@@ -518,6 +519,7 @@ class RuntimeProcessHost:
                                     await client.call("worker.identity", {}, timeout=1)
                                 )
                             except (OSError, httpx.HTTPError, RuntimeIpcError):
+                                # diagnostic-expected: the bounded startup socket probe retries before any operational command is admitted.
                                 # No command is dispatched while the socket is starting.
                                 await asyncio.sleep(0.05)
                                 continue
@@ -546,19 +548,23 @@ class RuntimeProcessHost:
                                     identity.pid, identity.process_birth, signal.SIGKILL
                                 )
                         except BaseException as error:
+                            # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup raised after all steps.
                             failures.append(error)
                         try:
                             if child.stdin is not None and not child.stdin.closed:
                                 child.stdin.close()
                         except BaseException as error:
+                            # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup raised after all steps.
                             failures.append(error)
                         try:
                             await asyncio.to_thread(child.wait, timeout=5)
                         except BaseException as error:
+                            # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup raised after all steps.
                             failures.append(error)
                     try:
                         await self.coordinator.abort_start(runtime_id)
                     except BaseException as error:
+                        # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup raised after all steps.
                         failures.append(error)
                     if failures:
                         raise BaseExceptionGroup(
@@ -591,6 +597,7 @@ class RuntimeProcessHost:
                 try:
                     await client.call("worker.shutdown", {}, timeout=min(timeout, 5))
                 except (httpx.HTTPError, OSError, RuntimeIpcError):
+                    # diagnostic-expected: a lost shutdown reply is inconclusive; the following OS identity check proves exit.
                     # A lost reply can follow successful shutdown. Only an OS
                     # identity check, never the missing reply, proves exit.
                     pass
@@ -673,6 +680,7 @@ class RuntimeProcessHost:
                             }
                         )
                 except CoordinationConflict as error:
+                    # diagnostic-expected: a retirement conflict is retained as an explicit reconciliation blocker.
                     retained.append(
                         {
                             "runtime_id": worker.runtime_id,
@@ -726,6 +734,7 @@ class RuntimeProcessHost:
                 )
                 reachable = observed == identity
             except (OSError, httpx.HTTPError, RuntimeIpcError):
+                # diagnostic-expected: rediscovery records an unreachable channel and separately verifies OS process identity.
                 reachable = False
             finally:
                 await client.close()

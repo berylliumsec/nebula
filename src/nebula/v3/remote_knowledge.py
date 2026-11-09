@@ -11,6 +11,7 @@ import threading
 from typing import Any
 from uuid import uuid4
 
+from .diagnostics import create_diagnostic_task
 from .execution_scope import current_execution_lease
 from .knowledge_index import (
     IndexedKnowledgeChunk,
@@ -97,6 +98,7 @@ class RemoteKnowledgeIndex:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            # diagnostic-expected: no running loop is the required synchronous worker-thread context.
             return
         raise KnowledgeIndexError(
             "Synchronous shared index calls require the index worker thread"
@@ -137,11 +139,18 @@ class RemoteKnowledgeIndex:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            # diagnostic-expected: no running loop selects the synchronous adapter; its errors still propagate.
             self._call(action, {})
         else:
             if loop is not self.loop:
                 raise KnowledgeIndexError("The index belongs to another worker loop")
-            task = loop.create_task(self._rpc(action, {}))
+            task = create_diagnostic_task(
+                self._rpc(action, {}),
+                feature="knowledge",
+                event_code="knowledge.remote.background",
+                failure_message="A background shared-index request could not complete.",
+                name="nebula-remote-index-background",
+            )
             self._background_tasks.add(task)
 
             def completed(item):

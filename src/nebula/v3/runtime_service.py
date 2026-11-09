@@ -47,6 +47,7 @@ async def initialize_database(database: Database, data_root: Path) -> None:
     try:
         adoption = json.loads(read_private(marker))
     except FileNotFoundError:
+        # diagnostic-expected: normal installations have no offline legacy-adoption marker.
         adoption = None
     if adoption is not None and adoption != {
         "state": "offline-legacy-adoption",

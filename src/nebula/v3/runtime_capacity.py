@@ -239,6 +239,7 @@ class RuntimeCapacity:
             # The acquisition task is joined even if its caller disappears after
             # SQL commits, so a lost result cannot leak a known-idle reservation.
             while acquired is None:
+                # diagnostic-expected: this acquisition is shielded and drained below, releasing any late reservation.
                 task = asyncio.create_task(self.acquire(lease, request_key, demands))
                 try:
                     acquired = await asyncio.shield(task)

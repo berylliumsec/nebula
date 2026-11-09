@@ -228,6 +228,7 @@ class ProjectExecution:
             try:
                 self.quiesce_proof = await self._prepare_quiescence()
             except (CoordinationConflict, RuntimeIpcError) as error:
+                # diagnostic-expected: a refused quiescence returns its blockers before any controller cleanup begins.
                 # A signed refusal proves no controller cleanup began. This
                 # lets the host reopen admission so the blocker can be resolved.
                 return {
@@ -323,6 +324,7 @@ class ProjectExecution:
                 pass
             self.lease, self.state = lease, "starting"
             with execution_context(lease):
+                # diagnostic-expected: the owned lifetime records unexpected failures, updates status, and is joined on close.
                 self.task = asyncio.create_task(
                     self._lifetime(lease), name="nebula-project-execution"
                 )
@@ -352,7 +354,9 @@ class ProjectExecution:
                     )
                     if deferred is not None:
                         self.state = "prepared"
+                        # diagnostic-expected: this Event waiter is cancelled and joined in the immediately enclosing finally.
                         activate_wait = asyncio.create_task(self._activate.wait())
+                        # diagnostic-expected: this Event waiter is cancelled and joined in the immediately enclosing finally.
                         stop_wait = asyncio.create_task(self._stop.wait())
                         try:
                             while (
@@ -405,6 +409,7 @@ class ProjectExecution:
                             try:
                                 delivered = await runner.run_one(lease, lane=lane)
                             except LeaseLost:
+                                # diagnostic-expected: ordinary lease loss stops this consumer and fences the project.
                                 self.state = "fenced"
                                 self._stop.set()
                                 return
@@ -431,7 +436,18 @@ class ProjectExecution:
                                     lease
                                 ):
                                     pass
-                            except Exception:
+                            except LeaseLost:
+                                # diagnostic-expected: ordinary lease loss fences and stops the owned project.
+                                self.state = "fenced"
+                                self._stop.set()
+                            except Exception as error:
+                                record_caught_exception(
+                                    "runtime",
+                                    "runtime.project.lease_unavailable",
+                                    "Project ownership could not be verified; admission is fenced.",
+                                    error,
+                                    stage="lease",
+                                )
                                 self.state = "fenced"
                                 self._stop.set()
 
@@ -440,6 +456,7 @@ class ProjectExecution:
                             try:
                                 await handoff_agent.tick()
                             except LeaseLost:
+                                # diagnostic-expected: ordinary lease loss stops handoff work and fences the project.
                                 self.state = "fenced"
                                 self._stop.set()
                                 return
@@ -454,16 +471,20 @@ class ProjectExecution:
                             await asyncio.sleep(1)
 
                     tasks = [
+                        # diagnostic-expected: the work consumer classifies operation failures and is cancelled and joined below.
                         asyncio.create_task(
                             consume("work"), name="nebula-project-work"
                         ),
+                        # diagnostic-expected: the control consumer classifies operation failures and is cancelled and joined below.
                         asyncio.create_task(
                             consume("control"), name="nebula-project-control"
                         ),
+                        # diagnostic-expected: the lease watcher fences and classifies failures and is cancelled and joined below.
                         asyncio.create_task(watch_lease(), name="nebula-project-lease"),
                     ]
                     if handoff_agent is not None:
                         tasks.append(
+                            # diagnostic-expected: the handoff watcher classifies operation failures and is cancelled and joined below.
                             asyncio.create_task(
                                 watch_handoff(), name="nebula-project-handoff"
                             )
@@ -525,6 +546,7 @@ class ProjectExecution:
                 async with self.context.coordinator.coordination.fenced(self.lease):
                     pass
             except LeaseLost:
+                # diagnostic-expected: ordinary lease loss fences admission and returns the existing reconnect response.
                 self.state = "fenced"
                 self._stop.set()
                 await self.app(scope, receive, send)
@@ -534,6 +556,7 @@ class ProjectExecution:
     async def close(self):
         if self._close_task is None:
             self.closed = True
+            # diagnostic-expected: this cleanup task is shielded and joined by finish_cleanup below.
             self._close_task = asyncio.create_task(self._close())
 
         async def join():

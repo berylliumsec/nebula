@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse, Response
 from .async_utils import finish_cleanup
 from .database import DeploymentHostRow, RuntimeCommandRow, RuntimeDeliveryRow
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .runtime_coordination import CommandReceipt, CoordinationConflict
 from .runtime_delivery import MAX_FRAME_BYTES, _json
 from .runtime_global_delivery import GlobalSqlDelivery
@@ -142,8 +143,12 @@ class HostEffectDelivery(GlobalSqlDelivery):
             raise CoordinationConflict(
                 "Idempotency-Key conflicts with another accepted request"
             ) from error
-        task = asyncio.create_task(
-            self._run(receipt.command_id, intent, actor), name="nebula-host-setting"
+        task = create_diagnostic_task(
+            self._run(receipt.command_id, intent, actor),
+            feature="runtime",
+            event_code="runtime.host_setting",
+            failure_message="An accepted host request could not save its final state.",
+            name="nebula-host-setting",
         )
         self.tasks[receipt.command_id] = task
 
@@ -199,7 +204,14 @@ class HostEffectDelivery(GlobalSqlDelivery):
                     )
                 row.state = "succeeded" if status < 400 else "failed"
                 row.result = {"http_status": status}
-        except BaseException:
+        except BaseException as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.host_setting.uncertain",
+                "A host request did not confirm its effect and needs reconciliation.",
+                error,
+                stage="delivery",
+            )
 
             async def uncertain():
                 async with self.delivery.coordination._write() as session:

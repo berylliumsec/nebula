@@ -183,6 +183,7 @@ class RemoteExecutionCredentials(CredentialStore):
                 reference, purpose=purpose, profile_id=profile_id, operation="available"
             )
         except CredentialUnavailableError:
+            # diagnostic-expected: credential availability is a boolean probe; resolution failures still propagate.
             return False
         if type(result.get("available")) is not bool:
             raise RuntimeIpcError("Invalid host integration credential response")

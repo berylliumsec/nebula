@@ -11723,6 +11723,7 @@ class ChatService:
                         McpServerProfile, identifier
                     )
                 except NotFoundError:
+                    # diagnostic-expected: removed MCP profiles are ineligible; missing authority never exposes a tool.
                     profiles[identifier] = None
             profile = profiles[identifier]
             if (

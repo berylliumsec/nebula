@@ -31,6 +31,7 @@ class RuntimeAutoAdmission:
         if self.task is not None:
             return
         await bootstrap_scratch_project(self.supervisor.store)
+        # diagnostic-expected: the owned loop records operation failures and is cancelled and joined on close.
         self.task = asyncio.create_task(self._run(), name="nebula-first-admission")
 
     async def close(self):

@@ -224,6 +224,7 @@ def successful_load_names(history: Iterable[Mapping[str, Any]]) -> set[str]:
             try:
                 output = json.loads(output)
             except json.JSONDecodeError:
+                # diagnostic-expected: unparseable historical output is not proof of a successful tool load.
                 continue
         if not isinstance(output, Mapping) or not isinstance(
             output.get("loaded"), list

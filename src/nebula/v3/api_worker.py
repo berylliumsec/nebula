@@ -414,6 +414,7 @@ def create_api_worker(
                     and chat_body.get("backend", "provider") == "provider"
                 )
             except (ValueError, UnicodeError, RecursionError):
+                # diagnostic-expected: the stream hint is optional; malformed bodies still reach normal request validation.
                 requested = False
             if requested:
                 chat_acceptance = await chat_acceptance_for(project_id)

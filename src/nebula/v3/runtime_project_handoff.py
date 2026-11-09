@@ -226,6 +226,7 @@ class ProjectHandoffAgent:
         try:
             return await self._tick()
         except CoordinationConflict as error:
+            # diagnostic-expected: unsupported handoff adapters retain ownership and persist the actual blockers.
             # Unsupported inventory/checkpoint adapters retain a usable old
             # project and publish the actual blocker, without a kill deadline.
             await self.coordinator.resource(

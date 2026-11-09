@@ -404,6 +404,7 @@ class RuntimeDelivery:
         try:
             device = await store.get(PairedDeviceSession, actor.removeprefix("device:"))
         except NotFoundError:
+            # diagnostic-expected: a removed device cannot view or submit a durable command.
             return False
         now = utc_now()
         return (

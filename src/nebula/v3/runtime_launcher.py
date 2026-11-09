@@ -94,6 +94,7 @@ def operator_token(
                 path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
             )
         except FileExistsError:
+            # diagnostic-expected: another initializer won exclusive token creation; reread its private completed token.
             return operator_token(data_root, requested, adopt_legacy=adopt_legacy)
         with os.fdopen(descriptor, "w") as stream:
             stream.write(token + "\n")
@@ -132,6 +133,7 @@ def discovery(data_root: Path) -> dict | None:
     try:
         value = json.loads(read_private(runtime_root(data_root) / CONNECTION_NAME))
     except FileNotFoundError:
+        # diagnostic-expected: absence of a discovery file means no published Core connection.
         return None
     if (
         not isinstance(value, dict)
@@ -286,6 +288,7 @@ def desktop_connection(
                     health(candidate, token)
                     return frame
                 except (httpx.HTTPError, ValueError):
+                    # diagnostic-expected: bounded startup polling retries unpublished or not-yet-healthy connections.
                     pass
             if process.poll() is not None:
                 raise RuntimeError(

@@ -162,6 +162,7 @@ class HostBrowserBridge:
                     else False
                 )
             except ValueError:
+                # diagnostic-expected: an invalid peer address fails the local-only registration check closed.
                 local = False
             if not local:
                 raise HTTPException(

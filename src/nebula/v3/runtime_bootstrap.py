@@ -63,6 +63,7 @@ class RuntimeBootstrap:
         try:
             await self.routing.api_upstream({})
         except (RuntimeIpcError, OSError):
+            # diagnostic-expected: this readiness probe reports unavailable API admission as degraded host health.
             return False
         return True
 

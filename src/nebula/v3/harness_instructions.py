@@ -61,6 +61,7 @@ def grok_channel_is_confirmed(
                         try:
                             session = os.open(external_id, flags, dir_fd=folder)
                         except FileNotFoundError:
+                            # diagnostic-expected: this account folder has no matching native session; inspect the next bounded candidate.
                             continue
                         try:
                             file = os.open(
