@@ -7,7 +7,7 @@ import { useChrome } from "./state/ChromeContext";
 import { isNebulaShell } from "./hooks/useCompactLayout";
 import { MemoryBudgetSettings } from "./components/MemoryBudgetSettings";
 import { RuntimeContinuityNotice } from "./components/RuntimeContinuityNotice";
-import { NavigationContinuity } from "./state/NavigationContinuity";
+import { NavigationContinuity } from "./state/NavigationContinuityBoundary";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));

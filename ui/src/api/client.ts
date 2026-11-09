@@ -5418,7 +5418,10 @@ export class ApiClient {
     this.continuityInitialization ??= this.request<RuntimeIdentity>("runtime/identity").then(identity => {
       let scope: ContinuityScope;
       try { scope = identityScope(identity); }
-      catch { return this.pendingStore.scope; } // Older servers have no identity contract.
+      catch (error) {
+        logCaughtDiagnostic("interface.client.continuity_identity_invalid", "Core returned an invalid storage identity. Recovery is limited to this window.", error, "continuity-identity");
+        return this.pendingStore.scope;
+      }
       this.pendingStore = new PendingRequestStore(scope);
       this.notifyContinuity();
       return scope;
@@ -5516,7 +5519,10 @@ export class ApiClient {
     try {
       const value = await response.clone().json() as {state?: string};
       return value.state !== "uncertain" && value.state !== "failed";
-    } catch { return false; }
+    } catch {
+      // diagnostic-expected: an unreadable rejection cannot prove nonacceptance; retain the request identity while send reports the HTTP failure.
+      return false;
+    }
   }
 
   storageDashboard(signal?: AbortSignal, options: {offset?: number; limit?: number} = {}): Promise<StorageDashboard> {

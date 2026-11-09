@@ -58,7 +58,10 @@ export function StoragePage() {
       const page = await api.storageDashboard(undefined, {offset: data.next_offset, limit: data.limit ?? 1000});
       if (current === generation.current) setData(previous => previous ? mergeStoragePage(previous, page) : page);
     } catch (caught) {
-      if (current === generation.current) setPageError(String(caught));
+      if (current === generation.current) {
+        logCaughtDiagnostic("interface.storage.dashboard_page_load_failed", "More Storage reports could not be loaded.", caught, "storage-dashboard-pagination");
+        setPageError(String(caught));
+      }
     } finally { if (current === generation.current) setLoadingMore(false); }
   };
   const retryDispatch = async (dispatchId: string) => {

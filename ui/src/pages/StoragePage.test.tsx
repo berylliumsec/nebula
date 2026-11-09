@@ -4,6 +4,7 @@ import {MemoryRouter} from "react-router-dom";
 import {beforeEach, expect, it, vi} from "vitest";
 import type {StorageDashboard, StorageVolume} from "../api/types";
 import {StoragePage} from "./StoragePage";
+import {logCaughtDiagnostic} from "../diagnostics";
 
 const api = {storageDashboard: vi.fn(), retryStorageDispatch: vi.fn()};
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", engagements: []})}));
@@ -48,27 +49,35 @@ it("loads a bounded next page, deduplicates rows and replaces the partial notice
 });
 
 it("retains loaded reports when a next-page read fails and permits an explicit retry", async () => {
-  api.storageDashboard.mockResolvedValueOnce(firstPage()).mockRejectedValueOnce(new Error("Temporarily offline"))
+  const failure = new Error("Temporarily offline");
+  api.storageDashboard.mockResolvedValueOnce(firstPage()).mockRejectedValueOnce(failure)
     .mockResolvedValueOnce({...empty(), volumes: [volume("Recovered volume")], partial: false, next_offset: null});
   mount();
   await userEvent.click(await screen.findByRole("button", {name: "Load more storage reports"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("Existing reports remain here");
   expect(screen.getByText("First volume")).toBeVisible();
+  expect(logCaughtDiagnostic).toHaveBeenCalledWith("interface.storage.dashboard_page_load_failed", "More Storage reports could not be loaded.", failure, "storage-dashboard-pagination");
   await userEvent.click(screen.getByRole("button", {name: "Load more storage reports"}));
   expect(await screen.findByText("Recovered volume")).toBeVisible();
 });
 
-it("does not append a late page after the operator refreshes the snapshot", async () => {
+it.each(["success", "failure"])("ignores a late page %s after the operator refreshes the snapshot", async outcome => {
   let finish!: (page: StorageDashboard) => void;
+  let fail!: (error: Error) => void;
   api.storageDashboard.mockResolvedValueOnce(firstPage())
-    .mockImplementationOnce(() => new Promise<StorageDashboard>(resolve => {finish = resolve;}))
+    .mockImplementationOnce(() => new Promise<StorageDashboard>((resolve, reject) => {finish = resolve; fail = reject;}))
     .mockResolvedValueOnce({...firstPage(), volumes: [volume("Refreshed volume")], partial: false, next_offset: null});
   mount();
   await userEvent.click(await screen.findByRole("button", {name: "Load more storage reports"}));
   await userEvent.click(screen.getByRole("button", {name: "Refresh storage"}));
   expect(await screen.findByText("Refreshed volume")).toBeVisible();
-  await act(async () => finish({...empty(), volumes: [volume("Late volume")], partial: false}));
+  await act(async () => {
+    if (outcome === "success") finish({...empty(), volumes: [volume("Late volume")], partial: false});
+    else fail(new Error("Obsolete page failure"));
+  });
   expect(screen.queryByText("Late volume")).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(logCaughtDiagnostic).not.toHaveBeenCalled();
   expect(api.storageDashboard).toHaveBeenCalledTimes(3);
 });
 

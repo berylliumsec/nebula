@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
-import { NavigationContinuity } from "./NavigationContinuity";
+import { NavigationContinuity } from "./NavigationContinuityBoundary";
 import { rememberChat, rememberedNavigation } from "./navigationContinuity";
 
 const fixture = vi.hoisted(() => ({workspace: {} as any}));

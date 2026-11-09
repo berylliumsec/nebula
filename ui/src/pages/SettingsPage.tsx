@@ -178,6 +178,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       await shutdownLocalRuntime();
       setCoreShutdownComplete(true);
     } catch (error) {
+      logCaughtDiagnostic("interface.settings_page.core_shutdown_failed", "The local Core could not shut down.", error, "core-shutdown");
       setCoreConnectionError(error instanceof Error ? error.message : String(error));
     } finally { setCoreConnectionBusy(false); }
   };

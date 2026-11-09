@@ -8,7 +8,10 @@ function readRecord(storage: Storage, key: string): Draft | undefined {
   const raw = storage.getItem(key);
   if (!raw || encodedBytes(raw) > CHAT_DRAFT_LIMITS.recordBytes + 128) return undefined;
   let value: unknown;
-  try { value = JSON.parse(raw); } catch { return undefined; }
+  try { value = JSON.parse(raw); } catch {
+    // diagnostic-expected: corrupt optional draft bytes must not block the composer or enter diagnostics.
+    return undefined;
+  }
   const record = value as Draft | null;
   return record && typeof record.text === "string" && encodedBytes(record.text) <= CHAT_DRAFT_LIMITS.recordBytes
     && Number.isSafeInteger(record.updatedAt) && record.updatedAt <= Date.now()

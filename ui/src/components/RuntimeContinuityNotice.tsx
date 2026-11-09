@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { PendingRequest } from "../api/durableRequests";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 /** Recovery here performs reads only. Drafts, decisions and resumes require an explicit action. */
 export function RuntimeContinuityNotice({api}: {api?: ApiClient}) {
@@ -20,7 +21,10 @@ export function RuntimeContinuityNotice({api}: {api?: ApiClient}) {
         if (reconcile && items.length && scope?.persistent) items = await api.reconcilePendingRequests(controller.signal);
         if (active) setRecords(items);
       } catch (caught) {
-        if (active) setError(caught instanceof Error ? caught.message : "Saved requests could not be checked. Retry when Core is reachable.");
+        if (active) {
+          logCaughtDiagnostic("interface.continuity.saved_requests_load_failed", "Saved requests could not be loaded or checked.", caught, "saved-requests-load");
+          setError(caught instanceof Error ? caught.message : "Saved requests could not be checked. Retry when Core is reachable.");
+        }
       }
     };
     void load(true);
@@ -32,7 +36,10 @@ export function RuntimeContinuityNotice({api}: {api?: ApiClient}) {
     if (!api || busy) return;
     setBusy(true); setError(undefined);
     try { setRecords(await api.reconcilePendingRequests()); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Saved requests could not be checked."); }
+    catch (caught) {
+      logCaughtDiagnostic("interface.continuity.saved_requests_check_failed", "Saved requests could not be checked.", caught, "saved-requests-check");
+      setError(caught instanceof Error ? caught.message : "Saved requests could not be checked.");
+    }
     finally { setBusy(false); }
   };
   if (!api || (!records.length && !scope?.limitation && !error)) return null;
@@ -51,7 +58,10 @@ export function RuntimeContinuityNotice({api}: {api?: ApiClient}) {
           <p>{record.summary || (record.path.startsWith("approvals/") ? "Approval decision" : "Saved request")} · {status?.state ?? (record.state === "accepted" ? "Saved; waiting for Core" : "Acceptance unconfirmed")}</p>
           {!record.replayable && <p>Only the request identity was saved. Check its outcome before retrying from the original screen.</p>}
           {project && session && <Link className="button quiet" to={`/projects/${encodeURIComponent(project)}/workbench?view=chat&session=${encodeURIComponent(session)}`}>Open saved conversation</Link>}
-          {status?.state === "succeeded" && <button className="button quiet" type="button" onClick={() => void api.dismissCompletedRequest(record.key).then(() => setRecords(items => items.filter(item => item.key !== record.key))).catch(caught => setError(String(caught)))}>Dismiss completed request</button>}
+          {status?.state === "succeeded" && <button className="button quiet" type="button" onClick={() => void api.dismissCompletedRequest(record.key).then(() => setRecords(items => items.filter(item => item.key !== record.key))).catch(caught => {
+            logCaughtDiagnostic("interface.continuity.saved_request_dismiss_failed", "A completed request could not be dismissed.", caught, "saved-request-dismiss");
+            setError(String(caught));
+          })}>Dismiss completed request</button>}
         </li>;
       })}</ul>
     </details>}

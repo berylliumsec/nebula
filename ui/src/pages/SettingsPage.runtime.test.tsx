@@ -6,6 +6,7 @@ import type { ApiClient } from "../api/client";
 import { DialogProvider } from "../components/DialogSystem";
 import { SettingsPage } from "./SettingsPage";
 import { invoke } from "@tauri-apps/api/core";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 const { workspace } = vi.hoisted(() => ({
   workspace: {
@@ -93,13 +94,15 @@ describe("explicit local Core shutdown", () => {
   });
 
   it("leaves a blocked shutdown actionable without claiming completion", async () => {
-    vi.mocked(invoke).mockImplementation(command => command === "stop_local_backend" ? Promise.reject(new Error("A command still has an uncertain effect")) : Promise.resolve({mode: "local", tokenAvailable: true}));
+    const failure = new Error("A command still has an uncertain effect");
+    vi.mocked(invoke).mockImplementation(command => command === "stop_local_backend" ? Promise.reject(failure) : Promise.resolve({mode: "local", tokenAvailable: true}));
     renderSettings("/settings#setup-settings");
     await userEvent.click(screen.getByRole("button", {name: "Shut down Core"}));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", {name: "Shut down Core"}));
     expect(await screen.findByRole("alert")).toHaveTextContent("uncertain effect");
     expect(screen.queryByText(/Core has shut down/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", {name: "Shut down Core"})).toBeEnabled();
+    expect(logCaughtDiagnostic).toHaveBeenCalledWith("interface.settings_page.core_shutdown_failed", "The local Core could not shut down.", failure, "core-shutdown");
   });
 
   it("does not offer local shutdown for a remote Core", async () => {

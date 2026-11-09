@@ -22,7 +22,10 @@ function records(): Record[] {
       && Number.isSafeInteger(value.updatedAt) && value.updatedAt <= Date.now()
       && value.updatedAt >= Date.now() - NAVIGATION_LIMITS.ageMs)
       .sort((left, right) => right.updatedAt - left.updatedAt).slice(0, NAVIGATION_LIMITS.scopes);
-  } catch { return []; } // diagnostic-expected: device-local preferences may be unavailable.
+  } catch {
+    // diagnostic-expected: device-local preferences may be unavailable; explicit navigation remains usable.
+    return [];
+  }
 }
 
 export function rememberedNavigation(scope?: NavigationScope): RememberedNavigation | undefined {
@@ -40,7 +43,10 @@ function save(scope: NavigationScope | undefined, value?: RememberedNavigation):
     while (bytes(JSON.stringify(values)) > NAVIGATION_LIMITS.bytes) values.pop();
     localStorage.setItem(NAVIGATION_STORAGE_KEY, JSON.stringify(values));
     return true;
-  } catch { return false; } // diagnostic-expected: navigation must remain usable without storage.
+  } catch {
+    // diagnostic-expected: navigation remains usable and the caller reports its storage limitation.
+    return false;
+  }
 }
 
 export function rememberProject(scope: NavigationScope | undefined, projectId: string): boolean {

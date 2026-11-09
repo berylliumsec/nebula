@@ -4,6 +4,7 @@ import { createStore, del } from "idb-keyval";
 import { ApiClient } from "./client";
 import { PendingRequestStore, RequestNotSentError } from "./durableRequests";
 import type { ChatStreamEvent } from "./types";
+import { diagnosticsFallbackErrors } from "../diagnostics";
 
 const identity = {core_id: "core", principal_id: "operator"};
 const json = (value: unknown, status = 200, headers = {}) => new Response(JSON.stringify(value), {status, headers: {"Content-Type": "application/json", ...headers}});
@@ -111,6 +112,19 @@ describe("durable client transport", () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({detail: "not found"}, 404));
     const client = new ApiClient({fetch});
     expect(await client.initializeContinuity()).toMatchObject({persistent: false, limitation: expect.stringContaining("only in this window")});
+  });
+
+  it("records malformed successful identity without leaking its values or enabling persistence", async () => {
+    const identityCanary = "canary-core-identity-value";
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({core_id: identityCanary, principal_id: null}));
+    const client = new ApiClient({fetch});
+    const scope = await client.initializeContinuity();
+    expect(scope).toMatchObject({persistent: false, limitation: expect.stringContaining("only in this window")});
+    expect(await client.initializeContinuity()).toBe(scope);
+    expect(fetch).toHaveBeenCalledOnce();
+    const record = diagnosticsFallbackErrors().filter(item => item.event_code === "interface.client.continuity_identity_invalid").at(-1);
+    expect(record).toMatchObject({level: "error", stage: "continuity-identity", exception_type: "Error"});
+    expect(JSON.stringify(record)).not.toContain(identityCanary);
   });
 
   it("retains submission identity when a viewer closes before any headers arrive", async () => {
