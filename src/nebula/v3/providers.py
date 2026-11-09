@@ -2899,8 +2899,8 @@ def _vllm_grammar_schema(value: Any) -> Any:
 
 
 # Reasoning families reject sampling parameters: OpenAI answers 400
-# "Unsupported parameter: 'temperature'" for the o-series and gpt-5 models.
-_OPENAI_REASONING_MODEL = re.compile(r"^(?:o\d+|gpt-5)(?:[-.]|$)")
+# "Unsupported parameter: 'temperature'" for the o-series and GPT-5/6 models.
+_OPENAI_REASONING_MODEL = re.compile(r"^(?:o\d+|gpt-[56])(?:[-.]|$)")
 
 
 def _openai_reasoning_model(model: str) -> bool:
@@ -3565,8 +3565,16 @@ class OpenAIResponsesProvider(ModelProvider):
                     "schema": request.response_schema,
                 }
             }
-        if request.metadata:
-            payload["metadata"] = request.metadata
+        # Core's full diagnostics stay on ModelRequest. OpenAI metadata allows
+        # at most 16 pairs, 64-character keys and 512-character values. Omit
+        # ineligible entries rather than truncating structured diagnostic JSON.
+        metadata = {
+            key: value
+            for key, value in request.metadata.items()
+            if len(key) <= 64 and len(value) <= 512
+        }
+        if metadata:
+            payload["metadata"] = dict(list(metadata.items())[:16])
         cache_key = _prompt_cache_key(self.config, request)
         if cache_key:
             payload["prompt_cache_key"] = cache_key
