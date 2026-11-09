@@ -1,8 +1,8 @@
 {
-  "change_digest": "91654f97dbaf0953e3e11cdaf4e1c1043f3a3a19715489b060d34faa98a3a8e0",
-  "reviewed_by": "Codex; independent validate_sol_context root-cause review",
-  "reason": "Correct exact GPT-6 Sol context metadata and enforce its separate input cap. Operator explicitly prohibits automated tests.",
-  "exclusions": "All automated tests and browser/device checks excluded by operator instruction. Regression cases are written but unexecuted. Live authenticated Core context readback verifies the profile correction; source acceptance remains partial.",
+  "change_digest": "333916058ebf230cfa8927fc61d85f2051e0ef8620ce146a425f390750855899",
+  "reviewed_by": "Codex; independent validate_openai_metadata root-cause review",
+  "reason": "Fix OpenAI metadata contract failure and retain already deployed runtime admission and GPT-6 classification fixes. User explicitly requests merge/deployment with no tests.",
+  "exclusions": "All automated tests and browser/device suites excluded by explicit operator instruction. Regression cases written but unexecuted. Production builds and authenticated deployment/readback only; end-to-end operator journey remains unverified.",
   "python_versions": [
     "3.12"
   ],
