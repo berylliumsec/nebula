@@ -244,7 +244,12 @@ async def test_edit_or_remove_replaces_old_native_instruction_authority(
 ):
     store, project, profile, runtime, vendor, _, decision = await environment(tmp_path)
     chat, _, first = await prepare(runtime, project, profile)
-    await run(runtime, first)
+    first_errors = [
+        event.model_dump(mode="json")
+        for event in await run(runtime, first)
+        if event.type == "error"
+    ]
+    assert not first_errors, first_errors
     old_native = await external(store, first)
     await store.update(
         ChatDecision,
@@ -253,7 +258,12 @@ async def test_edit_or_remove_replaces_old_native_instruction_authority(
         expected_revision=decision.revision,
     )
     _, _, second = await prepare(runtime, project, profile, chat)
-    assert not any(e.type == "error" for e in await run(runtime, second))
+    second_errors = [
+        event.model_dump(mode="json")
+        for event in await run(runtime, second)
+        if event.type == "error"
+    ]
+    assert not second_errors, second_errors
     current_native = await external(store, second)
     assert current_native != old_native
     assert RULE not in vendor.effective(current_native)
