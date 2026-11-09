@@ -35,7 +35,7 @@ from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
 from .runtime_routing import RuntimeRouting
 from .runtime_memory import RuntimeMemoryAdmission
-from .runtime_host_services import HostSharedServices
+from .runtime_host_services import HostSharedServices, create_host_knowledge_index
 from .runtime_management import RuntimeManagement
 from .storage import NebulaStore
 
@@ -101,6 +101,7 @@ class RuntimeSupervisor:
         self.host, self.coordinator = host, host.coordinator
         self.shared_services = shared_services or HostSharedServices(
             host,
+            knowledge_index_factory=create_host_knowledge_index,
             memory_budgets=worker_admission.budgets
             if isinstance(worker_admission, RuntimeMemoryAdmission)
             else None,

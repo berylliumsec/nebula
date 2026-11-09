@@ -15,6 +15,7 @@ from typing import Any, Literal, Protocol, cast
 import chromadb
 import numpy as np
 from chromadb.api.types import DefaultEmbeddingFunction, Documents, Embeddings
+from chromadb.api.client import Client
 from chromadb.config import Settings
 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
@@ -295,6 +296,10 @@ class ChromaKnowledgeIndex:
             )
         except Exception as exc:
             raise KnowledgeIndexError("could not initialize the Chroma index") from exc
+
+    def close(self) -> None:
+        """Release this host's persistent client after its accepted work drains."""
+        cast(Client, self._client).close()
 
     @property
     def descriptor(self) -> dict[str, str]:

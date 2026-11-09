@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 
 from .async_utils import finish_cleanup
 from .database import RuntimeInstanceRow, RuntimeProcessRow
-from .diagnostics import create_diagnostic_task, record_diagnostic
+from .diagnostics import create_diagnostic_task, record_caught_exception, record_diagnostic
 from .knowledge_index import KnowledgeIndexError
 from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity
@@ -36,6 +36,14 @@ from .shared_knowledge_rpc import SharedKnowledge
 
 HOST_SOCKET_NAME = "host-services.sock"
 PEER_HEADER = b"x-nebula-ipc-worker"
+
+
+def create_host_knowledge_index(data_root: Path):
+    """Open the production index only inside the exclusive host startup boundary."""
+    from .knowledge_index import ChromaKnowledgeIndex
+
+    path = os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR")
+    return ChromaKnowledgeIndex(Path(path) if path else data_root / "knowledge-index")
 
 
 def host_service_client(bootstrap, secret: bytes) -> RuntimeRpcClient:
@@ -60,11 +68,16 @@ class HostSharedServices:
         host,
         *,
         knowledge_index=None,
+        knowledge_index_factory=None,
         capacity_limits=None,
         memory_budgets=None,
         cleanup_runner_factory=None,
     ):
+        if knowledge_index is not None and knowledge_index_factory is not None:
+            raise ValueError("Supply a knowledge index or its deferred factory")
         self.host = host
+        self._knowledge_index_factory = knowledge_index_factory
+        self._owned_knowledge_index = None
         self.coordination = host.coordinator.coordination
         self.memory = SharedButlerMemory(
             self.coordination,
@@ -299,6 +312,7 @@ class HostSharedServices:
                     "cpu": max(1, min(4096, (os.cpu_count() or 1) - 1)),
                 }
             )
+        await self._initialize_knowledge()
         if self.knowledge is not None:
             sync = getattr(self.knowledge.index, "sync_product_knowledge", None)
             if callable(sync):
@@ -348,6 +362,33 @@ class HostSharedServices:
         details = path.stat()
         self._socket_identity = (details.st_dev, details.st_ino)
 
+    async def _initialize_knowledge(self):
+        if self._knowledge_index_factory is None:
+            return
+
+        async def initialize():
+            try:
+                index = await asyncio.to_thread(
+                    self._knowledge_index_factory, self.host.data_root
+                )
+            except (ImportError, OSError, KnowledgeIndexError) as error:
+                self.product_guidance = {"state": "degraded"}
+                record_caught_exception(
+                    "knowledge",
+                    "knowledge.host_index_initialization_failed",
+                    "Local knowledge indexing is unavailable; packaged product help, keyword memory and host recovery remain available. Restart Core to retry.",
+                    error,
+                    stage="startup",
+                )
+                return
+            # Retain ownership inside the joined operation: caller cancellation
+            # cannot discard a physically opened client before cleanup sees it.
+            self._owned_knowledge_index = index
+            self.knowledge = SharedKnowledge(self.host, index)
+            self.memory.embedding_index = index
+
+        await finish_cleanup(initialize())
+
     async def _stop_owned(self):
         await self.host_settings.close()
         await self.recovery.close()
@@ -370,6 +411,13 @@ class HostSharedServices:
                             "Shared-service socket changed during cleanup"
                         )
                     path.unlink()
+            if self._owned_knowledge_index is not None:
+                await finish_cleanup(
+                    asyncio.to_thread(self._owned_knowledge_index.close)
+                )
+                self._owned_knowledge_index = None
+                self.knowledge = None
+                self.memory.embedding_index = None
             if self.host.shared_services is self:
                 self.host.shared_services = None
 

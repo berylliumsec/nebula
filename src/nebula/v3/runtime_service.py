@@ -19,7 +19,7 @@ from .diagnostics import configure_diagnostics, install_exception_hooks
 from .memory_budget import MemoryBudgetService
 from .process_identity import process_birth
 from .release_store import ReleaseStore
-from .runtime_host_services import HostSharedServices
+from .runtime_host_services import HostSharedServices, create_host_knowledge_index
 from .runtime_launcher import (
     CONNECTION_NAME,
     DESKTOP_PROTOCOL,
@@ -146,7 +146,11 @@ async def serve_runtime(
     process_host = RuntimeProcessHost(
         coordinator, data_root, pool_settings=settings, operator_token=token
     )
-    shared = HostSharedServices(process_host, memory_budgets=budgets)
+    shared = HostSharedServices(
+        process_host,
+        memory_budgets=budgets,
+        knowledge_index_factory=create_host_knowledge_index,
+    )
     server = None
 
     async def shutdown_requested():
