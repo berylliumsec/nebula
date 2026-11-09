@@ -97,6 +97,51 @@ after compaction or resumption before continuing.
   and browser/installed-native acceptance decisions, draft PR publication and
   merge when repository gates permit. No deployment or existing installation
   was touched. Old trimmed immutable skill content cannot be reconstructed.
+- Follow-up public-host acceptance (helper ready): root requested a dedicated
+  retained-bundle helper after reviewing `e18e08a2`. Work is isolated on
+  `codex/standing-native-acceptance-fixture`; the reviewed branch remains at e18.
+  New files are `tests/v3/standing_instructions_native_fixture.py` and its focused
+  `test_standing_instructions_native_fixture.py`. Acceptance owns all shared
+  supervisor/bundle/browser/spec/config edits. The helper seeds one synthetic
+  native profile and saved Alpha constraint, binds only an inert in-process ACP
+  transport into each actual retained execution's Grok adapter, and preserves
+  the production open/run/readback guard. Authenticated project controls expose
+  actual captures, deliberately lossy native history compaction, and genuine
+  adapter disconnect/reload. Zero native workers are launched; this cannot prove
+  installed Grok, native memory readiness, or GUI support. The ordinary saved
+  decision API changes Alpha to Beta, followed by visible chat delivery; no
+  existing saved-decision editor exists in the current UI, and root accepted
+  the API edit for this evidence.
+  Two helper checks were collected. Initial2 failed in5.41s because the narrow
+  test omitted `default_runtime_platform`, which production execution_worker
+  normally supplies. Adding that real platform retained the workspace guard.
+  Next1 passed/1 failed in5.91s: the inert transport wrote to the profile account
+  while a Core-planned context correctly reads its isolated settings account.
+  Root's fresh `validate_integration_diagnostics` independently confirmed both
+  fixture causes from code and actual captured session/new rules; the same body
+  passes readback at the wrong fixture path and fails at the required isolated
+  path. The approved helper repair carries the selected account home per native
+  session and validates the same account on load. After it, the positive journey
+  passes; the second check failed in6.83s because its no-write monkeypatch did
+  not accept the new account_home keyword. The same fresh validator independently
+  confirmed that exact persisted error before the test-only stub was corrected.
+  The two checks then passed in6.98s. Acceptance requested an observational
+  `turn_active` capture field matching the real409 precondition; it was added
+  and the same2 checks passed in7.09s, bounded60s. Actual managed events record
+  copies `(1,0),(1,0),(1,0),(0,1)` across initial, lossy compaction, genuine
+  reconnect/load, and Beta edit. Thirteen actual ACP calls create two native
+  contexts; the unchanged Alpha context loads successfully and the compaction's
+  system-head SHA256 remains identical. Production missing-head readback still
+  refuses the turn before any session/prompt. Exact helper SHA256:
+  `0be64f41cf5e63eade3c1815c78bf425c1870489268eb542463586a5b1a2469d`.
+  The shared
+  `.github/test-selection.json` is untouched under root ownership; local2-case
+  diff-bound `--plan` and receipt are in `/tmp/standing-native-fixture-*json`,
+  with a60s run bound. No full suite or live provider was invoked. Root/acceptance
+  still own the combined public HostAPI/IPC production LAN/browser run, final
+  source/UI pin, shared selection, review and merge. This helper check is
+  authenticated Kernel evidence and must not be labeled public HostAPI/browser
+  or installed-vendor evidence.
 
 Update this checkpoint with exact file paths, evidence, test selections, commits,
 and remaining blockers as work proceeds. Do not replace unknowns with inferred
