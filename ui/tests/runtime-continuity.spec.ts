@@ -459,15 +459,15 @@ test("native standing instructions survive lossy compaction, reconnect and API r
     return response.json();
   };
   let controls = 0;
-  const native = async (operation: "capture" | "compact" | "reconnect") => delivered(await request.post(
+  const native = async (operation: "capture" | "compact" | "reconnect", diagnostics = false) => delivered(await request.post(
     fixture.origin + setup.control_path, {
-      headers: {...headers, "Idempotency-Key": `native-fixture-${operation}-${++controls}`}, data: {operation},
+      headers: {...headers, "Idempotency-Key": `native-fixture-${operation}-${++controls}`}, data: {operation, ...(diagnostics ? {diagnostics: true} : {})},
     }));
   const captures: Record<string, unknown>[] = [];
   const capture = async () => {
-    let value = await native("capture");
+    let value = await native("capture", true);
     await expect.poll(async () => {
-      value = await native("capture");
+      value = await native("capture", true);
       return value.turn_active;
     }).toBe(false);
     captures.push(value);
@@ -499,6 +499,22 @@ test("native standing instructions survive lossy compaction, reconnect and API r
   let sent = 0;
   let submissions = 0;
   page.on("request", value => {if (value.method() === "POST" && value.url().includes("/chat/completions")) submissions++;});
+  const responses: {status: number; observed_at_ms: number; command_id?: string; receipt_unavailable?: boolean}[] = [];
+  page.on("response", async response => {
+    if (response.request().method() !== "POST" || new URL(response.url()).pathname !== "/api/v1/chat/completions") return;
+    const observed: (typeof responses)[number] = {status: response.status(), observed_at_ms: Date.now()};
+    responses.push(observed);
+    if (response.status() === 202) {
+      try {
+        const body = await response.json();
+        const id = body.command_id ?? body.receipt?.command_id;
+        if (typeof id === "string" && /^[a-zA-Z0-9_-]{1,200}$/.test(id)) observed.command_id = id;
+      } catch {
+        // Diagnostic-only receipt parsing cannot replace the original assertion.
+        observed.receipt_unavailable = true;
+      }
+    }
+  });
   const assistantReplies = async () => {
     const messages = await read(`/api/v1/chat/sessions/${fixture.session_id}/messages?include_replaced=true`) as {id: string; role: string; content: string}[];
     return messages.filter(item => item.role === "assistant");
@@ -506,14 +522,45 @@ test("native standing instructions survive lossy compaction, reconnect and API r
   const send = async (text: string, answer: string) => {
     const previous = await assistantReplies();
     await composer.fill(text);
+    const submittedAt = Date.now();
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     sent++;
     await expect.poll(() => submissions).toBe(sent);
     let current = await assistantReplies();
-    await expect.poll(async () => {
-      current = await assistantReplies();
-      return current.length;
-    }).toBe(previous.length + 1);
+    const pollStartedAt = Date.now();
+    try {
+      await expect.poll(async () => {
+        current = await assistantReplies();
+        return current.length;
+      }).toBe(previous.length + 1);
+    } catch (error) {
+      const failedAt = Date.now();
+      const observed = await native("capture", true).then(value => ({
+        turn_active: value.turn_active, native_session_id: value.active_native_session_id,
+        system_head_available: value.system_head_available, turns: value.diagnostics?.turns,
+        diagnostics_observed_at_ns: value.diagnostics?.observed_at_ns,
+        readbacks: value.native.readbacks?.slice(-4),
+        requests: value.native.requests.map((item: Record<string, any>) => ({
+          method: item.method, managed: item.managed, observed_at_ns: item.observed_at_ns,
+          native_session_id: item.native_session_id, core_session_id: item.core_session_id,
+        })).slice(-12),
+        events: value.native.events.map((item: Record<string, any>) => ({
+          managed: item.managed, observed_at_ns: item.observed_at_ns,
+          native_session_id: item.native_session_id, core_session_id: item.core_session_id,
+          alpha_copies: item.alpha_copies, beta_copies: item.beta_copies,
+        })).slice(-6),
+      })).catch(caught => ({capture_error: caught instanceof Error ? caught.name : "unknown"}));
+      try {
+        console.error("native-continuity-reply-diagnostics", JSON.stringify({
+          submitted_at_ms: submittedAt, poll_started_at_ms: pollStartedAt, failed_at_ms: failedAt,
+          sent, submissions, responses,
+          previous_ids: previous.map(item => item.id), observed_ids: current.map(item => item.id), ...observed,
+        }));
+      } catch {
+        // Logging cannot replace the original assertion.
+      }
+      throw error;
+    }
     const added = current.filter(item => !previous.some(saved => saved.id === item.id));
     expect(added).toHaveLength(1);
     expect(added[0].content).toBe(answer);
@@ -584,7 +631,7 @@ test("native standing instructions survive lossy compaction, reconnect and API r
   const evidence = info.outputPath("native-standing-instructions.json");
   await writeFile(evidence, JSON.stringify({scope: "in-process zero-worker ACP transport; actual Grok adapter and public Core routes",
     mutation: "operator decision updated through authenticated public API; replies and reload through visible UI",
-    initialization: setup, captures, edited, submissions, native: beta.native, runtime: inspected}, null, 2));
+    initialization: setup, captures, edited, submissions, responses, native: beta.native, runtime: inspected}, null, 2));
   await info.attach("native-instruction-delivery", {path: evidence, contentType: "application/json"});
 });
 

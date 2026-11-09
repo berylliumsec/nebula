@@ -5,9 +5,11 @@ Reload the complete [standing-instruction goal](standing-instructions-goal.md),
 checkpoint after compaction or resumption. Preserve the complete goal and all its
 criteria. This repair owns one failing browser journey only.
 
-Status: the exact native Chromium 320 journey passes locally. The original CI
-missing-first-reply mechanism remains unknown and requires the next exact-title
-CI retry. The later independently confirmed assertion faults are repaired.
+Status: all eight native profiles fail on CI head `3c55e4b8`, while its unchanged
+Chromium 320 case passes locally. The current causal gate remains unresolved;
+bounded diagnostics are prepared for the next exact failed-node CI attempt.
+Earlier assertion repairs and their evidence below are historical. The original
+`eee508bc` missing-first-reply mechanism remains separately unknown.
 
 ## Scope and operator contract
 
@@ -19,8 +21,9 @@ CI retry. The later independently confirmed assertion faults are repaired.
   `ui/tests/runtime-continuity.spec.ts:413`, `model-chromium-320`.
   Original CI build: `eee508bc`, run 42666867639, job 129332908052.
 - Root owns shared specification/configuration/CI selection, push, review and
-  merge. The patch changes only this native test subsection plus this checkpoint.
-  No product, native-fixture or helper-test behavior changed.
+  merge. The initial assertion repair changed only this native subsection and
+  checkpoint. The second-CI follow-up adds fixture observations described below;
+  production behavior, native guard results and helper-test assertions stay unchanged.
 - Latest user scope permits only this exact failing title/profile on retry.
   Python, frontend-unit and native-unit selections are empty. No other journey,
   profile or suite executes. No skipped assertions, deadline/retry changes,
@@ -133,3 +136,112 @@ missing-first-reply uncertainty; the passing local receipt does not identify
 that mechanism. Installed vendor/live account/native GUI, physical devices and
 other browser profiles remain unverified and were outside this failed-only run.
 Root owns final diff/CI review, publication and merge of the complete durable goal.
+
+
+## Second CI head 3c55e4b8: active failure investigation
+
+Reload the full durable goal and both checkpoints before resuming this follow-up.
+Worktree `/workspace/nebula-ci-native-reconnect`, branch
+`codex/ci-native-reconnect`, exact base
+`3c55e4b8416e81965490b73f8202e0bbebe91460`. Root owns push/merge, global CI
+inventory, packaged-native failure and the shared failed-case selection.
+
+CI run 42674828799 reports all eight native title/profile jobs failed at the new
+five-second durable-reply poll, `runtime-continuity.spec.ts:514`. Complete raw
+WebKit 320 log: `/tmp/nebula-ci-3c55e4b8-native-webkit320.log`, job 129353417722.
+It reaches the third turn after native reconnect, expected 3 saved assistants,
+received 2. The connector supplied the other seven complete native job logs
+without accessing blocked artifact URLs:
+
+| Profile | Job | First failing durable count |
+| --- | --- | --- |
+| Desktop | 129353417796 | expected 1, received 0 |
+| Chromium 320 | 129353417827 | expected 1, received 0 |
+| Compact | 129353417850 | expected 1, received 0 |
+| WebKit 390 | 129353417921 | expected 1, received 0 |
+| Chromium 390 | 129353417951 | expected 1, received 0 |
+| WebKit 430 | 129353418083 | expected 1, received 0 |
+| Chromium 430 | 129353418414 | expected 3, received 2 |
+
+Those logs are `/tmp/nebula-ci-3c55e4b8-native-job-<job>.log`. No raw turn/error
+or native artifact timing is printed in them. A reconnect-only cause is therefore
+unproved; six profiles fail on their first turn. Preserve the original eee508bc
+missing-first-reply uncertainty separately.
+
+Only the exact still-failed native title in `model-chromium-320` will execute
+locally. It collects exactly one case. Local WebKit binaries are absent; system
+Chromium is available. No passing helper/contracts or other journey/profile may
+be rerun. No behavior/assertion/deadline/guard repair before the fresh causal gate.
+Root permits one fresh `fork_turns:none` validator, read-only and no tests/services,
+after the evidence packet is ready; no duplicate validator exists yet.
+
+Production UI build passed (`/tmp/nebula-native-reconnect-build.log`), served index
+SHA256 `3b1b7369de7b9702009cfc72795a24f177bfa7c4dafb4e796d65311d3de22582`.
+Product knowledge was built and verified exactly as in CI, 418 passages, source
+`946375111ee3`; log `/tmp/nebula-native-reconnect-knowledge-build.log`. Product,
+fixture and spec behavior were unchanged for that baseline execution. Its
+one-case review receipt is
+`/tmp/nebula-native-reconnect-selection-baseline-receipt.json`. The final external
+plan/receipt `/tmp/nebula-native-reconnect-selection{,-receipt}.json` has all local
+execution arrays/counts empty under the later user instruction; root owns the
+next CI failed-node selection.
+
+The one unchanged Chromium 320 case completed: **1 passed**, zero skips/retries,
+1.1-minute test and 1.4-minute runner. All five actual native submissions/prompts/
+events completed with `(1,0)` four times then `(0,1)`. Raw evidence:
+`/tmp/nebula-native-reconnect-baseline/runtime-continuity-native--39d5d-ithout-transcript-injection-model-chromium-320/`;
+log `/tmp/nebula-native-reconnect-browser-baseline.log`; machine receipt
+`/tmp/nebula-native-reconnect-execution-receipt.json`. Temporary fixture data/bundles
+were removed and ports 19881/19882 stopped.
+
+Fresh-context `validate_native_second_ci` independently reviewed all eight raw CI
+failures, the successful local artifact, owners/callers and competing mechanisms.
+Its causal gate is **unresolved**. The CI count reads use all durable messages;
+virtualization is not the cause. A browser POST count proves outgoing submission,
+not acceptance. Delayed acceptance/open/finalization and failed or rejected
+native delivery remain consistent with the evidence. No deadline, memory or
+readback repair is justified.
+
+Root relayed the latest user restriction after that local pass: **do not rerun
+any previously passed case**, including this local Chromium 320 case. No more
+local tests are permitted. Next CI is root-owned and may select only its ten
+currently failed browser nodes (eight native, two provider-tools); six passing
+tools nodes and all passing Python/frontend/Rust/checks are excluded. Root owns
+the packaged-native case separately. No helper/contracts were rerun here.
+
+### Diagnostic-only patch for the next failed CI attempt
+
+- Native fixture wraps the original readback function once, passing exactly the
+  original arguments and returning its original boolean. Observation and even
+  observation-error logging are best effort. No guard result is overridden.
+- The fixture observes metadata **after** the original guard, with descriptor-
+  relative `O_NOFOLLOW` traversal rooted at the owned synthetic data, at most
+  4,096 parent entries and 2,000,001 bytes. It records result, exact decimal-string
+  nanoseconds, observed candidate count/file type/size/UTF-8 validity/occurrence
+  count and error stage/errno. No instruction body or account path is printed.
+- Native request/event timestamps and native/Core session IDs correlate activity.
+  An optional capture flag reads only the last three durable turn summaries,
+  their status/revision/timestamps/final message identity and safe failure reason.
+- The existing reply-count assertion keeps its original predicate and deadline.
+  On failure, the native test prints an allowlisted bounded summary of POST
+  status/receipt, counts/IDs, turn state and recent readbacks/calls/events, then
+  rethrows the original assertion. Successful capture artifacts include the new
+  diagnostics without creating another test. Other journeys remain untouched.
+- Fresh independent static review found and corrected an intermediate-symlink
+  observation path, missing correlation fields and a logging exception boundary.
+  Its final review found no blocking safety/result issue. The causal gate remains
+  unresolved. Metadata from the second read is not the original guard's exact
+  rejection branch, and added file/lock work may affect timing despite preserving
+  the original result.
+- These diagnostics were added **after** the local baseline pass. They have not
+  been executed because the user forbids repeating that passed case. Do not cite
+  the baseline pass as runtime verification of this diagnostic patch.
+
+Static-review record: `/tmp/nebula-native-reconnect-static-review.json`. The
+original guard arguments/result, poll deadline/predicate and assertion rethrow
+were independently reviewed; no remaining blocking safety/result issue was found.
+The diagnostic patch is runtime-unverified under the user's no-repeat rule.
+
+Next: commit the statically reviewed diagnostic-only diff without a push, and
+have root collect the next exact failed-node CI evidence. Preserve both unknown
+CI mechanisms and do not infer a cause from the five-second count symptom.

@@ -14,6 +14,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import stat
+import time
 from uuid import uuid4
 
 RULE_ALPHA = "NATIVE_STANDING_ALPHA: Inspect synthetic fixture data only."
@@ -97,6 +100,95 @@ class NativeState:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.write_bytes(text.encode("utf-8"))
         path.chmod(0o600)
+
+    def observe_readback(self, home, native_id, text, not_before_ns, confirmed):
+        """Record metadata after the real guard; never alter its inputs/result."""
+        row = {
+            "native_session_id": native_id,
+            "observed_at_ns": str(time.time_ns()),
+            "not_before_ns": str(not_before_ns),
+            "confirmed": confirmed,
+            "metadata_observed_after_guard": True,
+            "candidate_count": 0,
+        }
+        stage = "owned_home"
+        try:
+            relative = home.relative_to(self.root)
+            if ".." in relative.parts or not re.fullmatch(
+                r"[A-Za-z0-9_-]{1,200}", native_id
+            ):
+                raise ValueError("invalid owned diagnostic path")
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            directory = os.open(self.root, flags)
+            try:
+                for part in (*relative.parts, "sessions"):
+                    child = os.open(part, flags, dir_fd=directory)
+                    os.close(directory)
+                    directory = child
+                stage = "sessions"
+                with os.scandir(directory) as parents:
+                    for index, parent in enumerate(parents):
+                        if index >= 4096:
+                            row["scan_limit_reached"] = True
+                            break
+                        if not parent.is_dir(follow_symlinks=False):
+                            continue
+                        project = os.open(parent.name, flags, dir_fd=directory)
+                        try:
+                            try:
+                                session = os.open(native_id, flags, dir_fd=project)
+                            except FileNotFoundError:
+                                continue
+                            try:
+                                row["candidate_count"] += 1
+                                if parent.name != "synthetic-project":
+                                    continue
+                                stage = "head"
+                                file = os.open(
+                                    "system_prompt.txt",
+                                    os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                                    dir_fd=session,
+                                )
+                                try:
+                                    info = os.fstat(file)
+                                    row.update(
+                                        regular_file=stat.S_ISREG(info.st_mode),
+                                        mtime_ns=str(info.st_mtime_ns),
+                                        size_bytes=info.st_size,
+                                    )
+                                    if row["regular_file"]:
+                                        payload = os.read(file, 2_000_001)
+                                        row["read_bytes"] = len(payload)
+                                        row["within_byte_limit"] = (
+                                            len(payload) <= 2_000_000
+                                        )
+                                        stage = "decode"
+                                        decoded = payload.decode("utf-8")
+                                        row["utf8_valid"] = True
+                                        row["expected_occurrences"] = decoded.count(
+                                            text
+                                        )
+                                finally:
+                                    os.close(file)
+                            finally:
+                                os.close(session)
+                        finally:
+                            os.close(project)
+            finally:
+                os.close(directory)
+        except (OSError, UnicodeError, ValueError) as error:
+            row.update(observation_stage=stage, observation_error=type(error).__name__)
+            if isinstance(error, UnicodeError):
+                row["utf8_valid"] = False
+            if isinstance(error, OSError):
+                row["errno"] = error.errno
+        with self.locked() as state:
+            row["core_session_id"] = (
+                state["sessions"].get(native_id, {}).get("core_session_id")
+            )
+            rows = state.setdefault("readbacks", [])
+            rows.append(row)
+            del rows[:-16]
 
     def compact(self):
         with self.locked() as state:
@@ -301,6 +393,7 @@ class InertRpc:
                 raise RuntimeError("native fixture request budget exhausted")
             row = {
                 "method": method,
+                "observed_at_ns": str(time.time_ns()),
                 "params": _safe(deepcopy(params), self.native.root),
                 "core_session_id": self.core_session_id,
                 "managed": self.managed,
@@ -389,7 +482,9 @@ class InertRpc:
                 }
                 state["events"].append(
                     {
+                        "observed_at_ns": str(time.time_ns()),
                         "native_session_id": identity,
+                        "core_session_id": self.core_session_id,
                         "frame": emitted,
                         "alpha_copies": alpha,
                         "beta_copies": beta,
@@ -423,7 +518,14 @@ class InertRpc:
 def configure_app(app, *, root: Path, lease, version: str):
     """Install only this retained module's inert native transport before lifespan."""
     from fastapi import HTTPException, Request
-    from nebula.v3.domain import ChatSession, HarnessKind, HarnessSession
+    from nebula.v3.domain import (
+        ChatSession,
+        ChatTurn,
+        HarnessKind,
+        HarnessSession,
+        HarnessTurn,
+    )
+    from nebula.v3 import harnesses
     from nebula.v3.harnesses import (
         GrokAcpAdapter,
         HarnessHealth,
@@ -436,6 +538,32 @@ def configure_app(app, *, root: Path, lease, version: str):
     if config is None or config["project_id"] != lease.project_id:
         return
     native = NativeState(root)
+    original_guard = getattr(
+        harnesses.grok_channel_is_confirmed,
+        "_native_fixture_original",
+        harnesses.grok_channel_is_confirmed,
+    )
+
+    def observed_guard(home, native_id, text, *, not_before_ns):
+        confirmed = original_guard(home, native_id, text, not_before_ns=not_before_ns)
+        try:
+            if home.resolve().is_relative_to(root):
+                native.observe_readback(home, native_id, text, not_before_ns, confirmed)
+        except Exception as error:
+            # Diagnostic persistence must not replace the actual guard result.
+            try:
+                print(
+                    json.dumps(
+                        {"native_readback_observation_error": type(error).__name__}
+                    ),
+                    flush=True,
+                )
+            except Exception:
+                pass  # Logging cannot replace the original readback result.
+        return confirmed
+
+    observed_guard._native_fixture_original = original_guard
+    harnesses.grok_channel_is_confirmed = observed_guard
     runtime = app.state.harness_runtime_service
     original_factory = runtime.adapter_factory
 
@@ -510,6 +638,43 @@ def configure_app(app, *, root: Path, lease, version: str):
         result["turn_active"] = session.id in runtime._active
         result["channel_receipt"] = session.metadata.get("instruction_channel")
         result["standing_snapshot"] = session.metadata.get("standing_instructions")
+        if body.get("diagnostics") is True:
+            turns = await runtime.store.list_session_entities(
+                ChatTurn, chat.id, newest_first=True, limit=3
+            )
+            summaries = []
+            for turn in turns:
+                summary = {
+                    "id": turn.id,
+                    "revision": turn.revision,
+                    "status": turn.status.value,
+                    "created_at": turn.created_at.isoformat(),
+                    "admitted_at": turn.admitted_at.isoformat()
+                    if turn.admitted_at
+                    else None,
+                    "final_message_id": turn.final_message_id,
+                    "error_present": bool(turn.error),
+                }
+                if turn.harness_turn_id:
+                    owner = await runtime.store.get(HarnessTurn, turn.harness_turn_id)
+                    summary["harness"] = {
+                        "id": owner.id,
+                        "harness_session_id": owner.harness_session_id,
+                        "status": owner.status.value,
+                        "started_at": owner.started_at.isoformat()
+                        if owner.started_at
+                        else None,
+                        "completed_at": owner.completed_at.isoformat()
+                        if owner.completed_at
+                        else None,
+                        "error_present": bool(owner.error),
+                        "reason_code": owner.metadata.get("diagnostic_reason_code"),
+                    }
+                summaries.append(summary)
+            result["diagnostics"] = {
+                "observed_at_ns": str(time.time_ns()),
+                "turns": summaries,
+            }
         return result
 
     # Reuse the actual production completion route's authentication dependencies.
