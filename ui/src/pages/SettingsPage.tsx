@@ -2,7 +2,8 @@ import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Contrast, KeyRound, Minus, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, UserRound, X } from "lucide-react";
-import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
+import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SetupStatus, SkillCatalogInfo } from "../api/types";
+import type { ApiClient } from "../api/client";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { UpstreamProviderPicker, upstreamCatalog, type UpstreamProviderOption } from "../components/UpstreamProviderPicker";
 import { PageHeader } from "../components/PageHeader";
@@ -228,12 +229,52 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [preparationClock, setPreparationClock] = useState(Date.now());
   const [selectingRuntime, setSelectingRuntime] = useState<string>();
   const [setupError, setSetupError] = useState<string>();
+  const [projectSetupAttempt, setProjectSetupAttempt] = useState(0);
+  const [projectSetup, setProjectSetup] = useState<{api: ApiClient; projectId: string; status?: SetupStatus; error?: string}>();
+  const setupProjectRef = useRef({api, projectId: engagement?.id});
+  setupProjectRef.current = {api, projectId: engagement?.id};
+  const currentProjectSetup = projectSetup?.api === api && projectSetup?.projectId === engagement?.id ? projectSetup : undefined;
+  const isSetupProjectCurrent = (projectId: string | undefined) => setupProjectRef.current.api === api
+    && setupProjectRef.current.projectId === projectId;
   const [detectedLocalProviders, setDetectedLocalProviders] = useState<LocalProviderDetection[]>([]);
   const [detectingLocalProviders, setDetectingLocalProviders] = useState(false);
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalogInfo>();
   const [nativeSkills, setNativeSkills] = useState<HarnessSkillSummary[]>([]);
   const [skillCatalogError, setSkillCatalogError] = useState<string>();
   const [skillCatalogLoading, setSkillCatalogLoading] = useState(false);
+
+  useEffect(() => {
+    setCheckingTerminal(false);
+    setSetupError(undefined);
+    if (!api || !engagement?.id || settingsSection !== "setup-settings" || !["ready", "degraded"].includes(workspaceState)) {
+      setProjectSetup(undefined);
+      return;
+    }
+    const projectId = engagement.id;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    setProjectSetup({api, projectId});
+    const load = async () => {
+      try {
+        const status = await api.setupStatus(controller.signal, projectId);
+        if (controller.signal.aborted) return;
+        setProjectSetup({api, projectId, status});
+        if (status.terminal.status === "detecting_runner"
+          || ["queued", "resolving_runtime", "preparing_image", "cancelling"].includes(status.terminal.imagePreparation.phase)) {
+          timer = window.setTimeout(() => void load(), 1_000);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return; // diagnostic-expected: a new Project or view supersedes this read.
+        logCaughtDiagnostic("interface.settings_page.project_setup_load_failed", "The selected Project's Terminal setup could not be loaded.", error, "project-setup");
+        setProjectSetup({api, projectId, error: error instanceof Error ? error.message : "Project Terminal setup could not be loaded. Check again."});
+      }
+    };
+    void load();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [api, engagement?.id, projectSetupAttempt, settingsSection, workspaceState]);
 
   useEffect(() => {
     if (!api || !["ready", "degraded"].includes(workspaceState)) {
@@ -727,32 +768,40 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     }
   };
   const checkTerminalSetup = async () => {
+    const projectId = engagement?.id;
     setCheckingTerminal(true);
     setSetupError(undefined);
     try {
-      if (api && ["error", "cancelled"].includes(setupStatus?.terminal.imagePreparation.phase ?? "")) {
-        await api.retrySetupImage(setupStatus?.scratchProjectId);
+      const preparation = currentProjectSetup?.status?.terminal.imagePreparation;
+      if (api && projectId && preparation?.projectId === projectId && ["error", "cancelled"].includes(preparation.phase)) {
+        await api.retrySetupImage(projectId);
+      } else {
+        await refreshSetupRuntime();
       }
-      await refreshSetupRuntime();
+      if (isSetupProjectCurrent(projectId)) setProjectSetupAttempt(value => value + 1);
     } catch (error) {
+      if (!isSetupProjectCurrent(projectId)) return; // diagnostic-expected: the selected Project changed during the action.
       void logCaughtDiagnostic("interface.settings_page.caught_failure_09", "A handled interface operation failed.", error, "settings_page");
       setSetupError(error instanceof Error ? error.message : "Could not check Terminal setup.");
     } finally {
-      setCheckingTerminal(false);
+      if (isSetupProjectCurrent(projectId)) setCheckingTerminal(false);
     }
   };
   const cancelImagePreparation = async () => {
-    if (!api || !setupStatus?.terminal.imagePreparation.operationId) return;
+    const projectId = engagement?.id;
+    const preparation = currentProjectSetup?.status?.terminal.imagePreparation;
+    if (!api || !projectId || !preparation?.operationId || preparation.projectId !== projectId) return;
     setCheckingTerminal(true);
     setSetupError(undefined);
     try {
-      await api.cancelSetupImage(setupStatus.terminal.imagePreparation.operationId);
-      await refreshSetupRuntime();
+      await api.cancelSetupImage(preparation.operationId, projectId);
+      if (isSetupProjectCurrent(projectId)) setProjectSetupAttempt(value => value + 1);
     } catch (error) {
+      if (!isSetupProjectCurrent(projectId)) return; // diagnostic-expected: the selected Project changed during the action.
       void logCaughtDiagnostic("interface.settings_page.image_preparation_cancel_failed", "Kali runtime preparation could not be cancelled.", error, "settings_page");
       setSetupError(error instanceof Error ? error.message : "Could not cancel Kali runtime preparation.");
     } finally {
-      setCheckingTerminal(false);
+      if (isSetupProjectCurrent(projectId)) setCheckingTerminal(false);
     }
   };
   const selectRuntime = async (candidateId: string) => {
@@ -762,6 +811,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     try {
       await api.selectSetupRuntime(candidateId);
       await refreshSetupRuntime();
+      setProjectSetupAttempt(value => value + 1);
     } catch (error) {
       void logCaughtDiagnostic("interface.settings_page.caught_failure_10", "A handled interface operation failed.", error, "settings_page");
       setSetupError(error instanceof Error ? error.message : "Could not select the container runtime.");
@@ -816,9 +866,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const moreProviderCatalog = providerCatalog.filter(
     (entry) => !primaryProviderFlavors.includes(entry.flavor),
   );
-  const imagePreparation = setupStatus?.terminal.imagePreparation;
-  const imagePreparationActive = setupStatus?.terminal.status === "preparing_image";
-  const imagePreparationFailed = imagePreparation?.phase === "error" || imagePreparation?.phase === "cancelled";
+  const terminalSetup = engagement?.id ? currentProjectSetup?.status?.terminal : setupStatus?.terminal;
+  const projectSetupPending = Boolean(api && engagement?.id && !currentProjectSetup?.status && !currentProjectSetup?.error);
+  const imagePreparation = currentProjectSetup?.status?.terminal.imagePreparation;
+  const imagePreparationOwned = Boolean(engagement?.id && imagePreparation?.projectId === engagement.id);
+  const imagePreparationActive = imagePreparationOwned && ["queued", "resolving_runtime", "preparing_image", "cancelling"].includes(imagePreparation?.phase ?? "");
+  const imagePreparationFailed = imagePreparationOwned && (imagePreparation?.phase === "error" || imagePreparation?.phase === "cancelled");
   const imagePreparationIndeterminate = imagePreparation?.progressIndeterminate === true
     || imagePreparation?.progressPercent === undefined;
   useEffect(() => {
@@ -861,12 +914,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         </section>}
         <div className="setup-card-grid">
           <article className="panel setup-card">
-            <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Kali runtime ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
-            {!imagePreparationActive && !imagePreparationFailed && <p>{setupStatus?.terminal.detail ?? (setupStatus?.terminal.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>}
+            <header><span className={`status-dot ${terminalSetup?.status === "ready" ? "healthy" : projectSetupPending || ["detecting_runner", "preparing_image"].includes(terminalSetup?.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{projectSetupPending ? "Checking Project setup…" : terminalSetup?.status === "ready" ? "Kali runtime ready" : terminalSetup?.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : terminalSetup?.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
+            {!imagePreparationActive && !imagePreparationFailed && <p>{terminalSetup?.detail ?? (terminalSetup?.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>}
             {(imagePreparationActive || imagePreparationFailed) && <ProgressState
               className="setup-preparation-progress"
               stage={imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : "Preparing Kali runtime"}
-              detail={imagePreparation?.detail ?? setupStatus?.terminal.detail ?? "Preparing the verified project image."}
+              detail={imagePreparation?.detail ?? terminalSetup?.detail ?? "Preparing the verified project image."}
               progressLabel="Kali runtime preparation progress"
               elapsed={elapsedLabel(imagePreparation?.startedAt, preparationClock)}
               progress={imagePreparationIndeterminate ? undefined : imagePreparation?.progressPercent}
@@ -887,6 +940,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         </div>
         {setupStatus?.scratchProjectId && <p className="setup-footnote"><Check size={14} /> Scratch Project is ready.</p>}
         {setupError && <DiagnosticErrorNotice error={setupError} fallback="Setup could not complete the operation." />}
+        {currentProjectSetup?.error && <DiagnosticErrorNotice error={currentProjectSetup.error} fallback="Project Terminal setup could not be loaded. Check again." />}
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />

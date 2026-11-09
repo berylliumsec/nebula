@@ -42,9 +42,24 @@ from .provider_settings import (
     persist_provider_model_catalog,
 )
 from .providers import provider_from_profile
-from .runtime_delivery import HttpIntent, RuntimeDelivery
+from .runtime_delivery import (
+    MAX_LIBRARY_INGEST_REQUEST_BYTES,
+    HttpIntent,
+    RuntimeDelivery,
+)
 from .runtime_host_delivery import HOST_EFFECT, HostEffectDelivery
+from .runtime_host_library import (
+    LIBRARY_ARTIFACT_CONTENT,
+    LIBRARY_INGEST_PATH,
+    HostLibrary,
+    is_host_library_route,
+)
 from .runtime_host_observations import HOST_OBSERVATION_ROUTES, HostObservations
+from .runtime_host_operator import (
+    HOST_OPERATOR_ROUTES,
+    HostOperator,
+    is_host_operator_route,
+)
 from .runtime_integration_effects import is_host_integration_write
 from .runtime_global_settings import is_global_settings_host_route
 from .runtime_vault import RuntimeVault
@@ -54,6 +69,7 @@ _MEMORY_JOB = re.compile(r"/api/v1/memory-budgets/jobs/([A-Za-z0-9_.:-]{1,200})"
 _MEMORY_APPLY = re.compile(
     r"/api/v1/memory-budgets/jobs/([A-Za-z0-9_.:-]{1,200})/apply"
 )
+MAX_HOST_LIBRARY_PAYLOAD_BYTES = 40 * 1024**2
 
 
 class _Forward(Response):
@@ -91,6 +107,8 @@ def is_host_settings_route(method, path):
         or (method, path) in HOST_OBSERVATION_ROUTES
         or is_host_integration_write(method, path)
         or is_global_settings_host_route(method, path)
+        or is_host_operator_route(method, path)
+        or is_host_library_route(method, path)
         or (
             (
                 method == "GET"
@@ -133,20 +151,32 @@ class HostSettings:
         self.delegated_authority = ContextVar("host_settings_authority", default=None)
         self.effect = None
         self.read_slots = asyncio.Semaphore(8)
+        self.library_ingest_slots = asyncio.Semaphore(1)
         self.observations = HostObservations(self)
+        self.operator = HostOperator(self)
+        self.library = HostLibrary(self)
         self.app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
         self._routes()
         self.observations.mount(self.app, self._authorized)
+        self.operator.mount(self.app, self._authorized)
+        self.library.mount(self.app, self._authorized)
         from .runtime_host_settings_bridge import HostSettingsBridge
 
         self.assistant_bridge = HostSettingsBridge(self)
 
     async def start(self):
         await self.observations.start()
+        await self.operator.start()
+        await self.library.start()
         if self.effect is None:
             delivery = RuntimeDelivery(
                 self.host.coordinator.coordination,
-                RuntimeVault(self.host.data_root / "runtime" / "payloads"),
+                RuntimeVault(
+                    self.host.data_root / "runtime" / "payloads",
+                    # Nested base64 in this route's serialized intent exceeds
+                    # the ordinary 16 MiB vault bound. Other bodies stay capped.
+                    maximum_bytes=MAX_HOST_LIBRARY_PAYLOAD_BYTES,
+                ),
             )
             self.effect = HostEffectDelivery(delivery, self)
             await self.effect.start()
@@ -154,6 +184,8 @@ class HostSettings:
     async def close(self):
         if self.effect is not None:
             await self.effect.close()
+        await self.library.close()
+        await self.operator.close()
         await self.observations.close()
         await self.assistant_bridge.close()
         await self.store.event_history.close()
@@ -504,6 +536,42 @@ class HostSettings:
 
         async def request(request: Request):
             actor = await principal(request)
+            artifact = (
+                LIBRARY_ARTIFACT_CONTENT.fullmatch(request.url.path)
+                if request.method == "GET"
+                else None
+            )
+            if artifact is not None:
+                if not await self.library.owns_artifact(artifact[1]):
+                    return _Forward(proxy)
+                if self.read_slots.locked():
+                    raise HTTPException(
+                        429, "Host Settings reads are busy; retry shortly"
+                    )
+
+                async def stream(scope, receive, send):
+                    async with self.read_slots:
+                        token = self.actor.set(actor)
+                        try:
+                            try:
+                                async with asyncio.timeout(30):
+                                    response = await self.library.artifact_content(
+                                        artifact[1]
+                                    )
+                            except TimeoutError:
+                                raise HTTPException(
+                                    503, "Library verification timed out; retry shortly"
+                                ) from None
+                            await response(scope, receive, send)
+                        finally:
+                            self.actor.reset(token)
+
+                return _Forward(stream)
+            if (
+                request.url.path == "/api/v1/setup/status"
+                and "project_id" in request.query_params
+            ):
+                return _Forward(proxy)
             if not is_host_settings_route(request.method, request.url.path):
                 return _Forward(proxy)
             memory_apply = _MEMORY_APPLY.fullmatch(request.url.path)
@@ -522,17 +590,42 @@ class HostSettings:
                     428,
                     "A client-generated Idempotency-Key is required for this mutation",
                 )
-            body = bytearray()
-            async for chunk in request.stream():
-                if len(body) + len(chunk) > 128 * 1024:
-                    raise HTTPException(413, "Host Settings request exceeds 128 KiB")
-                body.extend(chunk)
-            intent = intent_for(request, bytes(body))
-            if telemetry:
-                return await observe(intent, actor)
-            receipt = await self.effect.execute(
-                intent, actor_id=actor, idempotency_key=key
+            library_ingest = (
+                request.method == "POST" and request.url.path == LIBRARY_INGEST_PATH
             )
+
+            async def capture(maximum):
+                body = bytearray()
+                async for chunk in request.stream():
+                    if len(body) + len(chunk) > maximum:
+                        raise HTTPException(
+                            413,
+                            "Library request exceeds its bounded upload envelope"
+                            if library_ingest
+                            else "Host Settings request exceeds 128 KiB",
+                        )
+                    body.extend(chunk)
+                return intent_for(request, bytes(body))
+
+            if library_ingest:
+                # Reserve before consuming a large body, through encrypted
+                # durable acceptance. Concurrent uploads do not collect buffers.
+                if self.library_ingest_slots.locked():
+                    raise HTTPException(
+                        429, "A Library upload is being accepted; retry shortly"
+                    )
+                async with self.library_ingest_slots:
+                    intent = await capture(MAX_LIBRARY_INGEST_REQUEST_BYTES)
+                    receipt = await self.effect.execute(
+                        intent, actor_id=actor, idempotency_key=key
+                    )
+            else:
+                intent = await capture(128 * 1024)
+                if telemetry:
+                    return await observe(intent, actor)
+                receipt = await self.effect.execute(
+                    intent, actor_id=actor, idempotency_key=key
+                )
             return await self.effect.response(
                 actor, receipt.command_id, receipt=receipt
             )
@@ -548,9 +641,14 @@ class HostSettings:
             ("/api/v1/memory-budgets/jobs/{job_id}/apply", ["POST"]),
             ("/api/v1/credentials", ["POST"]),
             ("/api/v1/credentials/{path:path}", ["GET", "DELETE"]),
+            (LIBRARY_INGEST_PATH, ["POST"]),
+            ("/api/v1/library/items/{item_id}/reindex", ["POST"]),
+            ("/api/v1/library/items/{item_id}", ["DELETE"]),
+            ("/api/v1/knowledge/index-status", ["GET"]),
+            ("/api/v1/artifacts/{artifact_id}/content", ["GET"]),
         ):
             app.add_api_route(path, request, methods=methods)
-        for method, path in sorted(HOST_OBSERVATION_ROUTES):
+        for method, path in sorted(HOST_OBSERVATION_ROUTES | HOST_OPERATOR_ROUTES):
             app.add_api_route(path, request, methods=[method])
 
         async def owned(command_id, actor):

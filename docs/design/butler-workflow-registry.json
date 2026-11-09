@@ -3081,9 +3081,10 @@
       "ui_calls": [
         "ui/src/components/ContainerTerminalPanel.tsx::setupStatus",
         "ui/src/diagnostics/DiagnosticsPanel.tsx::setupStatus",
+        "ui/src/pages/SettingsPage.tsx::setupStatus",
         "ui/src/state/WorkspaceContext.tsx::setupStatus"
       ],
-      "core_owner": "Core SetupService status and current operation metadata",
+      "core_owner": "Host runtime discovery and exact Project image preparation status and operation metadata",
       "butler": {
         "discover": "nebula.settings.api_schema",
         "read": "nebula.data.system",
@@ -5738,6 +5739,10 @@
     },
     {
       "key": "ui/src/pages/SettingsPage.tsx::selectSetupRuntime",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/SettingsPage.tsx::setupStatus",
       "count": 1
     },
     {

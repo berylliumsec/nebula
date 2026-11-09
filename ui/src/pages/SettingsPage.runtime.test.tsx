@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
+import type { SetupImagePreparation, SetupStatus } from "../api/types";
 import { DialogProvider } from "../components/DialogSystem";
 import { SettingsPage } from "./SettingsPage";
 import { invoke } from "@tauri-apps/api/core";
@@ -27,9 +28,9 @@ const { workspace } = vi.hoisted(() => ({
     activateOperatorProfile: vi.fn(),
     deleteOperatorProfile: vi.fn(),
     refreshSetupRuntime: vi.fn(),
-    setupStatus: undefined,
+    setupStatus: undefined as SetupStatus | undefined,
     workspaceState: "ready",
-    engagement: undefined,
+    engagement: undefined as {id: string} | undefined,
   },
 }));
 
@@ -58,6 +59,10 @@ vi.mock("../components/TypeSafeIntegrationSettings", () => ({ TypeSafeIntegratio
 vi.mock("../components/EngagementPolicySettings", () => ({ EngagementPolicySettings: () => null }));
 vi.mock("../components/ReleaseSettingsPanel", () => ({ ReleaseSettingsPanel: () => null }));
 vi.mock("../components/HostCpuBudgetSettings", () => ({ HostCpuBudgetSettings: () => null }));
+vi.mock("../components/HostPressureSettings", () => ({ HostPressureSettings: () => null }));
+vi.mock("../components/MemoryBudgetSettings", () => ({ MemoryBudgetSettings: () => null }));
+vi.mock("../components/RuntimeUsagePanel", () => ({ RuntimeUsagePanel: () => null }));
+vi.mock("../components/WebSearchRuntimeSettings", () => ({ WebSearchRuntimeSettings: () => null }));
 vi.mock("../components/DevicePairingSettings", () => ({ DevicePairingSettings: () => null }));
 vi.mock("../components/ProviderHealthCard", () => ({ ProviderHealthCard: ({ provider, onEdit }: { provider: { name: string }; onEdit: (provider: unknown) => void }) => <button type="button" onClick={() => onEdit(provider)}>Edit {provider.name}</button> }));
 vi.mock("../components/CompactSettingsList", () => ({ CompactSettingsList: () => <div>Compact settings list</div> }));
@@ -73,6 +78,8 @@ describe("explicit local Core shutdown", () => {
     vi.clearAllMocks();
     vi.stubGlobal("__TAURI_INTERNALS__", {});
     workspace.api = undefined;
+    workspace.engagement = undefined;
+    workspace.setupStatus = undefined;
     workspace.providers = [] as never[];
     workspace.providerCatalog = [] as never[];
     vi.mocked(invoke).mockResolvedValue({mode: "local", tokenAvailable: true});
@@ -110,6 +117,95 @@ describe("explicit local Core shutdown", () => {
     renderSettings("/settings#setup-settings");
     await screen.findByText("Remote Core selected");
     expect(screen.queryByRole("button", {name: "Shut down Core"})).not.toBeInTheDocument();
+  });
+});
+
+function imageSetup(projectId: string, phase: SetupImagePreparation["phase"] = "preparing_image"): SetupStatus {
+  const active = ["queued", "resolving_runtime", "preparing_image", "cancelling"].includes(phase);
+  const failed = phase === "error" || phase === "cancelled";
+  return {
+    applicationStage: "ready", stageDetail: "Ready", retryable: false, recoveryActions: [], core: {status: "ready"},
+    scratchProjectId: "host-scratch",
+    terminal: {status: active ? "preparing_image" : failed ? "error" : "ready", candidates: [], imagePreparation: {
+      projectId, operationId: `${projectId}-operation`, phase, progressIndeterminate: active,
+      canCancel: phase === "preparing_image", canRetry: failed, detail: `${projectId} image ${phase}`,
+    }}, assistant: {status: "needs_model"},
+  };
+}
+
+function projectApi() {
+  return {
+    setupStatus: vi.fn(), cancelSetupImage: vi.fn().mockResolvedValue(undefined), retrySetupImage: vi.fn().mockResolvedValue(undefined),
+    discoverLocalProviders: vi.fn().mockResolvedValue([]), getSkillCatalog: vi.fn().mockResolvedValue({projectRoot: "", managedRoot: ""}),
+    listSkills: vi.fn().mockResolvedValue([]),
+  };
+}
+
+describe("selected Project image preparation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workspace.engagement = {id: "project-a"};
+    workspace.setupStatus = imageSetup("host-scratch");
+    workspace.providers = [] as never[];
+    workspace.providerCatalog = [] as never[];
+  });
+  afterEach(() => { workspace.api = undefined; workspace.engagement = undefined; workspace.setupStatus = undefined; });
+
+  it("waits for the selected snapshot, preserves failed cancellation and retries its own image", async () => {
+    const api = projectApi();
+    let observed = imageSetup("project-a");
+    let finish!: (value: SetupStatus) => void;
+    api.setupStatus.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockImplementation(async () => observed);
+    api.cancelSetupImage.mockRejectedValueOnce(new Error("Cancellation temporarily blocked")).mockImplementation(async () => { observed = imageSetup("project-a", "cancelled"); });
+    api.retrySetupImage.mockImplementation(async () => { observed = imageSetup("project-a", "ready"); });
+    workspace.api = api as unknown as ApiClient;
+    renderSettings("/settings#setup-settings");
+    expect(screen.getByText("Checking Project setup…")).toBeVisible();
+    expect(screen.queryByRole("button", {name: "Cancel"})).not.toBeInTheDocument();
+    await act(async () => finish(observed));
+    await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Cancellation temporarily blocked");
+    expect(screen.getByRole("button", {name: "Cancel"})).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+    await userEvent.click(await screen.findByRole("button", {name: "Retry preparation"}));
+    expect(await screen.findByText("Kali runtime ready")).toBeVisible();
+    expect(api.cancelSetupImage.mock.calls).toEqual([["project-a-operation", "project-a"], ["project-a-operation", "project-a"]]);
+    expect(api.retrySetupImage).toHaveBeenCalledWith("project-a");
+    expect(workspace.refreshSetupRuntime).not.toHaveBeenCalled();
+    expect(api.setupStatus.mock.calls.every(([, projectId]) => projectId === "project-a")).toBe(true);
+  });
+
+  it("ignores a late previous Project snapshot and cancels only the newly selected operation", async () => {
+    const api = projectApi();
+    let finishOld!: (value: SetupStatus) => void;
+    api.setupStatus.mockImplementation((_signal, projectId) => projectId === "project-a"
+      ? new Promise(resolve => {finishOld = resolve;}) : Promise.resolve(imageSetup("project-b")));
+    workspace.api = api as unknown as ApiClient;
+    const view = renderSettings("/settings#setup-settings");
+    workspace.engagement = {id: "project-b"};
+    view.rerender(<MemoryRouter initialEntries={["/settings#setup-settings"]}><DialogProvider><SettingsPage /></DialogProvider></MemoryRouter>);
+    expect(await screen.findByText("project-b image preparing_image")).toBeVisible();
+    expect(api.setupStatus.mock.calls[0][0].aborted).toBe(true);
+    await act(async () => finishOld(imageSetup("project-a")));
+    expect(screen.queryByText("project-a image preparing_image")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(api.cancelSetupImage).toHaveBeenCalledWith("project-b-operation", "project-b");
+    expect(api.cancelSetupImage).toHaveBeenCalledOnce();
+  });
+
+  it("never offers image controls for a different Project or falls back to the host scratch Project", async () => {
+    const api = projectApi();
+    api.setupStatus.mockResolvedValue(imageSetup("another-project", "error"));
+    workspace.api = api as unknown as ApiClient;
+    renderSettings("/settings#setup-settings");
+    await screen.findByText("Needs attention");
+    expect(screen.queryByRole("button", {name: "Cancel"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Retry preparation"})).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", {name: "Check again"}));
+    expect(workspace.refreshSetupRuntime).toHaveBeenCalledOnce();
+    expect(api.retrySetupImage).not.toHaveBeenCalled();
+    expect(api.cancelSetupImage).not.toHaveBeenCalled();
+    expect(api.setupStatus).toHaveBeenCalledWith(expect.any(AbortSignal), "project-a");
   });
 });
 

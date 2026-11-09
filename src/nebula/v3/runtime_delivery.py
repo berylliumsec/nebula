@@ -49,6 +49,9 @@ from .runtime_chat_acceptance import (
 from .storage import NebulaStore, NotFoundError
 
 MAX_REQUEST_BYTES = 8 * 1024**2
+# Only global Library ingestion carries a base64-encoded 20 MiB document in
+# JSON. Keep a bounded allowance for the filename, media type and JSON syntax.
+MAX_LIBRARY_INGEST_REQUEST_BYTES = 4 * ((20 * 1024**2 + 2) // 3) + 128 * 1024
 MAX_FRAME_BYTES = 256 * 1024
 _INTENT_HEADERS = {
     "content-type",
@@ -68,12 +71,20 @@ def _json(value) -> bytes:
     ).encode()
 
 
+def http_intent_body_limit(method: str, path: str) -> int:
+    if method == "POST" and path == "/api/v1/library/items/ingest":
+        return MAX_LIBRARY_INGEST_REQUEST_BYTES
+    return MAX_REQUEST_BYTES
+
+
 class HttpIntent(NebulaModel):
     method: Literal["POST", "PUT", "PATCH", "DELETE"]
     path: str = Field(min_length=1, max_length=4096)
     query: str = Field(default="", max_length=8192)
     headers: list[tuple[str, str]] = Field(default_factory=list, max_length=8)
-    body_base64: str = Field(default="", max_length=(MAX_REQUEST_BYTES + 2) // 3 * 4)
+    body_base64: str = Field(
+        default="", max_length=(MAX_LIBRARY_INGEST_REQUEST_BYTES + 2) // 3 * 4
+    )
 
     @model_validator(mode="after")
     def valid_intent(self):
@@ -86,13 +97,16 @@ class HttpIntent(NebulaModel):
             or "\n" in self.query
         ):
             raise ValueError("durable commands require a bounded API path")
+        maximum = http_intent_body_limit(self.method, self.path)
+        if len(self.body_base64) > (maximum + 2) // 3 * 4:
+            raise ValueError("durable HTTP request exceeds its bound")
         try:
             self.path.encode("ascii")
             self.query.encode("ascii")
             raw = base64.b64decode(self.body_base64, validate=True)
         except (UnicodeError, ValueError, binascii.Error):
             raise ValueError("invalid durable HTTP request encoding") from None
-        if len(raw) > MAX_REQUEST_BYTES:
+        if len(raw) > maximum:
             raise ValueError("durable HTTP request exceeds its bound")
         names = []
         for name, value in self.headers:
@@ -114,7 +128,7 @@ class HttpIntent(NebulaModel):
 
     @classmethod
     def capture(cls, method: str, path: str, query: bytes, headers, body: bytes):
-        if len(body) > MAX_REQUEST_BYTES:
+        if len(body) > http_intent_body_limit(method, path):
             raise ValueError("durable HTTP request exceeds its bound")
         return cls.model_validate(
             {

@@ -46,7 +46,7 @@ _SYSTEM = {
     "diagnostic_files": "/api/v1/diagnostics/files",
     "diagnostic_settings": "/api/v1/diagnostics/settings",
     "runtime_usage": "/api/v1/runtime-usage",
-    "setup_status": "/api/v1/setup/status",
+    "setup_status": "/api/v1/setup/status?project_id={project}",
     "automation_runtime": "/api/v1/automation/runtime?engagement_id={project}",
     "desktop_browser": "/api/v1/desktop-browser-mode",
     "source_control": "/api/v1/engagements/{project}/workspace/source-control",

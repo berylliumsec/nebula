@@ -21,7 +21,6 @@ from .domain import (
 from .knowledge import library_item_summary
 from .providers import PROVIDER_CATALOG
 from .relations import ResourceRelationService
-from .setup import SetupService
 from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
 
 
@@ -53,7 +52,6 @@ class RuntimeGlobalApi:
         self.store = GlobalSqlStore(database)
         self.actor: ContextVar[str] = ContextVar("global_sql_actor", default="operator")
         self.app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-        self.setup = SetupService(self.store, None)
         validator = ApiEntityValidator(self.store)
         relations = ResourceRelationService(self.store)
 
@@ -68,9 +66,11 @@ class RuntimeGlobalApi:
         from .runtime_global_settings import mount_global_settings
         from .runtime_global_reads import mount_global_reads
         from .runtime_global_work import mount_global_work
+        from .runtime_global_resources import mount_global_resources
 
         mount_global_settings(self.app, self.store, self.actor)
         mount_global_reads(self.app, self.store, self.actor)
+        mount_global_resources(self.app, self.store)
         self.work_observer = mount_global_work(self.app, self.store, self.actor)
 
         for resource, model in (
@@ -154,10 +154,6 @@ class RuntimeGlobalApi:
         async def library_item(item_id: str):
             return library_item_summary(await self.store.get(LibraryItem, item_id))
 
-        @self.app.get("/api/v1/setup/status")
-        async def setup():
-            return await self.setup.status()
-
     def supports(self, scope: dict) -> bool:
         if scope.get("method", "GET") not in {"GET", "HEAD", "OPTIONS"}:
             path = scope["path"].split("/")
@@ -178,5 +174,4 @@ class RuntimeGlobalApi:
 
     async def close(self):
         await self.work_observer.close()
-        await self.setup.shutdown()
         await self.store.event_history.close()

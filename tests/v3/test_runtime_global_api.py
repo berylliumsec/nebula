@@ -92,10 +92,11 @@ async def test_project_creation_and_global_catalogs_need_no_execution_owner(glob
         "harnesses",
         "operator-profiles",
         "provider-catalog",
-        "setup/status",
         "library/items",
         "runner-profiles",
     ):
+        # Runtime setup is a host observation, covered through the supervisor
+        # by the dedicated host-operator cases rather than a disabled SQL stub.
         assert (await client.get("/api/v1/" + path, headers=AUTH)).status_code == 200, (
             path
         )
