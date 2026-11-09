@@ -153,6 +153,7 @@ class RuntimeSupervisor:
             allow_insecure_pairing=allow_insecure_device_pairing,
         )
         self.management = RuntimeManagement(self, api, authentication)
+        self.shared_services.browser_bridge.mount(api, authentication)
         mount_runtime_identity(api, self.store, authentication)
 
         @api.get("/api/v1/health", dependencies=[Depends(authentication.require_auth)])

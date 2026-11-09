@@ -45,6 +45,7 @@ from .domain import (
 from .artifacts import ArtifactStore
 from .storage import NebulaStore
 from .credentials import CredentialStore, CredentialCreateRequest
+from .runtime_browser_bridge import BRIDGE_UNAVAILABLE, CurrentVisibleAdapter
 
 
 class CompanionBindingRequest(NebulaModel):
@@ -104,6 +105,7 @@ class BrowserCompanion:
     _store_credentials: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
     _store_artifacts: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
     _store_hosts: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
+    _store_bridges: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
 
     def __init__(
         self,
@@ -128,6 +130,16 @@ class BrowserCompanion:
         self.artifact_store = self._store_artifacts.get(store)
         if managed_host is not None:
             self._store_hosts[store] = ref(managed_host)
+
+    def bind_bridge(self, resolver) -> None:
+        self._store_bridges[self.store] = resolver
+
+    @classmethod
+    async def visible_mode(cls, store: NebulaStore) -> bool:
+        resolver = cls._store_bridges.get(store)
+        if resolver is not None and (await resolver()).enabled:
+            return True
+        return os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
 
     @staticmethod
     def _safe_url(value: Any) -> str | None:
@@ -213,7 +225,7 @@ class BrowserCompanion:
             AutomationProjectPolicy, engagement_id=project_id, limit=2
         )
         if (
-            os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+            await self.visible_mode(self.store)
             and policies
             and policies[0].browser_security_allow_all
         ):
@@ -407,7 +419,14 @@ class BrowserCompanion:
         return values
 
     async def adapter(self) -> LocalBrowserdAdapter:
-        if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+        resolver = self._store_bridges.get(self.store)
+        if resolver is not None:
+            current = await resolver()
+            if current.enabled or os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
+                if current.bridge is None:
+                    raise ValueError(BRIDGE_UNAVAILABLE)
+                return CurrentVisibleAdapter(current.bridge, resolver)
+        elif os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
             endpoint = os.environ.get("NEBULA_VISIBLE_BROWSER_URL")
             token = os.environ.get("NEBULA_VISIBLE_BROWSER_TOKEN")
             if not endpoint or not token:
@@ -444,7 +463,7 @@ class BrowserCompanion:
 
     async def session(self, session_id: str) -> BrowserSession:
         session = await self.store.get(BrowserSession, session_id)
-        cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+        cutover = await self.visible_mode(self.store)
         if cutover and session.runtime_kind != "electron_visible":
             raise ValueError("This historical browser cannot receive new commands.")
         if not cutover and (
@@ -477,7 +496,7 @@ class BrowserCompanion:
             sessions = await self.store.find_entities(
                 BrowserSession, {}, engagement_id=project_id
             )
-            cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
+            cutover = await self.visible_mode(self.store)
             companions = [
                 item
                 for item in sessions
@@ -654,6 +673,10 @@ class BrowserCompanion:
                     "The originating Assistant turn ended; request a fresh action."
                 )
             adapter = await self.adapter()
+            if isinstance(adapter, CurrentVisibleAdapter):
+                await adapter.ensure_identity(
+                    session.identity_id, session.engagement_id
+                )
             if request.operation not in {"tabs", "navigate", "new_tab", "close_tab"}:
                 tabs = await self._companion_call(
                     adapter, session.identity_id, {"operation": "tabs"}

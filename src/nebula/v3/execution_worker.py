@@ -42,6 +42,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_project_admission import HANDOFF_FEATURE, PARTICIPANT_FEATURE
     from .runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
     from .runtime_memory_control import RemoteMemorySettings
+    from .runtime_browser_bridge import RemoteBrowserBridge
     from .storage import NebulaStore
 
     bootstrap = context.bootstrap
@@ -115,6 +116,8 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             if services.get("memory_control") is True
             else None,
         )
+        if services.get("browser_bridge") is True:
+            app.state.browser_companion.bind_bridge(RemoteBrowserBridge(client).resolve)
         if HANDOFF_FEATURE in context.manifest.features:
             app.state.runtime_recovery_operation_id = (
                 recovery["operation_id"]

@@ -36,7 +36,13 @@ async def execution_status(host, identity):
 
 async def test_real_kernel_grant_delivery_and_supervisor_replacement(supervised):
     root, fixture = supervised.supervisor, supervised.managed
-    await fixture.stage("v1", _API_WORKER)
+    source = Path(__file__).resolve().parents[2] / "src"
+    # The detached environment deliberately removes PYTHONPATH. Pin this
+    # fixture's application before the shared venv's editable package is loaded.
+    program = (
+        "import sys\nsys.path.insert(0, " + repr(str(source)) + ")\n" + _API_WORKER
+    )
+    await fixture.stage("v1", program)
     execution = await root.prepare_execution("v1")
     assert (await execution_status(root.host, execution))["state"] == "unassigned"
     lease = await root.attach_execution("admitted-project", execution.runtime_id)

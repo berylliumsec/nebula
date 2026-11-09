@@ -22,6 +22,7 @@ from .runtime_capacity import RuntimeCapacity
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
 from .runtime_memory_recovery import HostMemoryRecovery
 from .runtime_memory_control import HostMemoryControl
+from .runtime_browser_bridge import HostBrowserBridge
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
@@ -88,6 +89,7 @@ class HostSharedServices:
         self._socket_identity = None
         self.product_guidance = {"state": "unavailable"}
         self.memory_control = None
+        self.browser_bridge = HostBrowserBridge(self.coordination)
         if getattr(host, "operator_token", None):
             self.configure_memory_control(host.operator_token)
 
@@ -143,6 +145,7 @@ class HostSharedServices:
                             "memory": True,
                             "capacity": True,
                             "memory_control": self.memory_control is not None,
+                            "browser_bridge": True,
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
                         }
@@ -151,6 +154,7 @@ class HostSharedServices:
                     register_shared_memory(rpc, self.memory, runtime_id=runtime_id)
                     if self.memory_control is not None:
                         self.memory_control.register(rpc, runtime_id)
+                    self.browser_bridge.register(rpc, runtime_id)
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)
                     self._peers[runtime_id] = rpc
@@ -329,6 +333,7 @@ class HostSharedServices:
     async def close(self):
         if self._close_task is None:
             self.closed = True
+            self.browser_bridge.close()
 
             async def cleanup():
                 async with self._start_lock:
