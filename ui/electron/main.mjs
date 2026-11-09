@@ -171,8 +171,12 @@ let bridge;
 let core;
 let browserRegistration;
 let bridgeHeartbeat;
+let browserRegistrationLost = false;
 
 async function refreshBrowserBridge() {
+  if (browserRegistrationLost) {
+    throw new Error("The desktop browser attachment changed. Reopen the desktop to attach again.");
+  }
   const response = await fetch(`${core.endpoint}/desktop/browser-bridge`, {
     method: "POST",
     headers: { Authorization: `Bearer ${core.token}`, "Content-Type": "application/json" },
@@ -181,7 +185,10 @@ async function refreshBrowserBridge() {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) {
-    if (response.status === 409) browserRegistration = undefined;
+    if (response.status === 409) {
+      browserRegistrationLost = true;
+      clearInterval(bridgeHeartbeat);
+    }
     throw new Error(`The desktop browser could not attach to Core (${response.status}).`);
   }
   browserRegistration = (await response.json()).registration_id;

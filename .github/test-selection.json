@@ -1,18 +1,17 @@
 {
-  "change_digest": "79b9607efd00a347eac103658dda9ac08581fab45f81ab8b0a8a29d7fd2b1232",
+  "change_digest": "ae677abc08bd29e2d52f4611a4ec384475ca218b6de76b9f020ef85469085327",
   "reviewed_by": "Codex",
-  "reason": "Twelve collected SQLite/PostgreSQL checks validate startup/periodic positive-evidence reconciliation and unchanged shutdown refusal/exit contracts after wiring the already-tested reconciliation method. Reviewed manifest now advertises implemented participant and quiescence capabilities. All twelve cases passed in22.51s; two upstream deprecation warnings only.",
-  "exclusions": "No full suite or live deployments. Only isolated inert worker processes and SQL. Actual source/frozen workflows run in separate acceptance tracks.",
+  "reason": "Three collected Node-backed Python cases exercise the real Electron renewal function: conflicting attachment stays permanently fenced, transient failure retains request identity, and success renews the same lease. Dedicated runtime browser catalog registered and desktop two-case listing verified; browser execution owned by acceptance. All three cases passed in0.10s; node syntax and exact browser test listing passed.",
+  "exclusions": "No full suite or Electron GUI. Browser catalog listing only; full production journey receipt remains with acceptance. No liveCore or provider.",
   "expected_tests": {
-    "python": 12,
+    "python": 3,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
+  "python_node": true,
   "python": [
-    "tests/v3/test_runtime_reconciliation.py",
-    "tests/v3/test_runtime_management.py::test_real_idle_api_shutdown_notifies_only_after_verified_process_retirement",
-    "tests/v3/test_runtime_management.py::test_owned_project_refuses_real_shutdown_without_notifying_launcher"
+    "tests/test_desktop_browser_registration.py"
   ],
   "frontend": [],
   "native": [],
