@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .database import (
     Database,
     ProjectHandoffRow,
+    ProviderToolManifestRow,
     RuntimeChatBindingRow,
     RuntimeProcessRow,
 )
@@ -27,6 +28,11 @@ from .deployment_protocol import ReleaseManifest
 from .deployments import DeploymentCoordinator
 from .release_store import ReleaseStore
 from .runtime_coordination import HEARTBEAT_SECONDS
+from .runtime_context_requirements import (
+    HOST_SEARCH_FEATURE,
+    PROVIDER_TOOLS_FEATURE,
+    STANDING_INSTRUCTIONS_FEATURE,
+)
 from .runtime_http import PrivateRuntimeHttp
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcServer
 from .runtime_processes import (
@@ -180,6 +186,9 @@ async def run_worker(
             "project.handoff/v1",
             "project.participants/v1",
             "project.quiesce/v1",
+            PROVIDER_TOOLS_FEATURE,
+            STANDING_INSTRUCTIONS_FEATURE,
+            HOST_SEARCH_FEATURE,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
@@ -207,6 +216,16 @@ async def run_worker(
             except SQLAlchemyError:
                 raise RuntimeIpcError(
                     "The supervisor must apply additive handoff migrations before readiness"
+                ) from None
+        if PROVIDER_TOOLS_FEATURE in manifest.features:
+            try:
+                async with database.session() as session:
+                    await session.execute(select(ProviderToolManifestRow).limit(0))
+            except SQLAlchemyError:
+                # diagnostic-expected: missing additive schema holds readiness;
+                # the independently retained worker never applies migrations.
+                raise RuntimeIpcError(
+                    "The supervisor must apply additive provider tool migrations before worker readiness"
                 ) from None
         from .diagnostics import configure_diagnostics
 

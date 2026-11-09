@@ -1,21 +1,16 @@
 {
-  "change_digest": "b93bedb396aa00a4bc3c1fa1937cbeaad37e4528790f5a04279ba25dc351b701",
-  "reviewed_by": "Codex",
-  "reason": "Six collected product-help cases regenerate/verify the current bundled index, discover durable provider tools and authoritative native instructions, explain canonical host settings/search and preserved memory-runner limitations, and verify the same digest synchronizes into an actual isolated Chroma collection. Catalog changes add discovery aliases only.",
-  "exclusions": "No full suite, operational provider or deployment. Frontend labels/aliases contain no interaction changes; production UI/browser and actual Core host bootstrap are separately selected integration gates.",
+  "change_digest": "adec80ef7c1f608d09f4ea0e4437b60ffcc15264645ec4f2c1951ce892de7166",
+  "reviewed_by": "Codex worker feature admission track; independent validate_worker_feature_admission causal gate and root agreement",
+  "reason": "All12 collected cases passed first run21.85s:4 actual checksummed archived runtime_worker.main subprocess starts (API/execution x SQLite/PostgreSQL) with all8 canonical features, plus8 actual run_worker unknown-feature/missing-provider-table refusals before factory/listener/diagnostics/readiness. API private HTTP200/version and execution unassigned RPC confirm real factories. Refusals preserve missing table and original Alembic head, proving no worker migration. Original replaceable sources were deleted; child module path confirms retained source. Ruff and mypy1 source pass. Raw /tmp/nebula-worker-feature-tests.txt and /tmp/nebula-worker-feature-mypy.txt.",
+  "exclusions": "No full suite, live deployment, installation, real provider/harness/OCI workload, or browser run. API tests use normal bearer plus private channel; execution remains unassigned. Parent owns final5-case retained production bundle/LAN acceptance rerun and combined selection.",
   "expected_tests": {
-    "python": 6,
+    "python": 12,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_durable_provider_tool_context",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_authoritative_native_instruction_versions",
-    "tests/v3/test_product_knowledge.py::test_product_help_finds_canonical_host_settings_and_search",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_search_service_memory_and_daemon_dependency"
+    "tests/v3/test_runtime_worker_features.py"
   ],
   "frontend": [],
   "native": [],
