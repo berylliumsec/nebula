@@ -2229,6 +2229,7 @@ export interface ProviderRequestInput {
 
 export type ChatStreamEvent =
   | { type: "connection"; state: "connected" | "reconnecting" }
+  | { type: "accepted"; commandId: string }
   | { type: "task_plan"; plan: ChatTaskPlan }
   | {
       type: "queued";
@@ -3088,6 +3089,8 @@ export interface HealthResponse {
   containerTerminal: "configured" | "unavailable";
   diagnosticsDegraded?: boolean;
   browserDiagnosticIngress: "enabled" | "disabled";
+  apiReady?: boolean;
+  recoveryPath?: string;
 }
 
 export interface RunnerCandidate {
