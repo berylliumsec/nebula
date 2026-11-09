@@ -88,6 +88,11 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
+from .host_workspace_folders import (
+    HostWorkspaceFolderCreateRequest,
+    create_host_workspace_folder as create_host_folder,
+    list_host_workspace_folders as list_host_folders,
+)
 from .approval_delivery import approval_harness_turn
 from .action_registry import ActionRegistry
 from .action_broker import (
@@ -962,26 +967,6 @@ class NotebookPackageRequest(NebulaModel):
 class NotebookPinRequest(NebulaModel):
     path: str | None = Field(default=None, max_length=4096)
     expected_revision: int = Field(ge=1)
-
-
-class HostWorkspaceFolderCreateRequest(NebulaModel):
-    parent_path: str = Field(min_length=1, max_length=4096)
-    name: str = Field(min_length=1, max_length=255)
-
-    @model_validator(mode="after")
-    def folder_name_is_one_portable_component(
-        self,
-    ) -> "HostWorkspaceFolderCreateRequest":
-        if (
-            self.name in {".", ".."}
-            or "/" in self.name
-            or "\\" in self.name
-            or any(ord(character) < 32 for character in self.name)
-        ):
-            raise ValueError("folder name must be one path component")
-        if len(self.name.encode("utf-8")) > 255:
-            raise ValueError("folder name is too long for the host filesystem")
-        return self
 
 
 class EventList(NebulaModel):
@@ -4928,13 +4913,30 @@ def create_execution_kernel(
         await ssh_environments.forget(alias, expected_revision=expected_revision)
         return Response(status_code=204)
 
+    async def require_operator_project(project_id: str | None, *, field="project_id"):
+        from .execution_scope import current_execution_lease
+
+        lease = current_execution_lease()
+        if lease is not None:
+            if project_id is None:
+                raise HTTPException(
+                    422, f"{field} is required for this Project runtime"
+                )
+            if project_id != lease.project_id:
+                raise HTTPException(404, "The requested Project is unavailable")
+        if project_id is not None:
+            await store.get(Engagement, project_id)
+
     @app.get(
         f"{API_PREFIX}/setup/status",
         response_model=SetupStatus,
         tags=["setup"],
         dependencies=[Depends(require_auth)],
     )
-    async def setup_status() -> SetupStatus:
+    async def setup_status(
+        project_id: str | None = Query(None, min_length=1, max_length=200),
+    ) -> SetupStatus:
+        await require_operator_project(project_id)
         return await setup.status()
 
     @app.get(
@@ -4946,7 +4948,9 @@ def create_execution_kernel(
         after_sequence: int = Query(default=0, ge=0),
         follow: bool = Query(default=True),
         last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+        project_id: str | None = Query(None, min_length=1, max_length=200),
     ) -> StreamingResponse:
+        await require_operator_project(project_id)
         cursor = after_sequence
         if last_event_id is not None:
             try:
@@ -5070,7 +5074,7 @@ def create_execution_kernel(
     async def select_setup_runtime(
         request: RunnerSelectionRequest,
     ) -> SetupControlResponse:
-        return await setup_control((await setup.select_runner(request)))
+        return await setup_control(setup.select_runner(request))
 
     @app.post(
         f"{API_PREFIX}/setup/image/prepare",
@@ -5081,7 +5085,8 @@ def create_execution_kernel(
     async def prepare_setup_image(
         request: ImagePreparationRequest,
     ) -> SetupControlResponse:
-        return await setup_control((await setup.prepare_image(request)))
+        await require_operator_project(request.project_id)
+        return await setup_control(setup.prepare_image(request))
 
     @app.post(
         f"{API_PREFIX}/setup/image/retry",
@@ -5092,7 +5097,8 @@ def create_execution_kernel(
     async def retry_setup_image(
         request: ImagePreparationRequest,
     ) -> SetupControlResponse:
-        return await setup_control((await setup.retry_image_preparation(request)))
+        await require_operator_project(request.project_id)
+        return await setup_control(setup.retry_image_preparation(request))
 
     @app.post(
         f"{API_PREFIX}/setup/image/cancel",
@@ -5103,7 +5109,8 @@ def create_execution_kernel(
     async def cancel_setup_image(
         request: ImagePreparationCancellationRequest,
     ) -> SetupControlResponse:
-        return await setup_control((await setup.cancel_image_preparation(request)))
+        await require_operator_project(request.project_id)
+        return await setup_control(setup.cancel_image_preparation(request))
 
     def require_execution_service() -> ExecutionService:
         if executions is None:
@@ -5398,7 +5405,9 @@ def create_execution_kernel(
     )
     async def container_terminal_capacity(
         response: Response,
+        engagement_id: str | None = Query(None, min_length=1, max_length=200),
     ) -> ContainerTerminalCapacity:
+        await require_operator_project(engagement_id, field="engagement_id")
         response.headers["Cache-Control"] = "private, no-store"
         return await require_container_terminal_service().capacity()
 
@@ -6564,102 +6573,13 @@ def create_execution_kernel(
         filter: str = Query(default="", max_length=255),
         include_sqlite_files: bool = False,
     ) -> dict[str, Any]:
-        requested = Path(path).expanduser() if path else Path.home()
-        if not requested.is_absolute():
-            raise HTTPException(status_code=422, detail="folder path must be absolute")
-        try:
-            current = requested.resolve(strict=True)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=404, detail="folder is unavailable"
-            ) from exc
-        if not current.is_dir():
-            raise HTTPException(status_code=422, detail="selected path is not a folder")
-        if include_sqlite_files:
-            name_filter = filter.strip().casefold()
-            try:
-                with os.scandir(current) as entries:
-                    candidates = []
-                    for entry in entries:
-                        try:
-                            if name_filter and name_filter not in entry.name.casefold():
-                                continue
-                            if entry.is_dir(follow_symlinks=False):
-                                kind = "directory"
-                            elif entry.is_file(
-                                follow_symlinks=False
-                            ) and entry.name.lower().endswith(
-                                (".db", ".sqlite", ".sqlite3")
-                            ):
-                                kind = "file"
-                            else:
-                                continue
-                            candidates.append((entry.name.casefold(), entry.name, kind))
-                        except OSError:
-                            # diagnostic-expected: unreadable entries are skipped by the host browser.
-                            continue
-            except OSError as exc:
-                raise HTTPException(
-                    status_code=403, detail="folder cannot be listed"
-                ) from exc
-            candidates.sort()
-            index_page = candidates[offset : offset + limit]
-            more = offset + limit < len(candidates)
-            return {
-                "path": str(current),
-                "parent": None if current.parent == current else str(current.parent),
-                "directories": [
-                    {"name": name, "path": str(current / name)}
-                    for _, name, kind in index_page
-                    if kind == "directory"
-                ],
-                "files": [
-                    {"name": name, "path": str(current / name)}
-                    for _, name, kind in index_page
-                    if kind == "file"
-                ],
-                "truncated": more,
-                "next_offset": offset + len(index_page) if more else None,
-            }
-        directories: list[dict[str, str]] = []
-        directory_index = 0
-        name_filter = filter.strip().casefold()
-        try:
-            with os.scandir(current) as entries:
-                for entry in sorted(
-                    entries, key=lambda item: (item.name.casefold(), item.name)
-                ):
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            if name_filter and name_filter not in entry.name.casefold():
-                                continue
-                            if directory_index < offset:
-                                directory_index += 1
-                                continue
-                            directories.append(
-                                {"name": entry.name, "path": str(current / entry.name)}
-                            )
-                            directory_index += 1
-                            if len(directories) > limit:
-                                break
-                    except OSError:
-                        # diagnostic-expected: an unreadable entry is omitted from the bounded browser.
-                        continue
-        except OSError as exc:
-            raise HTTPException(
-                status_code=403, detail="folder cannot be listed"
-            ) from exc
-        has_more = len(directories) > limit
-        page = directories[:limit]
-        parent = None if current.parent == current else str(current.parent)
-        return {
-            "path": str(current),
-            "parent": parent,
-            "directories": page,
-            "files": [],
-            "truncated": has_more,
-            "next_offset": offset + len(page) if has_more else None,
-        }
+        return await list_host_folders(
+            path,
+            offset=offset,
+            limit=limit,
+            filter=filter,
+            include_sqlite_files=include_sqlite_files,
+        )
 
     @app.post(
         f"{API_PREFIX}/workspace-folders",
@@ -6670,44 +6590,7 @@ def create_execution_kernel(
     async def create_host_workspace_folder(
         request: HostWorkspaceFolderCreateRequest,
     ) -> dict[str, Any]:
-        requested_parent = Path(request.parent_path).expanduser()
-        if not requested_parent.is_absolute():
-            raise HTTPException(
-                status_code=422, detail="parent folder path must be absolute"
-            )
-        try:
-            parent = requested_parent.resolve(strict=True)
-        except OSError as exc:
-            raise HTTPException(
-                status_code=404, detail="parent folder is unavailable"
-            ) from exc
-        if not parent.is_dir():
-            raise HTTPException(status_code=422, detail="parent path is not a folder")
-        descriptor: int | None = None
-        try:
-            descriptor = os.open(
-                parent,
-                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-            )
-            os.mkdir(request.name, mode=0o700, dir_fd=descriptor)
-        except FileExistsError as exc:
-            raise HTTPException(
-                status_code=409, detail="folder already exists"
-            ) from exc
-        except PermissionError as exc:
-            raise HTTPException(
-                status_code=403, detail="folder cannot be created"
-            ) from exc
-        except OSError as exc:
-            raise HTTPException(
-                status_code=422, detail="folder cannot be created"
-            ) from exc
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
-        return await list_host_workspace_folders(
-            str(parent / request.name), offset=0, limit=500, filter=""
-        )
+        return await create_host_folder(request)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace",

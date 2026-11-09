@@ -82,7 +82,9 @@ class HostObservations:
             or self._usage.credentials is not self.settings.credentials
         ):
             self._usage = RuntimeUsageService(
-                self.settings.store, self.settings.credentials
+                self.settings.store,
+                self.settings.credentials,
+                harness_account_reader=self.settings.operator.read_harness_account,
             )
         self._usage.transport = self.settings.usage_transport
         return self._usage

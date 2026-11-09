@@ -214,6 +214,7 @@ class ImagePreparationRequest(NebulaModel):
 
 
 class ImagePreparationCancellationRequest(NebulaModel):
+    project_id: str | None = Field(default=None, min_length=1, max_length=200)
     operation_id: str = Field(
         pattern=(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
@@ -932,7 +933,10 @@ class SetupService:
     ) -> SetupControlResponse:
         async with self._preparation_lock:
             current = self._image_preparation
-            if current.operation_id != request.operation_id:
+            if current.operation_id != request.operation_id or (
+                request.project_id is not None
+                and current.project_id != request.project_id
+            ):
                 raise SetupServiceError(
                     "image_preparation_not_found",
                     "the image-preparation operation does not exist",
