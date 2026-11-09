@@ -489,6 +489,45 @@ def registered_processes(data):
     return rows
 
 
+def retained_attachment_workers(data, project_id):
+    """Observe exact live owners without admitting or starting another worker."""
+    with sqlite3.connect(f"file:{data / 'nebula.db'}?mode=ro", uri=True) as database:
+        owner = database.execute(
+            "SELECT o.fencing_token,p.runtime_id,p.version,p.role,p.pid,p.process_birth "
+            "FROM project_ownership AS o JOIN runtime_processes AS p "
+            "ON p.runtime_id=o.runtime_id WHERE o.project_id=?",
+            (project_id,),
+        ).fetchone()
+        apis = database.execute(
+            "SELECT p.runtime_id,p.version,p.role,p.pid,p.process_birth "
+            "FROM deployment_host AS h JOIN runtime_processes AS p "
+            "ON p.runtime_id=h.api_runtime_id"
+        ).fetchall()
+    if owner is None or len(apis) != 1:
+        raise AssertionError("bootstrap attachment has no exact Project/API owners")
+    columns = ("runtime_id", "version", "role", "pid", "process_birth")
+    execution = dict(zip(columns, owner[1:], strict=True))
+    api_worker = dict(zip(columns, apis[0], strict=True))
+    for worker, role in ((execution, "execution"), (api_worker, "api")):
+        if (
+            worker["role"] != role
+            or not worker["pid"]
+            or not worker["process_birth"]
+            or process_birth(worker["pid"]) != worker["process_birth"]
+        ):
+            raise AssertionError(
+                "bootstrap attachment owner is not the exact live worker"
+            )
+    if owner[0] <= 0:
+        raise AssertionError("bootstrap attachment has no admitted Project fence")
+    return {
+        "project_id": project_id,
+        "fencing_token": owner[0],
+        "execution": execution,
+        "api": api_worker,
+    }
+
+
 def verify_shutdown(receipt, rows):
     if receipt.get("observed_state") != "stopped":
         raise RuntimeError("shutdown did not confirm observed process exit")
@@ -826,15 +865,21 @@ def run(args) -> dict:
             start_new_session=True,
         )
         desktops.append((child, environments[prefix]))
-        observations.append(desktop_observe(args, child, environments[prefix], "ready"))
+        observations.append(
+            {
+                **desktop_observe(args, child, environments[prefix], "ready"),
+                "phase": label,
+            }
+        )
         return child
 
-    def close_desktop(child, prefix):
-        observations.append(desktop_observe(args, child, environments[prefix], "close"))
+    def close_desktop(child, prefix, *, phase=None):
+        observed = desktop_observe(args, child, environments[prefix], "close")
+        observations.append({**observed, **({"phase": phase} if phase else {})})
 
     try:
         with inert_provider() as (provider_url, starts, release):
-            desktop = open_desktop("baseline", "baseline-desktop")
+            desktop = open_desktop("baseline", "baseline-bootstrap-desktop")
             native_start = wait_until(
                 lambda: native_bootstrap_identity(
                     data,
@@ -881,6 +926,7 @@ def run(args) -> dict:
                     },
                 },
             )
+
             # Global SQL creates do not admit a project's execution owner. Let
             # this read observe admission before negotiating typed chat; a first
             # chat sent without an owner uses legacy HTTP delivery with no binding.
@@ -891,7 +937,9 @@ def run(args) -> dict:
                 if response.status_code == 503:
                     return False
                 if require(response) != []:
-                    raise AssertionError("new fixture project already has conversations")
+                    raise AssertionError(
+                        "new fixture project already has conversations"
+                    )
                 return True
 
             wait_until(project_ready, timeout=90)
@@ -921,10 +969,6 @@ def run(args) -> dict:
                 "draft": draft,
                 "expected_text": "Before desktop close.",
             }
-            native_chat = NativeChatView(args, view)
-            observations.append(
-                native_chat.initial_setup(desktop, environments["baseline"])
-            )
 
             def assert_held(label):
                 if chat.error:
@@ -954,7 +998,67 @@ def run(args) -> dict:
                     "status": pending["status"],
                 }
 
-            held = [assert_held("baseline GUI draft")]
+            held = []
+
+            def bootstrap_attachment_observation(phase):
+                core = native_bootstrap_identity(
+                    data,
+                    manifests["baseline"],
+                    digest(args.baseline_bundle / "nebula-runtime.json"),
+                )
+                identity = require(client.get("/runtime/identity"))
+                workers = retained_attachment_workers(data, project["id"])
+                if core != native_start or identity != original_identity:
+                    raise AssertionError(
+                        "bootstrap window changed the retained Core identity"
+                    )
+                held.append(assert_held(phase))
+                return {
+                    "phase": phase,
+                    "core": core,
+                    "identity": identity,
+                    "workers": workers,
+                }
+
+            # The first window must create Core before the HTTP fixture can seed
+            # its Project. Start the UI again after seeding instead of assuming
+            # a browser Ctrl+R shortcut refreshes the native webview/catalog.
+            before_bootstrap_close = bootstrap_attachment_observation(
+                "before bootstrap window close"
+            )
+            close_desktop(desktop, "baseline", phase="bootstrap before chat setup")
+            bootstrap_closed = bootstrap_attachment_observation(
+                "bootstrap window closed"
+            )
+            if bootstrap_closed["workers"] != before_bootstrap_close["workers"]:
+                raise AssertionError(
+                    "bootstrap close changed the retained Project/API owners"
+                )
+            # Observe the closed-window state before any connector or new window
+            # could start a replacement for a service that incorrectly exited.
+            desktop = open_desktop("baseline", "baseline-desktop")
+            bootstrap_reopened = bootstrap_attachment_observation(
+                "bootstrap reopened before chat setup"
+            )
+            if bootstrap_reopened["workers"] != before_bootstrap_close["workers"]:
+                raise AssertionError(
+                    "bootstrap reopen replaced the retained Project/API owners"
+                )
+            if connect(args.baseline_core, data, environments["baseline"]) != first:
+                raise AssertionError(
+                    "bootstrap reopen changed the stable desktop connection"
+                )
+            bootstrap_attachment = {
+                "before_close": before_bootstrap_close,
+                "closed": bootstrap_closed,
+                "reopened": bootstrap_reopened,
+                "connection_unchanged": True,
+            }
+            native_chat = NativeChatView(args, view)
+            observations.append(
+                native_chat.initial_setup(desktop, environments["baseline"])
+            )
+            held.append(assert_held("baseline GUI draft"))
 
             def accepted_delivery_finished():
                 value = require(client.get(f"/runtime/requests/{chat.command_id}"))
@@ -1203,6 +1307,7 @@ def run(args) -> dict:
             receipt["served_production_ui"] = ui_observations
             receipt["native_build_provenance"] = native_provenance
             receipt["desktop_created_runtime"] = native_start
+            receipt["bootstrap_attachment"] = bootstrap_attachment
             (args.output / "continuity-receipt.json").write_text(
                 json.dumps(receipt, indent=2) + "\n"
             )

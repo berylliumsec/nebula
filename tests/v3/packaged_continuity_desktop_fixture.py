@@ -146,8 +146,6 @@ class X11:
             "XFlush": (C.c_int, [C.c_void_p]),
             "XFree": (C.c_int, [C.c_void_p]),
             "XCloseDisplay": (C.c_int, [C.c_void_p]),
-            "XSetInputFocus": (C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_ulong]),
-            "XKeysymToKeycode": (C.c_uint, [C.c_void_p, C.c_ulong]),
         }
         for name, (result, arguments) in signatures.items():
             function = getattr(self.lib, name)
@@ -254,18 +252,6 @@ class X11:
             raise RuntimeError("native window close event was not delivered")
         self.lib.XFlush(self.display)
 
-    def reload(self, window):
-        xtest = C.CDLL(ctypes.util.find_library("Xtst"))
-        xtest.XTestFakeKeyEvent.argtypes = [C.c_void_p, C.c_uint, C.c_int, C.c_ulong]
-        self.lib.XSetInputFocus(self.display, window, 2, 0)
-        control, key = (
-            self.lib.XKeysymToKeycode(self.display, symbol)
-            for symbol in (0xFFE3, ord("r"))
-        )
-        for code, pressed in ((control, 1), (key, 1), (key, 0), (control, 0)):
-            xtest.XTestFakeKeyEvent(self.display, code, pressed, 0)
-        self.lib.XFlush(self.display)
-
 
 def descendants(app):
     pending, count = [app], 0
@@ -321,16 +307,102 @@ def activate(node):
         raise RuntimeError("actual native accessible control did not activate")
 
 
+def project_selection_failure_state(app, project_name, atspi):
+    """Bounded structure only: no entry values, arbitrary names or private URIs."""
+    controls, documents = [], []
+    labels = {
+        "Open navigation": "navigation",
+        "Switch project": "switcher",
+        "Project switcher": "project-dialog",
+    }
+    expected_seen = False
+    for index, node in enumerate(descendants(app)):
+        if index >= 256:
+            break
+        role, name, state = node.getRoleName(), node.name, node.getState()
+        expected = name.startswith(project_name)
+        expected_seen = expected_seen or (expected and visible(node, atspi))
+        label = labels.get(name) or ("expected-project" if expected else None)
+        if label and len(controls) < 8:
+            controls.append(
+                {
+                    "control": label,
+                    "role": role[:40],
+                    "showing": state.contains(atspi.STATE_SHOWING),
+                    "expanded": state.contains(atspi.STATE_EXPANDED),
+                    "enabled": state.contains(atspi.STATE_ENABLED),
+                }
+            )
+        if "Document" in atspi.listInterfaces(node) and len(documents) < 2:
+            location = {"showing": state.contains(atspi.STATE_SHOWING)}
+            for item in node.queryDocument().getAttributes():
+                if ":" not in item:
+                    continue
+                key, value = item.split(":", 1)
+                if key.lower() not in {"uri", "url", "docurl"}:
+                    continue
+                uri = urlsplit(value)
+                # Classify the workspace location without exporting its query,
+                # fragment, hostname, credentials, filesystem path or entry text.
+                first = uri.path.strip("/").split("/", 1)[0]
+                location.update(
+                    scheme=uri.scheme
+                    if uri.scheme in {"http", "https", "tauri"}
+                    else "other",
+                    surface=first
+                    if first
+                    in {"", "index.html", "workbench", "projects", "settings", "work"}
+                    else "other",
+                )
+            documents.append(location)
+    return {
+        "expected_project_visible": expected_seen,
+        "controls": controls,
+        "documents": documents,
+    }
+
+
 def select_project(app, project_name, atspi):
-    control = wait(
-        lambda: (
-            named(app, "Open navigation", atspi) or named(app, "Switch project", atspi)
+    try:
+        control = wait(
+            lambda: (
+                named(app, "Open navigation", atspi)
+                or named(app, "Switch project", atspi)
+            )
         )
-    )
-    if control.name == "Open navigation":
-        activate(control)
-    activate(wait(lambda: named(app, "Switch project", atspi)))
-    activate(wait(lambda: named(app, project_name, atspi, prefix=True)))
+        if control.name == "Open navigation":
+            activate(control)
+        activate(wait(lambda: named(app, "Switch project", atspi)))
+        activate(wait(lambda: named(app, project_name, atspi, prefix=True)))
+    except TimeoutError as error:
+        try:
+            observed = project_selection_failure_state(app, project_name, atspi)
+            detail = json.dumps(observed, separators=(",", ":"))
+            while len(detail) > 1_000 and observed["controls"]:
+                # Escaping can expand a structurally bounded snapshot. Preserve
+                # the critical boolean within the driver's 1,500-character clip.
+                observed["controls"].pop(0)
+                observed["details_truncated"] = True
+                detail = json.dumps(observed, separators=(",", ":"))
+            if len(detail) > 1_000:
+                present = "true" if observed["expected_project_visible"] else "false"
+                detail = (
+                    '{"details_truncated":true,"expected_project_visible":'
+                    + present
+                    + "}"
+                )
+        except Exception as capture_error:
+            # diagnostic-expected: a failed diagnostic must preserve the original
+            # selection failure and never export an arbitrary exception body.
+            error_type = "".join(
+                character
+                for character in type(capture_error).__name__[:60]
+                if character.isascii() and (character.isalnum() or character == "_")
+            ) or "Error"
+            detail = '{"capture_error_type":"' + error_type + '"}'
+        raise RuntimeError(
+            "native project selection did not match: " + detail
+        ) from error
 
 
 def composer(app, atspi):
@@ -402,7 +474,6 @@ def run(request):
 
         app = wait(lambda: application(pid, pyatspi))
         if request["operation"] in {"select", "select_and_write"}:
-            x11.reload(window)
             select_project(app, request["project_name"], pyatspi)
             workbench = named(app, "Workbench", pyatspi)
             if workbench:

@@ -38,7 +38,7 @@ RECLAIM = tuple(path for path in GENERATED if path not in {"build", "ui/dist"}) 
 )
 GUI_FILES = re.compile(
     r"(?:continuity-(?:receipt|failure)\.json|supervisor\.log|"
-    r"(?:baseline|candidate|rollback-baseline)-desktop\.log|"
+    r"(?:baseline|baseline-bootstrap|candidate|rollback-baseline)-desktop\.log|"
     r"desktop-[a-z_]+-[0-9]+\.stderr|(?:shutdown|cleanup)\.(?:stdout|stderr))"
 )
 
