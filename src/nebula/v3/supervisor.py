@@ -155,6 +155,7 @@ class RuntimeSupervisor:
         )
         self.management = RuntimeManagement(self, api, authentication)
         self.shared_services.browser_bridge.mount(api, authentication)
+        self.shared_services.host_settings.mount(api, authentication, self.proxy)
         mount_runtime_identity(api, self.store, authentication)
 
         @api.get("/api/v1/health", dependencies=[Depends(authentication.require_auth)])

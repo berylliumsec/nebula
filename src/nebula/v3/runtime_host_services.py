@@ -23,6 +23,8 @@ from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpc
 from .runtime_memory_recovery import HostMemoryRecovery
 from .runtime_memory_control import HostMemoryControl
 from .runtime_browser_bridge import HostBrowserBridge
+from .runtime_host_settings import HostSettings
+from .runtime_host_credentials import register_session_credentials
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
@@ -90,6 +92,7 @@ class HostSharedServices:
         self.product_guidance = {"state": "unavailable"}
         self.memory_control = None
         self.browser_bridge = HostBrowserBridge(self.coordination)
+        self.host_settings = HostSettings(host)
         if getattr(host, "operator_token", None):
             self.configure_memory_control(host.operator_token)
 
@@ -146,6 +149,7 @@ class HostSharedServices:
                             "capacity": True,
                             "memory_control": self.memory_control is not None,
                             "browser_bridge": True,
+                            "provider_credentials": True,
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
                         }
@@ -155,6 +159,12 @@ class HostSharedServices:
                     if self.memory_control is not None:
                         self.memory_control.register(rpc, runtime_id)
                     self.browser_bridge.register(rpc, runtime_id)
+                    register_session_credentials(
+                        rpc,
+                        runtime_id,
+                        self.coordination,
+                        self.host_settings.credentials,
+                    )
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)
                     self._peers[runtime_id] = rpc
@@ -282,6 +292,7 @@ class HostSharedServices:
         if self.closed or self.host.closed:
             raise RuntimeError("Shared-service startup was detached")
         await self.recovery.start()
+        await self.host_settings.start()
         self.endpoint = "unix://" + str(path)
         self.server = _HostServer(
             uvicorn.Config(
@@ -307,6 +318,7 @@ class HostSharedServices:
         self._socket_identity = (details.st_dev, details.st_ino)
 
     async def _stop_owned(self):
+        await self.host_settings.close()
         await self.recovery.close()
         if self.server is not None:
             self.server.should_exit = True

@@ -47,6 +47,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_project_admission import HANDOFF_FEATURE, PARTICIPANT_FEATURE
     from .runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
     from .runtime_memory_control import RemoteMemorySettings
+    from .runtime_host_credentials import RemoteSessionCredentials
     from .runtime_browser_bridge import RemoteBrowserBridge
     from .storage import NebulaStore
 
@@ -119,6 +120,9 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             durable_chat_resume="chat.resume/v1" in context.manifest.features,
             settings_memory_request=RemoteMemorySettings(client).request
             if services.get("memory_control") is True
+            else None,
+            provider_session_resolver=RemoteSessionCredentials(client).resolve
+            if services.get("provider_credentials") is True
             else None,
         )
         if services.get("browser_bridge") is True:
