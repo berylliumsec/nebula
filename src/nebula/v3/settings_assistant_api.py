@@ -46,6 +46,15 @@ _GLOBAL_SETTINGS = re.compile(
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_HOST_SETUP_ACTIONS = {
+    "/api/v1/setup/runtime/refresh",
+    "/api/v1/setup/runtime/select",
+}
+_PROJECT_SETUP_ACTIONS = {
+    "/api/v1/setup/image/prepare",
+    "/api/v1/setup/image/retry",
+    "/api/v1/setup/image/cancel",
+}
 _BOOLEAN = TypeAdapter(bool)
 _PROFILE_MODELS: dict[str, type[BaseModel]] = {
     "providers": ProviderProfile,
@@ -586,6 +595,7 @@ async def _settings_request(
     expected_revision: int | None = None,
     *,
     before_execution: bool = True,
+    project_setup: bool = True,
 ) -> httpx.Response:
     """Keep MCP profiles and setup image controls within the selected project."""
 
@@ -603,7 +613,17 @@ async def _settings_request(
         # omitted. An interactive Butler request must retain its own scope.
         body = {**(body or {}), "project_id": project_id}
     if method == "POST" and path == "/api/v1/setup/image/cancel":
-        current = await client.get("/api/v1/setup/status", headers=headers)
+        if body is not None and not isinstance(body, dict):
+            raise ValueError(
+                "provide a setup cancellation object for the selected project"
+            )
+        if isinstance(body, dict) and body.get("project_id") not in (None, project_id):
+            raise ValueError("cancel only an image operation in the selected project")
+        current = await client.get(
+            "/api/v1/setup/status",
+            headers=headers,
+            params={"project_id": project_id},
+        )
         if not current.is_success:
             return current
         preparation = current.json()["terminal"]["image_preparation"]
@@ -616,6 +636,7 @@ async def _settings_request(
             raise ValueError("cancel only an image operation in the selected project")
         # Core still checks the exact operation ID, including races and
         # idempotent cancellation; never substitute a newer operation here.
+        body = {**(body or {}), "project_id": project_id}
     if method == "GET" and path in {
         "/api/v1/mcp-servers",
         "/api/v1/mcp-servers/export",
@@ -682,6 +703,8 @@ async def _settings_request(
         params["engagement_id"] = project_id
     if method == "GET" and path == "/api/v1/automation/runtime" and before_execution:
         params["engagement_id"] = project_id
+    if method == "GET" and path == "/api/v1/setup/status" and project_setup:
+        params["project_id"] = project_id
     if method == "GET" and path == "/api/v1/ssh-environments":
         params["resolve"] = "false"
     if method == "DELETE" and re.fullmatch(r"/api/v1/ssh-environments/[^/]+", path):
@@ -689,6 +712,15 @@ async def _settings_request(
     response = await client.request(
         method, path, json=body, headers=headers, params=params
     )
+    if (
+        method == "GET"
+        and path == "/api/v1/setup/status"
+        and project_setup
+        and response.is_success
+    ):
+        preparation = response.json()["terminal"]["image_preparation"]
+        if preparation.get("project_id") not in (None, project_id):
+            raise ValueError("setup status belongs to another project")
     if exact and not exact[3] and exact[2] != "schema" and response.is_success:
         if response.content:
             _require_mcp_scope(response.json(), project_id)
@@ -940,12 +972,30 @@ async def execute_settings_api(
                 "GET",
                 readback_path,
                 before_execution=False,
+                project_setup=not (
+                    selected == "POST" and candidate in _HOST_SETUP_ACTIONS
+                ),
             )
             if readback.is_success:
                 value = readback.json()
-                if not (
-                    selected == "POST" and isinstance(result, dict) and "id" in result
-                ) or (isinstance(value, dict) and value.get("id") == result["id"]):
+                exact_image_operation = (
+                    selected != "POST"
+                    or candidate not in _PROJECT_SETUP_ACTIONS
+                    or (
+                        isinstance(result, dict)
+                        and result.get("operation_id") is not None
+                        and value["terminal"]["image_preparation"].get("operation_id")
+                        == result["operation_id"]
+                    )
+                )
+                if exact_image_operation and (
+                    not (
+                        selected == "POST"
+                        and isinstance(result, dict)
+                        and "id" in result
+                    )
+                    or (isinstance(value, dict) and value.get("id") == result["id"])
+                ):
                     observed = value
             elif selected == "DELETE" and readback.status_code == 404:
                 observed = {"deleted": True}
@@ -1109,8 +1159,15 @@ class SettingsAssistantApi:
                 body=body,
                 expected_revision=expected_revision,
             )
-        if self.host_request is not None and self.host_request.supports(
-            method.upper(), candidate
+        # Host discovery and selection do not own a project's image operation.
+        # Its status and controls must remain on this exact fenced application.
+        project_setup = (
+            method.upper() == "GET" and candidate == "/api/v1/setup/status"
+        ) or (method.upper() == "POST" and candidate in _PROJECT_SETUP_ACTIONS)
+        if (
+            self.host_request is not None
+            and not project_setup
+            and self.host_request.supports(method.upper(), candidate)
         ):
             return await self.host_request.request(
                 project_id,
