@@ -92,6 +92,7 @@ class ContinuityFixture:
             if scenario not in {
                 "provider-tools-context",
                 "standing-instructions-native",
+                "work-settings",
             }:
                 raise ValueError("unknown isolated acceptance scenario")
             scenario_file = self.root / "acceptance-scenario.json"

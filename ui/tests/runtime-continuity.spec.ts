@@ -18,7 +18,7 @@ async function controller(request: APIRequestContext) {
   const {token, control_origin: origin} = JSON.parse(await readFile(authFile, "utf8"));
   const headers = {Authorization: `Bearer ${token}`};
   return {
-    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native") => {
+    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native" | "work-settings") => {
       const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario}});
       expect(response.ok(), await response.text()).toBe(true);
       return response.json();
@@ -545,4 +545,190 @@ test("native standing instructions survive lossy compaction, reconnect and API r
     mutation: "operator decision updated through authenticated public API; replies and reload through visible UI",
     initialization: setup, captures, edited, submissions, native: beta.native, runtime: inspected}, null, 2));
   await info.attach("native-instruction-delivery", {path: evidence, contentType: "application/json"});
+});
+
+test("global Work observes distinct execution workers across API replacement and Settings reads host-wide recorded usage", async ({page, request}, info) => {
+  test.setTimeout(300_000);
+  const control = await controller(request);
+  const fixture = await control.reset(false, false, "work-settings");
+  expect(fixture.scenario).toBe("work-settings");
+  const setup = fixture.scenario_receipt;
+  const projects = setup.projects as {project_id: string; name: string; session_id: string; profile_id: string; profile_name: string}[];
+  expect(projects).toHaveLength(2);
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  const read = async (path: string) => {
+    const response = await request.get(fixture.origin + path, {headers});
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  const mutate = async (path: string, data: Record<string, unknown>, key: string) => {
+    let response = await request.post(fixture.origin + path, {headers: {...headers, "Idempotency-Key": key}, data});
+    if (response.status() === 202) {
+      const accepted = await response.json();
+      const command = accepted.command_id ?? accepted.receipt.command_id;
+      await expect.poll(async () => {
+        response = await request.get(`${fixture.origin}/api/v1/runtime/requests/${command}/response`, {headers});
+        return response.status();
+      }, {timeout: 30_000}).not.toBe(202);
+    }
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  const sse: {status: number; contentType: string; apiVersion?: string}[] = [];
+  page.on("response", response => {
+    if (new URL(response.url()).pathname === "/api/v1/work/events") {
+      sse.push({status: response.status(), contentType: response.headers()["content-type"] ?? "",
+        apiVersion: response.headers()["x-nebula-api-version"]});
+    }
+  });
+  await pair(page, request, fixture);
+  expect(await read("/api/v1/harnesses")).toEqual([]);
+  await control.control("execution", {version: "acceptance-v1", project_id: projects[1].project_id});
+  const initial = await control.control("inspect");
+  const executionPids = initial.processes.filter((item: {role: string; alive: boolean}) => item.role === "execution" && item.alive)
+    .map((item: {pid: number}) => item.pid).sort((a: number, b: number) => a - b);
+  expect(executionPids).toHaveLength(2);
+  expect(new Set(executionPids).size).toBe(2);
+  const originalApi = initial.processes.find((item: {role: string; alive: boolean}) => item.role === "api" && item.alive);
+  expect(originalApi).toBeDefined();
+  await page.goto("/projects");
+  await expect(page.getByRole("heading", {name: "All projects", exact: true})).toBeVisible();
+  await expect(page.locator(".work-live-state")).toHaveText("Live", {timeout: 30_000});
+  expect(sse.some(item => item.status === 200 && item.contentType.includes("text/event-stream"))).toBe(true);
+  expect(await read("/api/v1/work/items")).toEqual([]);
+  expect(await read("/api/v1/work/updates")).toEqual([]);
+  expect(await read("/api/v1/work/agents")).toEqual([]);
+  await expect(page.getByText("No agents are working right now.", {exact: true})).toBeVisible();
+  const items: {id: string; engagement_id: string; title: string; revision: number}[] = [];
+  const updates: {id: string; item_id: string; engagement_id: string; summary: string}[] = [];
+  const viewers: Page[] = [];
+  let completedUsage: unknown;
+  await control.control("hold", {name: "hold-provider"});
+  try {
+    for (const [index, project] of projects.entries()) {
+      const item = await mutate(`/api/v1/engagements/${project.project_id}/work`, {
+        title: `Continuity Work ${index + 1}`, description: "Synthetic cross-worker SQL and streaming check.",
+        status: "in_progress", assignee_session_id: project.session_id,
+        source_kind: "chat", source_id: project.session_id, request_id: `work-create-${index}`,
+      }, `work-create-${index}`);
+      items.push(item);
+      const update = await mutate(`/api/v1/engagements/${project.project_id}/work/${item.id}/updates`, {
+        summary: `Initial persisted check-in ${index + 1}`, status: "in_progress",
+        expected_revision: item.revision, request_id: `work-update-before-${index}`,
+      }, `work-update-before-${index}`);
+      updates.push(update);
+      await expect(page.locator(".work-project-latest").filter({hasText: item.title})).toBeVisible({timeout: 30_000});
+      await expect(page.locator(".work-update-preview").filter({hasText: update.summary})).toBeVisible({timeout: 30_000});
+      const viewer = await page.context().newPage();
+      viewers.push(viewer);
+      await viewer.goto(`/projects/${project.project_id}/workbench?view=chat&session=${project.session_id}`);
+      const composer = viewer.locator(".chat-composer textarea");
+      await expect(composer).toBeVisible();
+      await composer.fill(`Run the inert Work activity check for ${project.project_id}.`);
+      await viewer.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect.poll(async () => (await control.control("inspect")).events
+        .filter((item: {event: string}) => item.event === "provider-start").length, {timeout: 30_000}).toBe(index + 1);
+      await expect(viewer.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("First", {timeout: 30_000});
+      await viewer.close();
+    }
+    const working = page.getByRole("region", {name: "Agents working now", exact: true});
+    await expect(working.locator("li")).toHaveCount(2, {timeout: 30_000});
+    for (const item of items) await expect(working).toContainText(item.title);
+    const agents = await read("/api/v1/work/agents");
+    expect(agents.map((item: {session_id: string}) => item.session_id).sort()).toEqual(projects.map(item => item.session_id).sort());
+    expect(agents.every((item: {state: string}) => item.state === "working")).toBe(true);
+    const before = await control.control("inspect");
+    const writes = before.events.filter((item: {event: string}) => item.event === "work-mutation");
+    expect(writes).toHaveLength(4);
+    expect([...new Set(writes.map((item: {pid: number}) => item.pid))].sort((a, b) => Number(a) - Number(b))).toEqual(executionPids);
+    await page.screenshot({path: info.outputPath("global-work-active.png"), fullPage: true});
+    const streamsBeforeReplacement = sse.filter(item => item.status === 200).length;
+    const promoted = await control.control("api", {version: "acceptance-v2"});
+    await control.control("retire", {runtime_id: originalApi.id});
+    await expect.poll(async () => (await control.control("inspect")).processes
+      .find((item: {id: string}) => item.id === originalApi.id)?.alive).toBe(false);
+    await expect.poll(() => sse.filter(item => item.status === 200).length, {timeout: 30_000}).toBeGreaterThan(streamsBeforeReplacement);
+    expect(sse.filter(item => item.status === 200).every(item => item.contentType.includes("text/event-stream"))).toBe(true);
+    await expect(page.locator(".work-live-state")).toHaveText("Live", {timeout: 30_000});
+    for (const [index, project] of projects.entries()) {
+      const item = await read(`/api/v1/engagements/${project.project_id}/work/${items[index].id}`);
+      const update = await mutate(`/api/v1/engagements/${project.project_id}/work/${item.id}/updates`, {
+        summary: `Execution ${index + 1} persisted after API replacement`, next_step: "Keep the same saved Work identity.",
+        status: "review", expected_revision: item.revision, request_id: `work-update-after-${index}`,
+      }, `work-update-after-${index}`);
+      updates.push(update);
+      await expect(page.locator(".work-update-preview").filter({hasText: update.summary})).toBeVisible({timeout: 30_000});
+    }
+    const persisted = await control.control("work-evidence");
+    expect(persisted.items.map((item: {id: string}) => item.id).sort()).toEqual(items.map(item => item.id).sort());
+    expect(persisted.updates.map((item: {id: string}) => item.id).sort()).toEqual(updates.map(item => item.id).sort());
+    expect((await read("/api/v1/work/items?engagement_id=continuity-project")).map((item: {id: string}) => item.id)).toEqual([items[0].id]);
+    const after = await control.control("inspect");
+    expect(after.processes.filter((item: {role: string; alive: boolean}) => item.role === "execution" && item.alive)
+      .map((item: {pid: number}) => item.pid).sort((a: number, b: number) => a - b)).toEqual(executionPids);
+    expect(after.events.filter((item: {event: string}) => item.event === "work-mutation")).toHaveLength(6);
+    expect(after.events.filter((item: {event: string}) => item.event === "provider-start")).toHaveLength(2);
+    for (const target of [page.getByRole("button", {name: "Refresh Work", exact: true}), page.getByRole("button", {name: "New item", exact: true}), page.getByRole("searchbox", {name: "Search projects", exact: true})]) {
+      expect((await target.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
+    expect((await new AxeBuilder({page}).include(".work-page").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({path: info.outputPath("global-work-after-replacement.png"), fullPage: true});
+    await control.control("release", {name: "hold-provider"});
+    await expect.poll(async () => Promise.all(projects.map(item => read(`/api/v1/chat/sessions/${item.session_id}/pending-turn`))), {timeout: 30_000}).toEqual([null, null]);
+    await expect(working.locator("li")).toHaveCount(0, {timeout: 30_000});
+    expect(await read("/api/v1/work/agents")).toEqual([]);
+    expect(await read("/api/v1/harnesses")).toEqual([]);
+    const firstUsage = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/runtime-usage" && response.request().method() === "GET");
+    await page.goto("/settings#usage-settings");
+    const initialUsage = await firstUsage;
+    expect(initialUsage.ok(), await initialUsage.text()).toBe(true);
+    const section = page.getByRole("region", {name: "Provider and harness usage", exact: true});
+    await expect(section.getByRole("heading", {name: "Balances & activity", exact: true})).toBeVisible();
+    for (const project of projects) {
+      const card = section.getByRole("article", {name: `${project.profile_name} usage`, exact: true});
+      await expect(card.getByText("Unavailable", {exact: true})).toBeVisible();
+      await expect(card.locator(".runtime-usage-recorded span").filter({hasText: "tokens tracked in Nebula"}).getByText("6", {exact: true})).toBeVisible();
+    }
+    const refreshed = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/v1/runtime-usage" && url.searchParams.get("refresh") === "true";
+    });
+    const refresh = section.getByRole("button", {name: "Refresh provider and harness usage", exact: true});
+    await refresh.click();
+    const response = await refreshed;
+    expect(response.ok(), await response.text()).toBe(true);
+    const usage = await response.json();
+    completedUsage = usage;
+    expect(usage.items).toHaveLength(2);
+    for (const project of projects) {
+      const item = usage.items.find((item: {profile_id: string}) => item.profile_id === project.profile_id);
+      expect(item.kind).toBe("provider");
+      expect(item.provider_type).toBe("vllm");
+      expect(item.vendor.state).toBe("unavailable");
+      expect(item.recorded).toMatchObject(setup.expected_usage_per_profile);
+    }
+    await refresh.focus();
+    expect((await refresh.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect((await new AxeBuilder({page}).include("#runtime-usage").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({path: info.outputPath("global-runtime-usage.png"), fullPage: true});
+    const final = await control.control("inspect");
+    expect(final.events.filter((item: {event: string}) => item.event === "provider-start")).toHaveLength(2);
+    expect(final.processes.filter((item: {role: string; alive: boolean}) => item.role === "execution" && item.alive)
+      .map((item: {pid: number}) => item.pid).sort((a: number, b: number) => a - b)).toEqual(executionPids);
+    const evidence = info.outputPath("global-work-settings.json");
+    await writeFile(evidence, JSON.stringify({scope: "public SQL-backed Work/SSE and host usage; local inert providers, no saved harnesses or vendor calls",
+      viewerLifecycle: "normal paired chat viewers closed after first output; Core-owned turns remained visible in global Work",
+      initialization: setup, initial, promoted, items, updates, agents, persisted, streamsBeforeReplacement, sse, usage, final,
+      completed: await control.control("work-evidence")}, null, 2));
+    await info.attach("global-work-and-host-usage", {path: evidence, contentType: "application/json"});
+  } catch (error) {
+    await info.attach("work-before-release", {body: JSON.stringify({runtime: await control.control("inspect"),
+      work: await control.control("work-evidence"), usage: completedUsage}, null, 2), contentType: "application/json"});
+    throw error;
+  } finally {
+    await control.control("release", {name: "hold-provider"});
+    await Promise.allSettled(viewers.filter(viewer => !viewer.isClosed()).map(viewer => viewer.close()));
+  }
 });

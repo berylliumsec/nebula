@@ -28,6 +28,125 @@ async def wait_barrier(root: Path, name: str) -> None:
         await asyncio.sleep(0.02)
 
 
+async def initialize(store, *, root: Path, project_id: str, session_id: str):
+    """Seed only inert profiles/chats; Work mutations use the public API."""
+    from nebula.v3.domain import (
+        ChatSession,
+        Engagement,
+        HarnessProfile,
+        ProviderProfile,
+    )
+
+    if project_id != "continuity-project" or session_id != "continuity-chat":
+        raise ValueError("the Work fixture owns only its synthetic conversations")
+    original = await store.get(ProviderProfile, "continuity-provider")
+    await store.update(
+        ProviderProfile,
+        original.id,
+        {"endpoint": "http://127.0.0.1:1/v1"},
+        expected_revision=original.revision,
+    )
+    chat = await store.get(ChatSession, session_id)
+    await store.update(
+        ChatSession,
+        chat.id,
+        {
+            "metadata": {
+                **chat.metadata,
+                "tools_enabled": False,
+                "planning_enabled": False,
+            }
+        },
+        expected_revision=chat.revision,
+    )
+    second = await store.create(
+        ProviderProfile(
+            id="continuity-provider-two",
+            name="Inert Work provider two",
+            provider_type="vllm",
+            is_local=True,
+            endpoint="http://127.0.0.1:1/v1",
+            model_allowlist=["model-a"],
+        )
+    )
+    await store.create(
+        ChatSession(
+            id="pinned-chat",
+            engagement_id="pinned-project",
+            title="Second synthetic Work conversation",
+            provider_profile_id=second.id,
+            model="model-a",
+            metadata={
+                "initial_title_state": "operator",
+                "tools_enabled": False,
+                "planning_enabled": False,
+            },
+        )
+    )
+    projects = []
+    for identity, selected_chat, profile in (
+        (project_id, session_id, original),
+        ("pinned-project", "pinned-chat", second),
+    ):
+        project = await store.get(Engagement, identity)
+        await store.update(
+            Engagement,
+            identity,
+            {"work_enabled": True},
+            expected_revision=project.revision,
+        )
+        projects.append(
+            {
+                "project_id": identity,
+                "name": project.name,
+                "session_id": selected_chat,
+                "profile_id": profile.id,
+                "profile_name": profile.name,
+            }
+        )
+    if await store.list_entities(HarnessProfile, limit=1):
+        raise ValueError(
+            "the inert usage fixture must contain no saved harness profiles"
+        )
+    return {
+        "projects": projects,
+        "model": "model-a",
+        "expected_usage_per_profile": {
+            "input_tokens": 4,
+            "output_tokens": 2,
+            "total_tokens": 6,
+            "turns": 1,
+        },
+    }
+
+
+def configure_app(app, *, root: Path, lease, version: str):
+    """Observe real per-project Work writes without replacing their handlers."""
+    prefix = f"/api/v1/engagements/{lease.project_id}/work"
+
+    @app.middleware("http")
+    async def observe_work(request: Request, call_next):
+        response = await call_next(request)
+        if (
+            request.method in {"POST", "PATCH", "PUT"}
+            and response.status_code < 300
+            and (
+                request.url.path == prefix or request.url.path.startswith(prefix + "/")
+            )
+        ):
+            record(
+                root,
+                "work-mutation",
+                version=version,
+                project_id=lease.project_id,
+                runtime_id=lease.runtime_id,
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+            )
+        return response
+
+
 @asynccontextmanager
 async def project(context, lease):
     import nebula.v3.execution_kernel as kernel
@@ -99,6 +218,7 @@ async def project(context, lease):
             module = {
                 "provider-tools-context": "acceptance_provider_tools_context",
                 "standing-instructions-native": "acceptance_standing_instructions_native",
+                "work-settings": "acceptance_worker",
             }.get(scenario)
             if module is None:
                 raise RuntimeError("unknown retained acceptance scenario")
@@ -183,6 +303,7 @@ async def serve(config):
     from nebula.v3.deployments import DeploymentCoordinator
     from nebula.v3.memory_budget import MemoryBudgetService
     from nebula.v3.memory_policy import MemoryAdministratorLimits, MemoryBudgetError
+    from nebula.v3.process_identity import same_process
     from nebula.v3.runtime_memory import RuntimeMemoryAdmission
     from nebula.v3.runtime_processes import RuntimeProcessHost
     from nebula.v3.supervisor import RuntimeSupervisor
@@ -259,6 +380,7 @@ async def serve(config):
             module = {
                 "provider-tools-context": "acceptance_provider_tools_context",
                 "standing-instructions-native": "acceptance_standing_instructions_native",
+                "work-settings": "acceptance_worker",
             }.get(scenario)
             if module is None:
                 raise HTTPException(400, "unknown acceptance scenario")
@@ -383,6 +505,42 @@ async def serve(config):
                 return result
             finally:
                 await observed_store.event_history.close()
+        if operation == "work-evidence":
+            from nebula.v3.domain import ChatTurn, WorkItem, WorkUpdate
+            from nebula.v3.storage import NebulaStore
+
+            scenario = root / "acceptance-scenario.json"
+            if (
+                not scenario.is_file()
+                or json.loads(scenario.read_text())["scenario"] != "work-settings"
+            ):
+                raise HTTPException(409, "select the explicit Work fixture")
+            observed_store = NebulaStore(database)
+            result = {"items": [], "updates": [], "turns": []}
+            try:
+                for selected in ("continuity-project", "pinned-project"):
+                    for key, model in (("items", WorkItem), ("updates", WorkUpdate)):
+                        rows = await observed_store.list_entities(
+                            model, engagement_id=selected, limit=100
+                        )
+                        result[key].extend(row.model_dump(mode="json") for row in rows)
+                    turns = await observed_store.list_entities(
+                        ChatTurn, engagement_id=selected, limit=100
+                    )
+                    result["turns"].extend(
+                        {
+                            "id": turn.id,
+                            "session_id": turn.session_id,
+                            "engagement_id": turn.engagement_id,
+                            "status": turn.status.value,
+                            "provider_profile_id": turn.provider_profile_id,
+                            "usage": turn.usage.model_dump(mode="json"),
+                        }
+                        for turn in turns
+                    )
+                return result
+            finally:
+                await observed_store.event_history.close()
         if operation == "inspect":
             async with database.session() as session:
                 processes = list(await session.scalars(select(RuntimeProcessRow)))
@@ -396,6 +554,11 @@ async def serve(config):
                         "version": row.version,
                         "role": row.role,
                         "state": row.state,
+                        "alive": bool(
+                            row.pid
+                            and row.process_birth
+                            and same_process(row.pid, row.process_birth)
+                        ),
                     }
                     for row in processes
                 ],

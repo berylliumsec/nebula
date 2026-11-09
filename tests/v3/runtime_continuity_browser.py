@@ -127,6 +127,7 @@ async def serve(root: Path):
         adapters = {
             "provider-tools-context": "acceptance_provider_tools_context.py",
             "standing-instructions-native": "acceptance_standing_instructions_native.py",
+            "work-settings": "acceptance_worker.py",
         }
         if scenario is not None and scenario not in adapters:
             raise HTTPException(400, "unknown isolated acceptance scenario")
@@ -194,6 +195,7 @@ async def serve(root: Path):
             memory = await fixture.client.get("/api/v1/memory-budgets", timeout=5)
             tools = {}
             native = None
+            work = None
             scenario = fixture.root / "acceptance-scenario.json"
             if (
                 scenario.is_file()
@@ -246,6 +248,21 @@ async def serve(root: Path):
                     if "application/json" in observed.headers.get("content-type", "")
                     else observed.text[-4096:],
                 }
+            if (
+                scenario.is_file()
+                and json.loads(scenario.read_text())["scenario"] == "work-settings"
+            ):
+                observed = await fixture.client.post(
+                    "/__acceptance/control",
+                    json={"operation": "work-evidence"},
+                    timeout=5,
+                )
+                work = {
+                    "status": observed.status_code,
+                    "evidence": observed.json()
+                    if "application/json" in observed.headers.get("content-type", "")
+                    else observed.text[-4096:],
+                }
             jobs = {}
             for identity, task in allocations.items():
                 job = await fixture.client.get(
@@ -276,6 +293,7 @@ async def serve(root: Path):
                 "allocations": jobs,
                 "provider_tools": tools,
                 "native_instructions": native,
+                "work": work,
             }
         if operation in {"hold", "release"}:
             if body.get("name") not in {"hold-provider"}:
