@@ -541,3 +541,78 @@ def test_reopened_native_view_cannot_pass_by_reselecting_chat_or_rewriting_draft
     current.update(expected)
     assert view.observe(None, {}) == expected
     assert calls == ["select_and_write", "observe", "observe", "observe"]
+
+
+def test_newer_distractor_uses_unstarted_goal_and_authoritative_empty_readback():
+    original = {
+        "id": "selected-chat",
+        "engagement_id": "project",
+        "created_at": "2026-11-09T12:00:00Z",
+        "updated_at": "2026-11-09T12:00:01Z",
+    }
+    newer = {
+        "id": "newer-chat",
+        "engagement_id": "project",
+        "created_at": "2026-11-09T12:00:02Z",
+        "updated_at": "2026-11-09T12:00:02Z",
+    }
+    goal = {
+        "id": "unstarted-goal",
+        "engagement_id": "project",
+        "session_id": "newer-chat",
+        "status": "draft",
+    }
+    calls, keys = [], []
+    state = {"messages": []}
+
+    def serve(request):
+        path = request.url.path.removeprefix("/api/v1")
+        calls.append((request.method, path))
+        if request.method == "POST":
+            assert path == "/chat/goal-conversations"
+            keys.append(request.headers["Idempotency-Key"])
+            body = json.loads(request.content)
+            assert (
+                body["provider_id"] == "provider" and body["engagement_id"] == "project"
+            )
+            assert body["model"] == "continuity-model" and body["completion_criteria"]
+            assert "draft-goal" in body["objective"]
+            return httpx.Response(201, json={"session": newer, "goal": goal})
+        assert request.method == "GET"
+        if path == "/chat-sessions/selected-chat":
+            return httpx.Response(200, json=original)
+        if path == "/chat-sessions/newer-chat":
+            return httpx.Response(200, json=newer)
+        if path == "/chat/sessions/newer-chat/goal":
+            return httpx.Response(200, json=goal)
+        if path == "/chat/sessions/newer-chat/messages":
+            assert request.url.params["include_replaced"] == "true"
+            return httpx.Response(200, json=state["messages"])
+        if path == "/chat/sessions/newer-chat/pending-turn":
+            return httpx.Response(200, text="null")
+        assert path == "/chat-sessions" and request.url.params["recent_first"] == "true"
+        return httpx.Response(200, json=[newer, original])
+
+    with client_for(serve) as client:
+        created, observed = driver.create_newer_draft_goal(
+            client,
+            project_id="project",
+            provider_id="provider",
+            original_session_id="selected-chat",
+        )
+        assert created["session"]["id"] == "newer-chat"
+        assert observed["kind"] == "unstarted_draft_goal"
+        assert observed["goal_status"] == "draft" and observed["message_count"] == 0
+        assert observed["recent_first_session_id"] == "newer-chat"
+        state["messages"] = [{"id": "unexpected-persisted-message"}]
+        with pytest.raises(AssertionError, match="empty newer draft-goal"):
+            driver.verify_newer_draft_goal(
+                client,
+                created,
+                project_id="project",
+                original_session_id="selected-chat",
+            )
+    assert keys and len(keys) == 1
+    assert [path for method, path in calls if method == "POST"] == [
+        "/chat/goal-conversations"
+    ]

@@ -1,16 +1,16 @@
 {
-  "change_digest": "28f6f3a75537973fbe70a8c12693be02544bfaf40ec84754bf51ec2036f76018",
-  "reviewed_by": "Codex desktop packaging track; parent explicitly assigned bounded CI orchestration and hazard contracts",
-  "reason": "Exactly five Python3.12 cases collected in0.02s for the new CI-only orchestrator: actual clean Git pins versus inherited relabels, docs-only/dirty refusal, output and cleanup containment, explicit GUI evidence allowlist including symlink escape refusal, and credential redaction. First execution passed5/5 in0.16s. Static review then removed the now-unused candidate build env before the GUI journey and cleared inherited pytest options/plugins; final diff-bound execution passed5/5 in0.19s. These contracts protect cleanup/provenance/upload boundaries without mirroring GUI behavior. CLI help and Ruff pass.",
-  "exclusions": "No dependency install/download, Core build, native GUI launch, live provider, deployment, existing installation, broad suite, frontend or Rust execution. Root owns real baseline/candidate builds and exactly one GUI journey in GitHub CI; local canonical browser CDN policy block is unchanged. These five checks are orchestration contracts only and do not prove GUI continuity.",
+  "change_digest": "7d243c9dce9d1fcca7cd42c03d95f9c960df8854718110619aabd88e43873e51",
+  "reviewed_by": "Codex desktop packaging track; independent validate_acceptance_session_reads original causal gate plus plan_acceptance draft-goal/lane challenge, parent assigned repair",
+  "reason": "Exactly20 Python3.12 driver contracts collected in0.06s and passed first execution in0.40s: existing19 plus one regression for supported POST /chat/goal-conversations, immutable mutation identity, authoritative empty messages and saved draft-goal readback. Root cause is unsupported generic ChatSession POST405; fork also refuses a held response. Independent review confirms default draft does not dispatch, start is explicit, and typed acceptance frees the work lane while producer runs. Driver now requires manifest feature/observed succeeded acceptance, verifies newer timestamps/order and rechecks before both native reopens. Ruff and diff whitespace checks pass.",
+  "exclusions": "No product API/Core changes, dependency install/download, native build/GUI execution, real provider, LAN deployment, existing installation, broad suite, frontend or Rust execution. This is fixture/contract verification only; root owns the separately selected real packaged GUI CI journey and orchestrator sanitizer. Existing no-reselection native observer contract remains unchanged.",
   "expected_tests": {
-    "python": 5,
+    "python": 20,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_ci_native_runtime_continuity.py"
+    "tests/test_packaged_continuity_driver.py"
   ],
   "frontend": [],
   "native": [],

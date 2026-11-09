@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -688,6 +689,81 @@ class NativeChatView:
         return self._capture(child, environment, "observe", expected_text)
 
 
+def verify_newer_draft_goal(client, created, *, project_id, original_session_id):
+    """Prove the distractor is saved, empty, unstarted and ahead of the selection."""
+    original = require(client.get(f"/chat-sessions/{original_session_id}"))
+    newer = require(client.get(f"/chat-sessions/{created['session']['id']}"))
+    goal = require(client.get(f"/chat/sessions/{newer['id']}/goal"))
+    messages = require(
+        client.get(
+            f"/chat/sessions/{newer['id']}/messages",
+            params={"include_replaced": "true"},
+        )
+    )
+    pending = require(
+        client.get(
+            f"/chat/sessions/{newer['id']}/pending-turn", params={"view": "status"}
+        )
+    )
+    recent = require(
+        client.get(
+            "/chat-sessions",
+            params={"engagement_id": project_id, "recent_first": "true", "limit": 20},
+        )
+    )
+    if (
+        newer["id"] == original_session_id
+        or original["id"] != original_session_id
+        or any(item["engagement_id"] != project_id for item in (original, newer, goal))
+        or goal["id"] != created["goal"]["id"]
+        or goal["session_id"] != newer["id"]
+        or goal["status"] != "draft"
+        or messages != []
+        or pending is not None
+        or not all(
+            datetime.fromisoformat(newer[field])
+            > datetime.fromisoformat(original[field])
+            for field in ("created_at", "updated_at")
+        )
+        or not recent
+        or recent[0]["id"] != newer["id"]
+        or original_session_id not in {item["id"] for item in recent}
+    ):
+        raise AssertionError("fixture did not establish an empty newer draft-goal chat")
+    return {
+        "kind": "unstarted_draft_goal",
+        "session_id": newer["id"],
+        "goal_id": goal["id"],
+        "goal_status": goal["status"],
+        "message_count": len(messages),
+        "created_at": newer["created_at"],
+        "updated_at": newer["updated_at"],
+        "selected_created_at": original["created_at"],
+        "selected_updated_at": original["updated_at"],
+        "recent_first_session_id": recent[0]["id"],
+    }
+
+
+def create_newer_draft_goal(client, *, project_id, provider_id, original_session_id):
+    # Generic session POST is intentionally unsupported. This public action
+    # saves a conversation and a draft goal without starting provider work.
+    created = mutate(
+        client,
+        "POST",
+        "/chat/goal-conversations",
+        {
+            "engagement_id": project_id,
+            "provider_id": provider_id,
+            "model": "continuity-model",
+            "objective": "Newer synthetic draft-goal conversation",
+            "completion_criteria": ["Remain an unstarted, empty fixture draft"],
+        },
+    )
+    return created, verify_newer_draft_goal(
+        client, created, project_id=project_id, original_session_id=original_session_id
+    )
+
+
 def run(args) -> dict:
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -696,6 +772,10 @@ def run(args) -> dict:
         for prefix in ("baseline", "candidate")
     }
     verify_release_pair(manifests)
+    if "chat.accept/v1" not in manifests["baseline"].get("features", []):
+        raise ValueError(
+            "held-turn setup requires the baseline's typed chat acceptance"
+        )
     native_provenance = verify_native_provenance(args, manifests)
     from scripts.package_audit import (
         inspect_pyinstaller_binary,
@@ -861,39 +941,25 @@ def run(args) -> dict:
                 }
 
             held = [assert_held("baseline GUI draft")]
+
+            def accepted_delivery_finished():
+                value = require(client.get(f"/runtime/requests/{chat.command_id}"))
+                if value["state"] in {"failed", "uncertain"}:
+                    raise RuntimeError("original chat acceptance needs reconciliation")
+                return value if value["state"] == "succeeded" else None
+
+            acceptance = wait_until(accepted_delivery_finished, timeout=90)
             # Keep a newer saved chat available so restoring sessions[0] cannot
             # masquerade as restoring the selected older conversation.
-            newer = mutate(
+            newer_draft, newer_observed = create_newer_draft_goal(
                 client,
-                "POST",
-                "/chat-sessions",
-                {
-                    "engagement_id": project["id"],
-                    "title": "Newer synthetic conversation",
-                    "backend": "provider",
-                    "provider_profile_id": provider["id"],
-                    "model": "continuity-model",
-                    "metadata": {"initial_title_state": "operator"},
-                },
+                project_id=project["id"],
+                provider_id=provider["id"],
+                original_session_id=session_id,
             )
-            recent = require(
-                client.get(
-                    "/chat-sessions",
-                    params={
-                        "engagement_id": project["id"],
-                        "recent_first": "true",
-                        "limit": 20,
-                    },
-                )
-            )
-            if (
-                not recent
-                or recent[0]["id"] != newer["id"]
-                or newer["id"] == session_id
-            ):
-                raise AssertionError(
-                    "fixture did not establish a selected non-newest chat"
-                )
+            newer = newer_draft["session"]
+            distractors = [{"phase": "before baseline close", **newer_observed}]
+            held.append(assert_held("newer unstarted draft-goal creation"))
             observations.append(native_chat.observe(desktop, environments["baseline"]))
             close_desktop(desktop, "baseline")
             held.append(assert_held("baseline window close"))
@@ -926,6 +992,17 @@ def run(args) -> dict:
             upgraded_status = wait_ready(client, candidate_version)
             ui_observations.append(
                 served_ui(client, manifests["candidate"], "candidate")
+            )
+            distractors.append(
+                {
+                    "phase": "before candidate reopen",
+                    **verify_newer_draft_goal(
+                        client,
+                        newer_draft,
+                        project_id=project["id"],
+                        original_session_id=session_id,
+                    ),
+                }
             )
             candidate_desktop = open_desktop("candidate", "candidate-desktop")
             candidate = connect(args.candidate_core, data, environments["candidate"])
@@ -961,6 +1038,17 @@ def run(args) -> dict:
             )
             final_status = wait_ready(client, original_status["api_version"])
             ui_observations.append(served_ui(client, manifests["baseline"], "rollback"))
+            distractors.append(
+                {
+                    "phase": "before rollback reopen",
+                    **verify_newer_draft_goal(
+                        client,
+                        newer_draft,
+                        project_id=project["id"],
+                        original_session_id=session_id,
+                    ),
+                }
+            )
             rollback_desktop = open_desktop("baseline", "rollback-baseline-desktop")
             rollback = connect(args.baseline_core, data, environments["baseline"])
             if (
@@ -1084,6 +1172,8 @@ def run(args) -> dict:
                 "provider_executions": len(starts),
                 "session_id": session_id,
                 "newer_session_id": newer["id"],
+                "newer_draft_goal_observations": distractors,
+                "original_acceptance_state": acceptance["state"],
                 "turn_id": turn_id,
                 "command_id": chat.command_id,
                 "held_observations": held,
