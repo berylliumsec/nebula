@@ -77,7 +77,11 @@ for the selected cases. No passing journey or file-wide suite is selected.
   transcript data. Repeated Work landmarks now have distinct human-readable
   message titles. Accessibility and all original manifest, effect, fork and
   continuity assertions remain enabled. Its final exact-case result is recorded
-  in the worker receipt; no passing journey was rerun.
+  in `/tmp/nebula-ci-provider-tools-final-receipt.json`: one Android Chromium 320
+  case passed in 1.5 minutes, including unchanged Axe checks and the historical
+  fork. Five effects, one load and exact old/new worker identities were observed;
+  no passing journey was rerun. Three exited zombie entries awaited PID 1 reaping
+  after all live fixture workers and the supervisor were gone.
 - macOS module resolution is repaired by the distinct component filename
   `NavigationContinuityBoundary`; frontend diagnostic handling uses fixed safe
   events or specific expected-response annotations. Earlier focused local checks
