@@ -50,7 +50,16 @@ from .storage import NebulaStore, NotFoundError
 
 MAX_REQUEST_BYTES = 8 * 1024**2
 MAX_FRAME_BYTES = 256 * 1024
-_INTENT_HEADERS = {"content-type", "accept", "if-match", "if-none-match"}
+_INTENT_HEADERS = {
+    "content-type",
+    "accept",
+    "if-match",
+    "if-none-match",
+    "if-entry-identity",
+    "x-nebula-sensitive-data-acknowledged",
+    "x-content-sha256",
+    "x-parent-identity",
+}
 
 
 def _json(value) -> bytes:

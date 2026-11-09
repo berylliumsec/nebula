@@ -16,9 +16,7 @@ import re
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, StreamingResponse
-from starlette.staticfiles import StaticFiles
 
 from .authentication import CoreAuthentication
 from .authentication_api import AuthenticationApi
@@ -31,6 +29,8 @@ from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_routes import command_lane
 from .runtime_identity import mount_runtime_identity
+from .runtime_static import RuntimeStatic
+from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from .storage import NebulaStore, NotFoundError
 
 
@@ -55,14 +55,7 @@ class _ViewerResponse(StreamingResponse):
             self.slots.release()
 
 
-class _ApiStatic(StaticFiles):
-    async def get_response(self, path, scope):
-        try:
-            return await super().get_response(path, scope)
-        except StarletteHTTPException as error:
-            if error.status_code != 404 or "." in Path(path).name:
-                raise
-            return await super().get_response("index.html", scope)
+_ApiStatic = RuntimeStatic
 
 
 def create_api_worker(
@@ -80,6 +73,7 @@ def create_api_worker(
     command_start_timeout: float = 15,
     poll_interval: float = 0.25,
     allow_insecure_device_pairing: bool = False,
+    global_api=None,
 ) -> FastAPI:
     if (
         not operator_token
@@ -101,6 +95,13 @@ def create_api_worker(
     work_slots = asyncio.Semaphore(maximum_waiting_views)
     control_slots = asyncio.Semaphore(maximum_control_views)
     journal = RuntimeChatJournal(delivery.coordination, store)
+    if global_api is None:
+        from .runtime_global_api import RuntimeGlobalApi
+
+        global_api = RuntimeGlobalApi(store.database)
+    from .runtime_global_delivery import GlobalSqlDelivery
+
+    global_delivery = GlobalSqlDelivery(delivery, global_api)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -109,6 +110,7 @@ def create_api_worker(
             yield
         finally:
             await proxy.close()
+            await global_api.close()
             await store.event_history.close()
             await store.database.dispose()
 
@@ -352,6 +354,9 @@ def create_api_worker(
             raise HTTPException(404, "Authentication route is unavailable")
         actor = await principal(request, await auth.bearer(request))
         if request.method in {"GET", "HEAD", "OPTIONS"}:
+            if global_api.supports(request.scope):
+                request.scope.setdefault("state", {})["global_actor"] = actor
+                return _Forward(global_api)
             return _Forward(proxy)
         key = request.headers.get("Idempotency-Key", "")
         if not re.fullmatch(r"[!-~]{1,200}", key):
@@ -379,6 +384,13 @@ def create_api_worker(
             ) from None
         lane = command_lane(intent.path)
         project_id = await project_for(intent)
+        if project_id == GLOBAL_EXECUTION_PROJECT and global_api.supports(
+            request.scope
+        ):
+            receipt = await global_delivery.execute(
+                intent, actor_id=actor, idempotency_key=key
+            )
+            return await response_view(actor, receipt.command_id, slots=control_slots)
         chat_acceptance = False
         chat_resume = False
         if (

@@ -75,9 +75,21 @@ def _references(path: str, query: bytes, payload) -> tuple[set[str], set[str]]:
 
 
 class RuntimeRouting:
-    def __init__(self, coordination: RuntimeCoordination, credential_directory: Path):
+    def __init__(
+        self,
+        coordination: RuntimeCoordination,
+        credential_directory: Path,
+        *,
+        request_admission: bool = False,
+    ):
         self.coordination = coordination
         self.credentials = RuntimeCredentials(credential_directory)
+        self.request_admission = request_admission
+
+    async def _demand(self, project_id: str):
+        if self.request_admission and project_id != GLOBAL_EXECUTION_PROJECT:
+            async with self.coordination._write() as session:
+                await self.coordination._ensure_project(session, project_id)
 
     async def _project(self, path: str, query: bytes, payload=None) -> str:
         references, explicit = _references(path, query, payload)
@@ -133,7 +145,11 @@ class RuntimeRouting:
                 raise CoordinationConflict(
                     "Invalid JSON cannot be routed to an execution owner"
                 ) from None
-        return await self._project(intent.path, intent.query.encode("ascii"), payload)
+        project = await self._project(
+            intent.path, intent.query.encode("ascii"), payload
+        )
+        await self._demand(project)
+        return project
 
     async def supports_chat_acceptance(self, project_id: str) -> bool:
         return await self.supports_feature(project_id, "chat.accept/v1")
@@ -190,6 +206,7 @@ class RuntimeRouting:
 
     async def upstream_for(self, scope: dict) -> HttpUpstream:
         project = await self._project(scope["path"], scope.get("query_string", b""))
+        await self._demand(project)
         async with self.coordination.database.session() as session:
             owner = await session.get(ProjectOwnershipRow, project)
             now = await self.coordination._clock_ms(session)

@@ -123,7 +123,9 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
         Database(bootstrap.database, bootstrap=False, pool_settings=settings)
     )
     routing = RuntimeRouting(
-        context.coordinator.coordination, Path(bootstrap.credential_directory)
+        context.coordinator.coordination,
+        Path(bootstrap.credential_directory),
+        request_admission=True,
     )
     delivery = RuntimeDelivery(
         context.coordinator.coordination,
