@@ -128,6 +128,7 @@ class RetainedAcpAdapter(GrokAcpAdapter):
         self.vendor = vendor
 
     async def _connect(self, *_args, **_kwargs):
+        self.vendor.home.mkdir(parents=True, exist_ok=True)
         return RetainedAcpRpc(self.vendor)
 
     async def open_memory_managed(self, request, _memory):

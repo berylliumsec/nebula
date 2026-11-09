@@ -5,13 +5,13 @@ Reload the complete [standing-instruction goal](standing-instructions-goal.md),
 checkpoint after compaction or resumption. Preserve the complete goal and all its
 criteria. This repair owns one failing browser journey only.
 
-Status: the native helper's source-proven completion-budget contract is now
-corrected after fresh independent validation and static review. One shared
-60-second answer deadline covers persistence and matching-ID visibility. The
-actual CI backend cause remains unknown; diagnostics and this follow-up are
-runtime-unverified under the user's no-repeat instruction. Root owns the next
-CI run of only the eight still-failed native title/profile nodes. Earlier records
-below are historical. The original `eee508bc` mechanism remains separately unknown.
+Status: CI head `2b4ff750` supplies the actual native failure in all eight
+profiles: a fresh valid head is rejected by the high-resolution wall clock versus
+filesystem-mtime comparison before any prompt. Independent causal, repair-design
+and final static validation passed. The advancing filesystem barrier is ready;
+runtime verification remains pending the same eight failed CI nodes. No prior
+pass is repeated. Older records below are historical; the original `eee508bc`
+mechanism is not retroactively proven.
 
 ## Scope and operator contract
 
@@ -301,3 +301,92 @@ External local selection: `/tmp/nebula-native-completion-budget-selection.json`
 (all execution arrays/counts empty under user instruction). Root owns the shared
 CI plan, push, review and merge. Preserve both the current CI backend uncertainty
 and the separate original `eee508bc` unknown on resumption.
+
+
+## Confirmed readback failure: CI head 2b4ff750
+
+Reload the full standing-instruction goal and both checkpoints after resumption.
+New isolated worktree `/workspace/nebula-native-readback-freshness`, branch
+`codex/native-readback-freshness`, exact published base
+`2b4ff750617b9637eabec12778fc8a536f7d91aa`; all combined global source is preserved.
+Shared CI selection and workflows remain root-owned and unchanged here.
+
+Run 42685160535 diagnostics are saved in
+`/tmp/nebula-native-failure-2b4ff750-<job>.json`. All eight profiles fail their
+first send with interrupted Core/Harness turns, one submission, and no native
+prompt/output event. Each actual guard returned false although its scoped head
+is regular, unique, 1,361 bytes, within the cap, valid UTF-8 and contains the exact
+full expected channel once. The measured mtime is 0.211-1.429 ms below the mark.
+Source ordering puts `time.time_ns()` before session/new, whose inert RPC then
+writes the head synchronously before returning. No later fixture head write
+occurs before guard/observer. These facts exclude an actually older retained
+head, wrong account, duplicate identity, missing body, cap or decoding failure
+for these captured cases.
+
+Desktop job 129390038676 records mark `1794253227718375563`, subsequent
+session/new entry `1794253227718426320`, and freshly written head mtime
+`1794253227716946717`: 1,428,846 ns below the mark. Actual guard false leads to
+interrupted/invalid_input with no session/prompt. Complete derived evidence:
+`/tmp/nebula-native-readback-freshness-causal-evidence.json`.
+
+Fresh-context `validate_native_readback_freshness` independently confirmed this
+actual rejection and the two-stage filesystem-barrier repair before edits.
+[Linux v6.8 current_time](https://github.com/torvalds/linux/blob/v6.8/fs/inode.c#L2492)
+uses `ktime_get_coarse_real_ts64` then filesystem granularity truncation. This
+primary source explains the coarse-clock mechanism; the exact runner kernel
+build is not established. CI ordering itself proves the invalid comparison.
+Older CI failures without equivalent metadata remain separately unproven.
+
+### Repair, protections and final static review
+
+- `grok_channel_barrier` follows the trusted configured account-root symlink as
+  before, but securely opens/creates sessions with O_DIRECTORY/O_NOFOLLOW.
+- An exclusive random 0600 probe gets a real one-byte write and first fstat
+  mtime. A one-second monotonic bound, one-millisecond pauses and real one-byte
+  rewrites require a **strict** mtime advance. No utime, acceptance tolerance or
+  wall-clock fallback exists. Inability or no advance refuses the open.
+- Cleanup verifies the probe entry still matches its exclusively owned device/
+  inode, unlinks it and closes all descriptors in finally blocks. This completes
+  before returning the barrier and before session/new or session/load can start.
+  Cleanup failure also refuses the open.
+- Ordinary unmodified preexisting heads are at or below the first tick, which is
+  strictly below the advanced barrier; they remain stale. Fresh new/load writes
+  can share the advanced filesystem tick and pass. Clock rollback or unsupported
+  nonadvancing storage fails closed.
+- Readback keeps mtime >= barrier plus scoped identity, no-follow child/file,
+  unambiguous regular head, bounded scan/read, UTF-8 and exact text once. It also
+  binds sessions root and head to the probe device, rejecting another mount.
+  Optional device compatibility preserves existing direct guard callers; existing
+  guard tests/assertions are unchanged and were not rerun.
+- `finish_cleanup(asyncio.to_thread(...))` shields and fully joins the probe even
+  under repeated cancellation. BaseException cleanup joins RPC close. Original
+  and close failures are retained together. A group containing CancelledError is
+  re-raised as CancelledError **from the full group**, so unchanged caller gateway
+  cleanup and queued-turn settlement run. Ordinary error/cancel classes remain.
+- The public native fixture prepares only its scoped account directory, matching
+  real `_connect`, and forwards expected device to the original guard exactly
+  once. Diagnostics label filesystem clock/device without changing its result.
+  The retained continuity fixture gets only account mkdir preparation; its
+  previously passed cases and assertions are not selected or executed.
+
+Fresh final static review from `validate_native_readback_freshness` passes. It
+confirmed the expected-directory audit marker, configured-root compatibility,
+joined probe/RPC lifecycle, grouped-cancellation propagation, exact guard/device/
+cap constraints and genuine fixture setup. Root independently read and agreed
+with the final diff before authorizing commit. No concrete defect remains in
+those static reviews; runtime proof is still pending.
+
+Root expressly allowed the formatter only as an edit on the four modified Python
+files (one reformatted, three unchanged). No formatter check, pytest, Playwright,
+collection, build, mypy, audit, probe execution or previous passing static check
+ran. Existing installations, live accounts and installed vendors were untouched.
+The probe bound stays within the unchanged native startup allowance; submission,
+answer/Stop/capture and 300-second browser budgets remain unchanged. Root will
+push only the same eight failed native nodes; both tools cases and every prior
+pass remain frozen. The packaged GUI failure is a separate root-owned workstream.
+
+Static receipt: `/tmp/nebula-native-readback-freshness-static-review.json`.
+External local selection: `/tmp/nebula-native-readback-freshness-selection.json`
+(all execution arrays/counts empty). Root owns integration, push, exact failed-node
+CI, review and merge. Report the change as statically verified until that CI
+provides runtime evidence; do not infer installed-vendor conformance.

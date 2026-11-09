@@ -101,13 +101,21 @@ class NativeState:
         path.write_bytes(text.encode("utf-8"))
         path.chmod(0o600)
 
-    def observe_readback(self, home, native_id, text, not_before_ns, confirmed):
+    def observe_readback(
+        self, home, native_id, text, not_before_ns, confirmed, expected_device=None
+    ):
         """Record metadata after the real guard; never alter its inputs/result."""
         row = {
             "native_session_id": native_id,
             "observed_at_ns": str(time.time_ns()),
             "not_before_ns": str(not_before_ns),
             "confirmed": confirmed,
+            "freshness_clock": (
+                "filesystem" if expected_device is not None else "legacy"
+            ),
+            "expected_device": (
+                str(expected_device) if expected_device is not None else None
+            ),
             "metadata_observed_after_guard": True,
             "candidate_count": 0,
         }
@@ -154,6 +162,7 @@ class NativeState:
                                     row.update(
                                         regular_file=stat.S_ISREG(info.st_mode),
                                         mtime_ns=str(info.st_mtime_ns),
+                                        device=str(info.st_dev),
                                         size_bytes=info.st_size,
                                     )
                                     if row["regular_file"]:
@@ -544,11 +553,19 @@ def configure_app(app, *, root: Path, lease, version: str):
         harnesses.grok_channel_is_confirmed,
     )
 
-    def observed_guard(home, native_id, text, *, not_before_ns):
-        confirmed = original_guard(home, native_id, text, not_before_ns=not_before_ns)
+    def observed_guard(home, native_id, text, *, not_before_ns, expected_device=None):
+        confirmed = original_guard(
+            home,
+            native_id,
+            text,
+            not_before_ns=not_before_ns,
+            expected_device=expected_device,
+        )
         try:
             if home.resolve().is_relative_to(root):
-                native.observe_readback(home, native_id, text, not_before_ns, confirmed)
+                native.observe_readback(
+                    home, native_id, text, not_before_ns, confirmed, expected_device
+                )
         except Exception as error:
             # Diagnostic persistence must not replace the actual guard result.
             try:
@@ -581,6 +598,8 @@ def configure_app(app, *, root: Path, lease, version: str):
                 if isolated
                 else _harness_home(profile)
             ).resolve()
+            account_home.relative_to(native.root)
+            account_home.mkdir(parents=True, exist_ok=True, mode=0o700)
             return InertRpc(
                 native,
                 account_home=account_home,

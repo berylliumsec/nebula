@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .async_utils import MaybeAsync
 
-from .async_utils import async_done_callback, call_async
+from .async_utils import async_done_callback, call_async, finish_cleanup
 
 from .async_utils import resolve_workspace
 
@@ -113,6 +113,7 @@ from .chat_subagents import (
 )
 from .chat_agent_messages import AgentMessageService
 from .harness_instructions import (
+    grok_channel_barrier,
     grok_channel_is_confirmed,
     installed_channel_matches,
     instruction_snapshot,
@@ -8278,7 +8279,28 @@ class GrokAcpAdapter(HarnessAdapter):
                         }
                     )
             session_cost_usd: float | None = None
-            opened_at_ns = time.time_ns()
+            instruction_home: Path | None = None
+            instruction_barrier: tuple[int, int] | None = None
+            if managed_instructions:
+                isolated = request.session.metadata.get(
+                    "control_assistant"
+                ) is True or _gateway_only_core_planned_session(
+                    request.session, request.profile.kind
+                )
+                instruction_home = (
+                    request.workspace.parent / f"{request.workspace.name}.settings-home"
+                    if isolated
+                    else _harness_home(request.profile)
+                )
+                try:
+                    instruction_barrier = await finish_cleanup(
+                        asyncio.to_thread(grok_channel_barrier, instruction_home)
+                    )
+                except OSError as error:
+                    raise HarnessConfigurationError(
+                        "Grok could not establish fresh standing-instruction readback. "
+                        "No message was sent. Check the account's sessions storage, then retry."
+                    ) from error
             if request.session.external_session_id:
                 capabilities = initialize.get("agentCapabilities")
                 if not (
@@ -8333,22 +8355,17 @@ class GrokAcpAdapter(HarnessAdapter):
                 # A new session has spent nothing yet, so per-turn cost is exact.
                 session_cost_usd = 0.0
             if managed_instructions:
-                isolated = request.session.metadata.get(
-                    "control_assistant"
-                ) is True or _gateway_only_core_planned_session(
-                    request.session, request.profile.kind
-                )
-                home = (
-                    request.workspace.parent / f"{request.workspace.name}.settings-home"
-                    if isolated
-                    else _harness_home(request.profile)
-                )
+                if instruction_home is None or instruction_barrier is None:
+                    raise HarnessConfigurationError(
+                        "Grok instruction freshness is unavailable."
+                    )
                 if not await asyncio.to_thread(
                     grok_channel_is_confirmed,
-                    home,
+                    instruction_home,
                     external_session_id,
                     developer_instructions,
-                    not_before_ns=opened_at_ns,
+                    not_before_ns=instruction_barrier[0],
+                    expected_device=instruction_barrier[1],
                 ):
                     if request.session.external_session_id:
                         raise HarnessInstructionContextChanged(
@@ -8367,9 +8384,24 @@ class GrokAcpAdapter(HarnessAdapter):
                 if managed_instructions
                 else developer_instructions,
             )
-        except (Exception, asyncio.CancelledError):
-            await rpc.close()
-            raise
+        except BaseException as error:
+            # diagnostic-expected: joined probe cleanup may combine cancellation
+            # and failure in a BaseExceptionGroup; this RPC remains ours to close.
+            try:
+                await finish_cleanup(rpc.close())
+            except BaseException as close_error:
+                # diagnostic-expected: preserve both failures for propagation.
+                error = BaseExceptionGroup(
+                    "Grok open and RPC cleanup failed", [error, close_error]
+                )
+            if (
+                isinstance(error, BaseExceptionGroup)
+                and error.subgroup(asyncio.CancelledError) is not None
+            ):
+                # Existing callers own gateway cleanup and queued-turn settlement
+                # for cancellation. Retain the complete failure group as cause.
+                raise asyncio.CancelledError() from error
+            raise error
 
 
 class ClaudeAgentSdkAdapter(HarnessAdapter):
