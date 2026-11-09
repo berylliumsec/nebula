@@ -2899,8 +2899,8 @@ def _vllm_grammar_schema(value: Any) -> Any:
 
 
 # Reasoning families reject sampling parameters: OpenAI answers 400
-# "Unsupported parameter: 'temperature'" for the o-series and gpt-5 models.
-_OPENAI_REASONING_MODEL = re.compile(r"^(?:o\d+|gpt-5)(?:[-.]|$)")
+# "Unsupported parameter: 'temperature'" for the o-series and GPT-5/6 models.
+_OPENAI_REASONING_MODEL = re.compile(r"^(?:o\d+|gpt-[56])(?:[-.]|$)")
 
 
 def _openai_reasoning_model(model: str) -> bool:

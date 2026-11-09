@@ -1,8 +1,8 @@
 {
-  "change_digest": "e06e8e506bc6e1c0b54c96f70660d0bf14ff89b45fa18c8004d11adc31aa20bc",
-  "reviewed_by": "Codex; independent validate_admission confirmed stale ownership clocks and cold historical header hydration blocking execution heartbeat",
-  "reason": "Operator explicitly requested no tests while fixing and deploying runtime admission. Zero tests selected. Verification is source review, production build and authenticated live operational readback.",
-  "exclusions": "All automated tests and CI test/build checks excluded by explicit operator instruction. No pytest, browser, frontend, native, migration tests or synthetic instance. Production packaging is required for deployment; broader product quality remains unverified.",
+  "change_digest": "35100e7c32fb0d170a84eae25e01aca21e65979ee3ac542ede784b05093b69c8",
+  "reviewed_by": "Codex; fresh openai_model_check independently traced GPT-6 classification and payload handling",
+  "reason": "Operator requested OpenAI GPT-6 Sol Butler configuration and retained the no-test constraint. No automated tests selected. Native provider capability verification is required by Core before saving Butler settings.",
+  "exclusions": "All automated tests, CI test/build checks, browser and device suites excluded. Validate the production build and exact provider capability/settings readback; do not claim broader acceptance.",
   "python_versions": [
     "3.12"
   ],
