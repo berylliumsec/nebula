@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field
@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import EntityRow, ProviderToolManifestRow
 from .domain import ChatBackend, ChatSession, NebulaModel, utc_now
-from .providers import ModelRequest, ModelToolResult, ToolDefinition
+from .providers import (
+    InstructionSectionProvenance,
+    ModelRequest,
+    ModelToolResult,
+    ToolDefinition,
+)
 from .storage import ConflictError, CorruptRecordError, StoreTransaction
 from .tools import ToolSpec
 
@@ -358,20 +363,139 @@ def render_hints(receipt: Mapping[str, Any], manifest: ToolManifest) -> str:
     )
 
 
-def without_tools_section(instructions: str) -> str:
-    """Replace the managed section when a recovery starts from an assembled request."""
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    if SECTION_START in instructions:
-        before, remainder = instructions.split(SECTION_START, 1)
-        _, separator, after = remainder.partition(SECTION_END)
-        if not separator:
-            raise CorruptRecordError("provider tools context has no closing boundary")
-        instructions = before + after
-    if HINTS_START in instructions:
-        before, remainder = instructions.split(HINTS_START, 1)
-        _, separator, after = remainder.partition("\n")
-        instructions = before + (separator + after if separator else "")
-    return instructions
+
+def _owned_parts(request: ModelRequest) -> tuple[str, str]:
+    """Remove only a proved Core range, preserving every surrounding byte."""
+
+    instructions = request.instructions or ""
+    proof = request.core_tools_section
+    if proof is None:
+        if any(
+            name in request.metadata
+            for name in (
+                "provider_tool_manifest_revision",
+                "provider_tool_manifest_digest",
+            )
+        ):
+            raise CorruptRecordError(
+                "saved provider instructions lack ownership proof; rebuild from their authoritative base"
+            )
+        return instructions, ""
+    size = proof.end - proof.start
+    if size == 0:
+        # An explicit fresh base owns no text, including lookalike markers.
+        return instructions, ""
+    if (
+        len(instructions) == proof.instructions_length
+        and _sha256(instructions) == proof.instructions_sha256
+    ):
+        start = proof.start
+        end = proof.end
+        if _sha256(instructions[start:end]) != proof.sha256:
+            raise CorruptRecordError("owned provider instruction digest differs")
+    else:
+        candidates: set[int] = set()
+        # Delimiters accelerate lookup, never establish ownership. Each
+        # candidate must match the persisted exact Core-owned fragment hash.
+        for prefix in (SECTION_START, HINTS_START):
+            offset = 0
+            while (offset := instructions.find(prefix, offset)) >= 0:
+                if _sha256(instructions[offset : offset + size]) == proof.sha256:
+                    candidates.add(offset)
+                offset += len(prefix)
+        original_windows = {
+            offset
+            for offset in candidates
+            if offset >= proof.start
+            and _sha256(
+                instructions[
+                    offset - proof.start : offset
+                    - proof.start
+                    + proof.instructions_length
+                ]
+            )
+            == proof.instructions_sha256
+        }
+        # Prepend/append copies preserve the original instruction window. This
+        # disambiguates a genuine operator quote of the exact rendered section.
+        if len(original_windows) != 1:
+            raise CorruptRecordError(
+                "owned provider instructions changed or became ambiguous; rebuild from their authoritative base"
+            )
+        start = original_windows.pop()
+        end = start + size
+    return instructions[:start] + instructions[end:], instructions[start:end]
+
+
+def tools_instruction_base(request: ModelRequest) -> str:
+    return _owned_parts(request)[0]
+
+
+def _with_owned_section(request: ModelRequest, base: str, section: str) -> ModelRequest:
+    instructions = base + section
+    return request.model_copy(
+        update={
+            "instructions": instructions,
+            "core_tools_section": InstructionSectionProvenance(
+                start=len(base),
+                end=len(instructions),
+                sha256=_sha256(section),
+                instructions_length=len(instructions),
+                instructions_sha256=_sha256(instructions),
+            ),
+        }
+    )
+
+
+def reset_tools_instruction_base(
+    request: ModelRequest, authoritative_base: str
+) -> ModelRequest:
+    """A named Core reconstruction supplies a fresh base; it strips no text."""
+
+    return _with_owned_section(request, authoritative_base, "")
+
+
+def map_tools_instruction_base(
+    request: ModelRequest, transform: Callable[[str], str]
+) -> ModelRequest:
+    """Update known surrounding instructions without invalidating ownership."""
+
+    base, section = _owned_parts(request)
+    return _with_owned_section(request, transform(base), section)
+
+
+def initialize_tools_instruction_base(
+    request: ModelRequest,
+    manifest: ToolManifest,
+    *,
+    receipt: Mapping[str, Any] | None = None,
+) -> ModelRequest:
+    """Validate resume proof or initialize only a known unrendered legacy base.
+
+    A pre-feature request has no renderer reference. A referenced old renderer
+    that produced no text also needs no deletion. Nonempty old output without
+    proof has no safe textual migration, even if an operator quote looks valid.
+    """
+
+    if request.core_tools_section is not None:
+        _owned_parts(request)
+        return request
+    revision = request.metadata.get("provider_tool_manifest_revision")
+    digest = request.metadata.get("provider_tool_manifest_digest")
+    if revision is None and digest is None:
+        return reset_tools_instruction_base(request, request.instructions or "")
+    if (
+        revision == str(manifest.revision)
+        and digest == manifest.digest
+        and not (render_tools(manifest) + render_hints(receipt or {}, manifest))
+    ):
+        return reset_tools_instruction_base(request, request.instructions or "")
+    raise CorruptRecordError(
+        "saved provider instructions lack ownership proof and an authoritative raw base; start a new response while keeping saved tool receipts"
+    )
 
 
 def apply_tools_context(
@@ -382,11 +506,13 @@ def apply_tools_context(
 ) -> ModelRequest:
     """Shared by prepare, routing, synthesis, resume and recovery."""
 
-    return request.model_copy(
+    owned = _with_owned_section(
+        request,
+        tools_instruction_base(request),
+        render_tools(manifest) + render_hints(receipt or {}, manifest),
+    )
+    return owned.model_copy(
         update={
-            "instructions": without_tools_section(request.instructions or "")
-            + render_tools(manifest)
-            + render_hints(receipt or {}, manifest),
             "metadata": {
                 **request.metadata,
                 "provider_tool_manifest_revision": str(manifest.revision),

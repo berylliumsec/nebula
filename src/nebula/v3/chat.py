@@ -278,7 +278,13 @@ from .chat_turn_outcomes import (
     turn_outcome_metadata,
     turn_outcome_text,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
+from .storage import (
+    ConflictError,
+    CorruptRecordError,
+    NebulaStore,
+    NotFoundError,
+    StoreTransaction,
+)
 from .tool_markup import frame_start as tool_frame_start
 from .tool_markup import is_frame as tool_frame_is_frame
 from .tool_markup import partial_tag_start as tool_frame_partial_start
@@ -328,14 +334,18 @@ from .provider_tool_manifest import (
     absent_candidates,
     apply_tools_context,
     catalog_load_receipt,
+    initialize_tools_instruction_base,
     legacy_present_names,
     managed_load_result,
+    map_tools_instruction_base,
     read_manifest,
     reconcile as reconcile_tool_manifest,
     render_hints,
     render_tools,
+    reset_tools_instruction_base,
     stage_manifest,
     successful_load_names,
+    tools_instruction_base,
 )
 from .skill_catalog import (
     SkillSelection,
@@ -7461,17 +7471,19 @@ class ChatService:
         if turn is None or turn.goal_id is None:
             return request
         goal = await self.store.get(ChatGoal, turn.goal_id)
-        instructions = request.instructions or ""
-        for old in (
-            _GOAL_TIME_TEN_MINUTE_REMINDER,
-            _GOAL_TIME_FIVE_MINUTE_REMINDER,
-            _GOAL_TIME_OVERDUE_REMINDER,
-        ):
-            instructions = instructions.replace(old, "")
-        instructions += _goal_time_instruction(goal, utc_now())
-        if instructions == (request.instructions or ""):
+
+        def refresh(instructions: str) -> str:
+            for old in (
+                _GOAL_TIME_TEN_MINUTE_REMINDER,
+                _GOAL_TIME_FIVE_MINUTE_REMINDER,
+                _GOAL_TIME_OVERDUE_REMINDER,
+            ):
+                instructions = instructions.replace(old, "")
+            return instructions + _goal_time_instruction(goal, utc_now())
+
+        updated = map_tools_instruction_base(request, refresh)
+        if updated.instructions == (request.instructions or ""):
             return request
-        updated = request.model_copy(update={"instructions": instructions})
         return await self._fit_turn_goal_request(prepared, updated)
 
     async def _goal_time_wait_due(self, turn: ChatTurn, now: datetime) -> bool:
@@ -8203,9 +8215,10 @@ class ChatService:
             ),
             "context_length_recovery": "1",
         }
-        recovered_base = prepared.model_request.model_copy(
+        recovered_base = reset_tools_instruction_base(
+            prepared.model_request, instructions
+        ).model_copy(
             update={
-                "instructions": instructions,
                 "messages": join_consecutive_assistant_messages(
                     [
                         ModelMessage(
@@ -14097,9 +14110,11 @@ class ChatService:
                 "automation runtime or scope changed while the response was paused"
             )
         resolved_model = provider.require(model_request)
-        turn = await activate_recovery(turn)
         reference = turn.request_snapshot.get(MANIFEST_KEY)
-        if isinstance(reference, dict) and isinstance(reference.get("revision"), int):
+        has_manifest = isinstance(reference, dict) and isinstance(
+            reference.get("revision"), int
+        )
+        if has_manifest:
             async with self.store.database.session() as database_session:
                 tool_manifest = await read_manifest(
                     database_session,
@@ -14131,6 +14146,19 @@ class ChatService:
                 ),
                 reason="legacy_selection_or_successful_load",
             )
+        try:
+            model_request = initialize_tools_instruction_base(
+                model_request,
+                tool_manifest,
+                receipt=catalog_snapshot(turn.request_snapshot),
+            )
+            base_instructions = tools_instruction_base(model_request)
+        except CorruptRecordError as exc:
+            # Validate before recovery activation or manifest writes. An old
+            # ambiguous request must keep its paused state and tool receipts.
+            raise ChatHistoryConflict(str(exc)) from exc
+        turn = await activate_recovery(turn)
+        if not has_manifest:
             async with self.store.transaction(immediate=True) as transaction:
                 tool_manifest = await stage_manifest(
                     transaction, session, tool_manifest
@@ -14170,6 +14198,7 @@ class ChatService:
                 turn.request_snapshot.get("context_usage", {})
             ),
             tools_enabled=True,
+            base_instructions=base_instructions,
             tool_components=components,
             tool_manifest=tool_manifest,
             tool_source_profiles={item.id: item for item in mcp_profiles},
