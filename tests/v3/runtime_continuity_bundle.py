@@ -115,11 +115,17 @@ def build_bundle(
     source_hash = hashlib.sha256(json.dumps({
         name: digest for name, digest in files.items() if name.startswith("source/")
     }, sort_keys=True).encode()).hexdigest()
+    features = ["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"]
+    worker_source = (source / "nebula/v3/runtime_worker.py").read_text()
+    for capability in ("project.participants/v1", "project.quiesce/v1"):
+        if capability in worker_source:
+            features.append(capability)
+    heads = sorted(path.stem for path in (source / "nebula/v3/migrations/versions").glob("*.py"))
     manifest = ReleaseManifest(
         version=version, schema_family=5, schema_min=5, schema_max=5,
-        additive_migrations=True, migration_head="0041_handoff_admission",
+        additive_migrations=True, migration_head=heads[-1],
         core_executable="bin/nebula-core", ui_directory="ui", files=files,
-        features=["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"],
+        features=features,
     )
     (directory / MANIFEST_NAME).write_text(manifest.model_dump_json())
     digest = sha256(directory / MANIFEST_NAME)
