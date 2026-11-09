@@ -73,6 +73,8 @@ async def project(context, lease):
         chat = app.state.control_assistant_work.chat
         chat.provider_factory = lambda profile: InertProvider(profile.id)
         chat.provider_scheduler.host_load = None
+        from acceptance_allocator import attach_allocator
+        attach_allocator(app, root, lease.project_id)
         record(root, "project-constructed", version=version, project_id=lease.project_id,
                fencing_token=lease.fencing_token, source=kernel.__file__)
         return app
@@ -129,12 +131,18 @@ async def serve(config):
         database, administrator=lambda: MemoryAdministratorLimits.model_validate(config["administrator"])
     )
     host = RuntimeProcessHost(coordinator, root, operator_token=config["token"])
-    supervisor = RuntimeSupervisor(host, operator_token=config["token"],
-                                   worker_admission=RuntimeMemoryAdmission(budgets))
+    options = {"worker_admission": RuntimeMemoryAdmission(budgets)}
+    if config.get("allow_insecure_device_pairing"):
+        options["allow_insecure_device_pairing"] = True
+    supervisor = RuntimeSupervisor(host, operator_token=config["token"], **options)
     for bundle in config["bundles"]:
         manifest = ReleaseManifest.model_validate_json((Path(bundle["path"]) / "nebula-runtime.json").read_text())
         await coordinator.stage(manifest, Path(bundle["path"]), bundle["manifest_sha256"])
     await supervisor.start()
+    from acceptance_allocator import runner_for
+    allocator = runner_for(root)
+    if allocator is not None:
+        supervisor.shared_services.memory_control.api.runners["continuity-allocator"] = allocator
     selected = config.get("recovery_version")
     if selected:
         selector = getattr(supervisor, "select_recovery_release", None)
@@ -142,6 +150,14 @@ async def serve(config):
             raise RuntimeError("candidate lacks explicit verified host recovery release selection")
         await selector(selected)
     original_advance = supervisor._advance_project_handoff
+    original_transfer = coordinator.transfer
+
+    async def transfer(project_id):
+        lease = await original_transfer(project_id)
+        await wait_barrier(root, "hold-phase-transferred")
+        return lease
+
+    coordinator.transfer = transfer
 
     async def advance(row):
         await wait_barrier(root, "hold-phase-" + row.phase)
@@ -171,6 +187,9 @@ async def serve(config):
         if operation == "retire":
             await host.retire(body["runtime_id"], timeout=10)
             return {"retired": True}
+        if operation == "recovery-release":
+            await supervisor.select_recovery_release(body["version"])
+            return {"selected": body["version"]}
         if operation == "inspect":
             async with database.session() as session:
                 processes = list(await session.scalars(select(RuntimeProcessRow)))
@@ -207,7 +226,12 @@ def main():
     elif sys.argv[1:2] == ["acceptance-supervisor"]:
         config = json.loads(Path(sys.argv[2]).read_text())
         asyncio.run(serve(config))
-    else:
+    elif sys.argv[1:2] == ["runtime-worker"]:
         from nebula.v3.runtime_processes import read_worker_bootstrap
         from nebula.v3.runtime_worker import run_worker
         asyncio.run(run_worker(read_worker_bootstrap(sys.stdin.buffer), execution_factory=execution))
+    else:
+        # The final service/desktop driver enters the actual CLI. Its workers
+        # come back through the branch above with only inert adapters injected.
+        from nebula.v3.cli import main as cli_main
+        cli_main()

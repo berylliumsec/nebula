@@ -16,7 +16,7 @@ import httpx
 from sqlalchemy import select
 
 from nebula.v3.database import Database, RuntimeProcessRow
-from nebula.v3.domain import Engagement, ProviderProfile
+from nebula.v3.domain import Engagement, ProviderProfile, RunnerProfile
 from nebula.v3.memory_budget import MemoryBudgetService
 from nebula.v3.memory_policy import GIB, MemoryAdministratorLimits, MemoryBudgetUpdate
 from nebula.v3.process_identity import process_birth, same_process, signal_process
@@ -25,7 +25,7 @@ from tests.v3.runtime_continuity_bundle import AcceptanceBundle
 
 
 class ContinuityFixture:
-    def __init__(self, root: Path, database, bundles: list[AcceptanceBundle], *, host="127.0.0.1"):
+    def __init__(self, root: Path, database, bundles: list[AcceptanceBundle], *, host="127.0.0.1", port=None):
         self.root, self.bundles, self.host = root, bundles, host
         self.database = Database(database)
         self.store = NebulaStore(self.database)
@@ -36,9 +36,11 @@ class ContinuityFixture:
             maximum_swap_bytes=2 * GIB,
         )
         self.budgets = MemoryBudgetService(self.database, administrator=lambda: self.administrator)
-        with socket.socket() as listener:
-            listener.bind((host, 0))
-            self.port = listener.getsockname()[1]
+        if port is None:
+            with socket.socket() as listener:
+                listener.bind((host, 0))
+                port = listener.getsockname()[1]
+        self.port = port
         self.origin = f"http://{host}:{self.port}"
         self.process: subprocess.Popen | None = None
         self.birth: str | None = None
@@ -46,7 +48,7 @@ class ContinuityFixture:
                                        headers={"Authorization": "Bearer " + self.token},
                                        timeout=90, trust_env=False)
 
-    async def initialize(self, *, cold=False):
+    async def initialize(self, *, cold=False, pairing=False, memory=False):
         self.root.mkdir(parents=True)
         await self.store.create(Engagement(id="continuity-project", name="Synthetic continuity"))
         await self.store.create(Engagement(id="pinned-project", name="Synthetic pinned work"))
@@ -54,6 +56,17 @@ class ContinuityFixture:
             id="continuity-provider", name="Inert continuity provider", provider_type="vllm",
             is_local=True, model_allowlist=["model-a"],
         ))
+        if memory:
+            from tests.v3.runtime_continuity_allocator import prepare_allocator
+            runtime = os.environ["NEBULA_TEST_MEMORY_RUNTIME"]
+            image = os.environ["NEBULA_TEST_MEMORY_IMAGE"]
+            socket = os.environ.get("NEBULA_TEST_MEMORY_SOCKET", "unix:///var/run/docker.sock")
+            await asyncio.to_thread(prepare_allocator, self.root, runtime=runtime, image=image, socket=socket)
+            await self.store.create(RunnerProfile(
+                id="continuity-allocator", name="Disposable continuity allocator",
+                runtime="docker", executable=runtime, socket=socket,
+                platform="linux/amd64", isolation="rootless", healthy=True,
+            ))
         status = await self.budgets.status()
         await self.budgets.save(MemoryBudgetUpdate(
             expected_revision=status.revision,
@@ -64,6 +77,7 @@ class ContinuityFixture:
             "root": str(self.root), "database": self.database.url,
             "token": self.token, "host": self.host, "port": self.port,
             "administrator": self.administrator.model_dump(mode="json"),
+            "allow_insecure_device_pairing": pairing,
             "bundles": [{**asdict(bundle), "path": str(bundle.path)} for bundle in self.bundles],
         }
         if cold:

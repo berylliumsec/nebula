@@ -90,6 +90,7 @@ def build_bundle(
     shutil.copytree(ui, directory / "ui", ignore=_ignore)
     worker = Path(__file__).with_name("runtime_continuity_worker.py")
     shutil.copy2(worker, directory / "acceptance_worker.py")
+    shutil.copy2(Path(__file__).with_name("runtime_continuity_allocator.py"), directory / "acceptance_allocator.py")
     (directory / "entry.py").write_text(
         "import sys\nfrom pathlib import Path\n"
         "root=Path(__file__).resolve().parent\n"

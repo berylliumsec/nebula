@@ -127,3 +127,135 @@ async def test_retained_bundle_uses_its_own_python_source_and_dependencies(conti
     )
     result = json.loads(result.stdout)
     assert all(str(bundle.path) in result[key] for key in ("python", "core", "sqlalchemy", "chroma"))
+
+
+async def test_zero_api_recovery_serves_verified_ui_and_admits_after_reserve_readback(continuity):
+    import hashlib
+    from nebula.v3.memory_policy import GIB
+
+    await continuity.control("recovery-release", version="acceptance-v1")
+    current = (await continuity.client.get("/api/v1/memory-budgets")).json()
+    policy = {**current["policy"], "reserve_bytes": 2 * GIB}
+    saved = await continuity.client.put("/api/v1/memory-budgets", json={"expected_revision": current["revision"], "policy": policy})
+    assert saved.status_code == 200, saved.text
+    health = await continuity.client.get("/api/v1/health")
+    assert health.status_code == 200 and health.json()["api_ready"] is False
+    index = await continuity.client.get("/index.html")
+    assert index.status_code == 200
+    assert hashlib.sha256(index.content).hexdigest() == continuity.bundles[0].index_sha256
+    observed = await continuity.control("inspect")
+    assert observed["processes"] == []
+    refused = await continuity.client.post("/__acceptance/control", json={"operation": "api", "version": "acceptance-v1"})
+    assert refused.status_code >= 400
+    current = (await continuity.client.get("/api/v1/memory-budgets")).json()
+    restored = await continuity.client.put("/api/v1/memory-budgets", json={
+        "expected_revision": current["revision"], "policy": {**current["policy"], "reserve_bytes": 4 * GIB},
+    })
+    assert restored.status_code == 200, restored.text
+    assert (await continuity.client.get("/api/v1/memory-budgets")).json()["policy"]["reserve_bytes"] == 4 * GIB
+    await continuity.control("api", version="acceptance-v1")
+    assert (await continuity.client.get("/api/v1/health")).json()["api_ready"] is True
+
+
+@pytest.fixture
+async def allocator_continuity(tmp_path, location, continuity_bundles):
+    if not os.environ.get("NEBULA_TEST_MEMORY_RUNTIME") or not os.environ.get("NEBULA_TEST_MEMORY_IMAGE"):
+        pytest.skip("explicit disposable OCI runtime and cached image required for physical allocator gate")
+    fixture = ContinuityFixture(tmp_path / "allocator-installation", location, continuity_bundles)
+    try:
+        await fixture.initialize(memory=True)
+        yield fixture
+    finally:
+        await fixture.close()
+
+
+async def test_live_apply_after_api_replacement_reaches_original_physical_allocator(allocator_continuity):
+    fixture = allocator_continuity
+    from nebula.v3.memory_policy import MIB
+    source, _api = await fixture.ready()
+    identity = "physical-continuity-allocator"
+    task = asyncio.create_task(fixture.client.post(
+        "/api/v1/engagements/continuity-project/acceptance-allocation",
+        json={"job_id": identity}, headers={"Idempotency-Key": identity},
+    ))
+    try:
+        async with asyncio.timeout(30):
+            while True:
+                response = await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity)
+                if response.status_code == 200:
+                    job = response.json()
+                    if job["state"] == "running" and (job["evidence"].get("current_bytes") or 0) >= 4 * MIB:
+                        break
+                await asyncio.sleep(.05)
+        await fixture.control("api", version="acceptance-v2")
+        current = (await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity)).json()
+        update = {"expected_revision": current["revision"], "limits": {"max_bytes": 16 * MIB}, "acknowledge_possible_termination": True}
+        applied = await fixture.client.post(f"/api/v1/memory-budgets/jobs/{identity}/apply", json=update,
+                                           headers={"Idempotency-Key": "apply-physical-limit"})
+        assert applied.status_code == 200, applied.text
+        job = applied.json()
+        assert job["application_state"] == "verified"
+        assert job["evidence"]["applied"]["max_bytes"] == 16 * MIB
+        assert same_process(source["pid"], source["process_birth"])
+        environment = {name: value for name, value in os.environ.items() if name not in {
+            "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
+        }}
+        check = await asyncio.to_thread(subprocess.run, [os.environ["NEBULA_TEST_MEMORY_RUNTIME"],
+            "--host=" + os.environ.get("NEBULA_TEST_MEMORY_SOCKET", "unix:///var/run/docker.sock"),
+            "inspect", "--format", "{{.HostConfig.Memory}}", job["evidence"]["group_id"]],
+            check=True, capture_output=True, text=True, timeout=10, env=environment)
+        assert int(check.stdout.strip()) == 16 * MIB
+        finished = await asyncio.wait_for(task, 45)
+        assert finished.status_code == 200, finished.text
+        final = (await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity)).json()
+        assert final["evidence"]["group_empty"] and final["reserved_bytes"] == 0
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(continuity_bundles, tmp_path):
+    import httpx
+    bundles = continuity_bundles
+    if not (bundles[0].path / "source/nebula/v3/runtime_launcher.py").exists():
+        pytest.skip("selected source predates the persistent runtime_service launcher integration")
+    data = tmp_path / "actual-runtime-service"
+    environment = {name: value for name, value in os.environ.items()
+                   if name in {"HOME", "PATH", "LANG", "LC_ALL", "TZ"}}
+
+    async def invoke(bundle, command):
+        result = await asyncio.to_thread(subprocess.run,
+            [str(bundle.path / "nebula-core"), command, "--data-dir", str(data)],
+            check=True, capture_output=True, text=True, timeout=120, env=environment)
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    connection = None
+    try:
+        connection = await invoke(bundles[0], "desktop-connect")
+        assert connection["protocol"] == "nebula-desktop-runtime-v1"
+        origin = f"http://{connection['host']}:{connection['port']}"
+        async with httpx.AsyncClient(base_url=origin, trust_env=False, timeout=30,
+            headers={"Authorization": "Bearer " + connection["ipc_token"]}) as client:
+            identity = (await client.get("/api/v1/runtime/identity")).json()
+            initial = (await client.get("/api/v1/deployment/status")).json()
+            assert initial["api_version"] == "acceptance-v1"
+            assert (await client.get("/api/v1/health")).status_code == 200
+            candidate = await invoke(bundles[1], "desktop-connect")
+            assert candidate == connection
+            assert (await client.get("/api/v1/runtime/identity")).json() == identity
+            assert (await client.get("/api/v1/deployment/status")).json()["api_version"] == "acceptance-v2"
+            rollback = await invoke(bundles[0], "desktop-connect")
+            assert rollback == connection
+            assert (await client.get("/api/v1/deployment/status")).json()["api_version"] == "acceptance-v1"
+            await invoke(bundles[1], "runtime-stop")
+            async with asyncio.timeout(15):
+                while True:
+                    try:
+                        await client.get("/api/v1/health", timeout=1)
+                    except httpx.TransportError:
+                        break
+                    await asyncio.sleep(.05)
+    finally:
+        if connection is not None:
+            await invoke(bundles[-1], "runtime-stop")
