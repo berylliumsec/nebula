@@ -119,6 +119,7 @@ class HostSettingsBridge:
                     result.pop("client_action", None)
                 return {"ok": True, "value": result}
             except ValidationError:
+                # diagnostic-expected: reject bounded private input without exposing input-rich Settings values.
                 return {
                     "ok": False,
                     "error": "invalid",
@@ -142,6 +143,7 @@ class HostSettingsBridge:
                     "guidance": guidance.model_dump(mode="json"),
                 }
             except (CoordinationConflict, ValueError) as error:
+                # diagnostic-expected: expected lease, revision and argument refusals cross signed RPC as errors raised by the worker adapter.
                 return {
                     "ok": False,
                     "error": "lease_lost"
