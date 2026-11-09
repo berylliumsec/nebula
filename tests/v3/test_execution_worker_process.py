@@ -104,7 +104,8 @@ async def test_real_kernel_grant_delivery_and_supervisor_replacement(supervised)
                     break
                 await asyncio.sleep(0.05)
         assert read.json()["revision"] == 2
-        assert read.headers["x-nebula-execution-version"] == "v1"
+        assert read.headers["x-nebula-api-version"] == "v1"
+        assert "x-nebula-execution-version" not in read.headers
     assert not (fixture.data / "butler-memory.sqlite3").exists()
     assert (fixture.data / "runtime" / "workers" / execution.runtime_id).is_dir()
     assert (fixture.data / "diagnostics-settings.json").is_file()

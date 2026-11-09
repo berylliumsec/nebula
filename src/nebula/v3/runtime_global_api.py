@@ -65,6 +65,10 @@ class RuntimeGlobalApi:
         async def capacity():
             return None
 
+        from .runtime_global_settings import mount_global_settings
+
+        mount_global_settings(self.app, self.store, self.actor)
+
         for resource, model in (
             ("engagements", Engagement),
             ("providers", ProviderProfile),

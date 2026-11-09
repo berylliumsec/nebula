@@ -1,7 +1,7 @@
 {
-  "change_digest": "67abf56db47d999f314ac2d9162d59ebbece32754ba7d3e27774cf12f71058f9",
+  "change_digest": "f082a41b6fd87dd3d57142dcdbf0c4564a02ef33b866e034297977cd16967d4e",
   "reviewed_by": "Codex",
-  "reason": "Twenty distinct focused cases passed: thirteen global SQL/identity-isolation cases across SQLite and PostgreSQL plus seven established CRUD compatibility contracts after mechanical extraction. Actor/key response receipts, atomic global edits, strict project isolation, shutdown fencing, consent/revision/workspace constraints pass. API-demand wiring and automatic admission are implemented; actual composed process acceptance is the next integration gate, not claimed by these tests.",
+  "reason": "Twenty distinct focused cases passed: thirteen global SQL/identity-isolation cases across SQLite and PostgreSQL plus seven established CRUD compatibility contracts after mechanical extraction. Actor/key response receipts, atomic global edits, strict project isolation, shutdown fencing, consent/revision/workspace constraints pass. API-demand wiring and automatic admission are implemented; actual composed process acceptance is the next integration gate, not claimed by these tests. Integration checkpoint adds separately tested worker slices; their receipts and outstanding gates are in docs/validation/runtime-implementation-checkpoint.md. Final integrated selection is pending; this branch push does not trigger main-only CI.",
   "exclusions": "No full suite, UI, existing installation, network providers or deployment. Other concurrently integrated tracks have separate focused receipts; final union remains pending.",
   "expected_tests": {
     "python": 20,
