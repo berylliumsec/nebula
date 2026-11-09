@@ -1,12 +1,12 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "98678c4df2cd968bf164a08d7e0ab507612e085d9070d0a7094fdd1a80b0d0e1",
+  "migration_tree_sha256": "1843a81fde8b9e1bc999e8e5c6bc0166fc8807a1feb552f7b40b547b38d6def2",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,
     "schema_max": 5,
     "additive_migrations": true,
-    "migration_head": "0046_provider_tool_manifest",
+    "migration_head": "0047_runtime_work_batches",
     "api_protocol_min": 1,
     "api_protocol_max": 1,
     "execution_protocol_min": 1,
@@ -20,7 +20,8 @@
       "provider.tools-context/v1",
       "provider.tools-context-ownership/v1",
       "harness.standing-instructions/v1",
-      "host.web-search-query/v1"
+      "host.web-search-query/v1",
+      "project.work-batch/v1"
     ]
   }
 }

@@ -8,6 +8,7 @@ from .database import (
     ProviderToolManifestRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
+    RuntimeWorkBatchProjectRow,
 )
 from .deployment_protocol import ReleaseManifest
 from .chat_snapshot_parts import TOOLS_OWNERSHIP_KEY
@@ -17,10 +18,23 @@ PROVIDER_TOOLS_FEATURE = "provider.tools-context/v1"
 PROVIDER_TOOLS_OWNERSHIP_FEATURE = "provider.tools-context-ownership/v1"
 STANDING_INSTRUCTIONS_FEATURE = "harness.standing-instructions/v1"
 HOST_SEARCH_FEATURE = "host.web-search-query/v1"
+WORK_BATCH_FEATURE = "project.work-batch/v1"
 
 
 async def required_context_features(session, project_id: str) -> set[str]:
     required = set()
+    if (
+        await session.scalar(
+            select(RuntimeWorkBatchProjectRow.batch_id)
+            .where(
+                RuntimeWorkBatchProjectRow.project_id == project_id,
+                RuntimeWorkBatchProjectRow.state.in_(("waiting", "barrier")),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        required.add(WORK_BATCH_FEATURE)
     if (
         await session.scalar(
             select(ProviderToolManifestRow.session_id)

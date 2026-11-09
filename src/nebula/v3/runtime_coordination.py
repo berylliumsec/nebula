@@ -490,6 +490,10 @@ class RuntimeCoordination:
             )
             if row is None or row.state == "uncertain":
                 return None
+            if row.state == "queued" and row.name == "work.batch.barrier/v1":
+                # The host commits this typed SQL barrier with its whole batch.
+                # Keep it at the lane head so later work cannot overtake it.
+                return None
             if row.state == "running":
                 if (row.runtime_id, row.fencing_token) != (
                     lease.runtime_id,

@@ -27,6 +27,7 @@ from nebula.v3.runtime_context_requirements import (
     PROVIDER_TOOLS_FEATURE,
     PROVIDER_TOOLS_OWNERSHIP_FEATURE,
     STANDING_INSTRUCTIONS_FEATURE,
+    WORK_BATCH_FEATURE,
 )
 from nebula.v3.runtime_http import internal_headers
 from nebula.v3.runtime_ipc import RuntimeIpcError
@@ -131,6 +132,7 @@ async def test_actual_main_admits_canonical_features_for_each_role(worker_host, 
         PROVIDER_TOOLS_OWNERSHIP_FEATURE,
         STANDING_INSTRUCTIONS_FEATURE,
         HOST_SEARCH_FEATURE,
+        WORK_BATCH_FEATURE,
     } <= set(FEATURES)
     release = await value.stage("canonical-" + role)
     identity = await value.host.spawn(release.manifest.version, role)

@@ -22,6 +22,7 @@ from .database import (
     ProviderToolManifestRow,
     RuntimeChatBindingRow,
     RuntimeProcessRow,
+    RuntimeWorkBatchProjectRow,
 )
 from .database_pool import PoolSettings
 from .deployment_protocol import ReleaseManifest
@@ -33,6 +34,7 @@ from .runtime_context_requirements import (
     PROVIDER_TOOLS_FEATURE,
     PROVIDER_TOOLS_OWNERSHIP_FEATURE,
     STANDING_INSTRUCTIONS_FEATURE,
+    WORK_BATCH_FEATURE,
 )
 from .runtime_http import PrivateRuntimeHttp
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcServer
@@ -191,6 +193,7 @@ async def run_worker(
             PROVIDER_TOOLS_OWNERSHIP_FEATURE,
             STANDING_INSTRUCTIONS_FEATURE,
             HOST_SEARCH_FEATURE,
+            WORK_BATCH_FEATURE,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
@@ -231,6 +234,16 @@ async def run_worker(
                 # the independently retained worker never applies migrations.
                 raise RuntimeIpcError(
                     "The supervisor must apply additive provider tool migrations before worker readiness"
+                ) from None
+        if WORK_BATCH_FEATURE in manifest.features:
+            try:
+                async with database.session() as session:
+                    await session.execute(select(RuntimeWorkBatchProjectRow).limit(0))
+            except SQLAlchemyError:
+                # diagnostic-expected: an independently retained worker cannot
+                # provide Work barriers before the host migrates their ledger.
+                raise RuntimeIpcError(
+                    "The supervisor must apply additive Work batch migrations before worker readiness"
                 ) from None
         from .diagnostics import configure_diagnostics
 

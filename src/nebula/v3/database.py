@@ -293,6 +293,27 @@ class RuntimeCommandRow(Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
+class RuntimeWorkBatchProjectRow(Base):
+    """Durable participants in an atomic SQL-only Work batch."""
+
+    __tablename__ = "runtime_work_batch_projects"
+    __table_args__ = (
+        Index("ix_runtime_work_batch_project_state", "project_id", "state"),
+    )
+
+    batch_id: Mapped[str] = mapped_column(
+        String(200),
+        ForeignKey("runtime_commands.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    barrier_command_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    barrier_sequence: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    runtime_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fencing_token: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class DevicePairingOfferRow(Base):
     """Single-use hashed pairing offers shared across replaceable API workers."""
 
