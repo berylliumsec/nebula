@@ -1,6 +1,7 @@
 """Prepared controllers remain inert until their durable restoration is verified."""
 
 from contextlib import asynccontextmanager
+import asyncio
 from dataclasses import asdict
 from types import SimpleNamespace
 
@@ -99,3 +100,43 @@ async def test_failed_clean_restoration_relinquishes_without_reviving_lease(runt
         async with runtime.coordination.coordination.fenced(runtime.lease):
             pass
     assert runtime.execution.state == "fenced"
+
+
+async def test_relinquish_keeps_verification_outside_its_audit_to_expiry_boundary(
+    runtime, monkeypatch
+):
+    digest = await transferred(runtime)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = runtime.coordination.coordination._check
+
+    async def barrier(session, lease, *, lock):
+        await original(session, lease, lock=lock)
+        if not lock and not entered.is_set():
+            entered.set()
+            await release.wait()
+
+    monkeypatch.setattr(runtime.coordination.coordination, "_check", barrier)
+    relinquish = asyncio.create_task(
+        runtime.coordination.relinquish_failed_restoration(runtime.lease)
+    )
+    verification = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        verification = asyncio.create_task(
+            runtime.coordination.verified(
+                runtime.lease, restored_checkpoint_digest=digest
+            )
+        )
+        await asyncio.sleep(0)
+        assert not verification.done()
+        release.set()
+        await relinquish
+        with pytest.raises(LeaseLost):
+            await verification
+    finally:
+        release.set()
+        await asyncio.gather(
+            relinquish,
+            *([verification] if verification else []),
+            return_exceptions=True,
+        )

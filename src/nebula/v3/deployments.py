@@ -1315,7 +1315,7 @@ class DeploymentCoordinator:
                     RuntimeRecoveryRow.project_id == project_id,
                 )
                 .order_by(
-                    RuntimeRecoveryRow.created_at_ms.desc(),
+                    RuntimeRecoveryRow.target_fencing_token.desc(),
                     RuntimeRecoveryRow.operation_id,
                 )
                 .limit(1)
@@ -1440,7 +1440,8 @@ class DeploymentCoordinator:
 
     async def relinquish_failed_restoration(self, lease: ProjectLease) -> None:
         """Expire a cleaned pre-activation grant; keep all evidence and its fence."""
-        async with self.coordination.fenced(lease) as session:
+        async with self.coordination._write() as session:
+            await self.coordination._check(session, lease, lock=True)
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             if (
                 handoff is None
@@ -1487,10 +1488,10 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "restoration retains admitted effects or capacity"
                 )
-            # The commit-time fence would reject an already expired lease.
-            # Verify everything under the normal fence, then expire in a
-            # separate CAS transaction after the worker has stopped permanently.
-        async with self.coordination._write() as session:
+            # Recheck immediately before intentional expiry, keeping the same
+            # project lock through audits and revocation. There is no ordinary
+            # fenced post-check because this transaction expires its own grant.
+            await self.coordination._check(session, lease, lock=False)
             owner = await session.get(
                 ProjectOwnershipRow, lease.project_id, with_for_update=True
             )
