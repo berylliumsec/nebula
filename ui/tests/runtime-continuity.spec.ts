@@ -526,13 +526,19 @@ test("native standing instructions survive lossy compaction, reconnect and API r
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     sent++;
     await expect.poll(() => submissions).toBe(sent);
-    let current = await assistantReplies();
+    const completionDeadline = performance.now() + 60_000;
+    const remainingCompletionTime = () => {
+      const remaining = Math.floor(completionDeadline - performance.now());
+      if (remaining <= 0) throw new Error("Native reply completion exceeded 60 seconds.");
+      return remaining;
+    };
+    let current = previous;
     const pollStartedAt = Date.now();
     try {
       await expect.poll(async () => {
         current = await assistantReplies();
         return current.length;
-      }).toBe(previous.length + 1);
+      }, {timeout: remainingCompletionTime()}).toBe(previous.length + 1);
     } catch (error) {
       const failedAt = Date.now();
       const observed = await native("capture", true).then(value => ({
@@ -564,7 +570,7 @@ test("native standing instructions survive lossy compaction, reconnect and API r
     const added = current.filter(item => !previous.some(saved => saved.id === item.id));
     expect(added).toHaveLength(1);
     expect(added[0].content).toBe(answer);
-    await expect(page.locator(`#chat-message-${added[0].id} .assistant-markdown`)).toHaveText(answer, {timeout: 60_000});
+    await expect(page.locator(`#chat-message-${added[0].id} .assistant-markdown`)).toHaveText(answer, {timeout: remainingCompletionTime()});
     await expect(page.getByRole("button", {name: "Stop response", exact: true})).toBeHidden();
     return capture();
   };

@@ -5,11 +5,13 @@ Reload the complete [standing-instruction goal](standing-instructions-goal.md),
 checkpoint after compaction or resumption. Preserve the complete goal and all its
 criteria. This repair owns one failing browser journey only.
 
-Status: all eight native profiles fail on CI head `3c55e4b8`, while its unchanged
-Chromium 320 case passes locally. The current causal gate remains unresolved;
-bounded diagnostics are prepared for the next exact failed-node CI attempt.
-Earlier assertion repairs and their evidence below are historical. The original
-`eee508bc` missing-first-reply mechanism remains separately unknown.
+Status: the native helper's source-proven completion-budget contract is now
+corrected after fresh independent validation and static review. One shared
+60-second answer deadline covers persistence and matching-ID visibility. The
+actual CI backend cause remains unknown; diagnostics and this follow-up are
+runtime-unverified under the user's no-repeat instruction. Root owns the next
+CI run of only the eight still-failed native title/profile nodes. Earlier records
+below are historical. The original `eee508bc` mechanism remains separately unknown.
 
 ## Scope and operator contract
 
@@ -245,3 +247,57 @@ The diagnostic patch is runtime-unverified under the user's no-repeat rule.
 Next: commit the statically reviewed diagnostic-only diff without a push, and
 have root collect the next exact failed-node CI evidence. Preserve both unknown
 CI mechanisms and do not infer a cause from the five-second count symptom.
+
+
+## Source-contract gate: one native answer-completion budget
+
+Root obtained a new fresh-context source review from
+`validate_native_completion_budget` before authorizing this repair. The review
+independently established a test-contract defect without claiming the actual CI
+backend cause: the original mounted-row prerequisite could observe an optimistic
+empty assistant before Core acceptance, then wait 60 seconds for answer text.
+The substituted durable-count predicate instead observes `_complete_owner`'s
+final assistant transaction. Placing it under the former default five-second
+row poll imposed a new five-second completion requirement before the unchanged
+60-second text wait. All eight CI failures stop at that prerequisite, but their
+underlying delivery/timing mechanism is still unknown.
+
+The source-consistent six-second completion counterexample proves the contract
+restriction; it is not an observed CI timing trace. Neither a production memory,
+freshness, instruction-channel nor delivery repair is authorized by this proof.
+
+Follow-up is based directly on diagnostic commit
+`1fde06732c1e587fed859691e1c30177d8d87e7a` in the same isolated worktree/branch.
+Root already integrated that diagnostic commit separately. Only the native send
+helper and this checkpoint change in the follow-up:
+
+- Keep the outgoing-submission count under its original default five-second poll.
+- Start one monotonic `performance.now() + 60_000` deadline immediately afterward.
+  Remove the initial post-submission GET outside the completion phase by setting
+  `current = previous` before the budgeted poll.
+- Give the durable-count poll only `floor(deadline - now)` milliseconds. Preserve
+  exact-one/new-ID uniqueness and exact saved-content assertions between the
+  count and visible-text checks.
+- Give the same saved ID's visible markdown only the remaining time from that
+  same deadline. A nonpositive remainder throws before passing a zero timeout,
+  so no unlimited timeout or second 60-second allowance is introduced.
+- Preserve Stop-hidden, inactive capture, all diagnostics/rethrow, the overall
+  300-second journey and every production memory/readback/channel guard.
+
+The same fresh source validator statically reviewed the final diff and found no
+blocker in deadline accounting. All completion GETs are inside the budgeted poll;
+ID/content checks and visibility share that one phase. Failure diagnostics may
+consume time after a failed phase but cannot turn it into success. This restores
+the source-proven completion boundary, not an established CI backend fault.
+
+No tests, profiles, helper/contracts, collection, checks, builds or services were
+executed for this follow-up. Every previously passed local native case stays
+excluded. Root will verify only its eight still-failed native title/profile nodes
+in CI; passing tools, Python/frontend/Rust/checks and other journeys remain
+excluded. Runtime verification is explicitly pending.
+
+Static receipt: `/tmp/nebula-native-completion-budget-static-review.json`.
+External local selection: `/tmp/nebula-native-completion-budget-selection.json`
+(all execution arrays/counts empty under user instruction). Root owns the shared
+CI plan, push, review and merge. Preserve both the current CI backend uncertainty
+and the separate original `eee508bc` unknown on resumption.
