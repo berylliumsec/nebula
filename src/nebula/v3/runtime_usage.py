@@ -490,8 +490,9 @@ class RuntimeUsageService:
             # ordinary vendor error or retain the account observation.
             raise
         except MemoryEnforcementUnavailable as error:
-            # This message comes from the admission boundary, never a vendor
-            # response or credential. Its retained held job explains recovery.
+            # diagnostic-expected: protected account admission is unavailable.
+            # Local recovery text is safe to surface; unsupported readers retain
+            # a blocked job, while an uninitialized controller starts no reader.
             value = VendorUsage(
                 state="unavailable",
                 source="Harness account",
