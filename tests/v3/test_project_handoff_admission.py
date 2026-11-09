@@ -25,7 +25,7 @@ from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_project_admission import turn_admission_allowed
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_chat import FakeProvider
-from tests.v3.test_deployment_lifecycle import host as host, pair
+from tests.v3.test_deployment_lifecycle import host as host, manifest, worker
 from tests.v3.test_runtime_coordination import location as location
 
 pytestmark = pytest.mark.anyio
@@ -39,7 +39,19 @@ def anyio_backend():
 @pytest.fixture
 async def project(host, location):
     coordinator, durable = host
-    source, target, lease = await pair(host)
+    from pathlib import Path
+
+    for version in ("handoff-source", "handoff-target"):
+        await coordinator.stage(
+            manifest(
+                version, features=["project.handoff/v1", "project.participants/v1"]
+            ),
+            Path("/isolated/releases") / version,
+            "a" * 64,
+        )
+    source = await worker(host, "handoff-source")
+    target = await worker(host, "handoff-target")
+    lease = await coordinator.coordination.claim_project("one", source)
     store = NebulaStore(
         Database(
             location,

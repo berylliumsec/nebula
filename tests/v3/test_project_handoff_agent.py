@@ -6,10 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import select
 
-from nebula.v3.database import ProjectHandoffRow, RuntimeResourceRow
+from nebula.v3.database import (
+    ProjectHandoffRow,
+    RuntimeResourceRow,
+    ProviderTurnQueueRow,
+)
 from nebula.v3.deployments import checkpoint_digest
 from nebula.v3.deployment_protocol import ResourceSnapshot
-from nebula.v3.domain import Engagement, Observation
+from nebula.v3.domain import Engagement, Observation, ChatTurn
 from nebula.v3.runtime_coordination import CoordinationConflict
 from nebula.v3.runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
 from tests.v3.test_project_handoff_admission import project as project
@@ -175,3 +179,37 @@ async def test_bounded_checkpoint_reports_an_explicit_pin(project, agent, monkey
     assert not handoff.admission_held and any(
         "bounded handoff checkpoint" in text for text in handoff.blockers
     )
+
+
+async def test_running_provider_admission_without_resource_cannot_transfer(
+    project, agent
+):
+    await project.durable.create(
+        ChatTurn(
+            id="orphan-running",
+            engagement_id="one",
+            session_id="saved",
+            provider_profile_id="provider",
+            model="model",
+            status="routing",
+        )
+    )
+    async with project.coordinator.database.session() as session:
+        session.add(
+            ProviderTurnQueueRow(
+                turn_id="orphan-running",
+                lane="foreground",
+                state="running",
+                lease_owner="lost-admission",
+            )
+        )
+    assert await agent.tick() == "finishing"
+    current = await row(project)
+    assert current.admission_held and any(
+        "running provider admission" in item for item in current.blockers
+    )
+    async with project.coordinator.database.session() as session:
+        current = await session.get(ProjectHandoffRow, "one")
+        current.phase, current.blockers = "transferable", []
+    with pytest.raises(CoordinationConflict, match="changed after"):
+        await project.coordinator.transfer("one")

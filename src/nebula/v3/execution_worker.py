@@ -17,7 +17,12 @@ from .diagnostics import record_caught_exception
 from .execution_memory import ExecutionMemoryBudget
 from .execution_scope import execution_context
 from .runtime_capacity import RuntimeCapacity
-from .runtime_coordination import HEARTBEAT_SECONDS, LeaseLost, ProjectLease
+from .runtime_coordination import (
+    CoordinationConflict,
+    HEARTBEAT_SECONDS,
+    LeaseLost,
+    ProjectLease,
+)
 from .runtime_delivery import DurableHttpRunner, RuntimeDelivery
 from .runtime_host_services import host_service_client
 from .runtime_ipc import RuntimeIpcError
@@ -176,10 +181,12 @@ class ProjectExecution:
         self._activate = asyncio.Event()
         self.activation_started = False
         self.cleanup_complete = False
+        self.quiesce_proof = None
         context.rpc.register("execution.attach/v1", self.attach)
         context.rpc.register("execution.status/v1", self.status)
         context.rpc.register("execution.activate/v1", self.activate)
         context.rpc.register("execution.relinquish/v1", self.relinquish)
+        context.rpc.register("execution.quiesce/v1", self.quiesce)
 
     async def status(self, payload):
         if payload:
@@ -192,7 +199,61 @@ class ProjectExecution:
             "recovery_operation_id": self.recovery_operation_id,
             "activation_started": self.activation_started,
             "cleanup_complete": self.cleanup_complete,
+            "quiesce_checkpoint": self.quiesce_proof,
         }
+
+    async def quiesce(self, payload):
+        if payload:
+            raise RuntimeIpcError("Project quiescence accepts no arguments")
+        async with self._lock:
+            if self.lease is None:
+                raise RuntimeIpcError("The project has no ownership grant")
+            if self.state == "closed" and self.cleanup_complete and self.quiesce_proof:
+                await self.context.coordinator.release_quiesced_project(
+                    self.lease, checkpoint=self.quiesce_proof
+                )
+                return await self.status({})
+            try:
+                self.quiesce_proof = await self._prepare_quiescence()
+            except (CoordinationConflict, RuntimeIpcError) as error:
+                # A signed refusal proves no controller cleanup began. This
+                # lets the host reopen admission so the blocker can be resolved.
+                return {
+                    **await self.status({}),
+                    "quiesce_blockers": [str(error)[:4000]],
+                }
+            self.closed, self.state = True, "quiescing"
+            self._stop.set()
+            if self.task is not None:
+                await asyncio.gather(self.task, return_exceptions=True)
+            if not self.cleanup_complete or self.state != "closed":
+                raise RuntimeIpcError(
+                    "Project cleanup is unverified; its ownership is retained"
+                )
+            await self.context.coordinator.release_quiesced_project(
+                self.lease, checkpoint=self.quiesce_proof
+            )
+            return await self.status({})
+
+    async def _prepare_quiescence(self):
+        if self.state != "ready" or self.application is None:
+            raise RuntimeIpcError("Only a ready idle project can quiesce")
+        agent = getattr(
+            getattr(self.application, "state", None), "runtime_handoff", None
+        )
+        if agent is None:
+            raise RuntimeIpcError("This worker cannot prove its shutdown inventory")
+        local = list(agent.handles().values())
+        chat = agent.chat
+        if any(not runtime.done for runtime in chat._active_provider_turns.values()):
+            local.append("A provider response is still active")
+        if any(not task.done() for task in chat._naming_tasks) or any(
+            not item.task.done() for item in chat._precompactions.values()
+        ):
+            local.append("Conversation maintenance is still active")
+        return await self.context.coordinator.quiesce_checkpoint(
+            self.lease, local_blockers=local
+        )
 
     async def relinquish(self, payload):
         if payload:

@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
@@ -22,6 +22,7 @@ from .database import (
     DeploymentHostRow,
     DeploymentReceiptRow,
     EntityRow,
+    MemoryJobRow,
     ProviderTurnQueueRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
@@ -575,34 +576,248 @@ class DeploymentCoordinator:
             host = await self._host(session)
             if host.revision != expected_revision:
                 raise CoordinationConflict("deployment changed before shutdown")
-            blockers = []
-            for project in await session.scalars(
-                select(ProjectOwnershipRow.project_id).where(
-                    ProjectOwnershipRow.runtime_id.is_not(None)
-                )
-            ):
-                blockers.append("Project " + project + " still has an execution owner")
-            for command in await session.scalars(
-                select(RuntimeCommandRow.id).where(
-                    RuntimeCommandRow.state.in_(_UNFINISHED)
-                )
-            ):
-                blockers.append("Command " + command + " is unfinished")
-            for resource in await session.scalars(
-                select(RuntimeResourceRow.id).where(
-                    RuntimeResourceRow.state != "closed"
-                )
-            ):
-                blockers.append("Resource " + resource + " remains resident")
-            for reservation in await session.scalars(
-                select(RuntimeCapacityReservationRow.id).where(
-                    RuntimeCapacityReservationRow.state == "held"
-                )
-            ):
-                blockers.append("Capacity " + reservation + " remains held")
+            blockers = await self._shutdown_blockers(session)
             if blockers:
                 raise CoordinationConflict("; ".join(blockers[:20]))
             return {"revision": host.revision, "ready": True, "blockers": []}
+
+    async def _shutdown_blockers(self, session, project_id=None):
+        blockers = []
+        for model, predicate, label in (
+            (RuntimeCommandRow, RuntimeCommandRow.state.in_(_UNFINISHED), "Command"),
+            (RuntimeResourceRow, RuntimeResourceRow.state != "closed", "Resource"),
+            (
+                RuntimeCapacityReservationRow,
+                RuntimeCapacityReservationRow.state == "held",
+                "Capacity reservation",
+            ),
+            (
+                MemoryJobRow,
+                MemoryJobRow.state.in_(
+                    ("reserved", "starting", "running", "updating", "uncertain")
+                ),
+                "Compute job",
+            ),
+        ):
+            query = select(model.id).where(predicate)
+            if project_id is not None:
+                query = query.where(model.project_id == project_id)
+            blockers.extend(
+                label + " " + identity + " remains active or unresolved"
+                for identity in await session.scalars(query.limit(101))
+            )
+        query = (
+            select(ProviderTurnQueueRow.turn_id)
+            .join(EntityRow, EntityRow.id == ProviderTurnQueueRow.turn_id)
+            .where(ProviderTurnQueueRow.state.in_(("queued", "running")))
+        )
+        if project_id is not None:
+            query = query.where(EntityRow.engagement_id == project_id)
+        blockers.extend(
+            "Provider turn " + identity + " is admitted or queued"
+            for identity in await session.scalars(query.limit(101))
+        )
+        states = {
+            "chat_turns": (
+                "queued",
+                "routing",
+                "finalizing",
+                "waiting_approval",
+                "waiting_callback",
+            ),
+            "chat_goals": ("running",),
+            "chat_subagents": ("running",),
+            "runs": ("queued", "planning", "running", "waiting_approval", "cancelling"),
+            "command_executions": ("running", "interrupted"),
+            "harness_sessions": ("starting", "idle", "running", "waiting_approval"),
+            "harness_turns": ("queued", "running", "waiting_approval"),
+            "native_hook_executions": ("running", "interrupted"),
+            "tool_calls": ("running", "waiting_approval", "approved"),
+        }
+        conditions = [
+            (EntityRow.kind == kind)
+            & EntityRow.payload["status"].as_string().in_(active)
+            for kind, active in states.items()
+        ]
+        conditions.append(
+            (EntityRow.kind == "chat_schedules")
+            & EntityRow.payload["enabled"].as_boolean().is_(True)
+        )
+        conditions.append(
+            (EntityRow.kind == "approvals")
+            & EntityRow.payload["continuation"]["adapter_status"]
+            .as_string()
+            .in_(("pending", "unknown"))
+        )
+        conditions.append(
+            (EntityRow.kind == "chat_turns")
+            & (EntityRow.payload["status"].as_string() == "interrupted")
+            & EntityRow.payload["request_snapshot"]["recovery"]["required"]
+            .as_boolean()
+            .is_(True)
+        )
+        query = select(EntityRow.id, EntityRow.kind).where(or_(*conditions))
+        if project_id is not None:
+            query = query.where(EntityRow.engagement_id == project_id)
+        blockers.extend(
+            kind + " " + identity + " needs a safe pause or outcome"
+            for identity, kind in await session.execute(query.limit(101))
+        )
+        return blockers
+
+    async def _paused_inventory(self, session, project_id):
+        rows = list(
+            await session.execute(
+                select(EntityRow.id, EntityRow.kind, EntityRow.payload)
+                .where(
+                    EntityRow.engagement_id == project_id,
+                    or_(
+                        EntityRow.payload["status"]
+                        .as_string()
+                        .in_(("paused", "blocked")),
+                        (EntityRow.kind == "chat_schedules")
+                        & EntityRow.payload["enabled"].as_boolean().is_(False),
+                    ),
+                )
+                .order_by(EntityRow.id)
+                .limit(10_001)
+            )
+        )
+        if len(rows) > 10_000:
+            raise CoordinationConflict(
+                "Paused-work inventory exceeds its shutdown bound"
+            )
+        return checkpoint_digest({"paused": [list(row) for row in rows]})
+
+    async def prepare_shutdown(self, *, expected_revision: int) -> list[ProjectLease]:
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            if host.revision != expected_revision:
+                raise CoordinationConflict("deployment changed before shutdown")
+            owners = list(
+                await session.scalars(
+                    select(ProjectOwnershipRow)
+                    .where(ProjectOwnershipRow.runtime_id.is_not(None))
+                    .order_by(ProjectOwnershipRow.project_id)
+                    .with_for_update()
+                )
+            )
+            blockers = await self._shutdown_blockers(session)
+            if blockers:
+                raise CoordinationConflict("; ".join(blockers[:20]))
+            leases = [
+                ProjectLease(row.project_id, row.runtime_id, row.fencing_token)
+                for row in owners
+            ]
+            for lease in leases:
+                await self.coordination._check(session, lease, lock=False)
+                process = await session.get(RuntimeProcessRow, lease.runtime_id)
+                if process is not None:
+                    release = await session.get(RuntimeReleaseRow, process.version)
+                    if (
+                        release is None
+                        or "project.quiesce/v1"
+                        not in ReleaseManifest.model_validate(release.manifest).features
+                    ):
+                        raise CoordinationConflict(
+                            "Migrate this idle project to a version supporting verified quiescence before shutdown"
+                        )
+            host.shutdown_requested = True
+            host.revision += 1
+            host.detail = "New work is held while idle project controllers quiesce."
+            return leases
+
+    async def quiesce_checkpoint(
+        self, lease: ProjectLease, *, local_blockers: list[str]
+    ) -> dict:
+        async with self.coordination._write() as session:
+            host = await session.get(
+                DeploymentHostRow,
+                "host",
+                with_for_update={"read": True},
+                populate_existing=True,
+            )
+            if host is None or not host.shutdown_requested:
+                raise CoordinationConflict(
+                    "Hold host admission before quiescing a project"
+                )
+            await self.coordination._check(session, lease, lock=True)
+            blockers = [
+                *local_blockers,
+                *await self._shutdown_blockers(session, lease.project_id),
+            ]
+            if blockers:
+                raise CoordinationConflict("; ".join(blockers[:20]))
+            result = {
+                "project_id": lease.project_id,
+                "paused_sha256": await self._paused_inventory(
+                    session, lease.project_id
+                ),
+            }
+            await self.coordination._check(session, lease, lock=False)
+            return result
+
+    async def release_quiesced_project(
+        self, lease: ProjectLease, *, checkpoint: dict
+    ) -> None:
+        async with self.coordination._write() as session:
+            host = await session.get(
+                DeploymentHostRow,
+                "host",
+                with_for_update={"read": True},
+                populate_existing=True,
+            )
+            owner = await session.get(
+                ProjectOwnershipRow, lease.project_id, with_for_update=True
+            )
+            if (
+                owner is not None
+                and owner.runtime_id is None
+                and owner.fencing_token == lease.fencing_token
+            ):
+                return
+            if (
+                host is None
+                or not host.shutdown_requested
+                or checkpoint.get("project_id") != lease.project_id
+            ):
+                raise CoordinationConflict(
+                    "Quiesced project proof does not match held admission"
+                )
+            await self.coordination._check(session, lease, lock=False)
+            if await self._shutdown_blockers(session, lease.project_id):
+                raise CoordinationConflict(
+                    "Project acquired work while quiescing; retain its owner"
+                )
+            if checkpoint.get("paused_sha256") != await self._paused_inventory(
+                session, lease.project_id
+            ):
+                raise CoordinationConflict(
+                    "Previously paused work changed during quiescence"
+                )
+            await self.coordination._check(session, lease, lock=False)
+            owner = await session.get(ProjectOwnershipRow, lease.project_id)
+            owner.runtime_id, owner.lease_expires_at_ms = None, 0
+            await self._receipt(
+                session,
+                "project.quiesced",
+                {
+                    "project_id": lease.project_id,
+                    "runtime_id": lease.runtime_id,
+                    "fencing_token": lease.fencing_token,
+                },
+            )
+
+    async def abort_shutdown(
+        self,
+        *,
+        detail: str = "Shutdown is incomplete; retained work remains available.",
+    ) -> None:
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            host.shutdown_requested = False
+            host.revision += 1
+            host.detail = detail[:4000]
 
     async def begin_shutdown(self, *, expected_revision: int) -> list[str]:
         async with self.coordination._write() as session:
@@ -623,21 +838,17 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "reconcile pending worker startup before shutdown"
                 )
-            for model, predicate in (
-                (ProjectOwnershipRow, ProjectOwnershipRow.runtime_id.is_not(None)),
-                (RuntimeCommandRow, RuntimeCommandRow.state.in_(_UNFINISHED)),
-                (RuntimeResourceRow, RuntimeResourceRow.state != "closed"),
-                (
-                    RuntimeCapacityReservationRow,
-                    RuntimeCapacityReservationRow.state == "held",
-                ),
-            ):
-                if await session.scalar(
-                    select(func.count()).select_from(model).where(predicate)
-                ):
-                    raise CoordinationConflict(
-                        "Project work, unresolved effects or charged resources prevent shutdown"
-                    )
+            owner = await session.scalar(
+                select(ProjectOwnershipRow.project_id)
+                .where(ProjectOwnershipRow.runtime_id.is_not(None))
+                .limit(1)
+            )
+            blockers = await self._shutdown_blockers(session)
+            if owner is not None or blockers:
+                raise CoordinationConflict(
+                    "Project work, unresolved effects or charged resources prevent shutdown"
+                    + (": " + "; ".join(blockers[:10]) if blockers else "")
+                )
             host.shutdown_requested, host.api_runtime_id = True, None
             host.revision += 1
             host.detail = "Coordinated shutdown has fenced all new admissions."
@@ -937,6 +1148,11 @@ class DeploymentCoordinator:
                 observed.append(
                     f"{capacity} host capacity reservation(s) still require positive completion evidence"
                 )
+            admissions = await self._admitted_turns(session, lease.project_id)
+            if admissions:
+                observed.append(
+                    f"{len(admissions)} running provider admission(s) still require their current owner"
+                )
             if not row.admission_held and not pinned:
                 # The old runtime remained usable while pinned. Re-draining
                 # must include everything it admitted during that interval.
@@ -1048,7 +1264,13 @@ class DeploymentCoordinator:
                 )
                 .limit(1)
             )
-            if unfinished is not None or resources is not None or capacity is not None:
+            admissions = await self._admitted_turns(session, project_id)
+            if (
+                unfinished is not None
+                or resources is not None
+                or capacity is not None
+                or admissions
+            ):
                 raise CoordinationConflict(
                     "project changed after its transferable checkpoint"
                 )
@@ -1441,6 +1663,12 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "this incarnation does not own pending recovery"
                 )
+            if not await self._participants_supported(
+                session, lease.project_id, lease.runtime_id
+            ):
+                raise CoordinationConflict(
+                    "The recovery target cannot restore this project's durable participants"
+                )
             blockers = await self._recovery_blockers(
                 session, lease.project_id, lease.runtime_id
             )
@@ -1482,6 +1710,12 @@ class DeploymentCoordinator:
                 )
             if row.phase == "verified":
                 return
+            if not await self._participants_supported(
+                session, lease.project_id, lease.runtime_id
+            ):
+                raise CoordinationConflict(
+                    "The recovery target cannot restore this project's durable participants"
+                )
             if await self._recovery_blockers(
                 session, lease.project_id, lease.runtime_id
             ):

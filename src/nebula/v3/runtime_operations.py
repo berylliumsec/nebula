@@ -142,4 +142,19 @@ class DeploymentOperations:
             row = await session.get(DeploymentOperationRow, operation_id)
             if row is None or row.actor_id != actor_id:
                 raise CoordinationConflict("deployment operation is unavailable")
+        async with self.coordinator.coordination._write() as session:
+            await self.coordinator._host(session)
+            row = await session.get(
+                DeploymentOperationRow, operation_id, with_for_update=True
+            )
+            if row is None or row.actor_id != actor_id:
+                raise CoordinationConflict("deployment operation is unavailable")
+            if row.state == "running" and row.claim_owner != self.owner_id:
+                row.state = "uncertain"
+                row.updated_at_ms = await self.coordinator.coordination._clock_ms(
+                    session
+                )
+                row.result = {
+                    "detail": "The previous host did not confirm this operation. Read deployment status before reconciling it."
+                }
             return self._receipt(row)

@@ -2,7 +2,7 @@
 
 from sqlalchemy import select
 
-from .database import EntityRow, ProjectHandoffRow
+from .database import DeploymentHostRow, EntityRow, ProjectHandoffRow
 
 HANDOFF_FEATURE = "project.handoff/v1"
 PARTICIPANT_FEATURE = "project.participants/v1"
@@ -11,6 +11,9 @@ HANDOFF_WAIT = "Waiting for the project update; this response remains queued"
 
 async def turn_admission_allowed(session, turn):
     """Call inside the admission transaction holding the project ownership lock."""
+    host = await session.get(DeploymentHostRow, "host")
+    if host is not None and host.shutdown_requested:
+        return False
     handoff = await session.get(ProjectHandoffRow, turn.engagement_id)
     if handoff is None or not handoff.admission_held or handoff.phase == "verified":
         return True

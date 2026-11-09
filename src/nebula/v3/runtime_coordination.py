@@ -234,9 +234,6 @@ class RuntimeCoordination:
     ) -> int:
         # Admission and retirement share the process-row lock. A readiness
         # snapshot alone could admit an owner after shutdown saw an empty worker.
-        host = await session.get(DeploymentHostRow, "host")
-        if host is not None and host.shutdown_requested:
-            raise LeaseLost("the host has fenced new work for coordinated shutdown")
         process = await session.get(
             RuntimeProcessRow,
             runtime_id,
@@ -260,6 +257,16 @@ class RuntimeCoordination:
     async def claim_project(self, project_id: str, runtime_id: str) -> ProjectLease:
         _identifier(project_id, "project_id")
         async with self._write() as session:
+            host = await session.get(
+                DeploymentHostRow,
+                "host",
+                with_for_update={"read": True},
+                populate_existing=True,
+            )
+            if host is not None and host.shutdown_requested:
+                raise CoordinationConflict(
+                    "the host is draining for coordinated shutdown"
+                )
             await self._ensure_project(session, project_id)
             # UPDATE is a row lock on PostgreSQL and a writer lock on SQLite.
             # Read the clock after waiting for the lock, not before it.
@@ -378,7 +385,26 @@ class RuntimeCoordination:
                         "idempotency key already accepted with a different payload"
                     )
                 return _receipt(existing)
-            host = await session.get(DeploymentHostRow, "host")
+            await self._insert_absent(
+                session,
+                DeploymentHostRow,
+                {
+                    "key": "host",
+                    "revision": 0,
+                    "api_runtime_id": None,
+                    "target_version": None,
+                    "rollback_version": None,
+                    "shutdown_requested": False,
+                    "detail": "No runtime has been promoted.",
+                },
+                ["key"],
+            )
+            host = await session.get(
+                DeploymentHostRow,
+                "host",
+                with_for_update={"read": True},
+                populate_existing=True,
+            )
             if host is not None and host.shutdown_requested:
                 raise CoordinationConflict(
                     "the host is draining for coordinated shutdown"
@@ -434,11 +460,12 @@ class RuntimeCoordination:
             if lane not in {None, "work", "control"}:
                 raise ValueError("unknown command lane")
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            host = await session.get(DeploymentHostRow, "host")
             held = (
                 handoff is not None
                 and handoff.admission_held
                 and handoff.phase != "verified"
-            )
+            ) or (host is not None and host.shutdown_requested)
             # Control delivery has its own ordered lane. Stop, approvals and
             # input decisions cannot sit behind uncertain work or a handoff.
             selected_lane = "control" if held and lane is None else lane

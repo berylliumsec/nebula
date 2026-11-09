@@ -611,9 +611,34 @@ class RuntimeProcessHost:
                 raise CoordinationConflict(
                     "shutdown requires the active supervisor lock"
                 )
-            runtimes = await self.coordinator.begin_shutdown(
+            leases = await self.coordinator.prepare_shutdown(
                 expected_revision=expected_revision
             )
+        # A lost reply retains the durable admission hold. Explicit retries
+        # inspect the same worker grant instead of restarting its application.
+        for lease in leases:
+            client = await self.rpc(lease.runtime_id)
+            try:
+                status = await client.call("execution.quiesce/v1", {}, timeout=30)
+                if status.get("quiesce_blockers"):
+                    await self.coordinator.abort_shutdown(
+                        detail="Shutdown is blocked: "
+                        + "; ".join(status["quiesce_blockers"])
+                    )
+                    raise CoordinationConflict("; ".join(status["quiesce_blockers"]))
+                if (
+                    status.get("lease") != asdict(lease)
+                    or status.get("state") != "closed"
+                    or status.get("cleanup_complete") is not True
+                ):
+                    raise CoordinationConflict(
+                        "Idle project cleanup was not verified; retain its shutdown hold"
+                    )
+            finally:
+                await client.close()
+        async with self._launch:
+            revision = (await self.coordinator.status()).revision
+            runtimes = await self.coordinator.begin_shutdown(expected_revision=revision)
         stopped = []
         for runtime_id in runtimes:
             await self.retire(runtime_id)

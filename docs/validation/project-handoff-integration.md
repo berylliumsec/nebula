@@ -137,3 +137,27 @@ They retire only never-spawned or positively absent unowned workers, preserve
 owned dead workers, and retain a live worker whose control socket disappeared.
 Results: `/tmp/nebula-process-reconciliation.txt`. These fixtures do not replace
 the packaged, production LAN/mobile, or physical vendor-restoration rollout gates.
+
+## Coordinated idle shutdown
+
+`project.quiesce/v1` permits an already-used, idle project to stop without an
+operator Stop being substituted for pause. The host holds new command, provider
+and ownership admissions, while existing grants remain valid for controller
+cleanup. A worker verifies local handles and durable queues, goals, schedules,
+effects and charged capacity, then joins cleanup. Ownership releases only after
+the worker confirms cleanup and SQL rechecks both idleness and the fingerprint
+of prior paused work and disabled schedules. The project fencing counter stays
+monotonic for its next owner.
+
+Active work refuses shutdown. A signed preflight refusal leaves the worker ready
+and reopens admission so its blocker can be resolved; an unknown RPC outcome or
+unverified cleanup retains the hold and ownership. The final process-retirement
+step follows only after every project relinquishes its grant.
+
+Forty focused cases passed across SQLite/PostgreSQL for quiescence, shutdown
+admission, operation receipts and source boundaries. They include a previously
+used idle project, paused-state preservation, cleanup failure, local-handle
+refusal, a running provider admission missing its resource row, and concurrent
+command submission with or without an existing host row. An independently
+verified fixture repair removed an unsupported `ChatTurn.completed_at` argument.
+Raw output: `/tmp/nebula-shutdown-boundaries.txt`.

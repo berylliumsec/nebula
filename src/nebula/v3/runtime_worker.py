@@ -180,6 +180,7 @@ async def run_worker(
             "chat.resume/v1",
             "project.handoff/v1",
             "project.participants/v1",
+            "project.quiesce/v1",
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
