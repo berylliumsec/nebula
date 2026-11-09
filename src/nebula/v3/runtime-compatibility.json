@@ -1,6 +1,6 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "1843a81fde8b9e1bc999e8e5c6bc0166fc8807a1feb552f7b40b547b38d6def2",
+  "migration_tree_sha256": "323b469f0d39cde79bbe6f3cca53a53eb70fa20aa9f7b6b9255648a1c485d6b1",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,

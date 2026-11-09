@@ -122,6 +122,9 @@ class ProjectOwnershipRow(Base):
     __table_args__ = (Index("ix_project_ownership_runtime", "runtime_id"),)
 
     project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    admission_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     runtime_id: Mapped[str | None] = mapped_column(
         ForeignKey("runtime_instances.id"), nullable=True
     )

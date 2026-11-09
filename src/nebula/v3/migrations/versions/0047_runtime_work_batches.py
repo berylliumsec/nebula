@@ -10,6 +10,15 @@ depends_on = None
 
 
 def upgrade():
+    op.add_column(
+        "project_ownership",
+        sa.Column(
+            "admission_requested",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.true(),
+        ),
+    )
     op.create_table(
         "runtime_work_batch_projects",
         sa.Column(

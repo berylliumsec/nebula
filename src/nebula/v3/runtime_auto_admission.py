@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .database import (
     DeploymentHostRow,
     DeploymentReceiptRow,
     MemoryBudgetPolicyRow,
     ProjectOwnershipRow,
+    RuntimeCommandRow,
     RuntimeProcessRow,
 )
 from .diagnostics import record_caught_exception
@@ -92,7 +93,22 @@ class RuntimeAutoAdmission:
                         # A verified quiescence clears the owner while retaining
                         # its fencing history. Reopening may claim the next fence;
                         # expired or uncertain owners still have a runtime ID.
-                        .where(ProjectOwnershipRow.runtime_id.is_(None))
+                        .where(
+                            ProjectOwnershipRow.runtime_id.is_(None),
+                            or_(
+                                ProjectOwnershipRow.admission_requested.is_(True),
+                                select(RuntimeCommandRow.id)
+                                .where(
+                                    RuntimeCommandRow.project_id
+                                    == ProjectOwnershipRow.project_id,
+                                    RuntimeCommandRow.name != "work.batch.barrier/v1",
+                                    RuntimeCommandRow.state.in_(
+                                        ("queued", "running", "uncertain")
+                                    ),
+                                )
+                                .exists(),
+                            ),
+                        )
                         .limit(16)
                     )
                 )

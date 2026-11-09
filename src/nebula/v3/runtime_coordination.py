@@ -228,6 +228,13 @@ class RuntimeCoordination:
             },
             ["project_id"],
         )
+        # Ordinary routing/command admission is explicit demand. SQL-only batch
+        # participants can retain a counter without preparing an idle worker.
+        await session.execute(
+            update(ProjectOwnershipRow)
+            .where(ProjectOwnershipRow.project_id == project_id)
+            .values(admission_requested=True)
+        )
 
     async def _live_execution(
         self, session: AsyncSession, runtime_id: str, now: int

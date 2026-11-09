@@ -73,6 +73,7 @@ def create_api_worker(
     poll_interval: float = 0.25,
     allow_insecure_device_pairing: bool = False,
     global_api=None,
+    work_batches=None,
     dispose_database: bool = True,
 ) -> FastAPI:
     if (
@@ -125,6 +126,7 @@ def create_api_worker(
     app.state.runtime_delivery = delivery
     app.state.viewer_proxy = proxy
     app.state.store = store
+    app.state.work_batches = work_batches
     app.state.authentication_api = AuthenticationApi(
         app, store, auth, allow_insecure_pairing=allow_insecure_device_pairing
     )
@@ -384,6 +386,21 @@ def create_api_worker(
                 422, "The request cannot be represented as a bounded durable command"
             ) from None
         lane = command_lane(intent.path)
+        if (intent.method, intent.path) in {
+            ("POST", "/api/v1/work/import"),
+            ("PATCH", "/api/v1/work/projects"),
+        }:
+            if work_batches is None:
+                raise HTTPException(
+                    503,
+                    "Work batch coordination is unavailable. Update or reconnect Core; existing work continues.",
+                )
+            receipt = await work_batches.accept(
+                intent, actor_id=actor, idempotency_key=key
+            )
+            return await response_view(
+                actor, receipt.command_id, receipt=receipt, slots=work_slots
+            )
         # Only explicitly mounted SQL-global routes enter this path. Their
         # parameters can contain project references without changing ownership
         # (for example a guide ID equal to a project ID).
