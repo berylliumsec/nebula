@@ -290,3 +290,8 @@ protocol is rejected. Endpoint errors remain visible when a Core feature is unav
 On startup, remembered chats are resolved within their saved project. If a chat
 was removed, the shell offers selection again; choosing another chat or New
 conversation replaces the stale device-local selection without sending a message.
+
+The client assigns a fresh `Idempotency-Key` header to each mutation, including
+streamed submissions, so supervisor Core can record its identity. This does not
+automatically retry requests. Read saved state after an uncertain result before
+submitting another action. Read-only stream reattachment does not resubmit work.

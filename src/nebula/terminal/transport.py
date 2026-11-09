@@ -11,9 +11,10 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator, Generator, Iterator
 from urllib.parse import quote
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 import typer
@@ -151,6 +152,18 @@ def check_response(response: httpx.Response, *, pairing: bool = False) -> None:
     )
 
 
+class _MutationIdempotency(httpx.Auth):
+    """Give each dispatched mutation an identity without replaying it."""
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response, None]:
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            if "Idempotency-Key" not in request.headers:
+                request.headers["Idempotency-Key"] = str(uuid4())
+        yield request
+
+
 def connection_options(
     settings: Settings,
     *,
@@ -182,6 +195,7 @@ def connection_options(
         }
     return dict(
         base_url=core + "/api/v1/",
+        auth=_MutationIdempotency(),
         headers=headers,
         cookies=cookies,
         verify=verification,
