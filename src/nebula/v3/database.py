@@ -368,6 +368,55 @@ class DeploymentHostRow(Base):
     detail: Mapped[str] = mapped_column(String(4000), nullable=False)
 
 
+class RuntimeCoreIdentityRow(Base):
+    """Nonsecret installation identity, independent of credentials and workers."""
+
+    __tablename__ = "runtime_core_identity"
+    key: Mapped[str] = mapped_column(String(20), primary_key=True)
+    core_id: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeRecoveryRow(Base):
+    """Durable, idempotent recovery evidence for an exact ownership transition."""
+
+    __tablename__ = "runtime_recoveries"
+    __table_args__ = (Index("ix_runtime_recovery_project", "project_id"),)
+    operation_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_runtime_id: Mapped[str | None] = mapped_column(String(200))
+    source_fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_handoff_revision: Mapped[int | None] = mapped_column(Integer)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class DeploymentOperationRow(Base):
+    """Authenticated management intent and outcome retained across host restarts."""
+
+    __tablename__ = "deployment_operations"
+    __table_args__ = (
+        Index("ix_deployment_operation_actor", "actor_id", "updated_at_ms"),
+    )
+    operation_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    claim_owner: Mapped[str] = mapped_column(String(200), nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class ProjectHandoffRow(Base):
     __tablename__ = "project_handoffs"
     project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
