@@ -41,6 +41,7 @@ from .provider_settings import (
 from .providers import provider_from_profile
 from .runtime_delivery import HttpIntent, RuntimeDelivery
 from .runtime_host_delivery import HOST_EFFECT, HostEffectDelivery
+from .runtime_host_observations import HOST_OBSERVATION_ROUTES, HostObservations
 from .runtime_global_settings import is_global_settings_host_route
 from .runtime_vault import RuntimeVault
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -75,15 +76,22 @@ class _ReadIntent:
 
 
 def is_host_settings_route(method, path):
-    return is_global_settings_host_route(method, path) or (
-        (
-            method == "GET"
-            and path in {"/api/v1/desktop-browser-mode", "/api/v1/ssh-environments"}
+    return (
+        (method, path) in HOST_OBSERVATION_ROUTES
+        or is_global_settings_host_route(method, path)
+        or (
+            (
+                method == "GET"
+                and path in {"/api/v1/desktop-browser-mode", "/api/v1/ssh-environments"}
+            )
+            or (method == "GET" and path == "/api/v1/credentials/vault")
+            or (method == "POST" and path == "/api/v1/credentials")
+            or (
+                method == "GET"
+                and re.fullmatch(r"/api/v1/credentials/[^/]+/status", path)
+            )
+            or (method == "DELETE" and re.fullmatch(r"/api/v1/credentials/[^/]+", path))
         )
-        or (method == "GET" and path == "/api/v1/credentials/vault")
-        or (method == "POST" and path == "/api/v1/credentials")
-        or (method == "GET" and re.fullmatch(r"/api/v1/credentials/[^/]+/status", path))
-        or (method == "DELETE" and re.fullmatch(r"/api/v1/credentials/[^/]+", path))
     )
 
 
@@ -111,10 +119,13 @@ class HostSettings:
         self.actor = ContextVar("host_settings_actor", default="")
         self.effect = None
         self.read_slots = asyncio.Semaphore(8)
+        self.observations = HostObservations(self)
         self.app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
         self._routes()
+        self.observations.mount(self.app, self._authorized)
 
     async def start(self):
+        await self.observations.start()
         if self.effect is None:
             delivery = RuntimeDelivery(
                 self.host.coordinator.coordination,
@@ -126,6 +137,7 @@ class HostSettings:
     async def close(self):
         if self.effect is not None:
             await self.effect.close()
+        await self.observations.close()
         await self.store.event_history.close()
 
     async def __call__(self, scope, receive, send):
@@ -381,6 +393,30 @@ class HostSettings:
         return health.model_copy(update={"provider_revision": stored.revision})
 
     def mount(self, app, authentication, proxy):
+        async def observe(intent, actor):
+            if self.read_slots.locked():
+                raise HTTPException(429, "Host Settings reads are busy; retry shortly")
+            try:
+                async with self.read_slots, asyncio.timeout(30):
+                    status, headers, body = await self.effect._response(intent, actor)
+            except TimeoutError:
+                raise HTTPException(
+                    503, "Host Settings read timed out; retry shortly"
+                ) from None
+            response = Response(body, status_code=status)
+            response.raw_headers = [
+                (name.lower().encode("latin-1"), value.encode("latin-1"))
+                for name, value in headers
+                if name.lower()
+                not in {
+                    "content-length",
+                    "transfer-encoding",
+                    "connection",
+                    "cache-control",
+                }
+            ] + [(b"cache-control", b"private, no-store")]
+            return response
+
         def intent_for(request, body=b""):
             try:
                 if request.method == "GET":
@@ -411,30 +447,10 @@ class HostSettings:
             if not is_host_settings_route(request.method, request.url.path):
                 return _Forward(proxy)
             if request.method == "GET":
-                if self.read_slots.locked():
-                    raise HTTPException(
-                        429, "Host Settings reads are busy; retry shortly"
-                    )
-                intent = intent_for(request)
-                try:
-                    async with self.read_slots, asyncio.timeout(30):
-                        status, headers, body = await self.effect._response(
-                            intent, actor
-                        )
-                except TimeoutError:
-                    raise HTTPException(
-                        503, "Host Settings read timed out; retry shortly"
-                    ) from None
-                response = Response(body, status_code=status)
-                response.raw_headers = [
-                    (name.lower().encode("latin-1"), value.encode("latin-1"))
-                    for name, value in headers
-                    if name.lower()
-                    not in {"content-length", "transfer-encoding", "connection"}
-                ]
-                return response
+                return await observe(intent_for(request), actor)
+            telemetry = request.url.path == "/api/v1/diagnostics/events"
             key = request.headers.get("Idempotency-Key", "")
-            if re.fullmatch(r"[!-~]{1,200}", key) is None:
+            if not telemetry and re.fullmatch(r"[!-~]{1,200}", key) is None:
                 raise HTTPException(
                     428,
                     "A client-generated Idempotency-Key is required for this mutation",
@@ -445,6 +461,8 @@ class HostSettings:
                     raise HTTPException(413, "Host Settings request exceeds 128 KiB")
                 body.extend(chunk)
             intent = intent_for(request, bytes(body))
+            if telemetry:
+                return await observe(intent, actor)
             receipt = await self.effect.execute(
                 intent, actor_id=actor, idempotency_key=key
             )
@@ -463,6 +481,8 @@ class HostSettings:
             ("/api/v1/credentials/{path:path}", ["GET", "DELETE"]),
         ):
             app.add_api_route(path, request, methods=methods)
+        for method, path in sorted(HOST_OBSERVATION_ROUTES):
+            app.add_api_route(path, request, methods=[method])
 
         async def owned(command_id, actor):
             from .database import RuntimeCommandRow

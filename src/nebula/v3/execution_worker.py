@@ -48,6 +48,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
     from .runtime_memory_control import RemoteMemorySettings
     from .runtime_host_credentials import RemoteSessionCredentials
+    from .runtime_host_pressure import RemoteHostLoadGate
     from .runtime_browser_bridge import RemoteBrowserBridge
     from .storage import NebulaStore
 
@@ -123,6 +124,9 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             else None,
             provider_session_resolver=RemoteSessionCredentials(client).resolve
             if services.get("provider_credentials") is True
+            else None,
+            host_load_gate=RemoteHostLoadGate(client)
+            if services.get("host_pressure") is True
             else None,
         )
         if services.get("browser_bridge") is True:

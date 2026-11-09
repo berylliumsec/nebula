@@ -93,6 +93,7 @@ class RuntimeSupervisor:
         shared_services: HostSharedServices | None = None,
         recovery_version: str | None = None,
         allow_insecure_device_pairing: bool = False,
+        allow_browser_diagnostics: bool = False,
         shutdown_requested: Callable[[], Awaitable[None]] | None = None,
     ):
         if not operator_token:
@@ -108,6 +109,9 @@ class RuntimeSupervisor:
             raise ValueError("Shared services must use this supervisor's process host")
         self.store = NebulaStore(self.coordinator.database)
         self.shared_services.configure_memory_control(operator_token)
+        self.shared_services.host_settings.observations.allow_browser_diagnostics = (
+            allow_browser_diagnostics
+        )
         self.retained = ReleaseStore(retained_root or host.root / "releases")
         self.worker_admission = worker_admission
         if isinstance(worker_admission, RuntimeMemoryAdmission):

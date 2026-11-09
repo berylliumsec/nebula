@@ -25,6 +25,7 @@ from .runtime_memory_control import HostMemoryControl
 from .runtime_browser_bridge import HostBrowserBridge
 from .runtime_host_settings import HostSettings
 from .runtime_host_credentials import register_session_credentials
+from .runtime_host_pressure import register_host_pressure
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
@@ -150,6 +151,7 @@ class HostSharedServices:
                             "memory_control": self.memory_control is not None,
                             "browser_bridge": True,
                             "provider_credentials": True,
+                            "host_pressure": True,
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
                         }
@@ -164,6 +166,12 @@ class HostSharedServices:
                         runtime_id,
                         self.coordination,
                         self.host_settings.credentials,
+                    )
+                    register_host_pressure(
+                        rpc,
+                        runtime_id,
+                        self.coordination,
+                        self.host_settings.observations.gate,
                     )
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)

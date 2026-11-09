@@ -139,6 +139,7 @@ async def test_shared_service_capabilities_require_a_valid_private_peer(shared):
         "memory_control": True,
         "browser_bridge": True,
         "provider_credentials": True,
+        "host_pressure": True,
         "knowledge": False,
         "product_guidance": {"state": "unavailable"},
     }
