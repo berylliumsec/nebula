@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"memory-budgets","patterns":["ui/src/components/MemoryBudgetSettings*","ui/src/api/memoryBudgets.ts","src/nebula/v3/memory*.py","tests/v3/memory_budget_fixture.py","ui/tests/memory-budgets.spec.ts","ui/playwright.memory-budgets.config.ts"],"areas":["memory-budgets"]},
     {"name": "conversation-order", "patterns": ["ui/src/pages/conversationSidebar*", "ui/tests/conversation-order.spec.ts", "ui/playwright.conversation-order.config.ts", "tests/v3/conversation_order_fixture.py"], "areas": ["conversation-order"]},
     {"name":"universal-agents","patterns":["src/nebula/v3/harness_core_tools.py","src/nebula/v3/harness_hooks.py","ui/src/pages/chatSubagentChoice.ts","tests/v3/universal_agent_fixture.py"],"areas":["universal-agents"]},
     {"name": "first-user", "patterns": ["ui/src/components/PairingGate.tsx", "ui/src/components/ChatAttachments.tsx", "ui/src/components/Provider*", "ui/src/components/SideNav.tsx", "ui/src/calm-responsive.css"], "areas": ["first-user"]},
@@ -116,6 +117,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "memory-budgets": [
+      {"area":"memory-budgets","project":"model-desktop","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-compact","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-chromium-320","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-webkit-320","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-chromium-390","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-webkit-390","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-chromium-430","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"memory-budgets","project":"model-webkit-430","test_match":"tests/memory-budgets.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
     "conversation-order": [{"area": "conversation-order", "project": "model-desktop", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-compact", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-chromium-320", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-webkit-320", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-chromium-390", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-webkit-390", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-chromium-430", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-webkit-430", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}],
     "release-live-acceptance": [
       {"area": "release-live-acceptance", "project": "desktop", "test_match": "tests/release-live.spec.ts", "runtime": "real-core", "shard": "1/1"},

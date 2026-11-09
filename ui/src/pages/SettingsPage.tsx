@@ -22,6 +22,7 @@ import { ButlerInstructionsSettings } from "../components/ButlerInstructionsSett
 import { ButlerCheckIntervalSettings } from "../components/ButlerCheckIntervalSettings";
 import {HostPressureSettings} from "../components/HostPressureSettings";
 import { HostCpuBudgetSettings } from "../components/HostCpuBudgetSettings";
+import { MemoryBudgetSettings } from "../components/MemoryBudgetSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
@@ -70,7 +71,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
   if (["usage-settings", "runtime-usage"].includes(hash)) return "usage-settings";
-  if (["automation-settings", "butler-check-interval-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
+  if (["automation-settings", "memory-budget-settings", "butler-check-interval-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
   if (["integrations-settings", "storage-integration-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
@@ -898,6 +899,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
+      <MemoryBudgetSettings api={api} previewMode={previewMode} />
       </SettingsGroup>
       <SettingsGroup id="environments-settings" title="Environments" summary="SSH hosts from ~/.ssh/config" open={openAdvancedGroup === "environments-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "environments-settings"}>
       <EnvironmentSettings />

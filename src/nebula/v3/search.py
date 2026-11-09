@@ -323,6 +323,8 @@ async def _write_search_document(
 ) -> None:
     """An older repair cannot insert over a newer edit or resurrect a deleted row."""
 
+    from .projection_write import SearchProjectionWrite
+
     dialect = session.get_bind().dialect.name
     insert = postgresql_insert if dialect == "postgresql" else sqlite_insert
     fields = {"id": document_id, **values}
@@ -341,6 +343,10 @@ async def _write_search_document(
                 index_elements=[SearchDocumentRow.id],
                 set_={key: getattr(statement.excluded, key) for key in values},
                 where=SearchDocumentRow.revision <= statement.excluded.revision,
+            ).execution_options(
+                nebula_projection_write=SearchProjectionWrite(
+                    row.id, row.revision, document_id, tuple(values.items())
+                )
             )
         )
     )
@@ -545,7 +551,12 @@ class FederatedSearch:
         async with self.store.database.session(bulk=True) as session:
             # Ranking needs these scalar projection fields, not 2,000 ORM
             # identities per request. Keep the same candidate bound and order.
-            statement = select(SearchDocumentRow.__table__)
+            statement = select(
+                *(
+                    getattr(SearchDocumentRow, column.key)
+                    for column in SearchDocumentRow.__table__.columns
+                )
+            )
             if exclude_private_chats:
                 visible_chats = select(EntityRow.id).where(
                     EntityRow.kind == "chat_sessions",

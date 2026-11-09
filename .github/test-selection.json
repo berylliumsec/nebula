@@ -1,19 +1,31 @@
 {
-  "change_digest": "a6075455dc9419b405fa34eb4c8265474ef8730341adc815390baa2611ccd993",
-  "reviewed_by": "Codex; independent runtime foundation review",
-  "reason": "First additive storage change in the non-disruptive deployment sequence: independent SQL connections contend for ownership, reject stale/expired writes, deduplicate submissions, preserve command order and uncertain outcomes, and replay retained stream batches. The existing async database cases cover bootstrap, rollback, cancellation and bounded pool behavior around the new migration. The inherited diagnostic-audit blocker is repaired by restoring an expected-parser-failure comment only; no metric behavior changed and no additional tests are needed for that comment.",
-  "exclusions": "No public API, execution lifecycle, UI, desktop, provider or harness integration changes. Frontend, native, Playwright and production-LAN journeys are not applicable to this internal foundation and remain required for the later integration changes. These tests do not establish non-disruptive deployment continuity. No full suites.",
+  "change_digest": "451ae2cf6aa827c5be0e7d1e6c958e531ff0587d63d04287a03922c0f83ac634",
+  "reviewed_by": "Codex",
+  "reason": "19 collected Python cases: four normal-cleanup authority regressions after independently validated fixture repair; two charged-job visibility/order regressions across SQLite/PostgreSQL; ten authenticated API/Butler cases; three regenerated product-index/Chroma cases. Five collected Settings component cases include bounded-page notice. Five production LAN memory journeys validate the changed display/API metadata. Earlier28/32 OCI and recovery results remain recorded; no unrelated coverage is repeated. Final evidence-only report changes reviewed; no execution behavior changed after these passing checks.",
+  "exclusions": "No full suite, existing installation, live provider/SSH service or deployment. The prior32-case substep passed28 including all actual kernel jobs; its only four failures were missing workspace in a nonexecuting test fixture, now repaired. Mobile WebKit download403 and packaged desktop gates remain unavailable. Unsupported/uncertain runners stay held; no uncontrolled fallback.",
   "expected_tests": {
-    "python": 61,
-    "frontend": 0,
+    "python": 19,
+    "frontend": 5,
     "native": 0,
-    "playwright": 0
+    "playwright": 5
   },
   "python": [
-    "tests/v3/test_runtime_coordination.py",
-    "tests/v3/test_async_database.py"
+    "tests/v3/test_memory_recovery.py::test_normal_cleanup_does_not_free_capacity_on_a_replacement_daemon",
+    "tests/v3/test_memory_budget.py::test_older_running_job_stays_visible_ahead_of_finished_history_and_queue",
+    "tests/v3/test_memory_api.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_enforced_memory_budgets_and_butler_actions",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/MemoryBudgetSettings.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:memory-budgets/model-desktop",
+    "entry:memory-budgets/model-compact",
+    "entry:memory-budgets/model-chromium-320",
+    "entry:memory-budgets/model-chromium-390",
+    "entry:memory-budgets/model-chromium-430"
+  ]
 }

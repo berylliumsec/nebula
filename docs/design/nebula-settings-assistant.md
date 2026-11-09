@@ -1,5 +1,16 @@
 # Nebula assistant contract
 
+Memory budgets are a host-wide Settings destination (`memory-budgets`, target
+`memory-budget-settings`). Butler discovers typed `nebula.settings.memory_budget`,
+`memory_usage`, `set_memory_budget`, `verify_memory_job` and `apply_memory_limit`
+actions. Read before changing, retain unrelated policy fields, use fresh
+revisions, and verify the authenticated Core read-back. State whether a policy
+is saved for new jobs, a worker's limits are verified, or application is pending,
+failed or unsupported. Lowering running limits requires an explicit impact
+acknowledgement; a memory failure never authorizes automatic retry, a larger
+budget or goal resume. See [Compute memory budgets](../MEMORY_BUDGETS.md) for
+precedence, units, scope and runner dependencies.
+
 Entry: the persistent assistant icon in the shared shell opens one movable,
 hideable control conversation. Closing the window preserves its Core transcript.
 The operator may open Settings from a catalog result without losing the draft.

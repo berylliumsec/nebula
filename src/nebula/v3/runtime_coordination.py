@@ -31,6 +31,8 @@ from .database import (
     RunEventRow,
     RuntimeCommandRow,
     RuntimeInstanceRow,
+    ProjectHandoffRow,
+    RuntimeProcessRow,
 )
 from .domain import utc_now
 
@@ -228,7 +230,18 @@ class RuntimeCoordination:
 
     async def _live_execution(
         self, session: AsyncSession, runtime_id: str, now: int
-    ) -> None:
+    ) -> int:
+        # Admission and retirement share the process-row lock. A readiness
+        # snapshot alone could admit an owner after shutdown saw an empty worker.
+        process = await session.get(
+            RuntimeProcessRow,
+            runtime_id,
+            with_for_update={"read": True},
+            populate_existing=True,
+        )
+        if process is not None and process.state != "ready":
+            raise LeaseLost("execution process is not admitting authoritative work")
+        now = await self._clock_ms(session)
         found = await session.scalar(
             select(RuntimeInstanceRow.id).where(
                 RuntimeInstanceRow.id == runtime_id,
@@ -238,6 +251,7 @@ class RuntimeCoordination:
         )
         if found is None:
             raise LeaseLost("a live execution runtime is required")
+        return now
 
     async def claim_project(self, project_id: str, runtime_id: str) -> ProjectLease:
         _identifier(project_id, "project_id")
@@ -253,7 +267,7 @@ class RuntimeCoordination:
                 .values(command_sequence=ProjectOwnershipRow.command_sequence)
             )
             now = await self._clock_ms(session)
-            await self._live_execution(session, runtime_id, now)
+            now = await self._live_execution(session, runtime_id, now)
             token = await session.scalar(
                 update(ProjectOwnershipRow)
                 .where(
@@ -286,7 +300,7 @@ class RuntimeCoordination:
                 .values(command_sequence=ProjectOwnershipRow.command_sequence)
             )
         now = await self._clock_ms(session)
-        await self._live_execution(session, lease.runtime_id, now)
+        now = await self._live_execution(session, lease.runtime_id, now)
         found = await session.scalar(
             select(ProjectOwnershipRow.project_id).where(
                 ProjectOwnershipRow.project_id == lease.project_id,
@@ -316,6 +330,7 @@ class RuntimeCoordination:
         name: str,
         payload: dict[str, Any],
         expected_revision: int | None = None,
+        lane: Literal["work", "control"] = "work",
     ) -> CommandReceipt:
         for label, value in (
             ("project_id", project_id),
@@ -324,6 +339,8 @@ class RuntimeCoordination:
         ):
             _identifier(value, label)
         _identifier(name, "name", 100)
+        if lane not in {"work", "control"}:
+            raise ValueError("unknown command lane")
         if expected_revision is not None and (
             type(expected_revision) is not int or expected_revision < 1
         ):
@@ -348,7 +365,7 @@ class RuntimeCoordination:
                 )
             )
             if existing is not None:
-                if existing.payload_hash != digest:
+                if existing.payload_hash != digest or existing.lane != lane:
                     raise CoordinationConflict(
                         "idempotency key already accepted with a different payload"
                     )
@@ -372,6 +389,7 @@ class RuntimeCoordination:
                     "idempotency_key": idempotency_key,
                     "sequence": sequence,
                     "name": name,
+                    "lane": lane,
                     "payload": json.loads(_json(payload)),
                     "payload_hash": digest,
                     "expected_revision": expected_revision,
@@ -390,19 +408,39 @@ class RuntimeCoordination:
                 )
             )
             assert row is not None
-            if row.payload_hash != digest:
+            if row.payload_hash != digest or row.lane != lane:
                 raise CoordinationConflict(
                     "idempotency key already accepted with a different payload"
                 )
             return _receipt(row)
 
-    async def claim_next(self, lease: ProjectLease) -> ClaimedCommand | None:
+    async def claim_next(
+        self, lease: ProjectLease, *, lane: Literal["work", "control"] | None = None
+    ) -> ClaimedCommand | None:
         async with self.fenced(lease) as session:
+            if lane not in {None, "work", "control"}:
+                raise ValueError("unknown command lane")
+            handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            held = (
+                handoff is not None
+                and handoff.admission_held
+                and handoff.phase != "verified"
+            )
+            # Control delivery has its own ordered lane. Stop, approvals and
+            # input decisions cannot sit behind uncertain work or a handoff.
+            selected_lane = "control" if held and lane is None else lane
+            if held and selected_lane == "work":
+                return None
             row = await session.scalar(
                 select(RuntimeCommandRow)
                 .where(
                     RuntimeCommandRow.project_id == lease.project_id,
                     RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+                    *(
+                        [RuntimeCommandRow.lane == selected_lane]
+                        if selected_lane is not None
+                        else []
+                    ),
                 )
                 .order_by(RuntimeCommandRow.sequence)
                 .limit(1)
@@ -460,6 +498,17 @@ class RuntimeCoordination:
                 raise CoordinationConflict("command is not running under this owner")
             if apply is not None:
                 await apply(session)
+            lane = await session.scalar(
+                select(RuntimeCommandRow.lane).where(RuntimeCommandRow.id == command_id)
+            )
+            if lane == "control":
+                handoff = await session.get(ProjectHandoffRow, lease.project_id)
+                if handoff is not None and handoff.phase == "transferable":
+                    handoff.phase, handoff.admission_held = "finishing", True
+                    handoff.blockers = [
+                        "A control changed project state; verify a new safe boundary"
+                    ]
+                    handoff.revision += 1
 
     async def append_stream_batch(
         self,

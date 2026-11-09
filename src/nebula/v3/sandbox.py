@@ -25,7 +25,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Any, Awaitable, Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -33,6 +33,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .domain import utc_now
 from .kali_tool_inventory import MANIFEST_SCHEMA, TOOL_NAME_PATTERN
+
+if TYPE_CHECKING:
+    from .memory_runtime import MemoryComputeController
+    from .memory_guard import MemoryLaunchGuard
+    from .memory_policy import MemoryTerminationReason
 
 
 LOGGER = logging.getLogger(__name__)
@@ -255,6 +260,7 @@ class SandboxWorkspaceAccess(str, Enum):
 class SandboxLimits(BaseModel):
     cpu_count: float = Field(default=1.0, gt=0, le=64)
     memory_mb: int = Field(default=512, ge=32, le=131_072)
+    memory_swap_mb: int = Field(default=0, ge=0, le=131_072)
     pids: int = Field(default=128, ge=1, le=32_768)
     timeout_seconds: int = Field(default=300, ge=1, le=86_400)
     output_bytes: int = Field(default=2_000_000, ge=1, le=100_000_000)
@@ -474,6 +480,9 @@ class SandboxResult(BaseModel):
     stderr_truncated: bool = False
     observed_stdout_bytes: int = Field(default=0, ge=0)
     observed_stderr_bytes: int = Field(default=0, ge=0)
+    memory_job_id: str | None = None
+    memory_outcome: str | None = None
+    memory_enforcement: dict[str, Any] | None = None
 
 
 class EgressLease(ABC):
@@ -782,6 +791,7 @@ class ContainerEgressController(EgressController):
             "--user=0:0",
             "--pids-limit=16",
             "--memory=64m",
+            "--memory-swap=64m",
             "--cpus=0.1",
             f"--entrypoint={self.helper_executable}",
         ]
@@ -867,6 +877,7 @@ class ContainerEgressController(EgressController):
             "--user=0:0",
             "--pids-limit=32",
             "--memory=64m",
+            "--memory-swap=64m",
             "--cpus=0.25",
             "--tmpfs=/run:rw,noexec,nosuid,nodev,size=4m",
             f"--entrypoint={self.helper_executable}",
@@ -1302,6 +1313,8 @@ class ContainerSandboxRunner(SandboxRunner):
         allow_unpinned_images: bool = False,
         allowed_environment: set[str] | None = None,
         workspace_roots: list[Path] | None = None,
+        memory_compute: MemoryComputeController | None = None,
+        memory_profile_id: str | None = None,
     ) -> None:
         if profile is not None and runtime is not None:
             raise ValueError("configure either profile or runtime, not both")
@@ -1315,6 +1328,8 @@ class ContainerSandboxRunner(SandboxRunner):
             RunnerProfile.from_runtime(resolved_runtime) if resolved_runtime else None
         )
         self.runtime = str(self.profile.executable) if self.profile else None
+        self.memory_compute = memory_compute
+        self.memory_profile_id = memory_profile_id
         self.rootless_required = True
         # Compatibility-only validation for old SandboxRequest.network_name
         # callers. This set never authorizes run(); only egress_controller does.
@@ -1812,6 +1827,7 @@ class ContainerSandboxRunner(SandboxRunner):
             "--security-opt=no-new-privileges",
             f"--cpus={limits.cpu_count}",
             f"--memory={limits.memory_mb}m",
+            f"--memory-swap={limits.memory_mb + limits.memory_swap_mb}m",
             f"--pids-limit={limits.pids}",
             f"--user={container_user}",
             "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m",
@@ -1909,6 +1925,25 @@ class ContainerSandboxRunner(SandboxRunner):
         vpn_config: str | None = None,
     ) -> SandboxTerminalProcess:
         """Launch one fixed-command container with an interactive PTY."""
+
+        if self.memory_compute is not None:
+            from .memory_runtime import ComputeContext, compute_context
+            from .memory_policy import MemoryEnforcementUnavailable
+
+            context = compute_context.get() or ComputeContext(
+                None, "interactive_terminal", container_name
+            )
+            try:
+                await self.memory_compute.reject_unsupported(
+                    "container",
+                    project_id=context.project_id,
+                    resource_kind=context.resource_kind,
+                    resource_id=context.resource_id,
+                    detail="Interactive terminals require a memory-managed PTY adapter. Use managed code or command jobs until that adapter is available; no terminal is launched without aggregate accounting and verified limits.",
+                )
+            except MemoryEnforcementUnavailable as error:
+                # diagnostic-expected: the terminal owner persists this held-path failure.
+                raise SandboxUnavailable(str(error)) from error
 
         healthy, detail = await self.available()
         if not healthy:
@@ -2073,7 +2108,33 @@ class ContainerSandboxRunner(SandboxRunner):
         input_bytes: bytes = b"",
         on_chunk: Callable[[str, bytes], Awaitable[None]] | None = None,
         container_name: str | None = None,
+        memory_guard: MemoryLaunchGuard | None = None,
+        persistent: bool = False,
+        loopback_only: bool = False,
+        vpn_config: str | None = None,
     ) -> SandboxResult:
+        if (persistent or loopback_only) and memory_guard is None:
+            raise SandboxUnavailable(
+                "persistent compute requires the managed memory admission path"
+            )
+        if self.memory_compute is not None and memory_guard is None:
+            from .memory_runtime import ComputeContext, compute_context
+
+            context = compute_context.get() or ComputeContext(
+                None, "container", container_name or uuid4().hex
+            )
+            return await self.memory_compute.run_sandbox(
+                self,
+                request,
+                job_id=context.job_id or "compute-" + uuid4().hex,
+                project_id=context.project_id,
+                resource_kind=context.resource_kind,
+                resource_id=context.resource_id,
+                profile_id=self.memory_profile_id,
+                input_bytes=input_bytes,
+                on_chunk=on_chunk,
+                container_name=container_name,
+            )
         healthy, detail = await self.available()
         if not healthy:
             raise SandboxUnavailable(detail)
@@ -2093,8 +2154,9 @@ class ContainerSandboxRunner(SandboxRunner):
         stdout_task: asyncio.Task[tuple[bytes, bool, int]] | None = None
         stderr_task: asyncio.Task[tuple[bytes, bool, int]] | None = None
         timed_out = False
+        memory_reason: MemoryTerminationReason = "launch_failed"
         try:
-            if request.network == SandboxNetwork.SCOPED:
+            if request.network in {SandboxNetwork.SCOPED, SandboxNetwork.VPN}:
                 if not request.egress_rules and not request.egress_domains:
                     raise SandboxUnavailable(
                         "network tool execution requires an explicit broker-approved boundary"
@@ -2111,14 +2173,31 @@ class ContainerSandboxRunner(SandboxRunner):
                     seccomp_profile=self.profile.seccomp_profile
                     if self.profile
                     else None,
+                    vpn_config=vpn_config,
                 )
+            if loopback_only:
+                lease = await ContainerEgressController(
+                    helper_image=request.image
+                ).acquire_loopback(
+                    runtime_argv=self._runtime_argv(),
+                    runtime_environment=_runtime_environment(),
+                    container_name=selected_name,
+                    seccomp_profile=self.profile.seccomp_profile
+                    if self.profile
+                    else None,
+                )
+            if memory_guard is not None:
+                memory_guard.egress_lease = lease
             argv = self._argv(
                 request,
                 workspace,
                 container_name=selected_name,
                 network_mode=lease.network_mode if lease else None,
-                interactive=bool(input_bytes),
+                interactive=bool(input_bytes) or memory_guard is not None,
             )
+            if memory_guard is not None:
+                argv = memory_guard.wrap_argv(argv, request, selected_name)
+                argv = await memory_guard.prepare(self, argv, selected_name)
             started_at = utc_now()
             started = monotonic()
             try:
@@ -2126,7 +2205,7 @@ class ContainerSandboxRunner(SandboxRunner):
                     *argv,
                     stdin=(
                         asyncio.subprocess.PIPE
-                        if input_bytes
+                        if input_bytes or memory_guard is not None
                         else asyncio.subprocess.DEVNULL
                     ),
                     stdout=asyncio.subprocess.PIPE,
@@ -2147,6 +2226,12 @@ class ContainerSandboxRunner(SandboxRunner):
 
             assert process.stdout is not None
             assert process.stderr is not None
+            if memory_guard is not None:
+                await memory_guard.release(process, selected_name)
+                memory_reason = "failed"
+                if not input_bytes:
+                    assert process.stdin is not None
+                    process.stdin.close()
             if input_bytes:
                 assert process.stdin is not None
                 try:
@@ -2195,9 +2280,12 @@ class ContainerSandboxRunner(SandboxRunner):
                 )
             )
             try:
-                await asyncio.wait_for(
-                    process.wait(), timeout=request.limits.timeout_seconds
-                )
+                if persistent:
+                    await process.wait()
+                else:
+                    await asyncio.wait_for(
+                        process.wait(), timeout=request.limits.timeout_seconds
+                    )
             except asyncio.TimeoutError as caught_error:
                 record_caught_exception(
                     "sandbox",
@@ -2209,7 +2297,8 @@ class ContainerSandboxRunner(SandboxRunner):
                 timed_out = True
                 process.kill()
                 await process.wait()
-                await self._force_remove(selected_name)
+                if memory_guard is None:
+                    await self._force_remove(selected_name)
             stream_results = await asyncio.gather(
                 stdout_task, stderr_task, return_exceptions=True
             )
@@ -2221,6 +2310,9 @@ class ContainerSandboxRunner(SandboxRunner):
             )
             stderr, stderr_truncated, observed_stderr = cast(
                 tuple[bytes, bool, int], stream_results[1]
+            )
+            memory_reason = (
+                "completed" if process.returncode == 0 and not timed_out else "failed"
             )
             return SandboxResult(
                 command=request.command,
@@ -2250,11 +2342,26 @@ class ContainerSandboxRunner(SandboxRunner):
                 caught_error,
                 stage="sandbox",
             )
+            memory_reason = "cancelled"
             if process is not None:
                 if process.returncode is None:
                     process.kill()
                 await process.wait()
-                await self._force_remove(selected_name)
+                if memory_guard is None:
+                    await self._force_remove(selected_name)
+            readers = [task for task in (stdout_task, stderr_task) if task is not None]
+            for reader in readers:
+                reader.cancel()
+            if readers:
+                await asyncio.gather(*readers, return_exceptions=True)
+            raise
+        except Exception:
+            # diagnostic-expected: a rejected admission barrier must reap its
+            # local startup client before inspecting/removing the owned group.
+            if process is not None:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
             readers = [task for task in (stdout_task, stderr_task) if task is not None]
             for reader in readers:
                 reader.cancel()
@@ -2262,8 +2369,38 @@ class ContainerSandboxRunner(SandboxRunner):
                 await asyncio.gather(*readers, return_exceptions=True)
             raise
         finally:
-            if lease is not None:
-                await lease.close()
+            lease_closed = False
+
+            async def close_helpers():
+                nonlocal lease_closed
+                if lease is not None:
+                    await lease.close()
+                if (
+                    memory_guard is not None
+                    and memory_guard.policy.runner_overhead_bytes
+                ):
+                    helpers = memory_guard.auxiliary_group_ids or [
+                        selected_name + "-egress"
+                    ]
+                    for helper in helpers:
+                        await self._force_remove(helper, require_removed=True)
+                lease_closed = True
+
+            try:
+                if memory_guard is not None:
+                    from .async_utils import finish_cleanup
+
+                    await finish_cleanup(
+                        memory_guard.finalize(
+                            self,
+                            selected_name,
+                            memory_reason,
+                            before_release=close_helpers,
+                        )
+                    )
+            finally:
+                if lease is not None and not lease_closed:
+                    await lease.close()
 
     async def _force_remove(
         self, container_name: str, *, require_removed: bool = False
@@ -2308,14 +2445,17 @@ class ContainerSandboxRunner(SandboxRunner):
         if not require_removed:
             return
         try:
-            names, _stderr, return_code = await self._capture(
-                "ps", "--all", "--format", "{{.Names}}"
+            output, error, return_code = await self._capture(
+                "inspect", container_name, "--format", "{{.Id}}"
             )
         except (OSError, asyncio.TimeoutError, SandboxError) as exc:
             raise SandboxUnavailable(
                 "terminal container removal could not be verified"
             ) from exc
-        if return_code != 0 or container_name in names.splitlines():
+        if return_code == 0 or not any(
+            message in (output + error).lower()
+            for message in ("no such", "no container with name or id")
+        ):
             raise SandboxUnavailable(
                 "terminal container remains after removal was requested"
             ) from cleanup_error

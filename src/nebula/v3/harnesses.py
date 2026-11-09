@@ -8818,6 +8818,12 @@ class HarnessRuntimeService:
         self.artifact_store = artifact_store or ArtifactStore(
             Path(tempfile.mkdtemp(prefix="nebula-harness-artifacts-"))
         )
+        from .memory_budget import MemoryBudgetService
+        from .memory_runtime import MemoryComputeController
+
+        self.memory_compute = MemoryComputeController(
+            MemoryBudgetService(store.database), self.artifact_store.root
+        )
         self.mcp_service = McpProbeService(
             store,
             credential_store=credential_store,
@@ -9545,7 +9551,7 @@ class HarnessRuntimeService:
                     permission_handler=deny_permission,
                 )
                 adapter = self.adapter_factory(profile.kind)
-                connection = await adapter.open(request)
+                connection = await self._open_memory_managed(adapter, request)
                 session_state = "verified"
                 completed = False
                 reply = ""
@@ -9588,7 +9594,9 @@ class HarnessRuntimeService:
                         credential_store=self.credential_store,
                         permission_handler=deny_permission,
                     )
-                    connection = await adapter.open(resume_request)
+                    connection = await self._open_memory_managed(
+                        adapter, resume_request
+                    )
                     if connection.external_session_id != resumed.external_session_id:
                         raise HarnessTransportError(
                             "Diagnostic session resumed a different id"
@@ -18711,7 +18719,8 @@ class HarnessRuntimeService:
                 for tool in catalog["tools"]
                 if isinstance(tool, dict) and tool.get("name")
             )
-            connection = await self.adapter_factory(profile.kind).open(
+            connection = await self._open_memory_managed(
+                self.adapter_factory(profile.kind),
                 AdapterOpenRequest(
                     profile=profile,
                     session=session,
@@ -18724,7 +18733,7 @@ class HarnessRuntimeService:
                     credential_store=self.credential_store,
                     permission_handler=permission_handler,
                     interaction_handler=interaction_handler,
-                )
+                ),
             )
         except (Exception, asyncio.CancelledError):
             self._gateways.pop(session.id, None)
@@ -20235,6 +20244,18 @@ class HarnessRuntimeService:
         if isinstance(run_cost_usd, (int, float)):
             payload["run_cost_usd"] = run_cost_usd
         return payload
+
+    async def _open_memory_managed(self, adapter, request: AdapterOpenRequest):
+        opener = getattr(adapter, "open_memory_managed", None)
+        if opener is None:
+            await self.memory_compute.reject_unsupported(
+                "local",
+                project_id=request.session.engagement_id,
+                resource_kind="harness_worker",
+                resource_id=request.session.id,
+                detail="This native harness adapter has no protected memory-runner/v1 launch contract. Use a provider with memory-managed command tools, or connect a supported harness runner. It will not launch without verified limits.",
+            )
+        return await opener(request, self.memory_compute)
 
     async def _start_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:

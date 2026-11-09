@@ -347,6 +347,12 @@ class RuntimePlatform:
         self.store = store
         self.artifact_store = artifact_store
         self.data_root = data_root.expanduser().resolve()
+        from .memory_budget import MemoryBudgetService
+        from .memory_runtime import MemoryComputeController
+
+        self.memory_compute = MemoryComputeController(
+            MemoryBudgetService(store.database), self.data_root
+        )
         self.butler_instructions_root: Path | None = None
         self.data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.data_root.chmod(0o700)
@@ -477,7 +483,9 @@ class RuntimePlatform:
                     registry.register(plugin)
             except Exception as exc:
                 raise RuntimePlatformError(str(exc)) from exc
-        for plugin in build_ssh_tool_plugins(ssh_environments):
+        for plugin in build_ssh_tool_plugins(
+            ssh_environments, memory_compute=self.memory_compute
+        ):
             registry.register(plugin)
         register_artifact_retrieval_tools(
             registry,
@@ -902,6 +910,8 @@ class RuntimePlatform:
             profile=profile,
             egress_controller=egress,
             workspace_roots=workspace_roots,
+            memory_compute=self.memory_compute,
+            memory_profile_id=stored.id,
         )
 
 

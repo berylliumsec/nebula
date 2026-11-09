@@ -857,7 +857,7 @@ class NebulaStore:
         """Serialize sequence assignment for one run on supported databases."""
 
         dialect = self.database.engine.dialect.name
-        if dialect == "sqlite":
+        if dialect == "sqlite" and self.database.execution_runtime_id is None:
             (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             return
         (await connection.begin())
@@ -880,7 +880,11 @@ class NebulaStore:
         if self.database.task_session() is not None:
             raise RuntimeError("nested writes must use the existing StoreTransaction")
         async with self.database.session() as session:
-            if immediate and self.database.engine.dialect.name == "sqlite":
+            if (
+                immediate
+                and self.database.engine.dialect.name == "sqlite"
+                and self.database.execution_runtime_id is None
+            ):
                 # Report ingestion reads an absent incident before writing it.
                 # Take SQLite's writer lock first so concurrent agents cannot
                 # both conclude that they need to create the same incident.
@@ -1355,7 +1359,10 @@ class NebulaStore:
 
         connection = await self.database.connect()
         try:
-            if self.database.engine.dialect.name == "sqlite":
+            if (
+                self.database.engine.dialect.name == "sqlite"
+                and self.database.execution_runtime_id is None
+            ):
                 (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             else:
                 (await connection.begin())

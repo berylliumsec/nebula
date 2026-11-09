@@ -2,6 +2,27 @@
   "version": 1,
   "actions": [
     {
+      "id": "settings.memory_budgets",
+      "entry_point": "Settings > Automation > Memory budgets, or an explicit Butler memory-budget request",
+      "ui_calls": [
+        "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets\"",
+        "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets/jobs\"",
+        "ui/src/api/memoryBudgets.ts::request::\"PUT\" \"memory-budgets\"",
+        "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/runners/${encodeURIComponent(profileId)}/probe`",
+        "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/jobs/${encodeURIComponent(job.id)}/apply`"
+      ],
+      "core_owner": "Host-wide SQL policy, audited revisioned mutations and frozen job reservations with kernel runner evidence",
+      "butler": {
+        "discover": "nebula.settings.catalog; nebula.settings.memory_budget",
+        "read": "nebula.settings.memory_budget; nebula.settings.memory_usage; nebula.settings.verify_memory_job",
+        "change": "nebula.settings.set_memory_budget; nebula.settings.apply_memory_limit"
+      },
+      "authority": "Normal authenticated Core settings authorization. Read current policy/job revision and preserve unrelated fields. Saving applies to new jobs; a separate explicit running-limit action acknowledges possible termination. Only kernel readback establishes application; unknown cleanup stays charged. No automatic retry or goal resume.",
+      "observed_result_test": "tests/v3/test_memory_api.py::test_butler_discovers_typed_actions_saves_and_verifies_with_actor_audit",
+      "result": "UI and Butler share validated APIs. Configured/effective budgets, usage observations and pending/failed/verified worker application remain distinct. Supported OCI jobs are kernel-contained; unsupported runner paths are held with an explanation.",
+      "status": "supported"
+    },
+    {
       "id": "butler.memory_manage",
       "entry_point": "Butler Memory panel: read, search, edit or delete a visible saved memory; Butler can remember, search, update or forget one through typed tools",
       "ui_calls": [
@@ -3667,6 +3688,26 @@
     },
     {
       "key": "ui/src/api/hostPressure.ts::request::GET \"host-pressure\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/jobs/${encodeURIComponent(job.id)}/apply`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/runners/${encodeURIComponent(profileId)}/probe`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"PUT\" \"memory-budgets\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets/jobs\"",
       "count": 1
     },
     {

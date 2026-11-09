@@ -7,6 +7,7 @@ from .async_utils import MaybeAsync, call_async
 from .async_utils import resolve_workspace
 
 from .host_load import HostLoadGate
+from .memory_budget import MemoryBudgetService
 from .host_pressure import (
     HostPressureSettings,
     HostPressureUpdate,
@@ -1824,6 +1825,7 @@ def create_app(
     butler_memory_service: ButlerMemoryService | None = None,
     host_load_gate: HostLoadGate | None = None,
     host_cpu_budget: HostCpuBudget | None = None,
+    memory_budget_service: MemoryBudgetService | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -2506,6 +2508,7 @@ def create_app(
             return failures
 
         try:
+            await start_component("memory", "reconciliation", memory_reconciler.start, memory_reconciler.close)
             await host_pressure.startup()
             emit_diagnostic(
                 "info",
@@ -3443,6 +3446,44 @@ def create_app(
                 )
             )
         return f"device:{device.id}"
+
+    from .memory_api import MemoryApi
+    from .memory_runtime import MemoryComputeController
+    from .memory_recovery import MemoryReconciler
+
+    memory_budgets = memory_budget_service or MemoryBudgetService(store.database)
+    memory_compute = MemoryComputeController(memory_budgets, butler_instructions_root)
+    app.state.memory_budget = memory_budgets
+    app.state.memory_compute = memory_compute
+
+    async def resolve_memory_cleanup_runner(job):
+        if automation_runtime is None or job.snapshot.profile_id is None:
+            from .memory_policy import MemoryEnforcementUnavailable
+            raise MemoryEnforcementUnavailable("Reconnect this job's original execution profile to verify cleanup")
+        profile = await store.get(RunnerProfile, job.snapshot.profile_id)
+        return automation_runtime._runner(profile)
+
+    memory_reconciler = MemoryReconciler(memory_budgets, resolve_memory_cleanup_runner)
+    app.state.memory_reconciler = memory_reconciler
+    if tool_platform is not None:
+        tool_platform.memory_compute = memory_compute
+    if automation_runtime is not None:
+        automation_runtime.memory_compute = memory_compute
+    harness_runtime.memory_compute = memory_compute
+    if report_cpu_executor is not None:
+        report_cpu_executor.memory_compute = memory_compute
+    if report_renders is not None:
+        report_renders.memory_compute = memory_compute
+    app.state.memory_api = MemoryApi(
+        app,
+        store,
+        memory_budgets,
+        require_auth,
+        runner_factory=automation_runtime._runner
+        if automation_runtime is not None
+        else None,
+        apply_running=memory_compute.apply_running,
+    )
 
     # Reserve connection capacity for interactive reads using the discovered
     # deployment budget. Bulk admission is independent of thread-worker limits.

@@ -1595,13 +1595,19 @@ class ContainerTerminalService:
             sandbox_request = prepared.sandbox_request.model_copy(
                 update={"environment": audit_environment}
             )
-            process = await prepared.resolution.runner.open_terminal(
-                sandbox_request,
-                container_name="nebula-terminal-" + session.id.replace("-", "")[:40],
-                columns=session.request.columns,
-                rows=session.request.rows,
-                vpn_config=prepared.vpn_config,
-            )
+            from .memory_runtime import managed_compute
+
+            with managed_compute(
+                session.engagement_id, "interactive_terminal", session.id
+            ):
+                process = await prepared.resolution.runner.open_terminal(
+                    sandbox_request,
+                    container_name="nebula-terminal-"
+                    + session.id.replace("-", "")[:40],
+                    columns=session.request.columns,
+                    rows=session.request.rows,
+                    vpn_config=prepared.vpn_config,
+                )
         except (SandboxError, RuntimePlatformError) as exc:
             record_caught_exception(
                 "terminal",

@@ -37,6 +37,16 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_search_finds_enforced_memory_budgets_and_butler_actions(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("memory budgets swap reserve worker limits")
+    assert any(item["source"] == "docs/MEMORY_BUDGETS.md" for item in matches)
+    actions = search_product_knowledge(
+        "verify_memory_job memory_usage set_memory_budget"
+    )
+    assert any("verify_memory_job" in item["text"] for item in actions)
+
+
 def test_product_search_finds_core_performance_telemetry(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

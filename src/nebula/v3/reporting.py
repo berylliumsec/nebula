@@ -46,6 +46,8 @@ from reportlab.platypus import (
 from .artifacts import ArtifactStore
 from .cpu_workers import CpuWorkerPool
 from .report_cpu_executor import ReportCpuExecutor
+from .memory_budget import MemoryBudgetService
+from .memory_runtime import MemoryComputeController
 from .domain import (
     Artifact,
     Asset,
@@ -104,6 +106,9 @@ class ReportRenderService:
         self.artifact_store = artifact_store
         self.operator_id = operator_id or (lambda: "system")
         self.cpu_workers = cpu_workers
+        self.memory_compute = MemoryComputeController(
+            MemoryBudgetService(store.database), artifact_store.root
+        )
         self._pdf_renderer = _PdfRenderer(font_root)
         self.font_root = self._pdf_renderer.font_root
         self.font_paths = self._pdf_renderer.font_paths
@@ -115,8 +120,8 @@ class ReportRenderService:
         self._shutting_down = False
 
     async def startup(self) -> None:
-        if self.cpu_workers is not None:
-            await self.cpu_workers.start()
+        # CPU adapters have no protected memory-runner implementation yet.
+        # Do not start an injected pool that render dispatch cannot admit.
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
         async for render in self.store.iter_readable_entities(
@@ -284,38 +289,28 @@ class ReportRenderService:
             )
         return artifact, self.artifact_store.path_for(artifact)
 
+    async def _render_pdf_with_budget(
+        self, render: ReportRender, snapshot: dict[str, Any]
+    ) -> tuple[bytes, list[str]]:
+        # Every rendering entry point, including injected pools, crosses this
+        # boundary. A CPU/PDF runner must provide protected admission before it
+        # can replace this hold; an affinity-only pool is not that adapter.
+        await self.memory_compute.reject_unsupported(
+            "cpu-worker",
+            project_id=render.engagement_id,
+            resource_kind="report_pdf",
+            resource_id=render.id,
+            detail="PDF computation requires a memory-managed CPU runner. Configure a protected runner before explicitly retrying; unrestricted threads and affinity-only pools cannot enforce this job's memory budget.",
+        )
+        raise AssertionError("unsupported memory runner returned")
+
     async def _render(
         self, render_id: str, snapshot: dict[str, Any], *, input_bytes: int = 0
     ) -> None:
         render = await self.store.get(ReportRender, render_id)
 
-        async def mark_rendering() -> None:
-            nonlocal render
-            render = await self.store.update(
-                ReportRender,
-                render.id,
-                {"status": ReportRenderStatus.RENDERING},
-                expected_revision=render.revision,
-            )
-            (
-                await self._event(
-                    render, "report_render.rendering", {"status": "rendering"}
-                )
-            )
-
         try:
-            if self.cpu_workers is None:
-                (await mark_rendering())
-                pdf_bytes, warnings = await asyncio.to_thread(self._build_pdf, snapshot)
-            else:
-                pdf_bytes, warnings = await self.cpu_workers.run(
-                    render_pdf_snapshot,
-                    snapshot,
-                    str(self.font_root),
-                    tuple(sorted(self.font_hashes.items())),
-                    input_bytes=input_bytes,
-                    on_start=mark_rendering,
-                )
+            pdf_bytes, warnings = await self._render_pdf_with_budget(render, snapshot)
             stored = self.artifact_store.put_bytes_with_status(
                 pdf_bytes,
                 engagement_id=render.engagement_id,

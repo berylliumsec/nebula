@@ -27,6 +27,7 @@ from .mcp_import import export_mcp_config
 from .mcp_scope import mcp_metadata_is_visible, project_mcp_profiles
 from .storage import NotFoundError
 from .tools import GuidedToolError
+from .memory_actor import memory_actor
 
 
 _PROJECT_SETTING = re.compile(
@@ -40,7 +41,7 @@ _GLOBAL_SETTINGS = re.compile(
     r"providers|provider-catalog|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|skills|"
     r"integrations|automation/runtime|diagnostics/(?:settings|performance)|voice/settings|butler/(?:instructions|check-interval)|"
-    r"hooks|project-instructions|runtime-usage|host-load|host-pressure|host-cpu-budget|setup|release"
+    r"hooks|project-instructions|runtime-usage|host-load|host-pressure|host-cpu-budget|memory-budgets|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -540,6 +541,11 @@ async def _check_runtime_mutation(
 
 def _action_readback(method: str, path: str) -> str | None:
     if method == "POST":
+        memory_job = re.fullmatch(r"(/api/v1/memory-budgets/jobs/[^/]+)/apply", path)
+        if memory_job:
+            return memory_job[1]
+        if re.fullmatch(r"/api/v1/memory-budgets/runners/[^/]+/probe", path):
+            return "/api/v1/memory-budgets"
         if re.fullmatch(
             r"/api/v1/setup/(?:runtime/(?:select|refresh)|image/(?:prepare|retry|cancel))",
             path,
@@ -1072,12 +1078,16 @@ class SettingsAssistantApi:
     ) -> dict[str, Any]:
         if not isinstance(method, str) or not isinstance(path, str):
             raise ValueError("provide a Settings method and path")
-        return await execute_settings_api(
-            self.app,
-            self.token,
-            project_id,
-            method=method,
-            path=path,
-            body=body,
-            expected_revision=expected_revision,
-        )
+        attribution = memory_actor.set(f"butler:{project_id}")
+        try:
+            return await execute_settings_api(
+                self.app,
+                self.token,
+                project_id,
+                method=method,
+                path=path,
+                body=body,
+                expected_revision=expected_revision,
+            )
+        finally:
+            memory_actor.reset(attribution)

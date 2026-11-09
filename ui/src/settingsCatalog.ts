@@ -16,6 +16,15 @@ export function settingOpensInButler(entry: SettingCatalogEntry): boolean {
 
 export const settingCatalog: SettingCatalogEntry[] = [
   {
+    id: "settings.memory-budgets",
+    label: "Memory budgets",
+    description: "Set per-job memory, swap, total capacity and the Core reserve; inspect worker enforcement and usage",
+    category: "Automation",
+    scope: "Workspace",
+    target: "memory-budget-settings",
+    keywords: ["memory", "ram", "gib", "worker", "budget", "out of memory", "oom", "limits", "swap", "reserve", "compute", "pressure", "butler"],
+  },
+  {
     id: "settings.butler-instructions",
     label: "Nebula-wide Butler instructions",
     description: "Open Nebula-wide BUTLER.md directly in the Markdown code editor, or upload a replacement",

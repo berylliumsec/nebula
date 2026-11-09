@@ -56,6 +56,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("release", "Release and updates", "release-settings-group"),
     ("diagnostics", "Diagnostics and logging", "diagnostics-settings"),
     ("host-pressure", "Host pressure admission", "setup-settings"),
+    ("memory-budgets", "Memory budgets", "memory-budget-settings"),
     ("setup", "Terminal and Core setup", "setup-settings"),
 )
 
@@ -952,6 +953,9 @@ def provider_plugins(
             save_default_model,
         ),
     ]
+    from .memory_tools import memory_budget_tools
+
+    plugins.extend(memory_budget_tools(settings_api, engagement_id))
     if work is not None:
         from .control_assistant_work import (
             WORK_TOOLS,
