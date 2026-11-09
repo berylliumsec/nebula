@@ -37,6 +37,11 @@ durable receipts. An uncertain operation needs explicit reconciliation, and an
 incomplete cleanup is reported separately from a healthy API promotion.
 `offline-rollback` refuses to run in supervisor mode. Coherent legacy snapshots
 remain a separate disaster-recovery artifact, outside the code rollback path.
+Legacy mutations also verify the live protocol before stopping a service. A
+missing adoption marker or unavailable discovery never authorizes data restore.
+An available supervisor response always blocks the offline path. Automatic
+legacy recovery after failed candidate health uses only the positive legacy
+classification captured for that same cutover attempt.
 
 Install all three scripts together from a reviewed commit with atomic renames
 while the deploy lock is free. Verify their hashes against the commit. This

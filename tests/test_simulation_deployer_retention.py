@@ -6,6 +6,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -18,6 +19,17 @@ spec = importlib.util.spec_from_file_location(
 assert spec is not None and spec.loader is not None
 deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deployer)
+
+
+class LegacyClient:
+    def __init__(self, commit):
+        self.commit = commit
+
+    def get(self, path):
+        if path == "deployment/status":
+            raise HTTPError("http://fixture", 404, "legacy route absent", {}, None)
+        assert path == "health"
+        return {"status": "ok", "commit": self.commit}
 
 
 def _snapshot(root: Path, name: str) -> Path:
@@ -211,7 +223,7 @@ def test_promotion_prunes_only_after_new_core_is_healthy(
     )
     monkeypatch.setattr(deployer, "unit_state", lambda unit: "active")
     monkeypatch.setattr(deployer, "blockers", lambda core: [])
-    monkeypatch.setattr(deployer, "api", lambda: object())
+    monkeypatch.setattr(deployer, "api", lambda: LegacyClient(old))
     monkeypatch.setattr(
         deployer, "edge", lambda action: events.append(f"edge:{action}")
     )
@@ -271,7 +283,7 @@ def test_failed_promotion_never_prunes_rollback_state(
     )
     monkeypatch.setattr(deployer, "unit_state", lambda unit: "active")
     monkeypatch.setattr(deployer, "blockers", lambda core: [])
-    monkeypatch.setattr(deployer, "api", lambda: object())
+    monkeypatch.setattr(deployer, "api", lambda: LegacyClient(old))
     monkeypatch.setattr(deployer, "edge", lambda action: None)
     monkeypatch.setattr(deployer, "service", lambda action: None)
     monkeypatch.setattr(deployer, "require_stopped", lambda: None)
@@ -283,7 +295,7 @@ def test_failed_promotion_never_prunes_rollback_state(
         "wait_ready",
         lambda sha: (_ for _ in ()).throw(RuntimeError("new Core unhealthy")),
     )
-    monkeypatch.setattr(deployer, "rollback", lambda: events.append("rollback"))
+    monkeypatch.setattr(deployer, "rollback", lambda **_: events.append("rollback"))
     monkeypatch.setattr(
         deployer,
         "finish_rollback_retention",

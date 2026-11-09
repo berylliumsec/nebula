@@ -26,6 +26,7 @@ import tarfile
 import time
 from typing import Any
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 from nebula_deploy_gate import CoreClient, blockers, service_token
 from nebula_staged_deployer import StagedDeployer
@@ -61,6 +62,61 @@ PATH = "/home/simulation/.cargo/bin:/home/simulation/.local/bin:/usr/local/bin:/
 SERVICE = "nebula-core.service"
 EDGE = "nebula-lan-tls.service"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+
+
+class _LegacyAttempt:
+    def __init__(self, previous: str, candidate: str):
+        self.previous, self.candidate = previous, candidate
+
+
+def require_legacy_protocol(
+    record: dict,
+    *,
+    expected_version: str | None = None,
+    attempt: _LegacyAttempt | None = None,
+) -> None:
+    """A missing local mode is never evidence permitting data restoration."""
+    verified_attempt = bool(
+        attempt
+        and record.get("previous") == attempt.previous
+        and record.get("promoting") == attempt.candidate
+    )
+    client = api()
+    try:
+        status = client.get("deployment/status")
+    except HTTPError as error:
+        if error.code != 404:
+            if verified_attempt:
+                return
+            raise RuntimeError(
+                "Live deployment protocol is unavailable; retain state until it is verified"
+            ) from error
+    except OSError as error:
+        if verified_attempt:
+            return
+        raise RuntimeError(
+            "Live deployment protocol is unavailable; retain state until it is verified"
+        ) from error
+    else:
+        if isinstance(status, dict) and status.get("protocol") == "nebula.runtime/v1":
+            raise RuntimeError(
+                "The live Core is supervised; adopt-supervisor before promotion or code rollback"
+            )
+        raise RuntimeError(
+            "The live deployment protocol is unrecognized; offline mutation is blocked"
+        )
+    if verified_attempt:
+        return
+    health = client.get("health")
+    expected = expected_version or record.get("active")
+    if (
+        not isinstance(health, dict)
+        or health.get("status") != "ok"
+        or health.get("commit") != expected
+    ):
+        raise RuntimeError(
+            "A healthy exact legacy Core identity is required before offline mutation"
+        )
 
 
 def run(
@@ -908,6 +964,8 @@ def legacy_promote() -> dict[str, Any]:
         raise RuntimeError("initial same-build cutover has not been completed")
     if record.get("active") != previous:
         raise RuntimeError("deployer state does not match the running release")
+    require_legacy_protocol(record, expected_version=previous)
+    attempt = _LegacyAttempt(previous, new)
     command = run(
         "systemctl",
         "--user",
@@ -966,7 +1024,7 @@ def legacy_promote() -> dict[str, Any]:
         edge("start")
     except Exception:
         try:
-            rollback()
+            rollback(_legacy_attempt=attempt)
         except Exception as recovery:
             raise RuntimeError(
                 f"candidate failed; automatic rollback also failed: {recovery}"
@@ -986,12 +1044,15 @@ def legacy_promote() -> dict[str, Any]:
     }
 
 
-def offline_rollback() -> dict[str, Any]:
+def offline_rollback(
+    *, _legacy_attempt: _LegacyAttempt | None = None
+) -> dict[str, Any]:
     record = state()
     if record.get("deployment_mode") == "supervisor":
         raise RuntimeError(
             "Supervisor code rollback preserves live data; offline restoration requires a separate stopped disaster-recovery procedure"
         )
+    require_legacy_protocol(record, attempt=_legacy_attempt)
     failed_commit = record.get("promoting") or record.get("active")
     previous = record.get("previous")
     backup = Path(str(record.get("rollback_backup", "")))
@@ -1128,10 +1189,10 @@ def promote() -> dict[str, Any]:
     return staged_deployer(record).promote(pending)
 
 
-def rollback() -> dict[str, Any]:
+def rollback(*, _legacy_attempt: _LegacyAttempt | None = None) -> dict[str, Any]:
     record = state()
     if record.get("deployment_mode") != "supervisor":
-        return offline_rollback()
+        return offline_rollback(_legacy_attempt=_legacy_attempt)
     previous = record.get("previous")
     if not isinstance(previous, str):
         raise RuntimeError("No retained code rollback target is recorded")
