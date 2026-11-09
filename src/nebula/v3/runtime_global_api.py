@@ -71,7 +71,7 @@ class RuntimeGlobalApi:
 
         mount_global_settings(self.app, self.store, self.actor)
         mount_global_reads(self.app, self.store, self.actor)
-        mount_global_work(self.app, self.store, self.actor)
+        self.work_observer = mount_global_work(self.app, self.store, self.actor)
 
         for resource, model in (
             ("engagements", Engagement),
@@ -177,5 +177,6 @@ class RuntimeGlobalApi:
             self.actor.reset(token)
 
     async def close(self):
+        await self.work_observer.close()
         await self.setup.shutdown()
         await self.store.event_history.close()

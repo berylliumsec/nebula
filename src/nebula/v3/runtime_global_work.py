@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+import asyncio
+import time
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from starlette.background import BackgroundTask
+from starlette.responses import StreamingResponse
 
 from .domain import Engagement, WorkItem, WorkUpdate
 from .harnesses import HarnessCatalogItem, harness_catalog
 from .storage import NebulaStore, NotFoundError
 from .work import WorkAgentActivity, WorkService
+from .runtime_work_observer import SqlWorkObserver, WorkObservationUnavailable
 
 
 async def explicit_work_project(request: Request, store: NebulaStore) -> str | None:
@@ -34,9 +39,13 @@ async def explicit_work_project(request: Request, store: NebulaStore) -> str | N
     return project
 
 
-def mount_global_work(app: FastAPI, store: NebulaStore, actor: ContextVar[str]) -> None:
+def mount_global_work(
+    app: FastAPI, store: NebulaStore, actor: ContextVar[str]
+) -> SqlWorkObserver:
     """The public adapter authenticates before selecting the SQL read app."""
     work = WorkService(store)
+    observer = SqlWorkObserver(store)
+    app.state.work_observer = observer
 
     def authenticated() -> str:
         value = actor.get()
@@ -110,3 +119,54 @@ def mount_global_work(app: FastAPI, store: NebulaStore, actor: ContextVar[str]) 
     async def agents(request: Request, response: Response) -> list[WorkAgentActivity]:
         response.headers["Cache-Control"] = "no-store"
         return await work.active_agents(await explicit_work_project(request, store))
+
+    @app.get("/api/v1/work/events", dependencies=dependencies)
+    async def events(request: Request) -> StreamingResponse:
+        project = await explicit_work_project(request, store)
+        try:
+            subscription = await observer.subscribe(project)
+        except WorkObservationUnavailable:
+            raise HTTPException(
+                503,
+                "Saved Work observations are temporarily unavailable; retry shortly",
+            ) from None
+
+        async def stream():
+            previous = subscription.baseline
+            assert previous is not None
+            last_sent = time.monotonic()
+            try:
+                yield f"id: {previous.cursor}\nevent: ready\ndata: {{}}\n\n".encode()
+                while not subscription.closed:
+                    await asyncio.sleep(
+                        min(
+                            observer.poll_interval,
+                            max(
+                                0,
+                                observer.heartbeat_interval
+                                - (time.monotonic() - last_sent),
+                            ),
+                        )
+                    )
+                    if subscription.closed:
+                        return
+                    current = await observer.current(project)
+                    change = current.change_from(previous)
+                    previous = current
+                    if change:
+                        last_sent = time.monotonic()
+                        yield f'id: {current.cursor}\nevent: change\ndata: {{"kind": "{change}"}}\n\n'.encode()
+                    elif time.monotonic() - last_sent >= observer.heartbeat_interval:
+                        last_sent = time.monotonic()
+                        yield b": keep-alive\n\n"
+            finally:
+                await subscription.close()
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            background=BackgroundTask(subscription.close),
+        )
+
+    return observer
