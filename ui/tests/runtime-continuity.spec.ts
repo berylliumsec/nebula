@@ -378,8 +378,13 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   expect(target.pid).not.toBe(oldProducer);
   await expect.poll(async () => {
     const status = await read("/api/v1/deployment/status");
-    return status.projects.some((item: {project_id: string; runtime_id: string; phase: string}) =>
+    const verified = status.projects.some((item: {project_id: string; runtime_id: string; phase: string}) =>
       item.project_id === "continuity-project" && item.runtime_id === target.runtime_id && item.phase === "verified");
+    if (!verified) return false;
+    // Restoration is verified before activation makes public reads available.
+    const execution = await control.control("execution-status", {runtime_id: target.runtime_id});
+    return execution.runtime_id === target.runtime_id && execution.state === "ready"
+      && execution.lease?.project_id === "continuity-project" && execution.lease?.runtime_id === target.runtime_id;
   }, {timeout: 60_000}).toBe(true);
   expect((await manifest()).digest).toBe(beforeHandoff.digest);
   await send("[TOOLS_CONTEXT:USE] in the fresh execution worker", "TOOLS_CONTEXT_USED ABC");
