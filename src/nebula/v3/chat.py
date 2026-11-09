@@ -14111,10 +14111,8 @@ class ChatService:
             )
         resolved_model = provider.require(model_request)
         reference = turn.request_snapshot.get(MANIFEST_KEY)
-        has_manifest = isinstance(reference, dict) and isinstance(
-            reference.get("revision"), int
-        )
-        if has_manifest:
+        if isinstance(reference, dict) and isinstance(reference.get("revision"), int):
+            has_manifest = True
             async with self.store.database.session() as database_session:
                 tool_manifest = await read_manifest(
                     database_session,
@@ -14127,6 +14125,7 @@ class ChatService:
                     "provider tool context changed while the response was paused"
                 )
         else:
+            has_manifest = False
             previous = await self._provider_manifest_seed(session, components.specs)
             deferred_names = set(
                 catalog_snapshot(turn.request_snapshot).get("deferred", [])

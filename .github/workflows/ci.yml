@@ -198,7 +198,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     services:
       postgres:
-        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py')) && 'postgres:16-alpine' || '' }}
+        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py')) && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: nebula_async
           POSTGRES_PASSWORD: synthetic-ci-password
@@ -256,7 +256,7 @@ jobs:
         if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/test_playwright_impact.py') || contains(needs.selection.outputs.python, 'tests/v3/test_butler_workflow_registry.py'))
         run: npm --prefix ui ci
       - name: Build production UI for selected retained-process journeys
-        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_runtime_continuity_acceptance.py')
+        if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/v3/test_runtime_continuity_acceptance.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py'))
         run: |
           npm --prefix ui ci
           npm --prefix ui run build
@@ -271,12 +271,12 @@ jobs:
         if: env.RUN_SELECTED == 'true'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.python }}
-          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
+          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           NEBULA_TEST_POSTGRES_ADMIN_URL: ${{ contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') && 'postgresql://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
-          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
+          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination|test_runtime_work_batch_integration)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
             test -n "$NEBULA_TEST_POSTGRES_URL" || { echo 'Selected PostgreSQL coverage requires its owned database runtime.' >&2; exit 1; }
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
@@ -338,7 +338,7 @@ jobs:
 
   database-migrations:
     needs: selection
-    if: contains(needs.selection.outputs.python, 'tests/v3/test_migrations.py') || contains(needs.selection.outputs.python, 'tests/v3/test_database_migration') || contains(needs.selection.outputs.python, 'tests/v3/test_postgresql_core.py') || contains(needs.selection.outputs.python, 'tests/test_simulation_postgres_backup.py')
+    if: contains(needs.selection.outputs.python, 'tests/v3/test_migrations.py') || contains(needs.selection.outputs.python, 'tests/v3/test_database_migration') || contains(needs.selection.outputs.python, 'tests/v3/test_postgresql_core.py') || contains(needs.selection.outputs.python, 'tests/test_simulation_postgres_backup.py') || contains(fromJSON(needs.selection.outputs.python || '[]'), 'tests/v3/test_work_batch_contracts.py') || contains(needs.selection.outputs.python, 'tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata')
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -386,7 +386,13 @@ jobs:
           poetry run python - <<'PY'
           import json, os, subprocess, sys
           prefixes = ('tests/v3/test_migrations.py', 'tests/v3/test_database_migration', 'tests/v3/test_postgresql_core.py', 'tests/test_simulation_postgres_backup.py')
-          targets = [item for item in json.loads(os.environ['SELECTED_TESTS']) if item.startswith(prefixes)]
+          selected = json.loads(os.environ['SELECTED_TESTS'])
+          targets = [item for item in selected if item.startswith(prefixes)]
+          migration = 'tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata'
+          if 'tests/v3/test_work_batch_contracts.py' in selected:
+              targets.append(migration)
+          else:
+              targets.extend(item for item in selected if item == migration or item.startswith(migration + '['))
           assert targets, 'No reviewed PostgreSQL test targets'
           subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', *targets], check=True)
           subprocess.run([sys.executable, '-m', 'pytest', '-q', *targets], check=True)

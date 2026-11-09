@@ -3,6 +3,72 @@
 The parallel implementation is on `codex/execution-lifecycle-isolation`. This is
 an integration checkpoint, not a release acceptance receipt.
 
+## Current combined PR checkpoint
+
+All completed implementation tracks are combined on the integration branch,
+including memory budgets, provider-only tools context and standing instructions.
+The original task branches remain available as source history; their completed
+changes do not require separate merges into main. PR #960 is the single combined
+draft. Its foundation branch is being fast-forwarded to this reviewed checkpoint.
+It must stay unmerged until the remaining acceptance gates below pass.
+
+The three fresh-review defects recorded later in this document are repaired:
+used projects are admitted again without resetting their fence; prelaunch memory
+reservations retain exact owner evidence and conservative crash recovery; and
+global Work/catalog/runtime-usage reads use their proper SQL or host authority.
+Focused receipts cover 12 shutdown/readmission cases, 9 memory-prelaunch cases,
+10 global Work cases, 14 SQL event-observation cases and 22 host-usage contracts
+(the latter includes existing classifier, probe and vendor cases). These are
+separate, overlapping phase receipts, not a final-build aggregate.
+
+Cross-project Work imports and edits now use a host-owned durable batch with
+ordinary per-project barriers. Their schema/compatibility contract is family 5,
+head `0047_runtime_work_batches`, including `project.work-batch/v1`. Metadata-only
+projects do not launch execution workers. The coordinator has 42 focused passing
+cases and the shared migration/worker boundary selection has 42 distinct passing
+cases across recorded phases. Global delivery and delegated host effects take
+locks in the same order; 10 lock-order/replay contracts and 4 diagnostic contracts
+pass. A real Core test covers private API capabilities and public lost-response
+recovery on both databases: five distinct cases currently pass and the public
+PostgreSQL case remains pending. Its failed traces are retained; no six-case pass
+is claimed.
+
+Provider instruction ownership has exact byte-range proof and a separate worker
+compatibility feature, including referenced snapshot parts. Stateless provider
+delivery remains intact. Legacy ambiguous snapshots pause before activation.
+The provider boundary selection has 85 distinct passes and one optional
+PostgreSQL skip across its original execution and corrected-fixture rerun;
+the ownership compatibility selection has its own 58-case receipt. The final
+combined CI selection supplies PostgreSQL rather than treating that skip as
+evidence. Reload the standing-instruction and provider-boundary durable goals
+and checkpoints after compaction before continuing this work.
+
+The combined focused selection collects 970 Python cases, 106 frontend cases,
+48 browser cases and one exact Rust test (Rust count remains source-declared
+until native CI collection). Six production browser journeys run at desktop
+1440/1024, Android Chromium 320/390/430 and mobile WebKit 320/390/430: 30 Chromium
+and 18 WebKit cases. Final execution is pending; earlier pinned browser receipts
+are not final-build acceptance. The final production UI must be rebuilt and its
+identity recorded. Full Mypy passes all 350 source files after a type-narrowing
+repair that preserves manifest validation and recovery ordering.
+
+The bundled product knowledge asset is verified at 418 passages, source digest
+`946375111ee3c936114d4e7ea33d1822f987bd675bc9224bdf4e6b191607ba0b`,
+asset SHA-256
+`73c2b698ad6f198eacbe668e4fd10eab23a033bdb1d75fdc2a073543e5303b76`.
+Main through `af475971` is integrated, preserving its Daybreak option.
+
+Remaining gates are the public PostgreSQL journey, the final production browser
+matrix, two independently built Linux desktop packages and their one native
+close/update/reopen/rollback/shutdown journey, focused CI and independent final
+review. Local official browser downloads are blocked by the environment proxy;
+genuine WebKit and native package evidence must come from the focused CI jobs.
+Other desktop platform native evidence is not established by Linux execution.
+No existing installation, live service or release deployment is changed.
+
+The following sections preserve earlier build-specific checkpoints and must not
+be read as current combined acceptance results.
+
 Implemented slices include authenticated host recovery, stable client identity
 and request lookup, atomic global SQL APIs, automatic first-project admission,
 bounded client request/draft persistence, retained desktop attachment, verified
