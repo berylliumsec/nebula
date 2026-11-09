@@ -71,6 +71,7 @@ def create_api_worker(
     operator_token: str,
     project_for: Callable[[HttpIntent], Awaitable[str]],
     upstream_for: Callable[[dict], Awaitable[HttpUpstream]],
+    chat_acceptance_for: Callable[[str], Awaitable[bool]] | None = None,
     static_dir: Path | None = None,
     maximum_waiting_views: int = 32,
     maximum_control_views: int = 8,
@@ -176,6 +177,21 @@ def create_api_worker(
             deadline = asyncio.get_running_loop().time() + command_start_timeout
             while True:
                 page = await delivery.page(actor, command_id, limit=1)
+                binding = await delivery.chat_binding(actor, command_id)
+                if binding is not None and await journal.has_history(binding.turn_id):
+                    await journal.validate_cursor(binding.turn_id, after_sequence=after)
+                    response = _ViewerResponse(
+                        journal.sse(binding.turn_id, after_sequence=after),
+                        slots=slots,
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-store",
+                            "X-Accel-Buffering": "no",
+                            "X-Nebula-Command-Id": command_id,
+                        },
+                    )
+                    handed_off = True
+                    return response
                 if page.frames:
                     head = page.frames[0]
                     if head.kind != "head":
@@ -257,10 +273,16 @@ def create_api_worker(
     @app.get("/api/v1/runtime/requests/{command_id}")
     async def request_status(command_id: str, _actor=Depends(principal)):
         page = await delivery.page(_actor, command_id, limit=1)
+        binding = await delivery.chat_binding(_actor, command_id)
         return {
             "command_id": command_id,
             "project_id": page.project_id,
             "state": page.state,
+            **(
+                {"turn_id": binding.turn_id, "session_id": binding.session_id}
+                if binding is not None
+                else {}
+            ),
         }
 
     @app.get("/api/v1/runtime/requests/{command_id}/response")
@@ -329,12 +351,31 @@ def create_api_worker(
                 422, "The request cannot be represented as a bounded durable command"
             ) from None
         lane = command_lane(intent.path)
+        project_id = await project_for(intent)
+        chat_acceptance = False
+        if (
+            intent.method == "POST"
+            and intent.path == "/api/v1/chat/completions"
+            and chat_acceptance_for is not None
+        ):
+            try:
+                chat_body = json.loads(intent.body())
+                requested = (
+                    isinstance(chat_body, dict)
+                    and chat_body.get("stream") is True
+                    and chat_body.get("backend", "provider") == "provider"
+                )
+            except (ValueError, UnicodeError, RecursionError):
+                requested = False
+            if requested:
+                chat_acceptance = await chat_acceptance_for(project_id)
         receipt = await delivery.accept(
             intent,
-            project_id=await project_for(intent),
+            project_id=project_id,
             actor_id=actor,
             idempotency_key=key,
             lane=lane,
+            chat_acceptance=chat_acceptance,
         )
         del body, intent
         return await response_view(

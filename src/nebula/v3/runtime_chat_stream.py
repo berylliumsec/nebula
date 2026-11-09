@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from uuid import uuid4
 
 from .async_utils import finish_cleanup
 from .domain import ChatTurn
+from .database import EntityRow, RuntimeResourceRow
 from .execution_scope import current_execution_lease
 from .runtime_coordination import CoordinationConflict, LeaseLost, STREAM_EPOCH
 
@@ -18,20 +20,65 @@ class RuntimeChatJournal:
     def __init__(self, coordination, store):
         self.coordination, self.store = coordination, store
 
-    async def publish(self, turn_id, events, *, batch_key=None):
+    async def publish(self, turn_id, events, *, batch_key=None, apply=None):
         lease = current_execution_lease()
         if lease is None:
             raise LeaseLost("Chat publication requires exact project ownership")
 
         async def commit():
             return await self.coordination.append_stream_batch(
-                lease, turn_id, batch_key=batch_key or uuid4().hex, events=events
+                lease,
+                turn_id,
+                batch_key=batch_key or uuid4().hex,
+                events=events,
+                apply=apply,
             )
 
         return await finish_cleanup(commit())
 
     async def has_history(self, turn_id):
         return bool(await self.coordination.replay_stream(turn_id, limit=1))
+
+    @staticmethod
+    def resource_id(turn_id, segment):
+        return (
+            "provider-turn:"
+            + hashlib.sha256((turn_id + "\0" + segment).encode()).hexdigest()
+        )
+
+    async def begin(self, turn_id, segment):
+        lease = current_execution_lease()
+        if lease is None:
+            raise LeaseLost("Chat admission requires exact project ownership")
+        async with self.coordination.fenced(lease) as session:
+            turn = await session.get(EntityRow, turn_id)
+            if (
+                turn is None
+                or turn.kind != "chat_turns"
+                or turn.engagement_id != lease.project_id
+            ):
+                raise CoordinationConflict(
+                    "The provider turn does not belong to this project"
+                )
+            key = self.resource_id(turn_id, segment)
+            if await session.get(RuntimeResourceRow, key) is not None:
+                raise CoordinationConflict(
+                    "This provider segment already has an execution owner"
+                )
+            session.add(
+                RuntimeResourceRow(
+                    id=key,
+                    project_id=lease.project_id,
+                    runtime_id=lease.runtime_id,
+                    fencing_token=lease.fencing_token,
+                    kind="provider_turn",
+                    state="active",
+                    restoration="durable",
+                    detail="An accepted provider turn is finishing on its current runtime",
+                    checkpoint={"turn_id": turn_id, "segment": segment},
+                    updated_at_ms=await self.coordination._clock_ms(session),
+                )
+            )
 
     async def close(self, turn_id, segment, *, failed=False):
         frames = []
@@ -50,7 +97,27 @@ class RuntimeChatJournal:
         frames.append(
             (SEGMENT_END, {"type": SEGMENT_END, "turn_id": turn_id, "segment": segment})
         )
-        await self.publish(turn_id, frames, batch_key="stream-end/" + segment)
+        lease = current_execution_lease()
+
+        async def release(session):
+            resource = await session.get(
+                RuntimeResourceRow, self.resource_id(turn_id, segment)
+            )
+            if resource is not None:
+                if lease is None or (
+                    resource.project_id,
+                    resource.runtime_id,
+                    resource.fencing_token,
+                ) != (lease.project_id, lease.runtime_id, lease.fencing_token):
+                    raise LeaseLost(
+                        "The provider segment belongs to another execution owner"
+                    )
+                resource.state = "closed"
+                resource.updated_at_ms = await self.coordination._clock_ms(session)
+
+        await self.publish(
+            turn_id, frames, batch_key="stream-end/" + segment, apply=release
+        )
 
     async def validate_cursor(self, turn_id, *, after_sequence=0, epoch=None):
         if type(after_sequence) is not int or after_sequence < 0:

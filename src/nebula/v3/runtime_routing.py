@@ -15,9 +15,10 @@ from .database import (
     ProjectOwnershipRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
+    RuntimeReleaseRow,
     RuntimeResourceRow,
 )
-from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
+from .deployment_protocol import GLOBAL_EXECUTION_PROJECT, ReleaseManifest
 from .runtime_coordination import CoordinationConflict, RuntimeCoordination
 from .runtime_delivery import HttpIntent
 from .runtime_http import HttpUpstream
@@ -124,6 +125,23 @@ class RuntimeRouting:
                     "Invalid JSON cannot be routed to an execution owner"
                 ) from None
         return await self._project(intent.path, intent.query.encode("ascii"), payload)
+
+    async def supports_chat_acceptance(self, project_id: str) -> bool:
+        async with self.coordination.database.session() as session:
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            process = (
+                await session.get(RuntimeProcessRow, owner.runtime_id)
+                if owner is not None and owner.runtime_id
+                else None
+            )
+            if process is None:
+                return False
+            release = await session.get(RuntimeReleaseRow, process.version)
+            return (
+                release is not None
+                and "chat.accept/v1"
+                in ReleaseManifest.model_validate(release.manifest).features
+            )
 
     async def _target(
         self,

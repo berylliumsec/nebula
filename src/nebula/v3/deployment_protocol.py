@@ -50,6 +50,17 @@ class ReleaseManifest(NebulaModel):
     files: dict[str, SHA256] = Field(min_length=1, max_length=100_000)
     execution_reserve_bytes: int = Field(default=256 * 1024**2, ge=16 * 1024**2)
     restorable_resources: list[str] = Field(default_factory=list, max_length=100)
+    features: list[Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9./_-]{0,99}$")]] = (
+        Field(default_factory=list, max_length=32)
+    )
+    required_api_features: list[
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9./_-]{0,99}$")]
+    ] = Field(default_factory=list, max_length=32)
+
+    @field_validator("features", "required_api_features")
+    @classmethod
+    def stable_features(cls, values):
+        return sorted(set(values))
 
     @field_validator("core_executable", "ui_directory")
     @classmethod

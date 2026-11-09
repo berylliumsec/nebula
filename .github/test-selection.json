@@ -1,17 +1,26 @@
 {
-  "change_digest": "0492bfeccc6605ef9027ee7203c2ae07f88eee20a488268cacaeebc474587d14",
+  "change_digest": "0616fb8cbeb34d0d18721664df3eead4e37e0b4f8332cc7db6df23497c3a64a4",
   "reviewed_by": "Codex",
-  "reason": "50 distinct passing cases collected for final CI union:16 new SQLite/PostgreSQL authority/drain cases,3 shared profile-conversion cases,1 actual32MiB OCI/controller-SIGKILL automatic host cleanup case,30 affected private host service cases. Initial50 yielded49pass1fixture failure56s; corrected exactPodman case passed1.32s after independent validation identified invalid Docker executable input before conversion. No product repair or unrelated rerun. Host releases only after immutable group/helper proof, retains live/unknown/drifted work and joins cleanup before host lock release. Ruff and targeted mypy passed. Evidence docs added after validated source.",
-  "exclusions": "No full suite, live service/provider/harness, existing installation, deployment, SSH, model download or benchmark. Synthetic SQL and explicit disposable Docker daemon only; actual allocator4MiB under32MiB group uses cached digest-pinned postgres fixture image. Kernel adapter certifies only this fixture, not production rootless support. Existing mobile WebKit and packaged desktop acceptance remain unavailable/pending.",
+  "reason": "77 distinct passing cases collected as final CI union:27 acceptance/compatibility passed13.58s and50 process/journal/delivery/atomic-publication/bundle cases passed64.68s. Capability-gated typed acceptance commits conversation/turn/user-message/binding atomically, canonical old/new transport retries preserve identity, immutable bindings fence stale tasks, and feature/data guards protect API rollback. Actual retained kernel runs2 chats in1project while acceptance receipts finish, promotes APIv2/retiresv1, retries original receipt without new turn/provider and replays both durable cursors. Provider resource closure/end publication share one fenced commit with injected rollback proof. Ruff and targeted mypy passed. Evidence-only doc added after source validation.",
+  "exclusions": "No full suite, live service/provider/harness, existing installation, deployment, SSH, model download, browser or compute workload. Disposable SQL, private Unix listeners, retained source wrappers and inert local model barriers only. Source compatibility fallback and typed mode both exercised. Required final LAN/mobile WebKit/packaged desktop gates remain pending.",
   "expected_tests": {
-    "python": 50,
+    "python": 77,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_memory_recovery.py",
-    "tests/v3/test_runtime_host_services.py"
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_chat_acceptance_compatibility.py",
+    "tests/v3/test_execution_worker_process.py::test_detached_acceptance_runs_two_chats_in_one_project_through_api_replacement",
+    "tests/v3/test_execution_worker_process.py::test_api_promotion_reconnects_durable_chat_without_restarting_producer",
+    "tests/v3/test_runtime_chat_stream.py",
+    "tests/v3/test_runtime_delivery.py::test_lost_response_retry_and_api_replacement_preserve_one_mutation",
+    "tests/v3/test_runtime_delivery.py::test_device_is_revalidated_before_queued_work_executes",
+    "tests/v3/test_runtime_coordination.py::test_stream_replays_committed_batches_on_another_connection",
+    "tests/v3/test_runtime_coordination.py::test_stream_batch_retry_is_atomic_and_conflicting_retry_fails",
+    "tests/v3/test_release_store.py::test_installed_assets_survive_the_original_application_directory",
+    "tests/v3/test_release_store.py::test_tampered_or_symlinked_assets_never_install"
   ],
   "frontend": [],
   "native": [],

@@ -20,7 +20,12 @@ from sqlalchemy import select
 
 from .async_utils import finish_cleanup
 from .authentication import runtime_principal
-from .database import RuntimeCommandRow, RuntimeDeliveryRow
+from .database import (
+    EntityRow,
+    RuntimeChatBindingRow,
+    RuntimeCommandRow,
+    RuntimeDeliveryRow,
+)
 from .domain import NebulaModel, PairedDeviceSession, utc_now
 from .execution_scope import execution_context
 from .memory_actor import memory_actor
@@ -33,6 +38,11 @@ from .runtime_coordination import (
 )
 from .runtime_ipc import RuntimeIpcError
 from .runtime_vault import RuntimeVault
+from .runtime_chat_acceptance import (
+    CHAT_ACCEPT_COMMAND,
+    HTTP_INVOKE_COMMAND,
+    ChatBinding,
+)
 from .storage import NebulaStore, NotFoundError
 
 MAX_REQUEST_BYTES = 8 * 1024**2
@@ -152,7 +162,22 @@ class RuntimeDelivery:
         idempotency_key: str,
         lane: Literal["work", "control"] = "work",
         expected_revision: int | None = None,
+        chat_acceptance: bool = False,
     ) -> CommandReceipt:
+        if chat_acceptance:
+            try:
+                body = json.loads(intent.body())
+            except (ValueError, UnicodeError, RecursionError):
+                raise ValueError(
+                    "Chat acceptance requires a streaming chat intent"
+                ) from None
+            if (
+                intent.method != "POST"
+                or intent.path != "/api/v1/chat/completions"
+                or not isinstance(body, dict)
+                or body.get("stream") is not True
+            ):
+                raise ValueError("Chat acceptance requires a streaming chat intent")
         purpose = self._intent_purpose(actor_id)
         # Project and revision also participate in the immutable identity.
         raw = _json(intent.model_dump(mode="json"))
@@ -161,7 +186,7 @@ class RuntimeDelivery:
             project_id=project_id,
             actor_id=actor_id,
             idempotency_key=idempotency_key,
-            name="http.invoke/v1",
+            name=CHAT_ACCEPT_COMMAND if chat_acceptance else HTTP_INVOKE_COMMAND,
             payload={"format": 1, "request_reference": reference},
             lane=lane,
             expected_revision=expected_revision,
@@ -172,7 +197,8 @@ class RuntimeDelivery:
             row = await session.get(RuntimeCommandRow, command.receipt.command_id)
             if (
                 row is None
-                or row.name != "http.invoke/v1"
+                or row.name not in {HTTP_INVOKE_COMMAND, CHAT_ACCEPT_COMMAND}
+                or row.name != command.name
                 or row.payload != command.payload
             ):
                 raise CoordinationConflict(
@@ -293,6 +319,37 @@ class RuntimeDelivery:
             frames.append(DeliveryFrame(row.sequence, row.kind, content))
         return DeliveryPage(command_id, project_id, state, tuple(frames))
 
+    async def chat_binding(self, actor_id: str, command_id: str) -> ChatBinding | None:
+        self._intent_purpose(actor_id)
+        async with self.coordination.database.session() as session:
+            command = await session.get(RuntimeCommandRow, command_id)
+            if command is None or command.actor_id != actor_id:
+                raise NotFoundError("accepted request is unavailable")
+            binding = await session.get(RuntimeChatBindingRow, command_id)
+            if binding is None:
+                return None
+            if command.name != CHAT_ACCEPT_COMMAND:
+                raise CoordinationConflict(
+                    "The chat binding does not belong to a typed chat receipt"
+                )
+            turn = await session.get(EntityRow, binding.turn_id)
+            if (
+                turn is None
+                or turn.kind != "chat_turns"
+                or (
+                    binding.project_id,
+                    turn.engagement_id,
+                    turn.payload.get("session_id"),
+                )
+                != (command.project_id, command.project_id, binding.session_id)
+            ):
+                raise CoordinationConflict(
+                    "The accepted chat binding needs reconciliation"
+                )
+            return ChatBinding(
+                command_id, binding.project_id, binding.turn_id, binding.session_id
+            )
+
     async def valid_actor(self, actor: str) -> bool:
         self._intent_purpose(actor)
         if actor == "operator":
@@ -393,7 +450,10 @@ class DurableHttpRunner:
             "root_path": "",
             "server": ("nebula-runtime", 80),
             "client": None,
-            "state": {"runtime_command_id": command_id},
+            "state": {
+                "runtime_command_id": command_id,
+                "runtime_chat_acceptance": command.name == CHAT_ACCEPT_COMMAND,
+            },
         }
         consumed, started, ended, status_code = False, False, False, 0
 

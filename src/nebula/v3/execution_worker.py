@@ -38,6 +38,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .remote_knowledge import RemoteKnowledgeIndex
     from .runtime_platform import default_runtime_platform
     from .runtime_chat_stream import RuntimeChatJournal
+    from .runtime_chat_acceptance import CHAT_ACCEPT_FEATURE
     from .storage import NebulaStore
 
     bootstrap = context.bootstrap
@@ -90,6 +91,7 @@ async def project_application(context, lease) -> AsyncIterator[object]:
                 context.coordinator.coordination, lease
             ),
             stream_journal=RuntimeChatJournal(context.coordinator.coordination, store),
+            durable_chat_acceptance=CHAT_ACCEPT_FEATURE in context.manifest.features,
         )
         async with app.router.lifespan_context(app):
             yield app

@@ -228,6 +228,12 @@ class ExecutionSQLScope:
                     )
         elif isinstance(statement, (Insert, Update, Delete)):
             table = statement.table
+            if table.name == "runtime_chat_bindings" and not isinstance(
+                statement, Insert
+            ):
+                raise CoordinationConflict(
+                    "Accepted chat bindings are immutable; retention belongs to the host"
+                )
             if table.name in {
                 "schema_versions",
                 "bootstrap_state",

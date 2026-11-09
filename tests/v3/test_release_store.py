@@ -10,7 +10,7 @@ from nebula.v3.deployment_protocol import ReleaseManifest
 from nebula.v3.release_store import MANIFEST_NAME, ReleaseIntegrityError, ReleaseStore
 
 
-def bundle(directory, *, version="v1", code=b"retained executable"):
+def bundle(directory, *, version="v1", code=b"retained executable", features=()):
     directory.mkdir(parents=True)
     (directory / "ui").mkdir()
     (directory / "nebula-core").write_bytes(code)
@@ -29,6 +29,7 @@ def bundle(directory, *, version="v1", code=b"retained executable"):
             name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
             for name in ("nebula-core", "ui/index.html")
         },
+        features=list(features),
     )
     raw = manifest.model_dump_json().encode()
     (directory / MANIFEST_NAME).write_bytes(raw)

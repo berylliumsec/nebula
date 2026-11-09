@@ -199,6 +199,25 @@ class DeploymentCoordinator:
                     "candidate protocol/schema is incompatible with a resident runtime"
                 )
         if role == "execution":
+            required = set(manifest.required_api_features)
+            if "chat.accept/v1" in manifest.features:
+                required.add("chat.accept/v1")
+            host = await session.get(DeploymentHostRow, "host")
+            api = (
+                await session.get(RuntimeProcessRow, host.api_runtime_id)
+                if host is not None and host.api_runtime_id
+                else None
+            )
+            if api is not None:
+                api_release = await session.get(RuntimeReleaseRow, api.version)
+                assert api_release is not None
+                provided = set(
+                    ReleaseManifest.model_validate(api_release.manifest).features
+                )
+                if not required <= provided:
+                    raise CoordinationConflict(
+                        "Promote an API with the execution candidate's required features first"
+                    )
             execution_versions = set(
                 await session.scalars(
                     select(RuntimeProcessRow.version).where(
@@ -212,6 +231,32 @@ class DeploymentCoordinator:
                 and len(execution_versions) >= MAX_EXECUTION_VERSIONS
             ):
                 return False
+        else:
+            required = set()
+            for version in await session.scalars(
+                select(RuntimeProcessRow.version).where(
+                    RuntimeProcessRow.role == "execution",
+                    RuntimeProcessRow.state.in_(_RESIDENT),
+                )
+            ):
+                resident = await session.get(RuntimeReleaseRow, version)
+                assert resident is not None
+                resident_manifest = ReleaseManifest.model_validate(resident.manifest)
+                required.update(resident_manifest.required_api_features)
+                if "chat.accept/v1" in resident_manifest.features:
+                    required.add("chat.accept/v1")
+            if await session.scalar(
+                select(RuntimeCommandRow.id)
+                .where(RuntimeCommandRow.name == "chat.accept/v1")
+                .limit(1)
+            ):
+                required.add("chat.accept/v1")
+            missing = required - set(manifest.features)
+            if missing:
+                raise CoordinationConflict(
+                    "Candidate API lacks features required by resident or accepted work: "
+                    + ", ".join(sorted(missing))
+                )
         return True
 
     async def reserve_worker(

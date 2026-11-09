@@ -351,7 +351,9 @@ class RuntimeCoordination:
         encoded = _json(
             {
                 "project_id": project_id,
-                "name": name,
+                # Both transports accept the same immutable HTTP intent. API
+                # replacement must not change its idempotency identity.
+                "name": "http.invoke/v1" if name == "chat.accept/v1" else name,
                 "payload": payload,
                 "expected_revision": expected_revision,
             }
@@ -517,6 +519,7 @@ class RuntimeCoordination:
         *,
         batch_key: str,
         events: Sequence[tuple[str, dict[str, Any]]],
+        apply: Callable[[AsyncSession], Awaitable[None]] | None = None,
     ) -> list[StreamFrame]:
         """Persist one batch before publication, using existing event retention."""
         _identifier(batch_key, "batch_key")
@@ -608,6 +611,8 @@ class RuntimeCoordination:
                     for row in rows
                 ],
             )
+            if apply is not None:
+                await apply(session)
             return [self._frame(row) for row in rows]
 
     @staticmethod

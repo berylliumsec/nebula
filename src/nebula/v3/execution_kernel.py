@@ -1815,6 +1815,7 @@ def create_execution_kernel(
     memory_budget_service: MemoryBudgetService | None = None,
     runtime_capacity=None,
     stream_journal=None,
+    durable_chat_acceptance: bool = False,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -1827,6 +1828,12 @@ def create_execution_kernel(
         store = NebulaStore(location)
     elif database is not None:
         raise ValueError("pass either store or database, not both")
+    if durable_chat_acceptance and (
+        stream_journal is None or store.database.execution_runtime_id is None
+    ):
+        raise ValueError(
+            "Durable chat acceptance requires a fenced execution database and journal"
+        )
     relation_service = ResourceRelationService(store)
     work_service = WorkService(store)
     action_registry = ActionRegistry(store)
@@ -10906,7 +10913,9 @@ def create_execution_kernel(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def create_chat_completion(request: ChatCompletionRequest) -> Any:
+    async def create_chat_completion(
+        request: ChatCompletionRequest, http_request: Request
+    ) -> Any:
         if request.control_assistant and request.session_id is None:
             if request.engagement_id is None:
                 raise ChatConfigurationError(
@@ -11345,6 +11354,14 @@ def create_execution_kernel(
             )
 
         service = chat_service()
+        if (
+            durable_chat_acceptance
+            and request.stream
+            and getattr(http_request.state, "runtime_chat_acceptance", False)
+        ):
+            request._runtime_command_id = getattr(
+                http_request.state, "runtime_command_id", None
+            )
         prepared = await service.prepare_async(request)
         if not request.stream:
             result = await service.complete(prepared)
@@ -11357,6 +11374,17 @@ def create_execution_kernel(
             )
         if not request.stream:
             return result
+        if request._runtime_command_id is not None and accepted_turn_id is not None:
+            session = prepared.session or prepared.pending_session
+            assert session is not None
+            return JSONResponse(
+                {
+                    "state": "accepted",
+                    "turn_id": accepted_turn_id,
+                    "session_id": session.id,
+                },
+                status_code=202,
+            )
 
         turn_id = accepted_turn_id
 

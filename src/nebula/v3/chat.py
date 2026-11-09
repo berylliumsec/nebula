@@ -627,6 +627,7 @@ async def resolve_chat_model_content(
 
 class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
+    _runtime_command_id: str | None = PrivateAttr(default=None)
     # Core-only recovery context; never accepted from the public request body.
     _butler_recovery_case_id: str | None = PrivateAttr(default=None)
     _butler_recovery_instructions: str | None = PrivateAttr(default=None)
@@ -4131,6 +4132,7 @@ class ChatService:
             runtime.journal_prior_history = await self.stream_journal.has_history(
                 turn.id
             )
+            await self.stream_journal.begin(turn.id, runtime.epoch)
         initial_frames = await self._publish_provider_events(
             turn.id,
             runtime,
@@ -17015,6 +17017,8 @@ class ChatService:
             raise last_error
 
     async def _write_turn_inputs(self, prepared: PreparedChat) -> None:
+        from .runtime_chat_acceptance import bind_chat_command
+
         turn = prepared.turn
         if turn is None or not prepared.engagement_id:
             return
@@ -17089,6 +17093,14 @@ class ChatService:
                 (await transaction.add_all([session, *messages]))
                 (await stage_snapshot_parts(transaction, snapshot_parts))
                 (await transaction.add(turn))
+                await bind_chat_command(
+                    transaction.session,
+                    command_id=prepared.source_request._runtime_command_id
+                    if prepared.source_request is not None
+                    else None,
+                    turn_id=turn.id,
+                    session_id=session.id,
+                )
             prepared.session = session
             prepared.pending_session = None
         else:
@@ -17117,6 +17129,14 @@ class ChatService:
                 (await transaction.add_all(messages))
                 (await stage_snapshot_parts(transaction, snapshot_parts))
                 (await transaction.add(turn))
+                await bind_chat_command(
+                    transaction.session,
+                    command_id=prepared.source_request._runtime_command_id
+                    if prepared.source_request is not None
+                    else None,
+                    turn_id=turn.id,
+                    session_id=session.id,
+                )
                 if goal is not None:
                     (
                         await transaction.update(

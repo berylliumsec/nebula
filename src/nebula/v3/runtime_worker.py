@@ -12,8 +12,10 @@ import sys
 from typing import Any
 
 import uvicorn
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
-from .database import Database, RuntimeProcessRow
+from .database import Database, RuntimeChatBindingRow, RuntimeProcessRow
 from .database_pool import PoolSettings
 from .deployment_protocol import ReleaseManifest
 from .deployments import DeploymentCoordinator
@@ -72,6 +74,7 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
         delivery,
         operator_token=bootstrap.operator_token.get_secret_value(),
         project_for=routing.project_for,
+        chat_acceptance_for=routing.supports_chat_acceptance,
         upstream_for=routing.upstream_for,
         static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
     )
@@ -109,11 +112,25 @@ async def run_worker(
             raise RuntimeIpcError(
                 "worker version differs from its retained application"
             )
+        if set(manifest.features) - {"chat.accept/v1"}:
+            raise RuntimeIpcError(
+                "The retained worker cannot provide its declared release features"
+            )
         schema = await database.current_schema_version()
         if not manifest.schema_min <= schema <= manifest.schema_max:
             raise RuntimeIpcError(
                 "retained application cannot use the current SQL schema"
             )
+        if bootstrap.identity.role == "api" or "chat.accept/v1" in manifest.features:
+            try:
+                async with database.session() as session:
+                    await session.execute(
+                        select(RuntimeChatBindingRow.command_id).limit(0)
+                    )
+            except SQLAlchemyError:
+                raise RuntimeIpcError(
+                    "The supervisor must apply additive chat migrations before worker readiness"
+                ) from None
         from .diagnostics import configure_diagnostics
 
         diagnostic_root = (

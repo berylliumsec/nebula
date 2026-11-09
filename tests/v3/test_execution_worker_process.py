@@ -295,3 +295,178 @@ async def test_api_promotion_reconnects_durable_chat_without_restarting_producer
                 assert not same_process(first_api.pid, first_api.process_birth)
     finally:
         release.write_text("fixture cleanup")
+
+
+async def test_detached_acceptance_runs_two_chats_in_one_project_through_api_replacement(
+    supervised,
+):
+    from sqlalchemy import select
+    from nebula.v3.database import (
+        RuntimeChatBindingRow,
+        RuntimeCommandRow,
+        RuntimeResourceRow,
+    )
+
+    root, fixture = supervised.supervisor, supervised.managed
+    await fixture.store.create(
+        ProviderProfile(
+            id="inert-provider",
+            name="Inert fixture",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    source = _JOURNALED_WORKER.replace(
+        "chat.provider_scheduler.host_load = None",
+        "from nebula.v3.provider_scheduler import ProviderScheduler, ProviderSchedulerConfig\n        chat.provider_scheduler = ProviderScheduler(app.state.store, worker_id=chat.worker_id, config=ProviderSchedulerConfig(provider_limit=2, background_limit=1), runtime_capacity=chat.runtime_capacity)",
+    )
+    await fixture.stage("v1", source, features=["chat.accept/v1"])
+    await fixture.stage("v2", _API_WORKER, features=["chat.accept/v1"])
+    limits = await root.shared_services.capacity.status()
+    await root.shared_services.capacity.configure(
+        {"provider": 2, "background": 1, "tool": 2, "cpu": 2},
+        expected_revision=limits["revision"],
+    )
+    execution = await root.prepare_execution("v1")
+    await root.attach_execution("admitted-project", execution.runtime_id)
+    first_api = await root.prepare_api("v1")
+    await root.promote_api(
+        first_api.runtime_id,
+        expected_revision=(await root.coordinator.status()).revision,
+    )
+    release = fixture.data / "fixture-provider-release"
+    body = {
+        "provider_id": "inert-provider",
+        "engagement_id": "admitted-project",
+        "model": "model-a",
+        "messages": [{"role": "user", "content": "Two independent chats"}],
+        "include_knowledge": False,
+        "stream": True,
+    }
+
+    async def capture(client, key):
+        headers = {"Authorization": "Bearer " + _TOKEN, "Idempotency-Key": key}
+        async with client.stream(
+            "POST", "/api/v1/chat/completions", json=body, headers=headers
+        ) as response:
+            assert response.status_code == 200
+            received = []
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    frame = json.loads(line[6:])
+                    received.append(frame)
+                    if frame.get("type") == "delta":
+                        break
+            assert received[-1]["delta"] == "First "
+            return {
+                "command_id": response.headers["x-nebula-command-id"],
+                "turn_id": next(
+                    frame["turn_id"]
+                    for frame in received
+                    if frame.get("type") == "started"
+                ),
+                "sequence": received[-1]["sequence"],
+                "epoch": received[-1]["epoch"],
+            }
+
+    try:
+        async with server(root.app) as endpoint:
+            async with httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(uds=endpoint[7:]),
+                base_url="http://synthetic-listener",
+                trust_env=False,
+                timeout=20,
+            ) as client:
+                first = await capture(client, "parallel-first")
+                second = await capture(client, "parallel-second")
+                assert first["turn_id"] != second["turn_id"]
+                assert (
+                    fixture.data / "fixture-provider-starts"
+                ).read_text().splitlines() == ["one", "one"]
+                async with asyncio.timeout(8):
+                    while True:
+                        async with fixture.database.session() as session:
+                            commands = list(
+                                await session.scalars(select(RuntimeCommandRow))
+                            )
+                            resources = list(
+                                await session.scalars(
+                                    select(RuntimeResourceRow).where(
+                                        RuntimeResourceRow.state == "active"
+                                    )
+                                )
+                            )
+                            bindings = list(
+                                await session.scalars(select(RuntimeChatBindingRow))
+                            )
+                        if len(commands) == 2 and all(
+                            command.state == "succeeded" for command in commands
+                        ):
+                            break
+                        await asyncio.sleep(0.02)
+                assert {command.name for command in commands} == {"chat.accept/v1"}
+                assert len(bindings) == 2 and len(resources) == 2
+                assert {resource.kind for resource in resources} == {"provider_turn"}
+                assert (await root.shared_services.capacity.status())["used"][
+                    "provider"
+                ] == 2
+                new_api = await root.prepare_api("v2")
+                await root.promote_api(
+                    new_api.runtime_id,
+                    expected_revision=(await root.coordinator.status()).revision,
+                )
+                await root.host.retire(first_api.runtime_id)
+                retry = await capture(client, "parallel-first")
+                assert (
+                    retry["command_id"] == first["command_id"]
+                    and retry["turn_id"] == first["turn_id"]
+                )
+                assert (
+                    fixture.data / "fixture-provider-starts"
+                ).read_text().splitlines() == ["one", "one"]
+                release.write_text("finish both inert producers")
+                for accepted in (first, second):
+                    response = await client.get(
+                        f"/api/v1/chat/turns/{accepted['turn_id']}/events?after={accepted['sequence']}&epoch={accepted['epoch']}",
+                        headers={"Authorization": "Bearer " + _TOKEN},
+                    )
+                    assert (
+                        response.status_code == 200
+                        and response.headers["x-nebula-api-version"] == "v2"
+                    )
+                    frames = [
+                        json.loads(line[6:])
+                        for line in response.text.splitlines()
+                        if line.startswith("data: ")
+                    ]
+                    assert (
+                        "".join(
+                            frame.get("delta", "")
+                            for frame in frames
+                            if frame.get("type") == "delta"
+                        )
+                        == "last"
+                    )
+                    assert any(frame.get("type") == "done" for frame in frames)
+                    status = await client.get(
+                        "/api/v1/runtime/requests/" + accepted["command_id"],
+                        headers={"Authorization": "Bearer " + _TOKEN},
+                    )
+                    assert status.json()["turn_id"] == accepted["turn_id"]
+                    assert status.json()["state"] == "succeeded"
+                assert len(await fixture.store.list_entities(ChatTurn)) == 2
+                async with fixture.database.session() as session:
+                    assert (
+                        list(
+                            await session.scalars(
+                                select(RuntimeResourceRow).where(
+                                    RuntimeResourceRow.state != "closed"
+                                )
+                            )
+                        )
+                        == []
+                    )
+                assert same_process(execution.pid, execution.process_birth)
+    finally:
+        release.write_text("fixture cleanup")

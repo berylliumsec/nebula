@@ -130,7 +130,7 @@ async def managed(location, tmp_path):
     hosts = [host]
     await host.start()
 
-    async def stage(version, program=None):
+    async def stage(version, program=None, *, features=()):
         source = tmp_path / ("application-" + version)
         digest = bundle(
             source,
@@ -141,6 +141,7 @@ async def managed(location, tmp_path):
                 + "\n"
                 + (program if program is not None else _WORKER)
             ).encode(),
+            features=features,
         )
         manifest, installed = retained.install(source, expected_manifest_sha256=digest)
         await coordinator.stage(manifest, installed, digest)

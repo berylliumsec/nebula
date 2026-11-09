@@ -271,6 +271,7 @@ class RuntimeCommandRow(Base):
         ),
         UniqueConstraint("project_id", "sequence", name="uq_runtime_command_sequence"),
         Index("ix_runtime_command_dispatch", "project_id", "state", "sequence"),
+        Index("ix_runtime_command_name", "name"),
     )
 
     id: Mapped[str] = mapped_column(String(200), primary_key=True)
@@ -318,6 +319,19 @@ class RuntimeDeliveryRow(Base):
     sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     content_reference: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class RuntimeChatBindingRow(Base):
+    """Command identity committed atomically with the accepted conversation turn."""
+
+    __tablename__ = "runtime_chat_bindings"
+    __table_args__ = (Index("ix_runtime_chat_binding_turn", "project_id", "turn_id"),)
+    command_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class RuntimeReleaseRow(Base):
