@@ -67,9 +67,11 @@ class RuntimeGlobalApi:
 
         from .runtime_global_settings import mount_global_settings
         from .runtime_global_reads import mount_global_reads
+        from .runtime_global_work import mount_global_work
 
         mount_global_settings(self.app, self.store, self.actor)
         mount_global_reads(self.app, self.store, self.actor)
+        mount_global_work(self.app, self.store, self.actor)
 
         for resource, model in (
             ("engagements", Engagement),
