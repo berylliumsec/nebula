@@ -61,10 +61,16 @@ FIRST_PARTY_OVERRIDES: dict[str, tuple[int, int | None]] = {
     "gemini-1-5-flash": (1_048_576, 8_192),
     "gemini-1-5-pro": (2_097_152, 8_192),
     "gemini-2-0-flash": (1_048_576, 8_192),
+    # https://developers.openai.com/api/docs/models/gpt-6-sol
+    "gpt-6-sol": (1_050_000, 128_000),
     # xAI models OpenRouter no longer lists.
     "grok-3": (131_072, None),
     "grok-4": (256_000, None),
 }
+
+
+# Separate input caps remain binding when a caller requests a shorter reply.
+FIRST_PARTY_INPUT_LIMITS = {"gpt-6-sol": 922_000}
 
 
 def normalize(model_id: str) -> str:
@@ -127,6 +133,18 @@ def render(limits: dict[str, tuple[int, int | None]]) -> str:
     lines.extend(
         f'    "{key}": ({window}, {output}),'
         for key, (window, output) in limits.items()
+    )
+    lines.extend(
+        [
+            "}",
+            "",
+            "# Published input caps independent of the requested output allowance.",
+            "KNOWN_MODEL_INPUT_LIMITS: dict[str, int] = {",
+        ]
+    )
+    lines.extend(
+        f'    "{key}": {value},'
+        for key, value in sorted(FIRST_PARTY_INPUT_LIMITS.items())
     )
     lines.append("}")
     return "\n".join(lines) + "\n"

@@ -40,7 +40,11 @@ from .domain import (
     Task,
     utc_now,
 )
-from .known_model_limits import KNOWN_MODEL_LIMITS, KNOWN_MODEL_LIMITS_REVISION
+from .known_model_limits import (
+    KNOWN_MODEL_INPUT_LIMITS,
+    KNOWN_MODEL_LIMITS,
+    KNOWN_MODEL_LIMITS_REVISION,
+)
 from .model_catalog import route_limits_verified as descriptor_routes_verified
 from .model_pricing import combined_billed_cost
 from .providers import (
@@ -537,8 +541,8 @@ def _default_output_share(context_window: int) -> int:
     )
 
 
-def known_model_limits(model: str | None) -> tuple[int, int | None] | None:
-    """Published (context_window, max_output_tokens) for a well-known hosted model.
+def _known_model_key(model: str | None) -> str | None:
+    """Find the normalized catalog key for a well-known hosted model.
 
     Provider spellings of one model are folded together: vendor paths
     ("deepseek/deepseek-v3.2", "models/gemini-2.5-pro"), Bedrock prefixes and
@@ -556,9 +560,15 @@ def known_model_limits(model: str | None) -> tuple[int, int | None] | None:
     candidate = normalized
     while candidate:
         if candidate in KNOWN_MODEL_LIMITS:
-            return KNOWN_MODEL_LIMITS[candidate]
+            return candidate
         candidate = candidate.rpartition("-")[0]
     return None
+
+
+def known_model_limits(model: str | None) -> tuple[int, int | None] | None:
+    """Published context and output limits, using normalized hosted model ids."""
+    key = _known_model_key(model)
+    return KNOWN_MODEL_LIMITS.get(key) if key is not None else None
 
 
 def resolve_context_limits(
@@ -602,6 +612,11 @@ def resolve_context_limits(
         if isinstance(descriptor, dict)
         else 0
     )
+    if not profile.is_local:
+        known_key = _known_model_key(model)
+        known_input = KNOWN_MODEL_INPUT_LIMITS.get(known_key, 0) if known_key else 0
+        if known_input:
+            input_limit = min(input_limit, known_input) if input_limit else known_input
     known_model = False
     if not profile.is_local and (not model_window or not model_output):
         # Local runtimes serve their own configured window (e.g. Ollama num_ctx),
