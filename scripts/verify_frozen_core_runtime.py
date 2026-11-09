@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -248,6 +249,12 @@ def run(
         projects = require(client.get("/engagements"))
         if project["id"] not in {item["id"] for item in projects}:
             raise AssertionError("Original saved project disappeared")
+        with sqlite3.connect(
+            f"file:{data / 'nebula.db'}?mode=ro", uri=True
+        ) as database:
+            process_rows = database.execute(
+                "SELECT runtime_id,role,pid,process_birth,state FROM runtime_processes"
+            ).fetchall()
         result = subprocess.run(
             [str(core), "runtime-stop", "--data-dir", str(data)],
             cwd=output,
@@ -264,6 +271,15 @@ def run(
         stop = json.loads(result.stdout)
         if stop.get("observed_state") != "stopped":
             raise AssertionError("Shutdown did not report observed process exit")
+        from nebula.v3.process_identity import same_process
+
+        if any(
+            pid and birth and same_process(pid, birth)
+            for _, _, pid, birth, _ in process_rows
+        ):
+            raise AssertionError(
+                "A registered frozen worker survived verified shutdown"
+            )
         stopped = True
         checks.append("explicit shutdown observes service exit after durable success")
         receipt = {
@@ -281,6 +297,22 @@ def run(
             "baseline_version": baseline,
             "candidate_version": candidate_version,
             "identity": identity,
+            "runtime_processes": [
+                dict(
+                    zip(
+                        (
+                            "runtime_id",
+                            "role",
+                            "pid",
+                            "process_birth",
+                            "state_before_shutdown",
+                        ),
+                        row,
+                        strict=True,
+                    )
+                )
+                for row in process_rows
+            ],
             "checks": checks,
         }
         log = data / "runtime/supervisor.log"

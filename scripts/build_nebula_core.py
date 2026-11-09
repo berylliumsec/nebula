@@ -245,9 +245,15 @@ def main() -> None:
         "sqlalchemy.dialects.postgresql.psycopg",
         "--hidden-import",
         "sqlalchemy.dialects.sqlite.aiosqlite",
-        "--collect-all",
+        # These packages load Python modules and a native greenlet extension.
+        # collect-all also copies their upstream test trees into installers.
+        "--hidden-import",
         "aiosqlite",
-        "--collect-all",
+        "--copy-metadata",
+        "aiosqlite",
+        "--hidden-import",
+        "greenlet",
+        "--copy-metadata",
         "greenlet",
         "--hidden-import",
         "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",

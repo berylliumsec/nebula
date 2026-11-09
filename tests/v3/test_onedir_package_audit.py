@@ -27,3 +27,14 @@ def test_onedir_audit_requires_data_outside_the_executable(tmp_path, monkeypatch
     (runtime / "_internal/nebula/v3/runtime-compatibility.json").unlink()
     with pytest.raises(package_audit.ArtifactAuditError, match="runtime-compatibility"):
         package_audit.inspect_pyinstaller_directory(runtime, "nebula-runtime")
+
+
+@pytest.mark.parametrize(
+    "member", ["aiosqlite/tests/test_core.py", "greenlet.tests.test_greenlet"]
+)
+def test_archive_rejects_dependency_tests(member):
+    members = {alternatives[0] for alternatives in package_audit.REQUIRED_MEMBERS}
+    with pytest.raises(
+        package_audit.ArtifactAuditError, match="forbidden members|build residue"
+    ):
+        package_audit.validate_members(members | {member})
