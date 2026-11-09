@@ -65,8 +65,9 @@ Pixel 5 Chromium 320/390/430 and iPhone 13 WebKit 320/390/430. Its three
 journeys collect 24 cases; the physical live-apply journey requires an explicitly
 selected disposable runtime and cached image. Collection is not execution evidence.
 
-Physical allocator routing, final runtime-service launchers and the complete
-production LAN matrix remain pending. The managed browser cache has no WebKit runtime; previous official
+The complete current production LAN matrix and packaged continuity remain
+pending. Source physical allocator and launcher results are recorded below.
+The managed browser cache has no WebKit runtime; previous official
 downloads were rejected with HTTP 403 `Domain forbidden`. No bypass is used.
 Physical devices and packaged desktop continuity have not been exercised. These
 missing gates prevent an unqualified product-completion claim.
@@ -176,3 +177,18 @@ under `/tmp/nebula-acceptance-final-17ec988e`. This is source-runtime evidence;
 it does not establish frozen or GUI package continuity. The Python acceptance
 module now collects 26 cases, including two Butler overview regressions that
 still require their separate product fix.
+
+The first desktop live-memory browser attempt omitted the visible runner
+enforcement probe and correctly encountered disabled limit controls.
+Independent review confirmed that omission; the fixture now checks enforcement
+through the profile-specific visible button and reads back its genuine
+capability before launching the bounded allocator. It does not seed a synthetic
+capability or bypass the disabled control.
+
+That corrected journey reached a verified physical 16 MiB limit on the original
+owner/group, retained the limit on reload, and passed focus and 44 px target
+checks. It failed axe after 49.4 seconds: the enabled “Apply to this job” button
+had foreground `#dae2e4` on `#6b6b6b`, ratio 4.05 against the required 4.5.
+The assertion remains intact. Evidence is preserved in
+`/tmp/nebula-acceptance-live-ui-contrast-failure`; no passing live-memory browser
+or complete responsive matrix is claimed from this attempt.

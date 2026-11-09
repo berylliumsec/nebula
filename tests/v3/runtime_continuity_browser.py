@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import subprocess
 import sys
 import tempfile
 
@@ -21,7 +22,8 @@ import uvicorn
 from nebula.v3.domain import ChatSession
 from nebula.v3.release_store import ReleaseStore
 from tests.v3.runtime_continuity_bundle import build_bundle, remove_owned_tree, retained_bundle
-from tests.v3.runtime_continuity_fixture import ContinuityFixture
+from tests.v3.runtime_continuity_fixture import ContinuityFixture, completed_response
+from tests.v3.runtime_continuity_allocator import release_allocator
 
 
 async def serve(root: Path):
@@ -42,19 +44,45 @@ async def serve(root: Path):
         bundles.append(await asyncio.to_thread(retained_bundle, built, retained))
         await asyncio.to_thread(remove_owned_tree, replaceable)
     fixture = None
+    allocations = {}
     serial = asyncio.Lock()
+
+    async def finish_allocations():
+        errors = []
+        if fixture is not None:
+            for identity in allocations:
+                release_allocator(fixture.root, identity)
+            for identity, task in allocations.items():
+                try:
+                    await completed_response(fixture.client, await task, timeout=30)
+                except Exception as exc:
+                    errors.append(f"{identity}: {type(exc).__name__}: {exc}")
+        allocations.clear()
+        return errors
+
+    async def close_fixture():
+        nonlocal fixture
+        if fixture is not None:
+            errors = await finish_allocations()
+            try:
+                await fixture.close()
+            finally:
+                fixture = None
+            if errors:
+                raise RuntimeError("Allocator cleanup was not confirmed: " + "; ".join(errors))
 
     @asynccontextmanager
     async def lifespan(_app):
         try:
             yield
         finally:
-            if fixture is not None:
-                await fixture.close()
-            auth_file.unlink(missing_ok=True)
-            # Uvicorn re-delivers SIGTERM after its lifespan exits. Remove the
-            # private read-only bundles here, before that default signal action.
-            await asyncio.to_thread(remove_owned_tree, root)
+            try:
+                await close_fixture()
+            finally:
+                auth_file.unlink(missing_ok=True)
+                # Uvicorn re-delivers SIGTERM after its lifespan exits. Remove
+                # private bundles before that default signal action.
+                await asyncio.to_thread(remove_owned_tree, root)
 
     app = FastAPI(lifespan=lifespan)
 
@@ -72,13 +100,13 @@ async def serve(root: Path):
         authorize(request)
         body = await request.json()
         async with serial:
-            if fixture is not None:
-                await fixture.close()
+            await close_fixture()
             selected = root / ("installation-" + secrets.token_hex(8))
             selected.mkdir()
             fixture = ContinuityFixture(selected / "data", selected / "core.db", bundles,
                                         host=host, port=port, listen_host="0.0.0.0")
-            await fixture.initialize(cold=body.get("cold", False), pairing=True)
+            await fixture.initialize(cold=body.get("cold", False), pairing=True,
+                                     memory=body.get("memory", False))
             await fixture.store.create(ChatSession(
                 id="continuity-chat", engagement_id="continuity-project",
                 title="Synthetic continuity conversation", provider_profile_id="continuity-provider",
@@ -97,11 +125,64 @@ async def serve(root: Path):
             raise HTTPException(409, "reset the isolated fixture first")
         body = await request.json()
         operation = body.pop("operation")
+        if operation == "diagnostics":
+            health = await fixture.client.get("/api/v1/health", timeout=5)
+            memory = await fixture.client.get("/api/v1/memory-budgets", timeout=5)
+            jobs = {}
+            for identity, task in allocations.items():
+                job = await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity, timeout=5)
+                jobs[identity] = {"request_returned": task.done(), "status": job.status_code, "job": job.json()}
+            paths = [*fixture.root.glob("runtime/*.log")]
+            paths += list(fixture.root.glob("runtime/workers/*/logs/diagnostics.log"))
+            paths += list(fixture.root.glob("runtime/workers/*/logs/butler.log"))
+            paths += list(fixture.root.glob("runtime/workers/*/logs/api.log"))
+            logs = {}
+            for path in paths[:16]:
+                with path.open("rb") as stream:
+                    stream.seek(max(0, path.stat().st_size - 8192))
+                    logs[str(path.relative_to(fixture.root))] = stream.read(8192).decode(errors="replace")
+            return {"status": health.status_code, "health": health.json(),
+                    "runtime": await fixture.control("inspect"), "logs": logs,
+                    "memory": {"status": memory.status_code, "settings": memory.json()},
+                    "allocations": jobs}
         if operation in {"hold", "release"}:
             if body.get("name") not in {"hold-provider"}:
                 raise HTTPException(400, "unknown fixture barrier")
             getattr(fixture, operation)(body["name"])
             return {"done": True}
+        if operation == "start-allocation":
+            identity = body["job_id"]
+            if identity in allocations or not (fixture.root / "allocator.json").exists():
+                raise HTTPException(409, "a fresh physical allocator fixture is required")
+            allocations[identity] = asyncio.create_task(fixture.client.post(
+                "/api/v1/engagements/continuity-project/acceptance-allocation",
+                json={"job_id": identity, "hold": True}, headers={"Idempotency-Key": identity},
+            ))
+            return {"started": True}
+        if operation in {"release-allocation", "allocation-result", "physical-group"}:
+            identity = body["job_id"]
+            if identity not in allocations:
+                raise HTTPException(404, "unknown fixture allocation")
+            if operation == "release-allocation":
+                release_allocator(fixture.root, identity)
+                return {"released": True}
+            if operation == "allocation-result":
+                return (await completed_response(fixture.client, await allocations[identity], timeout=30)).json()
+            response = await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity)
+            response.raise_for_status()
+            group_id = response.json()["evidence"]["group_id"]
+            selected = json.loads((fixture.root / "allocator.json").read_text())
+            environment = {name: value for name, value in os.environ.items() if name not in {
+                "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
+            }}
+            inspected = await asyncio.to_thread(subprocess.run,
+                [selected["runtime"], "--host=" + selected["socket"], "inspect", group_id],
+                check=True, capture_output=True, text=True, timeout=10, env=environment)
+            group = json.loads(inspected.stdout)[0]
+            if group["Id"] != group_id or group["Config"]["Labels"].get("nebula.memory.job") != identity:
+                raise HTTPException(409, "physical group identity did not match the fixture job")
+            return {"id": group["Id"], "memory_bytes": group["HostConfig"]["Memory"],
+                    "running": group["State"]["Running"], "oom_killed": group["State"]["OOMKilled"]}
         if operation == "restart-supervisor":
             await fixture.kill_supervisor()
             await fixture.start()
@@ -110,12 +191,9 @@ async def serve(root: Path):
 
     @app.post("/cleanup")
     async def cleanup(request: Request):
-        nonlocal fixture
         authorize(request)
         async with serial:
-            if fixture is not None:
-                await fixture.close()
-                fixture = None
+            await close_fixture()
         return {"cleaned": True}
 
     auth_file.parent.mkdir(parents=True, exist_ok=True)
