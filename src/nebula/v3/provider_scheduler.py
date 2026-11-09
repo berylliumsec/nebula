@@ -22,6 +22,7 @@ from .diagnostics import create_diagnostic_task
 from .execution_scope import current_execution_lease
 from .runtime_capacity import CapacityReservation, RuntimeCapacity
 from .runtime_coordination import LeaseLost
+from .runtime_project_admission import HANDOFF_WAIT, turn_admission_allowed
 
 # A turn waiting in one of these states resumes through admission again, so
 # its admission stays parked until it does.
@@ -325,39 +326,20 @@ class ProviderScheduler:
                         await admission.release(turn_id)
                         admission = None
                         continue
-                break
-            latest = await self.store.get(ChatTurn, turn_id)
-            if latest.status == ChatTurnStatus.CANCELLED:
-                raise asyncio.CancelledError
-            admitted_at = utc_now()
-            changes: dict[str, Any] = {
-                "admitted_at": admitted_at,
-                "admission_reason": None,
-            }
-            # Only a new turn starts routing here. A resumed turn keeps the
-            # state it parked in (waiting for an approval or a callback, or
-            # finalizing a retried answer): that state selects how it resumes.
-            if latest.status == ChatTurnStatus.QUEUED:
-                changes["status"] = ChatTurnStatus.ROUTING
-            async with self.store.transaction() as transaction:
-                row = await transaction.session.get(ProviderTurnQueueRow, turn_id)
-                if row is None or row.state != "queued":
-                    raise ConflictError("provider turn is no longer queued")
-                updated = await transaction.update(
-                    ChatTurn,
-                    turn_id,
-                    changes,
-                    expected_revision=latest.revision,
-                )
-                row.state = "running"
-                row.admitted_at = admitted_at
-                row.lease_owner = admission.lease_owner
-                row.lease_expires_at = admitted_at + timedelta(hours=24)
-                (await transaction.session.flush())
+                latest = await self.store.get(ChatTurn, turn_id)
+                if latest.status == ChatTurnStatus.CANCELLED:
+                    raise asyncio.CancelledError
+                if await self._commit_admission(latest, admission):
+                    break
+                # The gate and queue transition share the ownership lock.
+                # A handoff cannot slip between a check and provider start.
+                await admission.release(turn_id)
+                admission = None
+                await deferred(HANDOFF_WAIT)
+                await asyncio.sleep(0.1)
             self._active[turn_id] = lane
             self._active_owners[turn_id] = admission.lease_owner
             self._invalidate_positions()
-            del updated
             self._host_reasons.pop(turn_id, None)
             return admission
         except BaseException:
@@ -367,6 +349,33 @@ class ProviderScheduler:
             if admission is not None:
                 await admission.release(turn_id)
             raise
+
+    async def _commit_admission(self, turn, admission):
+        admitted_at = utc_now()
+        changes: dict[str, Any] = {
+            "admitted_at": admitted_at,
+            "admission_reason": None,
+        }
+        # A resumed turn retains the state selecting its recovery path.
+        if turn.status == ChatTurnStatus.QUEUED:
+            changes["status"] = ChatTurnStatus.ROUTING
+        async with self.store.transaction() as transaction:
+            if self.runtime_capacity is not None and not await turn_admission_allowed(
+                transaction.session, turn
+            ):
+                return False
+            row = await transaction.session.get(ProviderTurnQueueRow, turn.id)
+            if row is None or row.state != "queued":
+                raise ConflictError("provider turn is no longer queued")
+            await transaction.update(
+                ChatTurn, turn.id, changes, expected_revision=turn.revision
+            )
+            row.state = "running"
+            row.admitted_at = admitted_at
+            row.lease_owner = admission.lease_owner
+            row.lease_expires_at = admitted_at + timedelta(hours=24)
+            await transaction.session.flush()
+        return True
 
     async def _complete(self, turn_id: str, lease_owner: str) -> None:
         if self._active_owners.get(turn_id) == lease_owner:

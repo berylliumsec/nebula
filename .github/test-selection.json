@@ -1,21 +1,24 @@
 {
-  "change_digest": "7445b519d68666f981c04323a99d1fbfd1ca22a067c2a4964f878a86034db4aa",
+  "change_digest": "a5685a8fafd2d90041d71074be243d8061087cfda51fb4b811cb4b5845ac18af",
   "reviewed_by": "Codex",
-  "reason": "81 distinct passing cases:73 initial passes,5 after independently validated fixture domain/acquisition corrections,3 PostgreSQL reader cases after fixture pool-budget correction. No product behavior changed after first run; formatting and evidence only. Detached resume retains turn identity, atomically publishes segment cursor, isolates pending/errors from old frames, preserves retries and feature compatibility. Actual retained kernel resumes/attaches/replaces API with exactly2 provider starts across2 segments and same execution PID. Ruff and targeted mypy pass. Final CI union collected81.",
-  "exclusions": "No full suite, live provider/harness, existing installation, deployment, SSH or compute. Disposable SQL and retained source worker wrappers with inert providers only. Browser/LAN and packaged desktop acceptance remain separate final architecture gates.",
+  "reason": "30 distinct passing cases:29initial in17.44s and1 cancellation fixture in2.22s after independently validated pre-existing wait-write race synchronized. Eight new cases pass on SQLite/PostgreSQL: root freeze/admission serialization, admitted descendant completion, release of held host capacity, pinned/re-draining inventory and actual ChatService queued transfer preserving1turn/session with no cancel/pause and1target provider execution. Affected compensation, legacy admission/resume, shared provider schedulers and prestart-stop cases pass. Ruff and targeted mypy pass. Evidence-only docs and formatting followed source validation.",
+  "exclusions": "No full suite, live provider/harness, existing installation, operational deployment, browser or compute workload. Disposable SQL schemas, inert sleeping process identities and FakeProvider only. Physical controller inventory, automatic orchestration, retained-process active-work handoff and final LAN/WebKit/desktop gates remain subsequent integration.",
   "expected_tests": {
-    "python": 81,
+    "python": 30,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_chat_resume.py",
-    "tests/v3/test_chat_acceptance_compatibility.py",
-    "tests/v3/test_runtime_chat_acceptance.py",
-    "tests/v3/test_execution_worker_process.py::test_explicit_resume_detaches_and_replays_its_new_segment_after_api_replacement",
-    "tests/v3/test_runtime_chat_stream.py",
-    "tests/v3/test_execution_worker_process.py::test_detached_acceptance_runs_two_chats_in_one_project_through_api_replacement"
+    "tests/v3/test_project_handoff_admission.py",
+    "tests/v3/test_async_admission_cleanup.py",
+    "tests/v3/test_runtime_capacity.py::test_real_provider_schedulers_share_capacity_across_generations",
+    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
+    "tests/v3/test_chat_throughput.py::test_queued_cancellation_prevents_provider_admission",
+    "tests/v3/test_chat_throughput.py::test_admission_starts_only_a_new_turn_routing",
+    "tests/v3/test_chat_throughput.py::test_startup_restores_a_resume_the_previous_core_never_admitted",
+    "tests/v3/test_deployment_lifecycle.py::test_pinned_project_remains_usable_while_another_transfers",
+    "tests/v3/test_runtime_chat_stream.py::test_stop_before_first_producer_step_persists_cancelled_end_once"
   ],
   "frontend": [],
   "native": [],

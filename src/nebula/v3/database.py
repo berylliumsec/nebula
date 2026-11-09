@@ -382,6 +382,7 @@ class ProjectHandoffRow(Base):
     )
     blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    admitted_turn_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 

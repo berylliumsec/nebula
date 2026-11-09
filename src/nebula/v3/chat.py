@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .async_utils import MaybeAsync
 
-from .database import DatabaseBusyError
+from .database import DatabaseBusyError, EntityRow, ProviderTurnQueueRow
 
 from .async_utils import async_done_callback, call_async, finish_cleanup
 
@@ -1069,6 +1069,7 @@ class _ActiveProviderTurn:
     journal_closed: bool = False
     journal_prior_history: bool = False
     journal_start_sequence: int = 0
+    handoff_parked: bool = False
 
 
 # Session markers that describe the source conversation's own lifecycle, not
@@ -4186,6 +4187,38 @@ class ChatService:
             after=runtime.journal_start_sequence,
         )
 
+    async def park_queued_for_handoff(self):
+        """Detach queued producers, preserving their durable turn and admission."""
+        from .runtime_project_admission import turn_admission_allowed
+
+        if self.stream_journal is None:
+            raise ChatHistoryConflict("Queued transfer requires the durable journal")
+        parked = []
+        for turn_id, runtime in list(self._active_provider_turns.items()):
+            if runtime.done:
+                continue
+            # The admission transaction takes the same project ownership lock.
+            # Once this says held, a racing scheduler cannot admit this root.
+            async with self.store.database.session() as session:
+                turn = await session.get(EntityRow, turn_id)
+                queue = await session.get(ProviderTurnQueueRow, turn_id)
+                if turn is None or queue is None or queue.state != "queued":
+                    continue
+                if await turn_admission_allowed(
+                    session, ChatTurn.model_validate(turn.payload)
+                ):
+                    continue
+                runtime.handoff_parked = True
+                if runtime.task is not None:
+                    runtime.task.cancel()
+            if runtime.task is not None:
+                await asyncio.gather(runtime.task, return_exceptions=True)
+            # Includes cancellation before the producer's first coroutine step.
+            await self._close_provider_journal(turn_id, runtime)
+            runtime.done = True
+            parked.append(turn_id)
+        return parked
+
     async def _run_provider_turn(
         self,
         prepared: PreparedChat,
@@ -4298,11 +4331,16 @@ class ChatService:
                     try:
                         if not producing and prepared.turn is not None:
                             if cancelled:
-                                if self.shutting_down:
+                                if runtime.handoff_parked:
+                                    pass
+                                elif self.shutting_down:
                                     await self._interrupt_turn_for_shutdown(prepared)
                                 else:
                                     await self.cancel_turn(prepared.turn.id)
-                                await self.provider_scheduler.withdraw(prepared.turn.id)
+                                if not runtime.handoff_parked:
+                                    await self.provider_scheduler.withdraw(
+                                        prepared.turn.id
+                                    )
                             elif runtime.error is not None:
                                 runtime.error = await self._settle_unstarted_turn(
                                     prepared,

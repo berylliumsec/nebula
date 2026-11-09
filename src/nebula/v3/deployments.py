@@ -21,6 +21,8 @@ from .database import (
     BootstrapStateRow,
     DeploymentHostRow,
     DeploymentReceiptRow,
+    EntityRow,
+    ProviderTurnQueueRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeCommandRow,
@@ -542,6 +544,27 @@ class DeploymentCoordinator:
                     "Resource state changed; the source must verify a new safe boundary"
                 ]
 
+    @staticmethod
+    async def _admitted_turns(session, project_id):
+        turns = list(
+            await session.scalars(
+                select(ProviderTurnQueueRow.turn_id)
+                .join(EntityRow, EntityRow.id == ProviderTurnQueueRow.turn_id)
+                .where(
+                    EntityRow.engagement_id == project_id,
+                    EntityRow.kind == "chat_turns",
+                    ProviderTurnQueueRow.state == "running",
+                )
+                .order_by(ProviderTurnQueueRow.turn_id)
+                .limit(65)
+            )
+        )
+        if len(turns) > 64:
+            raise CoordinationConflict(
+                "Verify the project's provider inventory before handoff; more than 64 admissions remain"
+            )
+        return turns
+
     async def request_handoff(self, project_id: str, target_runtime_id: str) -> None:
         async with self.coordination._write() as session:
             await self._host(session)
@@ -605,6 +628,7 @@ class DeploymentCoordinator:
                 admission_held=True,
                 blockers=[],
                 checkpoint={},
+                admitted_turn_ids=await self._admitted_turns(session, project_id),
                 updated_at_ms=now,
             )
             if existing is None:
@@ -688,6 +712,12 @@ class DeploymentCoordinator:
             if commands:
                 observed.append(
                     f"{commands} unfinished or uncertain command(s) require their current owner"
+                )
+            if not row.admission_held and not pinned:
+                # The old runtime remained usable while pinned. Re-draining
+                # must include everything it admitted during that interval.
+                row.admitted_turn_ids = await self._admitted_turns(
+                    session, lease.project_id
                 )
             row.phase = (
                 HandoffPhase.FINISHING if observed else HandoffPhase.TRANSFERABLE
