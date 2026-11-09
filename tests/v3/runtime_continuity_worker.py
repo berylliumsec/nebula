@@ -33,8 +33,15 @@ async def project(context, lease):
     import nebula.v3.execution_kernel as kernel
     from nebula.v3.execution_worker import project_application
     from nebula.v3.providers import (
-        ModelCapabilities, ModelProvider, ModelResponse, ModelStreamEvent,
-        ModelUsage, ProviderConfig, ProviderHealth, ProviderKind, StreamEventType,
+        ModelCapabilities,
+        ModelProvider,
+        ModelResponse,
+        ModelStreamEvent,
+        ModelUsage,
+        ProviderConfig,
+        ProviderHealth,
+        ProviderKind,
+        StreamEventType,
     )
 
     root = Path(context.bootstrap.data_root)
@@ -42,21 +49,31 @@ async def project(context, lease):
 
     class InertProvider(ModelProvider):
         def __init__(self, provider_id):
-            super().__init__(ProviderConfig(
-                id=provider_id, kind=ProviderKind.OPENAI_COMPATIBLE,
-                base_url="http://127.0.0.1:1/v1", default_model="model-a",
-                model_allowlist=["model-a"], local=True,
-                capabilities=ModelCapabilities(streaming=True),
-            ))
+            super().__init__(
+                ProviderConfig(
+                    id=provider_id,
+                    kind=ProviderKind.OPENAI_COMPATIBLE,
+                    base_url="http://127.0.0.1:1/v1",
+                    default_model="model-a",
+                    model_allowlist=["model-a"],
+                    local=True,
+                    capabilities=ModelCapabilities(streaming=True),
+                )
+            )
 
         async def health(self):
-            return ProviderHealth(provider_id=self.config.id, healthy=True, models=["model-a"])
+            return ProviderHealth(
+                provider_id=self.config.id, healthy=True, models=["model-a"]
+            )
 
         async def complete(self, request):
             return ModelResponse(
-                provider_id=self.config.id, model="model-a", text="First last",
+                provider_id=self.config.id,
+                model="model-a",
+                text="First last",
                 usage=ModelUsage(input_tokens=4, output_tokens=2, total_tokens=6),
-                finish_reason="stop", provider_request_id="inert-" + lease.project_id,
+                finish_reason="stop",
+                provider_request_id="inert-" + lease.project_id,
             )
 
         async def stream(self, request):
@@ -65,7 +82,9 @@ async def project(context, lease):
             yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta="First ")
             await wait_barrier(root, "hold-provider")
             yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta="last")
-            yield ModelStreamEvent(type=StreamEventType.COMPLETED, response=await self.complete(request))
+            yield ModelStreamEvent(
+                type=StreamEventType.COMPLETED, response=await self.complete(request)
+            )
 
     original = kernel.create_execution_kernel
 
@@ -83,8 +102,11 @@ async def project(context, lease):
             }.get(scenario)
             if module is None:
                 raise RuntimeError("unknown retained acceptance scenario")
-            importlib.import_module(module).configure_app(app, root=root, lease=lease, version=version)
+            importlib.import_module(module).configure_app(
+                app, root=root, lease=lease, version=version
+            )
         from acceptance_allocator import attach_allocator
+
         attach_allocator(app, root, lease.project_id)
 
         @app.post("/api/v1/engagements/{selected_project}/acceptance-effect")
@@ -94,8 +116,15 @@ async def project(context, lease):
             record(root, "effect-entered", version=version, project_id=lease.project_id)
             await wait_barrier(root, "hold-effect")
             return {"effect": "synthetic-finished"}
-        record(root, "project-constructed", version=version, project_id=lease.project_id,
-               fencing_token=lease.fencing_token, source=kernel.__file__)
+
+        record(
+            root,
+            "project-constructed",
+            version=version,
+            project_id=lease.project_id,
+            fencing_token=lease.fencing_token,
+            source=kernel.__file__,
+        )
         return app
 
     kernel.create_execution_kernel = configured
@@ -103,10 +132,17 @@ async def project(context, lease):
         async with project_application(context, lease) as app:
             activate = getattr(app.state, "runtime_activate", None)
             if activate is not None:
+
                 async def deferred_activation():
-                    record(root, "activation-wait", version=version, project_id=lease.project_id)
+                    record(
+                        root,
+                        "activation-wait",
+                        version=version,
+                        project_id=lease.project_id,
+                    )
                     await wait_barrier(root, "hold-activation")
                     return await activate()
+
                 app.state.runtime_activate = deferred_activation
             agent = getattr(app.state, "runtime_handoff", None)
             if agent is not None:
@@ -114,6 +150,7 @@ async def project(context, lease):
 
                 async def tick():
                     from nebula.v3.database import ProjectHandoffRow
+
                     async with context.database.session() as session:
                         row = await session.get(ProjectHandoffRow, lease.project_id)
                         phase = row.phase if row is not None else None
@@ -130,6 +167,7 @@ async def project(context, lease):
 @asynccontextmanager
 async def execution(context):
     from nebula.v3.execution_worker import ProjectExecution
+
     worker = ProjectExecution(context, application_factory=project)
     try:
         yield worker.app
@@ -155,26 +193,40 @@ async def serve(config):
     database = Database(config["database"], pool_settings=settings)
     coordinator = DeploymentCoordinator(database)
     budgets = MemoryBudgetService(
-        database, administrator=lambda: MemoryAdministratorLimits.model_validate(config["administrator"])
+        database,
+        administrator=lambda: MemoryAdministratorLimits.model_validate(
+            config["administrator"]
+        ),
     )
-    host = RuntimeProcessHost(coordinator, root, operator_token=config["token"], pool_settings=settings)
+    host = RuntimeProcessHost(
+        coordinator, root, operator_token=config["token"], pool_settings=settings
+    )
     options = {"worker_admission": RuntimeMemoryAdmission(budgets)}
     if config.get("allow_insecure_device_pairing"):
         options["allow_insecure_device_pairing"] = True
     supervisor = RuntimeSupervisor(host, operator_token=config["token"], **options)
     for bundle in config["bundles"]:
-        manifest = ReleaseManifest.model_validate_json((Path(bundle["path"]) / "nebula-runtime.json").read_text())
-        await coordinator.stage(manifest, Path(bundle["path"]), bundle["manifest_sha256"])
+        manifest = ReleaseManifest.model_validate_json(
+            (Path(bundle["path"]) / "nebula-runtime.json").read_text()
+        )
+        await coordinator.stage(
+            manifest, Path(bundle["path"]), bundle["manifest_sha256"]
+        )
     await supervisor.start()
     from acceptance_allocator import runner_for
+
     allocator = runner_for(root)
     if allocator is not None:
-        supervisor.shared_services.memory_control.api.runners["continuity-allocator"] = allocator
+        supervisor.shared_services.memory_control.api.runners[
+            "continuity-allocator"
+        ] = allocator
     selected = config.get("recovery_version")
     if selected:
         selector = getattr(supervisor, "select_recovery_release", None)
         if selector is None:
-            raise RuntimeError("candidate lacks explicit verified host recovery release selection")
+            raise RuntimeError(
+                "candidate lacks explicit verified host recovery release selection"
+            )
         await selector(selected)
     original_advance = supervisor._advance_project_handoff
     original_transfer = coordinator.transfer
@@ -217,9 +269,15 @@ async def serve(config):
             try:
                 owner = await observed_store.get(ChatSession, body["session_id"])
                 if owner.engagement_id != "continuity-project":
-                    raise HTTPException(403, "the fixture owns only its synthetic project")
-                return await importlib.import_module(module).initialize(observed_store, root=root,
-                    project_id=owner.engagement_id, session_id=owner.id)
+                    raise HTTPException(
+                        403, "the fixture owns only its synthetic project"
+                    )
+                return await importlib.import_module(module).initialize(
+                    observed_store,
+                    root=root,
+                    project_id=owner.engagement_id,
+                    session_id=owner.id,
+                )
             finally:
                 await observed_store.event_history.close()
         if operation == "api":
@@ -227,7 +285,10 @@ async def serve(config):
                 identity = await supervisor.prepare_api(body["version"])
             except MemoryBudgetError as error:
                 raise HTTPException(409, str(error)) from error
-            await supervisor.promote_api(identity.runtime_id, expected_revision=(await coordinator.status()).revision)
+            await supervisor.promote_api(
+                identity.runtime_id,
+                expected_revision=(await coordinator.status()).revision,
+            )
             return identity.model_dump(mode="json")
         if operation == "execution":
             identity = await supervisor.prepare_execution(body["version"])
@@ -235,7 +296,9 @@ async def serve(config):
             return identity.model_dump(mode="json")
         if operation == "handoff":
             target = await supervisor.prepare_execution(body["version"])
-            await supervisor.request_project_handoff(body["project_id"], target.runtime_id)
+            await supervisor.request_project_handoff(
+                body["project_id"], target.runtime_id
+            )
             return target.model_dump(mode="json")
         if operation == "retire":
             await host.retire(body["runtime_id"], timeout=10)
@@ -251,7 +314,11 @@ async def serve(config):
                 await client.close()
         if operation == "tool-context":
             scenario = root / "acceptance-scenario.json"
-            if not scenario.is_file() or json.loads(scenario.read_text())["scenario"] != "provider-tools-context":
+            if (
+                not scenario.is_file()
+                or json.loads(scenario.read_text())["scenario"]
+                != "provider-tools-context"
+            ):
                 raise HTTPException(409, "select the explicit provider-tools fixture")
             from nebula.v3.domain import ChatSession
             from nebula.v3.provider_tool_manifest import read_manifest
@@ -261,31 +328,58 @@ async def serve(config):
             try:
                 owner = await observed_store.get(ChatSession, body["session_id"])
                 if owner.engagement_id != "continuity-project":
-                    raise HTTPException(403, "the fixture owns only its synthetic project")
+                    raise HTTPException(
+                        403, "the fixture owns only its synthetic project"
+                    )
                 async with database.session() as session:
-                    manifest = await read_manifest(session, project_id=owner.engagement_id, session_id=owner.id)
-                return {"manifest": {**manifest.model_dump(mode="json"), "digest": manifest.digest},
-                        "reference": owner.metadata.get("provider_tool_manifest")}
+                    manifest = await read_manifest(
+                        session, project_id=owner.engagement_id, session_id=owner.id
+                    )
+                return {
+                    "manifest": {
+                        **manifest.model_dump(mode="json"),
+                        "digest": manifest.digest,
+                    },
+                    "reference": owner.metadata.get("provider_tool_manifest"),
+                }
             finally:
                 await observed_store.event_history.close()
         if operation == "native-evidence":
             scenario = root / "acceptance-scenario.json"
-            if not scenario.is_file() or json.loads(scenario.read_text())["scenario"] != "standing-instructions-native":
-                raise HTTPException(409, "select the explicit native instructions fixture")
+            if (
+                not scenario.is_file()
+                or json.loads(scenario.read_text())["scenario"]
+                != "standing-instructions-native"
+            ):
+                raise HTTPException(
+                    409, "select the explicit native instructions fixture"
+                )
             from nebula.v3.domain import ChatSession, HarnessSession
             from nebula.v3.storage import NebulaStore
 
             observed_store = NebulaStore(database)
             try:
-                owner = await observed_store.get(ChatSession, body.get("session_id", "continuity-chat"))
+                owner = await observed_store.get(
+                    ChatSession, body.get("session_id", "continuity-chat")
+                )
                 if owner.engagement_id != "continuity-project":
-                    raise HTTPException(403, "the fixture owns only its synthetic project")
-                result = importlib.import_module("acceptance_standing_instructions_native").evidence(root)
+                    raise HTTPException(
+                        403, "the fixture owns only its synthetic project"
+                    )
+                result = importlib.import_module(
+                    "acceptance_standing_instructions_native"
+                ).evidence(root)
                 if owner.harness_session_id:
-                    native = await observed_store.get(HarnessSession, owner.harness_session_id)
+                    native = await observed_store.get(
+                        HarnessSession, owner.harness_session_id
+                    )
                     result["core_harness_session_id"] = native.id
-                    result["channel_receipt"] = native.metadata.get("instruction_channel")
-                    result["standing_snapshot"] = native.metadata.get("standing_instructions")
+                    result["channel_receipt"] = native.metadata.get(
+                        "instruction_channel"
+                    )
+                    result["standing_snapshot"] = native.metadata.get(
+                        "standing_instructions"
+                    )
                 return result
             finally:
                 await observed_store.event_history.close()
@@ -294,10 +388,25 @@ async def serve(config):
                 processes = list(await session.scalars(select(RuntimeProcessRow)))
             return {
                 "supervisor_pid": os.getpid(),
-                "processes": [{"id": row.runtime_id, "pid": row.pid, "birth": row.process_birth,
-                               "version": row.version, "role": row.role, "state": row.state} for row in processes],
-                "events": [json.loads(line) for line in (root / "acceptance-events.jsonl").read_text().splitlines()]
-                if (root / "acceptance-events.jsonl").exists() else [],
+                "processes": [
+                    {
+                        "id": row.runtime_id,
+                        "pid": row.pid,
+                        "birth": row.process_birth,
+                        "version": row.version,
+                        "role": row.role,
+                        "state": row.state,
+                    }
+                    for row in processes
+                ],
+                "events": [
+                    json.loads(line)
+                    for line in (root / "acceptance-events.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+                if (root / "acceptance-events.jsonl").exists()
+                else [],
             }
         raise HTTPException(400, "unknown synthetic fixture control")
 
@@ -306,10 +415,15 @@ async def serve(config):
     route = app.router.routes.pop()
     app.router.routes.insert(0, route)
     try:
-        await uvicorn.Server(uvicorn.Config(
-            supervisor.app, host=config["host"], port=config["port"],
-            log_level="warning", access_log=False,
-        )).serve()
+        await uvicorn.Server(
+            uvicorn.Config(
+                supervisor.app,
+                host=config["host"],
+                port=config["port"],
+                log_level="warning",
+                access_log=False,
+            )
+        ).serve()
     finally:
         await supervisor.close()
         await database.dispose()
@@ -320,17 +434,32 @@ def main():
         import chromadb
         import nebula.v3.runtime_worker as worker
         import sqlalchemy
-        print(json.dumps({"python": sys.executable, "core": worker.__file__,
-                          "sqlalchemy": sqlalchemy.__file__, "chroma": chromadb.__file__}))
+
+        print(
+            json.dumps(
+                {
+                    "python": sys.executable,
+                    "core": worker.__file__,
+                    "sqlalchemy": sqlalchemy.__file__,
+                    "chroma": chromadb.__file__,
+                }
+            )
+        )
     elif sys.argv[1:2] == ["acceptance-supervisor"]:
         config = json.loads(Path(sys.argv[2]).read_text())
         asyncio.run(serve(config))
     elif sys.argv[1:2] == ["runtime-worker"]:
         from nebula.v3.runtime_processes import read_worker_bootstrap
         from nebula.v3.runtime_worker import run_worker
-        asyncio.run(run_worker(read_worker_bootstrap(sys.stdin.buffer), execution_factory=execution))
+
+        asyncio.run(
+            run_worker(
+                read_worker_bootstrap(sys.stdin.buffer), execution_factory=execution
+            )
+        )
     else:
         # The final service/desktop driver enters the actual CLI. Its workers
         # come back through the branch above with only inert adapters injected.
         from nebula.v3.cli import main as cli_main
+
         cli_main()

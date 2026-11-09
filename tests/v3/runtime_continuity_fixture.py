@@ -32,15 +32,26 @@ async def completed_response(client, response, *, timeout=90):
         command_id = document.get("command_id") or document["receipt"]["command_id"]
         async with asyncio.timeout(timeout):
             while response.status_code == 202:
-                response = await client.get(f"/api/v1/runtime/requests/{command_id}/response")
+                response = await client.get(
+                    f"/api/v1/runtime/requests/{command_id}/response"
+                )
                 if response.status_code == 202:
-                    await asyncio.sleep(.05)
+                    await asyncio.sleep(0.05)
     assert response.status_code in {200, 201}, response.text
     return response
 
 
 class ContinuityFixture:
-    def __init__(self, root: Path, database, bundles: list[AcceptanceBundle], *, host="127.0.0.1", port=None, listen_host=None):
+    def __init__(
+        self,
+        root: Path,
+        database,
+        bundles: list[AcceptanceBundle],
+        *,
+        host="127.0.0.1",
+        port=None,
+        listen_host=None,
+    ):
         self.root, self.bundles, self.host = root, bundles, host
         self.listen_host = listen_host or host
         self.pool_settings = PoolSettings(8, 12, 8, 3)
@@ -49,11 +60,15 @@ class ContinuityFixture:
         self.store = NebulaStore(self.database)
         self.token = "synthetic-continuity-" + uuid4().hex
         self.administrator = MemoryAdministratorLimits(
-            capacity_bytes=16 * GIB, maximum_job_bytes=8 * GIB,
-            maximum_aggregate_bytes=14 * GIB, minimum_reserve_bytes=2 * GIB,
+            capacity_bytes=16 * GIB,
+            maximum_job_bytes=8 * GIB,
+            maximum_aggregate_bytes=14 * GIB,
+            minimum_reserve_bytes=2 * GIB,
             maximum_swap_bytes=2 * GIB,
         )
-        self.budgets = MemoryBudgetService(self.database, administrator=lambda: self.administrator)
+        self.budgets = MemoryBudgetService(
+            self.database, administrator=lambda: self.administrator
+        )
         if port is None:
             with socket.socket() as listener:
                 listener.bind((host, 0))
@@ -62,50 +77,95 @@ class ContinuityFixture:
         self.origin = f"http://{host}:{self.port}"
         self.process: subprocess.Popen | None = None
         self.birth: str | None = None
-        self.client = httpx.AsyncClient(base_url=self.origin,
-                                       headers={"Authorization": "Bearer " + self.token},
-                                       timeout=90, trust_env=False)
+        self.client = httpx.AsyncClient(
+            base_url=self.origin,
+            headers={"Authorization": "Bearer " + self.token},
+            timeout=90,
+            trust_env=False,
+        )
 
-    async def initialize(self, *, cold=False, pairing=False, memory=False, scenario=None):
+    async def initialize(
+        self, *, cold=False, pairing=False, memory=False, scenario=None
+    ):
         self.root.mkdir(parents=True)
         if scenario is not None:
-            if scenario not in {"provider-tools-context", "standing-instructions-native"}:
+            if scenario not in {
+                "provider-tools-context",
+                "standing-instructions-native",
+            }:
                 raise ValueError("unknown isolated acceptance scenario")
             scenario_file = self.root / "acceptance-scenario.json"
             scenario_file.write_text(json.dumps({"scenario": scenario}))
             scenario_file.chmod(0o600)
         await self.database.initialize()
         self.database_ready = True
-        await self.store.create(Engagement(id="continuity-project", name="Synthetic continuity"))
-        await self.store.create(Engagement(id="pinned-project", name="Synthetic pinned work"))
-        await self.store.create(ProviderProfile(
-            id="continuity-provider", name="Inert continuity provider", provider_type="vllm",
-            is_local=True, model_allowlist=["model-a"],
-        ))
+        await self.store.create(
+            Engagement(id="continuity-project", name="Synthetic continuity")
+        )
+        await self.store.create(
+            Engagement(id="pinned-project", name="Synthetic pinned work")
+        )
+        await self.store.create(
+            ProviderProfile(
+                id="continuity-provider",
+                name="Inert continuity provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+            )
+        )
         if memory:
             from tests.v3.runtime_continuity_allocator import prepare_allocator
+
             runtime = os.environ["NEBULA_TEST_MEMORY_RUNTIME"]
             image = os.environ["NEBULA_TEST_MEMORY_IMAGE"]
-            socket = os.environ.get("NEBULA_TEST_MEMORY_SOCKET", "unix:///var/run/docker.sock")
-            await asyncio.to_thread(prepare_allocator, self.root, runtime=runtime, image=image, socket=socket)
-            await self.store.create(RunnerProfile(
-                id="continuity-allocator", name="Disposable continuity allocator",
-                runtime="docker", executable=runtime, socket=socket,
-                platform="linux/amd64", isolation="rootless", healthy=True,
-            ))
+            socket = os.environ.get(
+                "NEBULA_TEST_MEMORY_SOCKET", "unix:///var/run/docker.sock"
+            )
+            await asyncio.to_thread(
+                prepare_allocator,
+                self.root,
+                runtime=runtime,
+                image=image,
+                socket=socket,
+            )
+            await self.store.create(
+                RunnerProfile(
+                    id="continuity-allocator",
+                    name="Disposable continuity allocator",
+                    runtime="docker",
+                    executable=runtime,
+                    socket=socket,
+                    platform="linux/amd64",
+                    isolation="rootless",
+                    healthy=True,
+                )
+            )
         status = await self.budgets.status()
-        await self.budgets.save(MemoryBudgetUpdate(
-            expected_revision=status.revision,
-            policy=status.policy.model_copy(update={"reserve_bytes": (2 if cold else 4) * GIB,
-                                                   "aggregate_bytes": 8 * GIB}),
-        ), actor_id="fixture")
+        await self.budgets.save(
+            MemoryBudgetUpdate(
+                expected_revision=status.revision,
+                policy=status.policy.model_copy(
+                    update={
+                        "reserve_bytes": (2 if cold else 4) * GIB,
+                        "aggregate_bytes": 8 * GIB,
+                    }
+                ),
+            ),
+            actor_id="fixture",
+        )
         config = {
-            "root": str(self.root), "database": self.database.url,
-            "token": self.token, "host": self.listen_host, "port": self.port,
+            "root": str(self.root),
+            "database": self.database.url,
+            "token": self.token,
+            "host": self.listen_host,
+            "port": self.port,
             "administrator": self.administrator.model_dump(mode="json"),
             "pool_settings": asdict(self.pool_settings),
             "allow_insecure_device_pairing": pairing,
-            "bundles": [{**asdict(bundle), "path": str(bundle.path)} for bundle in self.bundles],
+            "bundles": [
+                {**asdict(bundle), "path": str(bundle.path)} for bundle in self.bundles
+            ],
         }
         if cold:
             config["recovery_version"] = self.bundles[0].version
@@ -115,21 +175,36 @@ class ContinuityFixture:
         await self.start()
 
     async def start(self):
-        environment = {name: value for name, value in os.environ.items()
-                       if name in {"HOME", "PATH", "LANG", "LC_ALL", "TZ", "TMPDIR"}}
+        environment = {
+            name: value
+            for name, value in os.environ.items()
+            if name in {"HOME", "PATH", "LANG", "LC_ALL", "TZ", "TMPDIR"}
+        }
         self.output = (self.root / "supervisor.log").open("ab")
         self.process = subprocess.Popen(
-            [str(self.bundles[-1].path / "nebula-core"), "acceptance-supervisor", str(self.config)],
-            stdout=self.output, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            start_new_session=True, env=environment,
+            [
+                str(self.bundles[-1].path / "nebula-core"),
+                "acceptance-supervisor",
+                str(self.config),
+            ],
+            stdout=self.output,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env=environment,
         )
         self.birth = process_birth(self.process.pid)
         async with asyncio.timeout(90):
             while True:
                 if self.process.poll() is not None:
-                    raise RuntimeError("fixture supervisor exited:\n" + (self.root / "supervisor.log").read_text()[-12000:])
+                    raise RuntimeError(
+                        "fixture supervisor exited:\n"
+                        + (self.root / "supervisor.log").read_text()[-12000:]
+                    )
                 try:
-                    response = await self.client.get("/api/v1/deployment/status", timeout=1)
+                    response = await self.client.get(
+                        "/api/v1/deployment/status", timeout=1
+                    )
                     if response.status_code == 200:
                         break
                 except httpx.TransportError:
@@ -137,14 +212,21 @@ class ContinuityFixture:
                 await asyncio.sleep(0.05)
 
     async def control(self, operation: str, **values):
-        response = await self.client.post("/__acceptance/control", json={"operation": operation, **values})
+        response = await self.client.post(
+            "/__acceptance/control", json={"operation": operation, **values}
+        )
         if response.is_error:
-            raise AssertionError(f"fixture control {operation}: {response.status_code} {response.text}")
+            raise AssertionError(
+                f"fixture control {operation}: {response.status_code} {response.text}"
+            )
         return response.json()
 
     async def ready(self):
-        source = await self.control("execution", version=self.bundles[0].version,
-                                    project_id="continuity-project")
+        source = await self.control(
+            "execution",
+            version=self.bundles[0].version,
+            project_id="continuity-project",
+        )
         api = await self.control("api", version=self.bundles[0].version)
         return source, api
 
@@ -165,22 +247,32 @@ class ContinuityFixture:
             while True:
                 response = await self.client.get("/api/v1/deployment/status")
                 response.raise_for_status()
-                project = next(item for item in response.json()["projects"]
-                               if item["project_id"] == "continuity-project")
+                project = next(
+                    item
+                    for item in response.json()["projects"]
+                    if item["project_id"] == "continuity-project"
+                )
                 if project["phase"] == phase:
                     return project
                 await asyncio.sleep(0.03)
 
     async def capture(self, key: str, *, until="delta", session_id=None):
         body = {
-            "provider_id": "continuity-provider", "engagement_id": "continuity-project",
-            "model": "model-a", "include_knowledge": False, "stream": True,
+            "provider_id": "continuity-provider",
+            "engagement_id": "continuity-project",
+            "model": "model-a",
+            "include_knowledge": False,
+            "stream": True,
             "messages": [{"role": "user", "content": key}],
         }
         if session_id:
             body["session_id"] = session_id
-        async with self.client.stream("POST", "/api/v1/chat/completions", json=body,
-                                      headers={"Idempotency-Key": key}) as response:
+        async with self.client.stream(
+            "POST",
+            "/api/v1/chat/completions",
+            json=body,
+            headers={"Idempotency-Key": key},
+        ) as response:
             assert response.status_code == 200, await response.aread()
             frames = []
             async for line in response.aiter_lines():
@@ -220,7 +312,9 @@ class ContinuityFixture:
         await self.database.dispose()
 
 
-async def serve_browser_fixture(root: Path, bundles: list[AcceptanceBundle], *, host: str):
+async def serve_browser_fixture(
+    root: Path, bundles: list[AcceptanceBundle], *, host: str
+):
     """The browser runner owns this process and its complete synthetic data."""
     fixture = ContinuityFixture(root / "data", root / "core.db", bundles, host=host)
     try:

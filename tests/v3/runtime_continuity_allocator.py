@@ -8,8 +8,14 @@ from fastapi import HTTPException, Request
 
 from nebula.v3.memory_policy import MIB, MemoryLimits
 from nebula.v3.sandbox import (
-    ContainerRuntimeType, ContainerSandboxRunner, RunnerIsolationMode,
-    RunnerPlatform, RunnerProfile, SandboxLimits, SandboxRequest, SandboxWorkspaceAccess,
+    ContainerRuntimeType,
+    ContainerSandboxRunner,
+    RunnerIsolationMode,
+    RunnerPlatform,
+    RunnerProfile,
+    SandboxLimits,
+    SandboxRequest,
+    SandboxWorkspaceAccess,
 )
 
 
@@ -45,7 +51,8 @@ class AcceptanceRunner(ContainerSandboxRunner):
             return False, error
         value = json.loads(output)
         return (
-            value.get("OSType") == "linux" and str(value.get("CgroupVersion")) == "2"
+            value.get("OSType") == "linux"
+            and str(value.get("CgroupVersion")) == "2"
             and value.get("MemoryLimit") is True,
             "Explicit disposable daemon only; this is not rootless production certification.",
         )
@@ -57,12 +64,23 @@ def prepare_allocator(root: Path, *, runtime: str, image: str, socket: str) -> N
     workspace.chmod(0o755)
     source = root / "allocator.c"
     source.write_text(SOURCE)
-    subprocess.run(["gcc", "-O0", "-static", str(source), "-o", str(workspace / "allocator")],
-                   check=True, capture_output=True, timeout=30)
+    subprocess.run(
+        ["gcc", "-O0", "-static", str(source), "-o", str(workspace / "allocator")],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
     (workspace / "allocator").chmod(0o555)
-    (root / "allocator.json").write_text(json.dumps({
-        "runtime": runtime, "image": image, "socket": socket, "workspace": str(workspace),
-    }))
+    (root / "allocator.json").write_text(
+        json.dumps(
+            {
+                "runtime": runtime,
+                "image": image,
+                "socket": socket,
+                "workspace": str(workspace),
+            }
+        )
+    )
 
 
 def runner_for(root: Path):
@@ -70,15 +88,23 @@ def runner_for(root: Path):
     if not config.exists():
         return None
     values = json.loads(config.read_text())
-    return AcceptanceRunner(profile=RunnerProfile(
-        runtime_type=ContainerRuntimeType.DOCKER, executable=Path(values["runtime"]),
-        socket=values["socket"], platform=RunnerPlatform.LINUX,
-        isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
-    ), allow_unpinned_images=True, workspace_roots=[Path(values["workspace"])])
+    return AcceptanceRunner(
+        profile=RunnerProfile(
+            runtime_type=ContainerRuntimeType.DOCKER,
+            executable=Path(values["runtime"]),
+            socket=values["socket"],
+            platform=RunnerPlatform.LINUX,
+            isolation_mode=RunnerIsolationMode.LINUX_ROOTLESS,
+        ),
+        allow_unpinned_images=True,
+        workspace_roots=[Path(values["workspace"])],
+    )
 
 
 def release_allocator(root: Path, identity: str) -> None:
-    if not identity or any(not (item.isascii() and (item.isalnum() or item in "-_")) for item in identity):
+    if not identity or any(
+        not (item.isascii() and (item.isalnum() or item in "-_")) for item in identity
+    ):
         raise ValueError("invalid isolated allocator identity")
     (root / "allocator-workspace" / ("release-" + identity)).touch(mode=0o444)
 
@@ -97,24 +123,46 @@ def attach_allocator(app, root: Path, project_id: str):
             raise HTTPException(404)
         body = await request.json()
         identity = body["job_id"]
-        if (not isinstance(identity, str) or not identity or len(identity) > 80
-                or any(not (item.isascii() and (item.isalnum() or item in "-_")) for item in identity)):
+        if (
+            not isinstance(identity, str)
+            or not identity
+            or len(identity) > 80
+            or any(
+                not (item.isascii() and (item.isalnum() or item in "-_"))
+                for item in identity
+            )
+        ):
             raise HTTPException(400)
         command = ["/workspace/allocator", "4", "25"]
         timeout = 40
         if body.get("hold") is True:
-            command = ["/workspace/allocator", "4", "90", "/workspace/release-" + identity]
+            command = [
+                "/workspace/allocator",
+                "4",
+                "90",
+                "/workspace/release-" + identity,
+            ]
             timeout = 100
         result = await app.state.memory_compute.run_sandbox(
             runner,
             SandboxRequest(
-                image=values["image"], command=command,
-                workspace=Path(values["workspace"]), workspace_access=SandboxWorkspaceAccess.READ,
+                image=values["image"],
+                command=command,
+                workspace=Path(values["workspace"]),
+                workspace_access=SandboxWorkspaceAccess.READ,
                 limits=SandboxLimits(memory_mb=32, timeout_seconds=timeout),
             ),
-            job_id=identity, project_id=project_id, resource_kind="synthetic_allocator",
-            resource_id=identity, profile_id="continuity-allocator",
+            job_id=identity,
+            project_id=project_id,
+            resource_kind="synthetic_allocator",
+            resource_id=identity,
+            profile_id="continuity-allocator",
             requested=MemoryLimits(max_bytes=32 * MIB),
         )
-        return {"job_id": identity, "exit_code": result.exit_code, "outcome": result.memory_outcome,
-                "stdout": result.stdout[-4096:], "stderr": result.stderr[-4096:]}
+        return {
+            "job_id": identity,
+            "exit_code": result.exit_code,
+            "outcome": result.memory_outcome,
+            "stdout": result.stdout[-4096:],
+            "stderr": result.stderr[-4096:],
+        }

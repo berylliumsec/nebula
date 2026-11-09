@@ -15,7 +15,11 @@ from starlette.responses import JSONResponse
 
 from .async_utils import finish_cleanup
 from .database import RuntimeInstanceRow, RuntimeProcessRow
-from .diagnostics import create_diagnostic_task, record_caught_exception, record_diagnostic
+from .diagnostics import (
+    create_diagnostic_task,
+    record_caught_exception,
+    record_diagnostic,
+)
 from .knowledge_index import KnowledgeIndexError
 from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity

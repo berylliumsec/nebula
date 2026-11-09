@@ -40,7 +40,8 @@ def sha256(path: Path) -> str:
 
 def _ignore(_directory: str, names: list[str]) -> set[str]:
     return {
-        name for name in names
+        name
+        for name in names
         if name in {"__pycache__", ".git", "site-packages", "test", "tests"}
         or name.endswith((".pyc", ".pth", ".egg-link"))
     }
@@ -77,7 +78,9 @@ def build_bundle(
 ) -> AcceptanceBundle:
     """Build an immutable fixture from explicitly selected source and UI trees."""
     if not (ui / "index.html").is_file() or not (source / "nebula" / "v3").is_dir():
-        raise ValueError("a production UI build and complete Nebula source are required")
+        raise ValueError(
+            "a production UI build and complete Nebula source are required"
+        )
     directory.mkdir(parents=True, exist_ok=False)
     if runtime_template is None:
         copy_runtime(directory, dependencies)
@@ -90,15 +93,28 @@ def build_bundle(
     shutil.copytree(ui, directory / "ui", ignore=_ignore)
     worker = Path(__file__).with_name("runtime_continuity_worker.py")
     shutil.copy2(worker, directory / "acceptance_worker.py")
-    shutil.copy2(Path(__file__).with_name("runtime_continuity_allocator.py"), directory / "acceptance_allocator.py")
-    tools_fixture = Path(os.environ.get("NEBULA_ACCEPTANCE_PROVIDER_TOOLS_FIXTURE", str(
-        Path(__file__).with_name("provider_tools_context_fixture.py"))))
+    shutil.copy2(
+        Path(__file__).with_name("runtime_continuity_allocator.py"),
+        directory / "acceptance_allocator.py",
+    )
+    tools_fixture = Path(
+        os.environ.get(
+            "NEBULA_ACCEPTANCE_PROVIDER_TOOLS_FIXTURE",
+            str(Path(__file__).with_name("provider_tools_context_fixture.py")),
+        )
+    )
     if tools_fixture.is_file():
         shutil.copy2(tools_fixture, directory / "acceptance_provider_tools_context.py")
-    native_fixture = Path(os.environ.get("NEBULA_ACCEPTANCE_NATIVE_FIXTURE", str(
-        Path(__file__).with_name("standing_instructions_native_fixture.py"))))
+    native_fixture = Path(
+        os.environ.get(
+            "NEBULA_ACCEPTANCE_NATIVE_FIXTURE",
+            str(Path(__file__).with_name("standing_instructions_native_fixture.py")),
+        )
+    )
     if native_fixture.is_file():
-        shutil.copy2(native_fixture, directory / "acceptance_standing_instructions_native.py")
+        shutil.copy2(
+            native_fixture, directory / "acceptance_standing_instructions_native.py"
+        )
     (directory / "entry.py").write_text(
         "import sys\nfrom pathlib import Path\n"
         "root=Path(__file__).resolve().parent\n"
@@ -114,40 +130,72 @@ def build_bundle(
     )
     executable.chmod(0o755)
     launcher = directory / "nebula-core"
-    launcher.write_text('#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$root/bin/nebula-core" "$@"\n')
+    launcher.write_text(
+        '#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$root/bin/nebula-core" "$@"\n'
+    )
     launcher.chmod(0o755)
     files = {
         str(path.relative_to(directory)): sha256(path)
-        for path in sorted(directory.rglob("*")) if path.is_file()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
     }
-    source_hash = hashlib.sha256(json.dumps({
-        name: digest for name, digest in files.items() if name.startswith("source/")
-    }, sort_keys=True).encode()).hexdigest()
+    source_hash = hashlib.sha256(
+        json.dumps(
+            {
+                name: digest
+                for name, digest in files.items()
+                if name.startswith("source/")
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     features = ["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"]
     worker_source = (source / "nebula/v3/runtime_worker.py").read_text()
     for capability in ("project.participants/v1", "project.quiesce/v1"):
         if capability in worker_source:
             features.append(capability)
     compatibility = source / "nebula/v3/runtime-compatibility.json"
-    declared = json.loads(compatibility.read_text())["manifest"]["features"] if compatibility.is_file() else []
-    for capability in ("provider.tools-context/v1", "harness.standing-instructions/v1", "host.web-search-query/v1"):
+    declared = (
+        json.loads(compatibility.read_text())["manifest"]["features"]
+        if compatibility.is_file()
+        else []
+    )
+    for capability in (
+        "provider.tools-context/v1",
+        "harness.standing-instructions/v1",
+        "host.web-search-query/v1",
+    ):
         if capability in declared:
             features.append(capability)
-    heads = sorted(path.stem for path in (source / "nebula/v3/migrations/versions").glob("*.py"))
+    heads = sorted(
+        path.stem for path in (source / "nebula/v3/migrations/versions").glob("*.py")
+    )
     manifest = ReleaseManifest(
-        version=version, schema_family=5, schema_min=5, schema_max=5,
-        additive_migrations=True, migration_head=heads[-1],
-        core_executable="bin/nebula-core", ui_directory="ui", files=files,
+        version=version,
+        schema_family=5,
+        schema_min=5,
+        schema_max=5,
+        additive_migrations=True,
+        migration_head=heads[-1],
+        core_executable="bin/nebula-core",
+        ui_directory="ui",
+        files=files,
         features=features,
     )
     (directory / MANIFEST_NAME).write_text(manifest.model_dump_json())
     digest = sha256(directory / MANIFEST_NAME)
     ReleaseStore.verify(directory, expected_manifest_sha256=digest)
-    return AcceptanceBundle(version, directory, digest, source_hash, files["ui/index.html"])
+    return AcceptanceBundle(
+        version, directory, digest, source_hash, files["ui/index.html"]
+    )
 
 
-def retained_bundle(bundle: AcceptanceBundle, retained: ReleaseStore) -> AcceptanceBundle:
-    _, path = retained.install(bundle.path, expected_manifest_sha256=bundle.manifest_sha256)
+def retained_bundle(
+    bundle: AcceptanceBundle, retained: ReleaseStore
+) -> AcceptanceBundle:
+    _, path = retained.install(
+        bundle.path, expected_manifest_sha256=bundle.manifest_sha256
+    )
     # Distribution discovery uses this companion digest, which cannot include
     # itself in the hashed manifest. Populate it from the already-verified input.
     path.chmod(0o755)
@@ -156,7 +204,11 @@ def retained_bundle(bundle: AcceptanceBundle, retained: ReleaseStore) -> Accepta
     companion.chmod(0o444)
     path.chmod(0o555)
     return AcceptanceBundle(
-        bundle.version, path, bundle.manifest_sha256, bundle.source_sha256, bundle.index_sha256
+        bundle.version,
+        path,
+        bundle.manifest_sha256,
+        bundle.source_sha256,
+        bundle.index_sha256,
     )
 
 
