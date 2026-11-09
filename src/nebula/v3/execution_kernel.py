@@ -326,6 +326,17 @@ from .credentials import (
     VaultState,
 )
 from .runtime_usage import HarnessQuotaRead, RuntimeUsageResponse, RuntimeUsageService
+from .integration_settings import (
+    TypeSafeKeyRequest,
+    TypeSafeIntegrationStatus,
+    WebSearchStatus,
+    WebSearchEngineRequest,
+    VpnProfileCreateRequest,
+    VpnProfileDeleteRequest,
+    public_vpn_profiles,
+    typesafe_integration_status,
+    web_search_integration_status,
+)
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
     ENTITY_MODEL_BY_KIND,
@@ -361,10 +372,7 @@ from .domain import (
     VpnProfile,
     ButlerVoiceSettings,
     ToolSuggestionSettings,
-    ToolSuggestionTest,
-    WebSearchEngine,
     WebSearchRuntimeState,
-    WebSearchTest,
     CommandExecution,
     ChatBackend,
     ChatMessage,
@@ -1297,58 +1305,11 @@ class BrowserNavigationCheck(NebulaModel):
     url: str = Field(min_length=1, max_length=16_384)
 
 
-class TypeSafeKeyRequest(NebulaModel):
-    secret: SecretStr
-    persistence: Literal["vault", "session"] = "vault"
-
-
-class TypeSafeIntegrationStatus(NebulaModel):
-    """Public view of the Jev key: never the key or its reference."""
-
-    source: Literal["vault", "session", "environment"] | None = None
-    available: bool = False
-    vault_available: bool = False
-    vault_state: VaultState = "unavailable"
-    last_test: ToolSuggestionTest | None = None
-    projects_using: int = Field(default=0, ge=0)
-
-
-class WebSearchStatus(NebulaModel):
-    """Public view of the local search runtime; it holds no secret."""
-
-    runtime_available: bool = False
-    runtime_detail: str = ""
-    container_state: WebSearchRuntimeState = WebSearchRuntimeState.ABSENT
-    image_digest: str | None = None
-    port: int | None = None
-    engines: list[WebSearchEngine] = Field(default_factory=list)
-    last_test: WebSearchTest | None = None
-    last_detail: str | None = None
-    projects_using: int = Field(default=0, ge=0)
-
-
-class WebSearchEngineRequest(NebulaModel):
-    engines: list[WebSearchEngine] = Field(min_length=1, max_length=16)
-
-
 class CredentialVaultStatus(NebulaModel):
     """Whether Core can store a credential in the OS vault right now."""
 
     state: VaultState = "unavailable"
     available: bool = False
-
-
-class VpnProfileCreateRequest(NebulaModel):
-    name: str = Field(min_length=1, max_length=120)
-    filename: str = Field(min_length=1, max_length=255, pattern=r"^[^/\\]+\.ovpn$")
-    config: str = Field(min_length=1, max_length=15_000)
-    username: str | None = Field(default=None, max_length=512)
-    password: str | None = Field(default=None, max_length=4_096)
-    persistence: Literal["vault", "session"] = "vault"
-
-
-class VpnProfileDeleteRequest(NebulaModel):
-    expected_revision: int = Field(ge=1)
 
 
 class AutomationCommandRequest(RunCommandRequest):
@@ -2161,14 +2122,10 @@ def create_execution_kernel(
     from .tool_suggestions import (
         SETTINGS_ID as TYPESAFE_SETTINGS_ID,
         check_connection,
-        key_source,
         load_settings,
         resolve_jev_client,
     )
-    from .web_search import (
-        WebSearchError,
-        load_settings as load_web_search_settings,
-    )
+    from .web_search import WebSearchError
 
     from .butler_resources import OpenRouterCreditObserver
 
@@ -8639,26 +8596,7 @@ def create_execution_kernel(
         return await automation_runtime.prepare()
 
     async def typesafe_status() -> TypeSafeIntegrationStatus:
-        projects_using = 0
-        offset = 0
-        while page := (
-            await store.list_entities(ScopePolicy, offset=offset, limit=1_000)
-        ):
-            projects_using += sum(
-                1 for scope in page if scope.tool_suggestions and not scope.local_only
-            )
-            offset += len(page)
-        source, available = await key_source(store, credentials)
-        settings = await load_settings(store)
-        vault_state = credentials.vault_state
-        return TypeSafeIntegrationStatus(
-            source=source,
-            available=available,
-            vault_available=vault_state == "available",
-            vault_state=vault_state,
-            last_test=settings.last_test if settings is not None else None,
-            projects_using=projects_using,
-        )
+        return await typesafe_integration_status(store, credentials)
 
     async def save_typesafe_settings(**changes: Any) -> None:
         settings = await load_settings(store)
@@ -8765,28 +8703,8 @@ def create_execution_kernel(
         return tool_platform.search_runtime
 
     async def web_search_status() -> WebSearchStatus:
-        projects_using = await store.web_search_project_count()
-        settings = await load_web_search_settings(store)
-        if tool_platform is None:
-            return WebSearchStatus(
-                runtime_available=False,
-                runtime_detail="Core has no container runtime configured",
-                projects_using=projects_using,
-                engines=settings.engines if settings else [],
-                last_test=settings.last_test if settings else None,
-            )
-        state, detail = await tool_platform.search_runtime.state()
-        return WebSearchStatus(
-            runtime_available=state != WebSearchRuntimeState.ABSENT
-            or "not created" in detail,
-            runtime_detail=detail,
-            container_state=state,
-            image_digest=settings.image_digest if settings else None,
-            port=settings.port if settings else None,
-            engines=settings.engines if settings else [],
-            last_test=settings.last_test if settings else None,
-            last_detail=settings.last_detail if settings else None,
-            projects_using=projects_using,
+        return await web_search_integration_status(
+            store, tool_platform.search_runtime if tool_platform is not None else None
         )
 
     @app.get(
@@ -8907,12 +8825,19 @@ def create_execution_kernel(
         tags=["automation"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_vpn_profiles() -> list[dict[str, Any]]:
-        profiles = list((await store.list_entities(VpnProfile, limit=1_000)))
-        # Vault status opens a D-Bus connection; keep that off the event loop.
-        return await asyncio.to_thread(
-            lambda: [public_vpn_profile(profile) for profile in profiles]
+    async def list_vpn_profiles(
+        response: Response,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        profiles, next_offset = await public_vpn_profiles(
+            store, credentials, offset=offset, limit=limit
         )
+        response.headers["Cache-Control"] = "no-store"
+        if next_offset is not None:
+            response.headers["X-Nebula-Partial"] = "true"
+            response.headers["X-Nebula-Next-Offset"] = str(next_offset)
+        return profiles
 
     @app.post(
         f"{API_PREFIX}/vpn-profiles",
