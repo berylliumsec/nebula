@@ -141,7 +141,8 @@ async def test_task_context_narrows_an_existing_transaction(execution):
 
 
 @pytest.mark.parametrize(
-    "kind", ["table", "text", "driver", "compound", "mixed", "unmapped"]
+    "kind",
+    ["table", "text", "driver", "compound", "mixed", "unmapped", "alias", "subquery"],
 )
 async def test_unscoped_query_forms_fail_closed(execution, kind):
     _, runtime, _, _ = execution
@@ -163,6 +164,10 @@ async def test_unscoped_query_forms_fail_closed(execution, kind):
                 await connection.execute(
                     union_all(select(EntityRow.id), select(EntityRow.id))
                 )
+            elif kind == "alias":
+                await connection.execute(select(EntityRow.__table__.alias()))
+            elif kind == "subquery":
+                await connection.execute(select(select(EntityRow.__table__).subquery()))
             else:
                 await connection.exec_driver_sql("SELECT * FROM entities")
 
@@ -277,6 +282,29 @@ async def test_existing_raw_event_writer_is_fenced(execution):
     with pytest.raises(LeaseLost):
         await runtime.append_event("turn-other", "wrong", {})
     assert await control.replay_events("turn-other") == []
+
+
+async def test_recovery_query_handles_derived_columns_and_keeps_project_scope(
+    execution,
+):
+    control, runtime, _, lease = execution
+    for project in ("mine", "other"):
+        await control.append_operation_event(
+            f"live-{project}", "container_terminal", project, "started", {}
+        )
+        await control.append_operation_event(
+            f"done-{project}", "container_terminal", project, "started", {}
+        )
+        await control.append_operation_event(
+            f"done-{project}", "container_terminal", project, "settled", {}
+        )
+    with execution_context(lease):
+        pending = await runtime.unsettled_operation_events(
+            "container_terminal", "settled"
+        )
+    assert [(item.operation_id, item.engagement_id) for item in pending] == [
+        ("live-mine", "mine")
+    ]
 
 
 async def test_insert_cannot_escape_to_another_project(execution):

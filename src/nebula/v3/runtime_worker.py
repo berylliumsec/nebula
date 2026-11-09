@@ -35,6 +35,7 @@ class WorkerContext:
     coordinator: DeploymentCoordinator
     manifest: ReleaseManifest
     secret: bytes = field(repr=False)
+    rpc: RuntimeRpcServer = field(repr=False)
 
 
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
@@ -83,9 +84,9 @@ async def run_worker(
 ):
     """Validate the committed incarnation before opening controllers or sockets.
 
-    Execution construction is injected by the execution role integration. An
-    unavailable role fails before readiness; there is no in-process fallback.
-    Compatibility launchers remain disabled until that integration is complete.
+    The execution role opens its private control socket before project assignment.
+    Controllers are constructed only after an exact SQL ownership grant. Tests
+    may inject an inert role; compatibility launchers remain separately gated.
     """
     if not bootstrap.identity.endpoint.startswith("unix:///"):
         raise RuntimeIpcError("workers require an explicit private Unix endpoint")
@@ -96,6 +97,7 @@ async def run_worker(
     coordinator = DeploymentCoordinator(database)
     heartbeat = None
     server = None
+    diagnostics = None
     try:
         secret = await validate_worker_binding(bootstrap, coordinator)
         manifest = await asyncio.to_thread(
@@ -112,13 +114,34 @@ async def run_worker(
             raise RuntimeIpcError(
                 "retained application cannot use the current SQL schema"
             )
-        factory = (
-            api_application if bootstrap.identity.role == "api" else execution_factory
+        from .diagnostics import configure_diagnostics
+
+        diagnostic_root = (
+            Path(bootstrap.data_root)
+            / "runtime"
+            / "workers"
+            / bootstrap.identity.runtime_id
         )
-        if factory is None:
-            raise RuntimeIpcError("The execution role is not enabled in this release")
-        context = WorkerContext(bootstrap, database, coordinator, manifest, secret)
+        diagnostics = configure_diagnostics(
+            diagnostic_root,
+            log_dir=diagnostic_root / "logs",
+            settings_path=Path(
+                os.getenv(
+                    "NEBULA_V3_DIAGNOSTICS_SETTINGS",
+                    str(Path(bootstrap.data_root) / "diagnostics-settings.json"),
+                )
+            ),
+            desktop_parent=False,
+        )
+        factory: WorkerFactory
+        if bootstrap.identity.role == "api":
+            factory = api_application
+        else:
+            from .execution_worker import execution_application
+
+            factory = execution_factory or execution_application
         rpc = RuntimeRpcServer(secret)
+        context = WorkerContext(bootstrap, database, coordinator, manifest, secret, rpc)
 
         async def identity(payload):
             if payload:
@@ -176,7 +199,9 @@ async def run_worker(
                                 "headers": [
                                     *message.get("headers", []),
                                     (
-                                        b"x-nebula-api-version",
+                                        b"x-nebula-api-version"
+                                        if bootstrap.identity.role == "api"
+                                        else b"x-nebula-execution-version",
                                         bootstrap.identity.version.encode(),
                                     ),
                                 ],
@@ -205,6 +230,8 @@ async def run_worker(
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
         await database.dispose()
+        if diagnostics is not None:
+            await asyncio.to_thread(diagnostics.close)
 
 
 def main():

@@ -184,10 +184,13 @@ class ExecutionSQLScope:
                 if isinstance(node, (Column, Table)):
                     table = node.table if isinstance(node, Column) else node
                     known = (
-                        Base.metadata.tables.get(table.key)
+                        Base.metadata.tables.get(getattr(table, "key", None))
                         if table is not None
                         else None
                     )
+                    # Derived columns can belong to a Subquery or Alias. Their
+                    # underlying tables/selects are visited below and retain
+                    # the same mapped-read checks and loader criteria.
                     annotations = getattr(node, "_annotations", {})
                     if (
                         known is not None

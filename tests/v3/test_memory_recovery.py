@@ -49,6 +49,66 @@ async def create(service, identity="job"):
     )
 
 
+@pytest.fixture
+async def memory_diagnostics(tmp_path, monkeypatch):
+    from nebula.v3 import diagnostics
+
+    manager = diagnostics.DiagnosticManager(
+        tmp_path / "diagnostic-fixture", level_override="debug", watch_settings=False
+    )
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    errors = []
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+    try:
+        yield manager, errors
+        await asyncio.sleep(0)
+        assert errors == []
+    finally:
+        loop.set_exception_handler(previous)
+        manager.close()
+
+
+async def test_reconciliation_diagnostics_preserve_charge_and_join_callbacks(
+    budgets, memory_diagnostics, monkeypatch
+):
+    service, _ = budgets
+    manager, errors = memory_diagnostics
+    created = await create(service)
+    reserved = await service.reserve(created.id, capability())
+    await service.claim_start(
+        created.id,
+        reserved.revision,
+        owner=MemoryLaunchOwner(
+            process_id=2_000_000_000,
+            process_birth="absent-fixture",
+            runner_fingerprint="a" * 64,
+            process_origin=process_origin(),
+        ),
+    )
+    observed = asyncio.Event()
+
+    async def unavailable(_job):
+        observed.set()
+        raise RuntimeError("Synthetic probe failure; no runner contacted")
+
+    reconciler = MemoryReconciler(service, unavailable)
+    monkeypatch.setattr(reconciler, "_reconcile", unavailable)
+    await reconciler.start()
+    await asyncio.wait_for(observed.wait(), 5)
+    await reconciler.close()
+    await asyncio.sleep(0)
+    manager.flush()
+    records = [
+        json.loads(line)
+        for line in (manager.log_dir / "runtime.log").read_text().splitlines()
+    ]
+    assert any(row["event_code"] == "memory.reconciliation.held" for row in records)
+    assert errors == []
+    assert (await service.status()).reserved_bytes == reserved.reserved_bytes
+
+
 async def test_live_owner_and_unknown_create_remain_charged(budgets):
     service, _ = budgets
 
@@ -268,7 +328,7 @@ async def test_daemon_authority_and_uncertain_limit_cleanup(budgets, changed_dae
 
 @pytest.mark.parametrize("released", [False, True])
 async def test_normal_cleanup_does_not_free_capacity_on_a_replacement_daemon(
-    budgets, tmp_path, released
+    budgets, tmp_path, released, memory_diagnostics
 ):
     service, _ = budgets
     from nebula.v3.sandbox import (

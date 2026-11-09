@@ -130,6 +130,19 @@ async def test_second_service_owner_cannot_replace_a_live_socket(shared):
     assert shared.managed.host.shared_services is shared.services
 
 
+async def test_shared_service_capabilities_require_a_valid_private_peer(shared):
+    result = await shared.remote.client.call("host.services/v1", {})
+    assert result == {
+        "protocol": "nebula.host-services/v1",
+        "memory": True,
+        "capacity": True,
+        "knowledge": False,
+        "product_guidance": {"state": "unavailable"},
+    }
+    with pytest.raises(RuntimeIpcError):
+        await shared.remote.client.call("host.services/v1", {"unexpected": True})
+
+
 async def test_concurrent_starts_use_one_service_task_and_socket(managed):
     services = HostSharedServices(managed.host, capacity_limits=_LIMITS)
     try:

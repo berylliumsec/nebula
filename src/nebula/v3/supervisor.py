@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from builtins import BaseExceptionGroup
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket
@@ -14,11 +15,16 @@ from starlette.responses import JSONResponse
 
 from .async_utils import finish_cleanup
 from .authentication import CoreAuthentication
-from .database import RuntimeInstanceRow, RuntimeProcessRow, RuntimeReleaseRow
+from .database import (
+    ProjectOwnershipRow,
+    RuntimeInstanceRow,
+    RuntimeProcessRow,
+    RuntimeReleaseRow,
+)
 from .deployment_protocol import ReleaseManifest, WorkerIdentity
 from .deployments import _RESIDENT
 from .release_store import ReleaseStore
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, ProjectLease
 from .runtime_http import RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
@@ -282,6 +288,80 @@ class RuntimeSupervisor:
             if spawned is None:
                 raise CoordinationConflict("The candidate remains staged")
             return spawned
+
+    async def prepare_execution(self, version: str) -> WorkerIdentity:
+        """Prepare an unassigned process; controllers wait for a project grant."""
+        async with self._operations:
+            self._active()
+            async with self.coordinator.database.session() as session:
+                release = await session.get(RuntimeReleaseRow, version)
+                if release is None:
+                    raise CoordinationConflict(
+                        "Stage and verify this release before preparing it"
+                    )
+                manifest = ReleaseManifest.model_validate(release.manifest)
+            if self.worker_admission is None:
+                raise CoordinationConflict(
+                    "Host worker memory reserve must be configured before candidate startup"
+                )
+            await self.worker_admission(manifest, "execution")
+            spawned = await self.host.spawn(version, "execution")
+            if spawned is None:
+                raise CoordinationConflict("The execution candidate remains staged")
+            return spawned
+
+    async def attach_execution(self, project_id: str, runtime_id: str, *, timeout=30):
+        """Attach fresh work, or resume an interrupted assignment response.
+
+        Live transfers and expired-owner recovery use their dedicated protocols;
+        this path cannot replace an existing project owner.
+        """
+        async with self._operations:
+            self._active()
+            client = await self.host.rpc(runtime_id)
+            try:
+                status = await client.call("execution.status/v1", {}, timeout=5)
+                if status.get("runtime_id") != runtime_id:
+                    raise RuntimeIpcError(
+                        "Execution status belongs to another incarnation"
+                    )
+                binding = status.get("lease")
+                if binding is not None and binding.get("project_id") != project_id:
+                    raise CoordinationConflict(
+                        "Prepare a new process for another project"
+                    )
+                async with self.coordinator.database.session() as session:
+                    owner = await session.get(ProjectOwnershipRow, project_id)
+                    if owner is not None and owner.runtime_id not in (None, runtime_id):
+                        raise CoordinationConflict(
+                            "Use verified handoff or explicit expired-owner recovery for this project"
+                        )
+                    lease = (
+                        ProjectLease(project_id, runtime_id, owner.fencing_token)
+                        if owner is not None and owner.runtime_id == runtime_id
+                        else None
+                    )
+                if lease is None:
+                    lease = await self.coordinator.coordination.claim_project(
+                        project_id, runtime_id
+                    )
+                await client.call("execution.attach/v1", asdict(lease), timeout=5)
+                async with asyncio.timeout(timeout):
+                    while True:
+                        status = await client.call("execution.status/v1", {}, timeout=5)
+                        if status.get("lease") != asdict(lease):
+                            raise RuntimeIpcError(
+                                "Execution attachment does not match the committed grant"
+                            )
+                        if status.get("state") == "ready":
+                            return lease
+                        if status.get("state") != "starting":
+                            raise CoordinationConflict(
+                                "Project startup needs reconciliation; its saved work remains held"
+                            )
+                        await asyncio.sleep(0.05)
+            finally:
+                await client.close()
 
     async def promote_api(self, runtime_id: str, *, expected_revision: int):
         async with self._operations:

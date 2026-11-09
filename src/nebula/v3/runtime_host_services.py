@@ -107,6 +107,21 @@ class HostSharedServices:
                         raise RuntimeIpcError("Shared host peer capacity is busy")
                     secret = self.host.credentials.read(process.credential_reference)
                     rpc = RuntimeRpcServer(secret)
+
+                    async def capabilities(payload):
+                        if payload:
+                            raise RuntimeIpcError(
+                                "Host capabilities accept no arguments"
+                            )
+                        return {
+                            "protocol": "nebula.host-services/v1",
+                            "memory": True,
+                            "capacity": True,
+                            "knowledge": self.knowledge is not None,
+                            "product_guidance": dict(self.product_guidance),
+                        }
+
+                    rpc.register("host.services/v1", capabilities)
                     register_shared_memory(rpc, self.memory, runtime_id=runtime_id)
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)

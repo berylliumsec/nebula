@@ -249,7 +249,7 @@ class MemoryComputeController:
             await self.service.started(job_id, current.revision, evidence)
             monitor = create_diagnostic_task(
                 sample_usage(),
-                feature="memory",
+                feature="runtime",
                 event_code="memory.usage_monitor_failed",
                 failure_message="Job memory usage could not be observed; its reservation remains charged.",
                 name="memory-usage-" + job_id,
@@ -423,7 +423,7 @@ class MemoryComputeController:
                 vpn_config=vpn_config,
                 on_ready=started,
             ),
-            feature="memory",
+            feature="runtime",
             event_code="memory.persistent_job_ended",
             failure_message="A managed runtime stopped; inspect its durable memory outcome.",
             name="memory-worker-" + job_id,
@@ -522,7 +522,7 @@ class MemoryComputeController:
             # A cancellation or lost response cannot roll back a kernel change.
             # Keep the maximum reservation and mark uncertainty for reconciliation.
             record_caught_exception(
-                "memory",
+                "runtime",
                 "memory.live_update_unverified",
                 "Running limits could not be verified.",
                 error,

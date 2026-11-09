@@ -63,7 +63,7 @@ class MemoryReconciler:
         if self.task is None:
             self.task = create_diagnostic_task(
                 self._loop(),
-                feature="memory",
+                feature="runtime",
                 event_code="memory.reconciliation.failed",
                 failure_message="Lost-worker cleanup stopped; unknown groups remain charged.",
                 name="memory-reconciliation",
@@ -95,7 +95,7 @@ class MemoryReconciler:
                 # A failed probe never proves that the group is empty. Keep the
                 # durable charge and retry independently of other lost jobs.
                 record_caught_exception(
-                    "memory",
+                    "runtime",
                     "memory.reconciliation.held",
                     "A lost job remains charged because cleanup could not be verified.",
                     error,

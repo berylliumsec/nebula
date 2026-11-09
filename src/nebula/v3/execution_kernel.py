@@ -1790,6 +1790,7 @@ def create_execution_kernel(
     enable_executable_missions: bool | None = None,
     execution_service: ExecutionService | None = None,
     execution_data_root: str | Path | None = None,
+    controller_root: str | Path | None = None,
     container_terminal_service: ContainerTerminalService | None = None,
     workspace_service: WorkspaceService | None = None,
     debug_service: DebugService | None = None,
@@ -1961,11 +1962,15 @@ def create_execution_kernel(
 
     browser_database = store.database.engine.url.database
     browser_root = (
-        Path(browser_database).parent
-        if store.database.engine.dialect.name == "sqlite"
-        and browser_database
-        and browser_database != ":memory:"
-        else Path(execution_data_root or Path.home() / ".local/share/nebula/v3")
+        Path(controller_root)
+        if controller_root is not None
+        else (
+            Path(browser_database).parent
+            if store.database.engine.dialect.name == "sqlite"
+            and browser_database
+            and browser_database != ":memory:"
+            else Path(execution_data_root or Path.home() / ".local/share/nebula/v3")
+        )
     )
     managed_skill_root = browser_root / ".agents" / "skills"
     managed_skill_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2497,7 +2502,7 @@ def create_execution_kernel(
 
         try:
             await start_component(
-                "memory",
+                "runtime",
                 "reconciliation",
                 memory_reconciler.start,
                 memory_reconciler.close,
