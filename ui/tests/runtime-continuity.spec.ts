@@ -4,7 +4,9 @@ import {expect, test, type APIRequestContext, type Page} from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright";
 
 async function controller(request: APIRequestContext) {
-  const {token, control_origin: origin} = JSON.parse(await readFile(process.env.NEBULA_MODEL_TEST_AUTH_FILE!, "utf8"));
+  const authFile = test.info().config.metadata.runtimeContinuityAuthFile;
+  if (typeof authFile !== "string") throw new Error("Use the dedicated runtime-continuity fixture configuration.");
+  const {token, control_origin: origin} = JSON.parse(await readFile(authFile, "utf8"));
   const headers = {Authorization: `Bearer ${token}`};
   return {
     reset: async (cold = false) => {
@@ -17,8 +19,16 @@ async function controller(request: APIRequestContext) {
       expect(response.ok(), await response.text()).toBe(true);
       return response.json();
     },
+    cleanup: async () => {
+      const response = await request.post(`${origin}/cleanup`, {headers});
+      expect(response.ok(), await response.text()).toBe(true);
+    },
   };
 }
+
+test.afterEach(async ({request}) => {
+  await (await controller(request)).cleanup();
+});
 
 async function pair(page: Page, request: APIRequestContext, fixture: {token: string; origin: string; index_sha256: string}) {
   const response = await request.get(fixture.origin + "/index.html");

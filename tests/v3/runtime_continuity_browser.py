@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import signal
 import sys
 import tempfile
 
@@ -53,6 +52,9 @@ async def serve(root: Path):
             if fixture is not None:
                 await fixture.close()
             auth_file.unlink(missing_ok=True)
+            # Uvicorn re-delivers SIGTERM after its lifespan exits. Remove the
+            # private read-only bundles here, before that default signal action.
+            await asyncio.to_thread(remove_owned_tree, root)
 
     app = FastAPI(lifespan=lifespan)
 
@@ -106,6 +108,16 @@ async def serve(root: Path):
             return {"restarted": True}
         return await fixture.control(operation, **body)
 
+    @app.post("/cleanup")
+    async def cleanup(request: Request):
+        nonlocal fixture
+        authorize(request)
+        async with serial:
+            if fixture is not None:
+                await fixture.close()
+                fixture = None
+        return {"cleaned": True}
+
     auth_file.parent.mkdir(parents=True, exist_ok=True)
     auth_file.write_text(json.dumps({"token": token, "control_origin": f"http://127.0.0.1:{port + 1}"}))
     auth_file.chmod(0o600)
@@ -114,9 +126,6 @@ async def serve(root: Path):
 
 def main():
     with tempfile.TemporaryDirectory(prefix="nebula-continuity-lan-") as directory:
-        def stop(_signum, _frame):
-            raise SystemExit(0)
-        signal.signal(signal.SIGTERM, stop)
         asyncio.run(serve(Path(directory)))
 
 

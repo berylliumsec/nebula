@@ -63,9 +63,8 @@ The dedicated Playwright config permanently inherits desktop Chromium 1440/1024,
 Pixel 5 Chromium 320/390/430 and iPhone 13 WebKit 320/390/430. Its first two
 journeys collected 16 cases. Collection is not execution evidence.
 
-Host/client integration, physical allocator routing, final runtime-service
-launchers, PostgreSQL crash cases and the final production LAN matrix remain
-pending. The managed browser cache has no WebKit runtime; previous official
+Physical allocator routing, final runtime-service launchers and the complete
+production LAN matrix remain pending. The managed browser cache has no WebKit runtime; previous official
 downloads were rejected with HTTP 403 `Domain forbidden`. No bypass is used.
 Physical devices and packaged desktop continuity have not been exercised. These
 missing gates prevent an unqualified product-completion claim.
@@ -98,10 +97,23 @@ recorded as a passing workflow. Raw results and the source/test selection are
 `/tmp/nebula-acceptance-rerun-78-selection.json`. Per-case databases and logs are
 retained in `/tmp/nebula-acceptance-rerun-78e9577a`.
 
-The first actual LAN browser case reached a proxy `Domain forbidden` page before
-pairing, so it supplies no product UI acceptance evidence. Its trace and page
-snapshot are preserved at `/tmp/nebula-acceptance-lan-first-failure`. Private
-fixture control now uses loopback while the product page keeps its LAN origin;
-a scoped browser-network arrangement and joined fixture cleanup are still under
-review. The positively identified leftover fixture supervisor was stopped and
-its exit verified; no operator process was contacted.
+The five PostgreSQL crash-phase cases passed on `78e9577a` in 266.57 seconds,
+including actual source/target processes and host reconstruction. Results and
+selection are `/tmp/nebula-acceptance-pg-phases-tests.txt` and
+`/tmp/nebula-acceptance-pg-phases-selection.json`.
+
+The first LAN attempt reached a proxy `Domain forbidden` page before pairing;
+its trace is preserved at `/tmp/nebula-acceptance-lan-first-failure`. Independent
+review established that the browser was proxying its own LAN address. The
+dedicated fixture now bypasses that proxy only for addresses verified to belong
+to this machine and loopback, preserving the inherited proxy for every other
+destination. It uses config metadata for its private auth file, loopback
+fixture controls, graceful shutdown and awaited per-case cleanup.
+
+The desktop Chromium 1440 cold-recovery journey subsequently passed in 51.9
+seconds at `http://172.26.91.238:19689`, using source `78e9577a` and the clean
+`af44af34` production UI. A fresh paired device saved/read back the reserve
+before any API worker existed, admitted an actual API, retained the saved value
+on reload, and passed axe, focus/44px and no-clipping checks. The screenshot was
+visually inspected. Evidence is in `/tmp/nebula-acceptance-lan-passed`; no
+physical-device result follows. Every spawned worker was verified gone.
