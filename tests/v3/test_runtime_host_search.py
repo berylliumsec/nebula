@@ -3,13 +3,16 @@
 import asyncio
 from dataclasses import asdict
 from datetime import timedelta
-import secrets
+import hashlib
+import os
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.database import RuntimeProcessRow
+from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.domain import (
     ChatSession,
     ChatTurn,
@@ -23,13 +26,20 @@ from nebula.v3.domain import (
 from nebula.v3.domain import utc_now
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.memory_policy import MemoryBudgetConflict, MemoryEnforcementUnavailable
+from nebula.v3.process_identity import process_birth
+from nebula.v3.runtime_context_requirements import HOST_SEARCH_FEATURE
 from nebula.v3.runtime_coordination import LEASE_MS, ProjectLease
 from nebula.v3.runtime_host_search import (
     HOST_SEARCH_QUERY,
     RemoteProjectSearch,
     register_host_search,
 )
-from nebula.v3.runtime_ipc import RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
+from nebula.v3.runtime_ipc import (
+    RuntimeCredentials,
+    RuntimeIpcError,
+    RuntimeRpcClient,
+    RuntimeRpcServer,
+)
 from nebula.v3.runtime_platform import RuntimePlatform, default_runtime_platform
 from nebula.v3.tools import ToolInvocation
 from nebula.v3.web_search import (
@@ -40,6 +50,7 @@ from nebula.v3.web_search import (
     WebSearchResult,
     WebSearchTool,
 )
+from tests.v3.test_deployment_lifecycle import manifest
 from tests.v3.test_runtime_coordination import cluster as cluster
 from tests.v3.test_runtime_coordination import location as location
 
@@ -81,22 +92,60 @@ class InertHostSearch:
 
 
 @pytest.fixture
-async def search(cluster):
+async def search(cluster, tmp_path):
     (coordination, _), (store, _), clock = cluster
     scope = await store.create(
         ScopePolicy(id="search-scope", engagement_id="project", web_search=True)
     )
     await store.update(Engagement, "project", {"scope_policy_id": scope.id})
-    lease = await coordination.claim_project("project", "old")
     runtime = InertHostSearch()
-    key = secrets.token_bytes(32)
-    rpc = RuntimeRpcServer(key)
-    register_host_search(rpc, lease.runtime_id, coordination, runtime)
-    client = RuntimeRpcClient(
-        "unix:///synthetic/search.sock", key, transport=httpx.ASGITransport(app=rpc.app)
-    )
-    remote = RemoteProjectSearch(client, store, lease)
+    credentials = RuntimeCredentials(tmp_path / "runtime-credentials")
+    deployment = DeploymentCoordinator(store.database)
+    deployment.coordination._clock_ms = coordination._clock_ms
+    clients = []
+    remote = None
+
+    async def register_runtime(runtime_id, version):
+        reference, key = credentials.create()
+        rpc = RuntimeRpcServer(key)
+        register_host_search(rpc, runtime_id, coordination, runtime)
+        endpoint = f"unix:///synthetic/search-{runtime_id}.sock"
+        client = RuntimeRpcClient(
+            endpoint, key, transport=httpx.ASGITransport(app=rpc.app)
+        )
+        clients.append(client)
+        release = manifest(version, features=[HOST_SEARCH_FEATURE])
+        await deployment.stage(
+            release,
+            tmp_path / version,
+            hashlib.sha256(release.model_dump_json().encode()).hexdigest(),
+        )
+        await coordination.register_runtime(runtime_id, version)
+        # The signed ASGI app runs in this pytest process. Record its verified
+        # process identity and the search capability implemented by this fixture.
+        pid = os.getpid()
+        birth = process_birth(pid)
+        assert birth is not None
+        async with store.database.session() as session:
+            session.add(
+                RuntimeProcessRow(
+                    runtime_id=runtime_id,
+                    version=version,
+                    role="execution",
+                    pid=pid,
+                    process_birth=birth,
+                    endpoint=endpoint,
+                    credential_reference=reference,
+                    state="ready",
+                    updated_at_ms=clock[0],
+                )
+            )
+        return rpc, client
+
     try:
+        rpc, client = await register_runtime("old", "release-old")
+        lease = await coordination.claim_project("project", "old")
+        remote = RemoteProjectSearch(client, store, lease)
         yield SimpleNamespace(
             store=store,
             coordination=coordination,
@@ -107,10 +156,12 @@ async def search(cluster):
             rpc=rpc,
             client=client,
             remote=remote,
+            register_runtime=register_runtime,
         )
     finally:
-        await remote.close()
-        await client.close()
+        if remote is not None:
+            await remote.close()
+        await asyncio.gather(*(client.close() for client in clients))
 
 
 def payload(search, **changes):
@@ -275,7 +326,7 @@ async def test_query_wait_releases_sql_and_rejects_revocation_before_return(
                 )
             else:
                 search.clock[0] += LEASE_MS + 1
-                await search.coordination.register_runtime("replacement", "synthetic")
+                await search.register_runtime("replacement", "synthetic")
                 await search.coordination.claim_project("project", "replacement")
         search.runtime.release.set()
         with pytest.raises(RuntimeIpcError, match="403"):
