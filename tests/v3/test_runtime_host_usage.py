@@ -222,7 +222,8 @@ async def test_host_diagnostic_turn_replays_one_protected_turn_without_project_s
     settings,
 ):
     projects = {
-        item.id: item.revision for item in await settings.store.list_entities(Engagement)
+        item.id: item.revision
+        for item in await settings.store.list_entities(Engagement)
     }
     await profile(settings)
     calls, _, _ = adapter(settings)
@@ -237,7 +238,8 @@ async def test_host_diagnostic_turn_replays_one_protected_turn_without_project_s
     assert [entry[0] for entry in calls] == ["open", "turn", "close", "open", "close"]
     assert calls[1][1:] == ("Reply with exactly OK. Do not use tools.", "synthetic")
     assert {
-        item.id: item.revision for item in await settings.store.list_entities(Engagement)
+        item.id: item.revision
+        for item in await settings.store.list_entities(Engagement)
     } == projects
     for model in (HarnessSession, HarnessTurn, ChatTurn):
         assert await settings.store.count(model) == 0
@@ -311,7 +313,8 @@ async def test_host_diagnostic_without_protected_adapter_records_global_memory_r
     settings,
 ):
     projects = {
-        item.id: item.revision for item in await settings.store.list_entities(Engagement)
+        item.id: item.revision
+        for item in await settings.store.list_entities(Engagement)
     }
     await profile(settings)
 
@@ -332,7 +335,8 @@ async def test_host_diagnostic_without_protected_adapter_records_global_memory_r
             and jobs[-1].resource_kind == "harness_worker"
         )
     assert {
-        item.id: item.revision for item in await settings.store.list_entities(Engagement)
+        item.id: item.revision
+        for item in await settings.store.list_entities(Engagement)
     } == projects
     for model in (HarnessSession, HarnessTurn, ChatTurn):
         assert await settings.store.count(model) == 0

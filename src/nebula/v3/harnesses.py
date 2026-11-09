@@ -9569,8 +9569,11 @@ class HarnessRuntimeService:
         from .harness_diagnostics import run_harness_test_turn
 
         return await run_harness_test_turn(
-            self.store, profile_id, credentials=self.credential_store,
-            adapter_factory=self.adapter_factory, open_connection=self._open_memory_managed,
+            self.store,
+            profile_id,
+            credentials=self.credential_store,
+            adapter_factory=self.adapter_factory,
+            open_connection=self._open_memory_managed,
         )
 
     async def available_skills(
