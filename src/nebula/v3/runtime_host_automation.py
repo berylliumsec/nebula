@@ -32,6 +32,7 @@ class HostAutomationRuntime:
             )
         )
         self.preparer_factory = preparer_factory or ContainerImagePreparer
+        self.memory_compute = None
         self.lock = asyncio.Lock()
 
     async def _profiles(self):
@@ -146,8 +147,12 @@ class HostAutomationRuntime:
                 raise ValueError(
                     "NEBULA_KALI_SOURCE_IMAGE must reference the official Kali repository and be pinned by digest"
                 )
+            runner = self.runner_factory(profile)
+            if self.memory_compute is not None:
+                runner.memory_compute = self.memory_compute
+                runner.memory_profile_id = profile.id
             image = await self.preparer_factory(
-                runner=self.runner_factory(profile),
+                runner=runner,
                 platform=profile.platform,
                 source_reference=source,
                 expected_repository=KALI_REPOSITORY,

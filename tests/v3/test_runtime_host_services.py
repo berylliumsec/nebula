@@ -141,6 +141,8 @@ async def test_shared_service_capabilities_require_a_valid_private_peer(shared):
         "provider_credentials": True,
         "host_pressure": True,
         "integration_credentials": True,
+        "web_search": True,
+        "host_settings": shared.services.host_settings.assistant_bridge.routes(),
         "knowledge": False,
         "product_guidance": {"state": "unavailable"},
     }

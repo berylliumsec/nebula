@@ -463,7 +463,9 @@ async def _check_runtime_mutation(
     if family == "runner-profiles":
         # Match the route's effective defaults, including omitted fields that clear
         # an existing context/socket/seccomp selection. Import after API startup.
-        from .execution_kernel import RunnerProfileRequest
+        from .runtime_global_settings import (
+            RunnerSettingsRequest as RunnerProfileRequest,
+        )
 
         try:
             candidate = RunnerProfileRequest.model_validate(body).model_dump(
@@ -787,6 +789,7 @@ async def execute_settings_api(
     path: str,
     body: dict[str, Any] | list[Any] | None = None,
     expected_revision: int | None = None,
+    transport_app=None,
 ) -> dict[str, Any]:
     """Call only an existing Settings route, with the active project supplied by Core."""
 
@@ -823,7 +826,9 @@ async def execute_settings_api(
             "read the exact profile and supply expected_revision before deleting"
         )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
+        transport=httpx.ASGITransport(
+            app=transport_app if transport_app is not None else app
+        ),
         base_url="http://127.0.0.1",
         timeout=30.0,
     ) as client:
@@ -1063,10 +1068,13 @@ async def execute_settings_api(
 class SettingsAssistantApi:
     """Core-owned gateway; bearer token and selected project remain server-side."""
 
-    def __init__(self, app: FastAPI, token: str, *, memory_request=None) -> None:
+    def __init__(
+        self, app: FastAPI, token: str, *, memory_request=None, host_request=None
+    ) -> None:
         self.app = app
         self.token = token
         self.memory_request = memory_request
+        self.host_request = host_request
 
     def schema(
         self, *, path: str | None = None, method: str | None = None
@@ -1085,6 +1093,7 @@ class SettingsAssistantApi:
         if not isinstance(method, str) or not isinstance(path, str):
             raise ValueError("provide a Settings method and path")
         candidate = _clean_path(path)
+        _require_public_input(method.upper(), candidate)
         if (
             self.memory_request is not None
             and (
@@ -1094,6 +1103,16 @@ class SettingsAssistantApi:
             and not re.fullmatch(r"/api/v1/memory-budgets/jobs/[^/]+/apply", candidate)
         ):
             return await self.memory_request(
+                project_id,
+                method=method.upper(),
+                path=candidate,
+                body=body,
+                expected_revision=expected_revision,
+            )
+        if self.host_request is not None and self.host_request.supports(
+            method.upper(), candidate
+        ):
+            return await self.host_request.request(
                 project_id,
                 method=method.upper(),
                 path=candidate,

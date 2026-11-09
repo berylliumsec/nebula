@@ -50,6 +50,9 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_host_credentials import RemoteSessionCredentials
     from .runtime_host_pressure import RemoteHostLoadGate
     from .runtime_integration_credentials import RemoteExecutionCredentials
+    from .runtime_host_settings_bridge import RemoteHostSettings
+    from .runtime_host_search import RemoteProjectSearch
+    from .web_search import UnavailableProjectSearch
     from .runtime_browser_bridge import RemoteBrowserBridge
     from .storage import NebulaStore
 
@@ -95,7 +98,12 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             await knowledge.refresh()
         artifacts = ArtifactStore(root / "artifacts")
         platform = default_runtime_platform(
-            store=store, artifact_store=artifacts, data_root=root
+            store=store,
+            artifact_store=artifacts,
+            data_root=root,
+            search_runtime=RemoteProjectSearch(client, store, lease)
+            if services.get("web_search") is True
+            else UnavailableProjectSearch(),
         )
         restore_digest = (
             await restored_checkpoint(context.coordinator, lease)
@@ -125,6 +133,9 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             durable_chat_resume="chat.resume/v1" in context.manifest.features,
             settings_memory_request=RemoteMemorySettings(client).request
             if services.get("memory_control") is True
+            else None,
+            settings_host_request=RemoteHostSettings(client, services["host_settings"])
+            if "host_settings" in services
             else None,
             provider_session_resolver=RemoteSessionCredentials(client).resolve
             if services.get("provider_credentials") is True

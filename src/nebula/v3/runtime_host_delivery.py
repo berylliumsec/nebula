@@ -51,16 +51,16 @@ class HostEffectDelivery(GlobalSqlDelivery):
                     "detail": "The previous host did not confirm this effect; it has not been retried."
                 }
 
-    async def execute(self, intent, *, actor_id, idempotency_key):
+    async def execute(self, intent, *, actor_id, idempotency_key, authority=None):
         async def accept():
             async with self.admission:
                 if self.closed:
                     raise CoordinationConflict("Host Settings is stopping")
-                return await self._accept(intent, actor_id, idempotency_key)
+                return await self._accept(intent, actor_id, idempotency_key, authority)
 
         return await finish_cleanup(accept())
 
-    async def _accept(self, intent, actor, key):
+    async def _accept(self, intent, actor, key, authority=None):
         coordinator = self.delivery.coordination
         raw = _json(intent.model_dump(mode="json"))
         reference = await asyncio.to_thread(
@@ -79,6 +79,8 @@ class HostEffectDelivery(GlobalSqlDelivery):
         ).hexdigest()
         try:
             async with coordinator._write() as session:
+                if authority is not None:
+                    await coordinator._check(session, authority, lock=True)
                 if coordinator.database.engine.dialect.name == "postgresql":
                     await session.execute(
                         text(
@@ -138,13 +140,15 @@ class HostEffectDelivery(GlobalSqlDelivery):
                 )
                 session.add(command)
                 await session.flush()
+                if authority is not None:
+                    await coordinator._check(session, authority, lock=False)
                 receipt = CommandReceipt(command.id, command.project_id, sequence, now)
         except IntegrityError as error:
             raise CoordinationConflict(
                 "Idempotency-Key conflicts with another accepted request"
             ) from error
         task = create_diagnostic_task(
-            self._run(receipt.command_id, intent, actor),
+            self._run(receipt.command_id, intent, actor, authority),
             feature="runtime",
             event_code="runtime.host_setting",
             failure_message="An accepted host request could not save its final state.",
@@ -160,9 +164,12 @@ class HostEffectDelivery(GlobalSqlDelivery):
         task.add_done_callback(completed)
         return receipt
 
-    async def _run(self, command_id, intent, actor):
+    async def _run(self, command_id, intent, actor, authority=None):
         try:
             async with self.slots:
+                if authority is not None:
+                    async with self.delivery.coordination.fenced(authority):
+                        pass
                 async with asyncio.timeout(150):
                     status, headers, body = await self._response(intent, actor)
             frames = [("head", _json({"status": status, "headers": headers}))]

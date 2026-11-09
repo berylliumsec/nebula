@@ -55,6 +55,20 @@ Focused backend evidence:
   integrations, then observed TypeSafe revocation and local fallback. Per-action
   Search capability tests cover supported initialization versus unavailable
   provisioning/reconfiguration without performing OCI work.
+- Canonical assistant/Search assembly: 21 distinct focused cases passed. The
+  Settings assistant reads and changes the same host policies as the UI through
+  an exact-grant private gateway. Existing input restrictions and guided policy
+  refusals remain intact. Global SQL mutations retain atomic receipts and fence
+  the delegated grant inside that transaction; queued external effects check it
+  before starting. Trusted durable tool context supplies replay identity. Two
+  archived retained-worker cases use the real scoped store, RuntimePlatform and
+  ToolBroker for separate project grants, proving one host query owner and no
+  project-local lifecycle fallback. Real retained Kernel requests also verify
+  canonical assistant CPU observations. The no-Kernel host import check passes.
+- Unsupported daemon initialization returns an actionable 503 and an audited
+  blocked global memory job with zero charge before any subprocess. A supported
+  cached-image Search adapter uses the canonical host memory controller; the
+  host owns its exact persistent lifecycle and awaited cleanup.
 - Ruff passed; targeted mypy reported no issues in the 11 observation modules.
 - Actual retained API composition requires the independently validated shared
   database ownership change in commit `17ec988e`.
@@ -66,8 +80,16 @@ and final Settings-assistant/product-index acceptance belong to the integrated
 candidate and are not established by this backend receipt. Web Search capability
 is read from its current managed adapter per action. The legacy direct OCI
 initializer is never treated as a supported memory-managed adapter. The managed
-Search adapter/binding and verified daemon image-build enforcement have their
-own runtime validation requirements.
+Search adapter and query proxy have their own focused receipts in addition to
+the assembly checks. Verified daemon image-build enforcement remains an explicit
+runner capability requirement; no CLI-only limit is treated as containment.
+
+Assembly evidence is in `/tmp/nebula-host-bridge-tests.txt` (19 passed),
+`/tmp/nebula-host-image-refusal-tests.txt` (2 passed), and
+`/tmp/nebula-host-guidance-tests.txt` (2 repeated policy-boundary cases passed).
+Ruff and the ten-module focused mypy check pass. Final combined browser/device,
+production LAN, packaging, assistant knowledge index, CI and merge evidence
+remain with the root integration task.
 
 The credential slice's seven-module focused mypy check passed. Including the
 existing terminal module also reports the preexisting

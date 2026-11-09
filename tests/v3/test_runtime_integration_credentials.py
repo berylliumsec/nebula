@@ -293,6 +293,9 @@ credentials = None
 store = None
 async def complete(self, request):
     client = await resolve_jev_client(store, credentials)
+    host_cpu = await application.state.settings_assistant_api.request(current_execution_lease().project_id, method='GET', path='host-cpu-budget')
+    if host_cpu['result']['activation_supported'] or host_cpu['result']['executor_scope'] != 'external':
+        raise RuntimeError('Settings assistant did not observe canonical host CPU policy')
     if client is not None and hashlib.sha256(client.api_key.encode()).hexdigest() != __TYPE_DIGEST__:
         raise RuntimeError('Synthetic TypeSafe credential mismatch')
     selected = await application.state.container_terminal_service._selected_vpn(current_execution_lease().project_id)

@@ -17,8 +17,13 @@ from .host_pressure import (
     HostPressureUpdate,
 )
 from .runtime_host_automation import HostAutomationRuntime
+from .memory_policy import (
+    MemoryBudgetError,
+    MemoryBudgetConflict,
+    MemoryEnforcementUnavailable,
+)
+from .sandbox import SandboxUnavailable
 from .runtime_integration_effects import HOST_INTEGRATION_WRITES, HostIntegrationEffects
-from .web_search import SearchRuntime
 
 HOST_OBSERVATION_ROUTES = {
     ("GET", "/api/v1/host-cpu-budget"),
@@ -60,15 +65,32 @@ class HostObservations:
             self.host.data_root / "host-cpu-budget.json", capacity
         )
         self.automation = HostAutomationRuntime(settings.store, self.host.data_root)
-        self.search = SearchRuntime(store=settings.store, data_root=self.host.data_root)
+        self.search = None
         self.integrations = HostIntegrationEffects(self)
         self.diagnostics = None
         self.allow_browser_diagnostics = False
 
     async def start(self):
         await self.pressure.startup()
+        if self.search is None:
+            from .managed_search_runtime import ManagedSearchRuntime
+            from .memory_runtime import MemoryComputeController
+
+            self.memory_compute = MemoryComputeController(
+                self.host.shared_services.recovery.budgets, self.host.data_root
+            )
+            self.search = ManagedSearchRuntime(
+                store=self.settings.store,
+                data_root=self.host.data_root,
+                memory_compute=self.memory_compute,
+            )
+            self.automation.memory_compute = self.memory_compute
 
     async def close(self):
+        close = getattr(self.search, "close", None)
+        if callable(close):
+            await close()
+            return
         task = getattr(self.search, "_idle_task", None)
         if task is not None and not task.done():
             task.cancel()
@@ -101,6 +123,29 @@ class HostObservations:
 
         dependencies = [Depends(auth)]
         self.integrations.mount(app, auth)
+
+        @app.exception_handler(SandboxUnavailable)
+        async def sandbox_unavailable(_request, error):
+            # diagnostic-expected: unsupported image enforcement is a recorded
+            # capability refusal; the memory ledger retains its blocked job.
+            from starlette.responses import JSONResponse
+
+            return JSONResponse({"detail": str(error)}, status_code=503)
+
+        @app.exception_handler(MemoryBudgetError)
+        async def memory_unavailable(_request, error):
+            # diagnostic-expected: expose budget/admission refusals truthfully.
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(
+                {"detail": str(error)},
+                status_code=409
+                if isinstance(error, MemoryBudgetConflict)
+                else 503
+                if isinstance(error, MemoryEnforcementUnavailable)
+                else 422,
+            )
+
         app.include_router(
             butler_instructions_router(self.host.data_root, self.settings.store),
             prefix="/api/v1",

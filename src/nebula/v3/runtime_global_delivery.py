@@ -26,7 +26,7 @@ class GlobalSqlDelivery:
             )
         self.delivery, self.application = delivery, application
 
-    async def execute(self, intent, *, actor_id, idempotency_key):
+    async def execute(self, intent, *, actor_id, idempotency_key, authority=None):
         coordinator = self.delivery.coordination
         raw = _json(intent.model_dump(mode="json"))
         reference = await asyncio.to_thread(
@@ -47,6 +47,8 @@ class GlobalSqlDelivery:
         ).hexdigest()
         try:
             async with coordinator._write() as session:
+                if authority is not None:
+                    await coordinator._check(session, authority, lock=True)
                 if coordinator.database.engine.dialect.name == "postgresql":
                     await session.execute(
                         text(
@@ -138,6 +140,9 @@ class GlobalSqlDelivery:
                     )
                 command.state = "succeeded" if status < 400 else "failed"
                 command.result = {"http_status": status}
+                if authority is not None:
+                    await session.flush()
+                    await coordinator._check(session, authority, lock=False)
                 return CommandReceipt(
                     command.id, command.project_id, command.sequence, now
                 )

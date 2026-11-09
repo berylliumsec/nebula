@@ -119,12 +119,16 @@ class HostSettings:
         self._directory = None
         self._directory_at = 0.0
         self.actor = ContextVar("host_settings_actor", default="")
+        self.delegated_authority = ContextVar("host_settings_authority", default=None)
         self.effect = None
         self.read_slots = asyncio.Semaphore(8)
         self.observations = HostObservations(self)
         self.app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
         self._routes()
         self.observations.mount(self.app, self._authorized)
+        from .runtime_host_settings_bridge import HostSettingsBridge
+
+        self.assistant_bridge = HostSettingsBridge(self)
 
     async def start(self):
         await self.observations.start()
@@ -140,6 +144,7 @@ class HostSettings:
         if self.effect is not None:
             await self.effect.close()
         await self.observations.close()
+        await self.assistant_bridge.close()
         await self.store.event_history.close()
 
     async def __call__(self, scope, receive, send):
@@ -150,6 +155,10 @@ class HostSettings:
             self.actor.reset(token)
 
     async def _authorized(self):
+        authority = self.delegated_authority.get()
+        if authority is not None:
+            async with self.host.coordinator.coordination.fenced(authority):
+                pass
         actor = self.actor.get()
         if actor == "operator":
             return actor

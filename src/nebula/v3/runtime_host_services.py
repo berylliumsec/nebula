@@ -27,6 +27,7 @@ from .runtime_host_settings import HostSettings
 from .runtime_host_credentials import register_session_credentials
 from .runtime_host_pressure import register_host_pressure
 from .runtime_integration_credentials import register_integration_credentials
+from .runtime_host_search import register_host_search
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
@@ -154,6 +155,8 @@ class HostSharedServices:
                             "provider_credentials": True,
                             "host_pressure": True,
                             "integration_credentials": True,
+                            "web_search": True,
+                            "host_settings": self.host_settings.assistant_bridge.routes(),
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
                         }
@@ -180,6 +183,13 @@ class HostSharedServices:
                         runtime_id,
                         self.coordination,
                         self.host_settings.credentials,
+                    )
+                    self.host_settings.assistant_bridge.register(rpc, runtime_id)
+                    register_host_search(
+                        rpc,
+                        runtime_id,
+                        self.coordination,
+                        self.host_settings.observations.search,
                     )
                     if self.knowledge is not None:
                         self.knowledge.register(rpc, runtime_id)

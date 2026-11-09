@@ -1623,6 +1623,7 @@ def create_execution_kernel(
     durable_chat_acceptance: bool = False,
     durable_chat_resume: bool = False,
     settings_memory_request=None,
+    settings_host_request=None,
     provider_session_resolver=None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
@@ -2602,7 +2603,10 @@ def create_execution_kernel(
     from .settings_assistant_api import SettingsAssistantApi
 
     settings_assistant_api = SettingsAssistantApi(
-        app, token, memory_request=settings_memory_request
+        app,
+        token,
+        memory_request=settings_memory_request,
+        host_request=settings_host_request,
     )
     app.state.settings_assistant_api = settings_assistant_api
     from .control_assistant_work import ControlAssistantWork
@@ -8597,14 +8601,32 @@ def create_execution_kernel(
         return await typesafe_status()
 
     def require_search_runtime() -> Any:
-        if tool_platform is None:
+        runtime = getattr(tool_platform, "search_runtime", None)
+        if runtime is None or not callable(getattr(runtime, "install", None)):
             raise HTTPException(
-                status_code=503,
-                detail="the local search runtime requires a configured Core runtime",
+                status_code=501,
+                detail="Web Search controls require the canonical Core host Settings service",
             )
-        return tool_platform.search_runtime
+        return runtime
 
     async def web_search_status() -> WebSearchStatus:
+        if settings_host_request is not None:
+            from .execution_scope import current_execution_lease
+
+            lease = current_execution_lease()
+            if lease is not None:
+                observed = await settings_host_request.request(
+                    lease.project_id,
+                    method="GET",
+                    path="/api/v1/integrations/web-search",
+                )
+                return WebSearchStatus.model_validate(
+                    {
+                        key: value
+                        for key, value in observed["result"].items()
+                        if key in WebSearchStatus.model_fields
+                    }
+                )
         runtime = tool_platform.search_runtime if tool_platform is not None else None
         observation = runtime if isinstance(runtime, SearchRuntimeObservation) else None
         return await web_search_integration_status(store, observation)
