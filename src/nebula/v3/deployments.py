@@ -44,7 +44,7 @@ from .runtime_coordination import (
 )
 from .process_identity import same_process
 
-_RESIDENT = ("reserved", "starting", "ready", "draining", "unreachable")
+_RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
 _UNFINISHED = ("queued", "running", "uncertain")
 
 
@@ -313,11 +313,39 @@ class DeploymentCoordinator:
             )
             row.updated_at_ms = await self.coordination._clock_ms(session)
 
+    async def begin_start_abort(self, runtime_id: str) -> bool:
+        """Fence an unready candidate before any external termination action.
+
+        Readiness publication and this transition share the host lock. A ready
+        worker may already own work even if its launch caller lost the response.
+        """
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            row = await session.get(RuntimeProcessRow, runtime_id, with_for_update=True)
+            if row is None or row.state not in {"reserved", "starting", "aborting"}:
+                return False
+            row.state, row.updated_at_ms = (
+                "aborting",
+                await self.coordination._clock_ms(session),
+            )
+            await session.execute(
+                update(RuntimeInstanceRow)
+                .where(RuntimeInstanceRow.id == runtime_id)
+                .values(lease_expires_at_ms=0)
+            )
+            host.revision += 1
+            await self._receipt(
+                session,
+                "worker.start_aborting",
+                {"runtime_id": runtime_id, "version": row.version},
+            )
+            return True
+
     async def abort_start(self, runtime_id: str) -> None:
         async with self.coordination._write() as session:
             host = await self._host(session)
             row = await session.get(RuntimeProcessRow, runtime_id, with_for_update=True)
-            if row is None or row.state not in {"reserved", "starting"}:
+            if row is None or row.state not in {"reserved", "starting", "aborting"}:
                 raise CoordinationConflict(
                     "only an unready startup reservation can be aborted"
                 )

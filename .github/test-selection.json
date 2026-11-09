@@ -1,31 +1,19 @@
 {
-  "change_digest": "451ae2cf6aa827c5be0e7d1e6c958e531ff0587d63d04287a03922c0f83ac634",
+  "change_digest": "243298166e7ee0b66183b0c24f8d7b4047c8f9aeefd2cad034f7b9f58157fcc2",
   "reviewed_by": "Codex",
-  "reason": "19 collected Python cases: four normal-cleanup authority regressions after independently validated fixture repair; two charged-job visibility/order regressions across SQLite/PostgreSQL; ten authenticated API/Butler cases; three regenerated product-index/Chroma cases. Five collected Settings component cases include bounded-page notice. Five production LAN memory journeys validate the changed display/API metadata. Earlier28/32 OCI and recovery results remain recorded; no unrelated coverage is repeated. Final evidence-only report changes reviewed; no execution behavior changed after these passing checks.",
-  "exclusions": "No full suite, existing installation, live provider/SSH service or deployment. The prior32-case substep passed28 including all actual kernel jobs; its only four failures were missing workspace in a nonexecuting test fixture, now repaired. Mobile WebKit download403 and packaged desktop gates remain unavailable. Unsupported/uncertain runners stay held; no uncontrolled fallback.",
+  "reason": "Six collected process cases previously failed because the disposable fixture omitted its synthetic Engagement entities. Fresh-context independent causal validation confirmed the setup fault; repair only seeds the two real synthetic projects and closes their event history. Rerun exactly the six failed cases across SQLite and disposable PostgreSQL. Prior 17 startup/process cases, 21 factory/auth cases and 19 transport cases passed.",
+  "exclusions": "No full suite, existing installation, operational service/provider/SSH or deployment. Workers only await events and answer private control messages. Fixture executable uses current repository libraries; this does not certify packaged immutable runtime contents or desktop update/reopen. Source role/CLI/stable-listener wiring remains unfinished; WebKit and packaged desktop evidence remain unavailable. No benchmark workload is run.",
   "expected_tests": {
-    "python": 19,
-    "frontend": 5,
+    "python": 6,
+    "frontend": 0,
     "native": 0,
-    "playwright": 5
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_memory_recovery.py::test_normal_cleanup_does_not_free_capacity_on_a_replacement_daemon",
-    "tests/v3/test_memory_budget.py::test_older_running_job_stays_visible_ahead_of_finished_history_and_queue",
-    "tests/v3/test_memory_api.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_enforced_memory_budgets_and_butler_actions",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_runtime_processes.py::test_published_worker_survives_cancellation_after_committed_readiness",
+    "tests/v3/test_runtime_processes.py::test_actual_supervisor_process_exit_leaves_worker_reachable"
   ],
-  "frontend": [
-    "ui/src/components/MemoryBudgetSettings.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:memory-budgets/model-desktop",
-    "entry:memory-budgets/model-compact",
-    "entry:memory-budgets/model-chromium-320",
-    "entry:memory-budgets/model-chromium-390",
-    "entry:memory-budgets/model-chromium-430"
-  ]
+  "playwright": []
 }

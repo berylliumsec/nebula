@@ -55,8 +55,10 @@ class RuntimeCredentials:
                 "runtime credentials require an owner-only host directory"
             )
 
-    def create(self) -> tuple[str, bytes]:
-        reference, secret = str(uuid4()), secrets.token_bytes(32)
+    def create(self, *, reference: str | None = None) -> tuple[str, bytes]:
+        reference = str(uuid4()) if reference is None else reference
+        self._validate_reference(reference)
+        secret = secrets.token_bytes(32)
         path = self.directory / reference
         descriptor = os.open(
             path,
@@ -69,7 +71,8 @@ class RuntimeCredentials:
             os.fsync(output.fileno())
         return reference, secret
 
-    def read(self, reference: str) -> bytes:
+    @staticmethod
+    def _validate_reference(reference: str) -> None:
         from uuid import UUID
 
         try:
@@ -79,6 +82,9 @@ class RuntimeCredentials:
                 raise ValueError()
         except ValueError as error:
             raise RuntimeIpcError("invalid runtime credential reference") from error
+
+    def read(self, reference: str) -> bytes:
+        self._validate_reference(reference)
         descriptor = os.open(
             self.directory / reference, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         )

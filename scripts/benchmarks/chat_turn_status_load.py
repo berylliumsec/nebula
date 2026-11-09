@@ -889,6 +889,8 @@ def _command(
 def _candidate_identity(repo: Path) -> dict[str, str | None]:
     source_paths = (
         "src/nebula/v3/api.py",
+        "src/nebula/v3/execution_kernel.py",
+        "src/nebula/v3/authentication.py",
         "src/nebula/v3/chat_agent_messages.py",
         "src/nebula/v3/database.py",
         "src/nebula/v3/harnesses.py",

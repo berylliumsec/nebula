@@ -504,6 +504,55 @@ async def test_failed_starts_free_slots_and_late_ready_is_fenced(host):
         await coordinator.worker_ready(proof)
 
 
+async def test_startup_abort_holds_its_slot_and_fences_readiness_before_cleanup(host):
+    coordinator, _store = host
+    first = await coordinator.reserve_worker(
+        "v1",
+        role="execution",
+        endpoint="unix:///isolated/abort.sock",
+        credential_reference=str(uuid4()),
+    )
+    await coordinator.reserve_worker(
+        "v2",
+        role="execution",
+        endpoint="unix:///isolated/resident.sock",
+        credential_reference=str(uuid4()),
+    )
+    assert await coordinator.begin_start_abort(first)
+    assert (await coordinator.status()).resident_versions == ["v1", "v2"]
+    assert (
+        await coordinator.reserve_worker(
+            "v3",
+            role="execution",
+            endpoint="unix:///isolated/third.sock",
+            credential_reference=str(uuid4()),
+        )
+        is None
+    )
+    proof = WorkerIdentity(
+        runtime_id=first,
+        version="v1",
+        role="execution",
+        endpoint="unix:///isolated/abort.sock",
+        pid=os.getpid(),
+        process_birth=process_birth(os.getpid()),
+    )
+    with pytest.raises(CoordinationConflict):
+        await coordinator.bind_spawn(proof)
+    with pytest.raises(CoordinationConflict):
+        await coordinator.worker_ready(proof)
+    await coordinator.abort_start(first)
+    assert (
+        await coordinator.reserve_worker(
+            "v3",
+            role="execution",
+            endpoint="unix:///isolated/third.sock",
+            credential_reference=str(uuid4()),
+        )
+        is not None
+    )
+
+
 async def test_forged_birth_cannot_bind_or_retire_a_live_process(host):
     coordinator, _store = host
     endpoint = "unix:///isolated/birth.sock"

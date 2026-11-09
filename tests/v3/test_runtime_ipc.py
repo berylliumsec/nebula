@@ -3,6 +3,7 @@
 import json
 import secrets
 import time
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -37,6 +38,18 @@ def test_host_credentials_are_private_and_references_cannot_escape(tmp_path):
     (credentials.directory / reference).chmod(0o644)
     with pytest.raises(RuntimeIpcError, match="private"):
         credentials.read(reference)
+
+
+def test_reserved_credential_reference_is_immutable_and_cannot_escape(tmp_path):
+    credentials = RuntimeCredentials(tmp_path / "credentials")
+    reference = str(uuid4())
+    actual, key = credentials.create(reference=reference)
+    assert actual == reference and credentials.read(reference) == key
+    with pytest.raises(FileExistsError):
+        credentials.create(reference=reference)
+    with pytest.raises(RuntimeIpcError):
+        credentials.create(reference="../escape")
+    assert len(list(credentials.directory.iterdir())) == 1
 
 
 async def test_authenticated_rpc_returns_only_matching_authenticated_response():

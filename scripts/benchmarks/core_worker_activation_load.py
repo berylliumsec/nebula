@@ -293,6 +293,8 @@ def main():
             repository / name
             for name in (
                 "src/nebula/v3/api.py",
+                "src/nebula/v3/execution_kernel.py",
+                "src/nebula/v3/authentication.py",
                 "src/nebula/v3/cpu_workers.py",
                 "src/nebula/v3/host_cpu_budget.py",
                 "src/nebula/v3/report_cpu_executor.py",
