@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from uuid import uuid4
 
 import pytest
@@ -13,7 +14,7 @@ from nebula.v3.domain import ChatTurn, Engagement
 from nebula.v3.process_identity import same_process
 from nebula.v3.release_store import ReleaseStore
 from tests.v3.runtime_continuity_bundle import build_bundle, remove_owned_tree, retained_bundle
-from tests.v3.runtime_continuity_fixture import ContinuityFixture
+from tests.v3.runtime_continuity_fixture import ContinuityFixture, completed_response
 from tests.v3.test_runtime_coordination import location as location
 
 pytestmark = pytest.mark.anyio
@@ -89,6 +90,97 @@ async def test_retained_source_api_replacement_and_code_rollback_keep_one_turn(c
     status = (await continuity.client.get("/api/v1/deployment/status")).json()
     assert "acceptance-v3" in status["staged_versions"]
     assert same_process(second_api["pid"], second_api["process_birth"])
+
+
+async def test_butler_overview_loads_through_retained_api(continuity):
+    await continuity.ready()
+    response = await continuity.client.get("/api/v1/engagements/continuity-project/butler/overview")
+    assert response.status_code == 200, response.text
+
+
+async def test_actual_participant_handoff_runs_one_due_schedule_and_preserves_prior_pauses(continuity):
+    from datetime import timedelta
+    from nebula.v3.domain import ChatGoal, ChatSchedule, ChatSession, utc_now
+
+    source_text = (continuity.bundles[0].path / "source/nebula/v3/runtime_worker.py").read_text()
+    if '"project.participants/v1"' not in source_text:
+        pytest.skip("selected source predates verified participant restoration")
+    due = utc_now() + timedelta(seconds=45)
+    for identity in ("scheduled-participant", "prior-paused-participant"):
+        await continuity.store.create(ChatSession(
+            id=identity, engagement_id="continuity-project", title=identity,
+            provider_profile_id="continuity-provider", model="model-a",
+        ))
+    await continuity.store.create(ChatGoal(
+        id="scheduled-goal", engagement_id="continuity-project",
+        session_id="scheduled-participant", objective="One bounded occurrence",
+        completion_criteria=["One inert response"], status="running",
+        step_budget=1, started_at=utc_now(),
+    ))
+    await continuity.store.create(ChatSchedule(
+        id="due-participant", engagement_id="continuity-project",
+        session_id="scheduled-participant", provider_profile_id="continuity-provider",
+        model="model-a", interval_seconds=3600, next_run_at=due,
+    ))
+    paused = await continuity.store.create(ChatGoal(
+        id="prior-paused-goal", engagement_id="continuity-project",
+        session_id="prior-paused-participant", objective="Preserve the operator pause",
+        completion_criteria=["Remain paused"], status="paused",
+        paused_at=utc_now(), elapsed_seconds=12,
+    ))
+    disabled = await continuity.store.create(ChatSchedule(
+        id="prior-disabled-schedule", engagement_id="continuity-project",
+        session_id="prior-paused-participant", provider_profile_id="continuity-provider",
+        model="model-a", interval_seconds=3600, next_run_at=utc_now(), enabled=False,
+    ))
+    source, _api = await continuity.ready()
+    continuity.hold("hold-activation")
+    target = await continuity.control("handoff", version="acceptance-v2", project_id="continuity-project")
+    async with asyncio.timeout(60):
+        while True:
+            observed = await continuity.control("inspect")
+            if any(item["event"] == "activation-wait" for item in observed["events"]):
+                break
+            await asyncio.sleep(.05)
+    status = await continuity.control("execution-status", runtime_id=target["runtime_id"])
+    assert status["state"] == "prepared"
+    async with asyncio.timeout(50):
+        while utc_now() <= due:
+            await asyncio.sleep(.1)
+    observed = await continuity.control("inspect")
+    assert not [item for item in observed["events"] if item["event"] == "provider-start"]
+    assert (await continuity.store.get(ChatSchedule, "due-participant")).last_turn_id is None
+    continuity.release("hold-activation")
+    after = await continuity.wait_project("verified")
+    assert after["runtime_id"] == target["runtime_id"]
+    async with asyncio.timeout(30):
+        while True:
+            schedule = await continuity.store.get(ChatSchedule, "due-participant")
+            if schedule.last_status == "complete":
+                break
+            await asyncio.sleep(.05)
+    turns = await continuity.store.list_entities(ChatTurn, engagement_id="continuity-project")
+    assert len(turns) == 1 and turns[0].id == schedule.last_turn_id
+    assert turns[0].goal_id == "scheduled-goal" and schedule.next_run_at > due
+    staged = await continuity.client.post("/__acceptance/control", json={
+        "operation": "handoff", "version": "acceptance-v3", "project_id": "continuity-project",
+    })
+    assert staged.status_code == 409 and "remains staged" in staged.text
+    observed = await continuity.control("inspect")
+    assert not [item for item in observed["processes"] if item["version"] == "acceptance-v3"]
+    state = (await continuity.client.get("/api/v1/deployment/status")).json()
+    assert "acceptance-v3" in state["staged_versions"]
+    assert not [item for item in state["projects"] if item["runtime_id"] == source["runtime_id"]]
+    await continuity.control("retire", runtime_id=source["runtime_id"])
+    assert not same_process(source["pid"], source["process_birth"])
+    third = await continuity.control("handoff", version="acceptance-v3", project_id="continuity-project")
+    assert (await continuity.wait_project("verified"))["runtime_id"] == third["runtime_id"]
+    assert (await continuity.store.get(ChatGoal, paused.id)).model_dump() == paused.model_dump()
+    assert (await continuity.store.get(ChatSchedule, disabled.id)).model_dump() == disabled.model_dump()
+    assert len(await continuity.store.list_entities(ChatTurn, engagement_id="continuity-project")) == 1
+    observed = await continuity.control("inspect")
+    starts = [item for item in observed["events"] if item["event"] == "provider-start"]
+    assert len(starts) == 1 and starts[0]["version"] == "acceptance-v2"
 
 
 @pytest.mark.parametrize("phase", ["requested", "finishing", "transferable", "transferred", "verified"])
@@ -175,11 +267,12 @@ async def allocator_continuity(tmp_path, location, continuity_bundles):
 async def test_live_apply_after_api_replacement_reaches_original_physical_allocator(allocator_continuity):
     fixture = allocator_continuity
     from nebula.v3.memory_policy import MIB
+    from tests.v3.runtime_continuity_allocator import release_allocator
     source, _api = await fixture.ready()
     identity = "physical-continuity-allocator"
     task = asyncio.create_task(fixture.client.post(
         "/api/v1/engagements/continuity-project/acceptance-allocation",
-        json={"job_id": identity}, headers={"Idempotency-Key": identity},
+        json={"job_id": identity, "hold": True}, headers={"Idempotency-Key": identity},
     ))
     try:
         async with asyncio.timeout(30):
@@ -211,14 +304,25 @@ async def test_live_apply_after_api_replacement_reaches_original_physical_alloca
             "inspect", "--format", "{{.HostConfig.Memory}}", job["evidence"]["group_id"]],
             check=True, capture_output=True, text=True, timeout=10, env=environment)
         assert int(check.stdout.strip()) == 16 * MIB
-        finished = await asyncio.wait_for(task, 45)
-        assert finished.status_code == 200, finished.text
+        release_allocator(fixture.root, identity)
+        finished = await completed_response(fixture.client, await asyncio.wait_for(asyncio.shield(task), 45))
+        assert finished.json()["exit_code"] == 0, finished.text
         final = (await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity)).json()
         assert final["evidence"]["group_empty"] and final["reserved_bytes"] == 0
+        (fixture.root / "physical-acceptance.json").write_text(json.dumps({
+            "original_execution": source, "applied": job,
+            "independent_group_limit_bytes": int(check.stdout.strip()),
+            "response": finished.json(), "finished": final,
+        }, indent=2))
     finally:
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        release_allocator(fixture.root, identity)
+        active_failure = sys.exc_info()[0] is not None
+        try:
+            await completed_response(fixture.client, await asyncio.wait_for(asyncio.shield(task), 45), timeout=45)
+        except Exception as exc:
+            (fixture.root / "allocator-cleanup-error.txt").write_text(f"{type(exc).__name__}: {exc}\n")
+            if not active_failure:
+                raise
 
 
 async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(continuity_bundles, tmp_path):
@@ -234,7 +338,12 @@ async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(con
         selected_environment = {**environment, "NEBULA_RUNTIME_BUNDLE": str(bundle.path)}
         result = await asyncio.to_thread(subprocess.run,
             [str(bundle.path / "nebula-core"), command, "--data-dir", str(data)],
-            check=True, capture_output=True, text=True, timeout=120, env=selected_environment)
+            capture_output=True, text=True, timeout=120, env=selected_environment)
+        receipt = tmp_path / (command + "-" + uuid4().hex + ".json")
+        receipt.write_text(json.dumps({"returncode": result.returncode,
+                                       "stdout": result.stdout, "stderr": result.stderr}, indent=2))
+        receipt.chmod(0o600)
+        assert result.returncode == 0, f"{command} failed; private receipt {receipt}: {result.stderr[-4000:]}"
         return json.loads(result.stdout)
 
     connection = None
@@ -246,20 +355,16 @@ async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(con
         async with httpx.AsyncClient(base_url=origin, trust_env=False, timeout=30,
             headers={"Authorization": "Bearer " + connection["ipc_token"]}) as client:
             identity = (await client.get("/api/v1/runtime/identity")).json()
-            initial = (await client.get("/api/v1/deployment/status")).json()
-            assert initial["api_version"] == "acceptance-v1"
-            assert (await client.get("/api/v1/health")).status_code == 200
+            async with asyncio.timeout(90):
+                while True:
+                    health = await client.get("/api/v1/health")
+                    initial = (await client.get("/api/v1/deployment/status")).json()
+                    if health.status_code == 200 and health.json()["api_ready"] and initial["api_version"] == "acceptance-v1":
+                        break
+                    await asyncio.sleep(.05)
 
             async def delivered(response):
-                async with asyncio.timeout(90):
-                    while response.status_code == 202:
-                        document = response.json()
-                        saved_id = document.get("command_id") or document["receipt"]["command_id"]
-                        response = await client.get(f"/api/v1/runtime/requests/{saved_id}/response")
-                        if response.status_code == 202:
-                            await asyncio.sleep(.05)
-                assert response.status_code in {200, 201}, response.text
-                return response
+                return await completed_response(client, response)
 
             project = (await delivered(await client.post("/api/v1/engagements", json={
                 "name": "Actual runtime-service project", "metadata": {},
@@ -318,8 +423,14 @@ async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(con
                         break
                     await asyncio.sleep(.05)
     finally:
+        active_failure = sys.exc_info()[0] is not None
         if connection is not None and not stopped:
-            await invoke(bundles[-1], "runtime-stop")
+            try:
+                await invoke(bundles[-1], "runtime-stop")
+            except Exception as exc:
+                (tmp_path / "service-cleanup-error.txt").write_text(f"{type(exc).__name__}: {exc}\n")
+                if not active_failure:
+                    raise
         if stopped:
             remove_owned_tree(data)
 

@@ -17,12 +17,21 @@ SOURCE = r"""
 #include <stdlib.h>
 #include <unistd.h>
 int main(int argc,char **argv) {
-    if(argc!=3) return 64;
+    if(argc!=3 && argc!=4) return 64;
     size_t n=(size_t)atoi(argv[1])*1024*1024;
     volatile char *p=malloc(n);
     if(!p) return 71;
     for(size_t i=0;i<n;i+=4096) p[i]=1;
-    sleep(atoi(argv[2]));
+    if(argc==4) {
+        int elapsed=0, deadline=atoi(argv[2]);
+        while(access(argv[3],F_OK)!=0 && elapsed<deadline) {
+            sleep(1);
+            elapsed++;
+        }
+        if(access(argv[3],F_OK)!=0) return 75;
+    } else {
+        sleep(atoi(argv[2]));
+    }
     free((void*)p);
     return 0;
 }
@@ -68,6 +77,12 @@ def runner_for(root: Path):
     ), allow_unpinned_images=True, workspace_roots=[Path(values["workspace"])])
 
 
+def release_allocator(root: Path, identity: str) -> None:
+    if not identity or any(not (item.isascii() and (item.isalnum() or item in "-_")) for item in identity):
+        raise ValueError("invalid isolated allocator identity")
+    (root / "allocator-workspace" / ("release-" + identity)).touch(mode=0o444)
+
+
 def attach_allocator(app, root: Path, project_id: str):
     runner = runner_for(root)
     if runner is None:
@@ -82,14 +97,20 @@ def attach_allocator(app, root: Path, project_id: str):
             raise HTTPException(404)
         body = await request.json()
         identity = body["job_id"]
-        if not isinstance(identity, str) or len(identity) > 80:
+        if (not isinstance(identity, str) or not identity or len(identity) > 80
+                or any(not (item.isascii() and (item.isalnum() or item in "-_")) for item in identity)):
             raise HTTPException(400)
+        command = ["/workspace/allocator", "4", "25"]
+        timeout = 40
+        if body.get("hold") is True:
+            command = ["/workspace/allocator", "4", "90", "/workspace/release-" + identity]
+            timeout = 100
         result = await app.state.memory_compute.run_sandbox(
             runner,
             SandboxRequest(
-                image=values["image"], command=["/workspace/allocator", "4", "25"],
+                image=values["image"], command=command,
                 workspace=Path(values["workspace"]), workspace_access=SandboxWorkspaceAccess.READ,
-                limits=SandboxLimits(memory_mb=32, timeout_seconds=40),
+                limits=SandboxLimits(memory_mb=32, timeout_seconds=timeout),
             ),
             job_id=identity, project_id=project_id, resource_kind="synthetic_allocator",
             resource_id=identity, profile_id="continuity-allocator",

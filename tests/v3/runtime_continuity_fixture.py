@@ -25,6 +25,20 @@ from nebula.v3.storage import NebulaStore
 from tests.v3.runtime_continuity_bundle import AcceptanceBundle
 
 
+async def completed_response(client, response, *, timeout=90):
+    """Read one accepted command's outcome without another effect submission."""
+    if response.status_code == 202:
+        document = response.json()
+        command_id = document.get("command_id") or document["receipt"]["command_id"]
+        async with asyncio.timeout(timeout):
+            while response.status_code == 202:
+                response = await client.get(f"/api/v1/runtime/requests/{command_id}/response")
+                if response.status_code == 202:
+                    await asyncio.sleep(.05)
+    assert response.status_code in {200, 201}, response.text
+    return response
+
+
 class ContinuityFixture:
     def __init__(self, root: Path, database, bundles: list[AcceptanceBundle], *, host="127.0.0.1", port=None, listen_host=None):
         self.root, self.bundles, self.host = root, bundles, host
