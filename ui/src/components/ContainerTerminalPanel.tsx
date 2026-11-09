@@ -970,6 +970,7 @@ export function ContainerTerminalPanel({
 
   const launchInProgress = Boolean(launchingKey);
   const canAdd = !launchInProgress && (capacity?.availableSessions ?? 0) > 0;
+  const capacityActionLabel = capacityError ? "Retry terminal capacity" : "Check terminal capacity";
   const activeTab = tabs.find((tab) => tab.key === activeKey);
 
   const toolbar = <header className="terminal-tab-bar">
@@ -1009,7 +1010,7 @@ export function ContainerTerminalPanel({
         </TerminalToolbarDetails>
         {publishedPortsError && <span className="terminal-port-error" role="alert">{publishedPortsError}</span>}
         {activeTab && <button className="icon-button subtle terminal-tab-close" type="button" aria-label={`Close Terminal ${activeTab.ordinal}`} onClick={() => void closeTab(activeTab)}><X size={14} /></button>}
-        <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacityError ? "Terminal capacity is unavailable" : !capacity ? "Checking terminal capacity" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
+        <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacityError ? "Terminal capacity is unavailable" : !capacity ? capacityLoading ? "Checking terminal capacity" : capacityActionLabel : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
         <div className="terminal-overflow">
           <button className="icon-button subtle" type="button" aria-label="List all terminals" aria-expanded={overflowOpen} onClick={() => setOverflowOpen((value) => !value)}><ChevronDown size={16} /></button>
           {overflowOpen && <div className="terminal-overflow-menu" role="menu">
@@ -1020,9 +1021,9 @@ export function ContainerTerminalPanel({
     </header>;
   return <section className="terminal-workspace" aria-label="Project terminals">
     {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
-    {capacityError && <p className="terminal-audit-warning" role="alert" aria-busy={capacityLoading}>
-      <AlertTriangle size={16} aria-hidden="true" /><span>Project terminal capacity is unavailable. Retry to check whether another terminal can start.</span>
-      <button className="icon-button subtle" type="button" style={{width: 44, height: 44, minWidth: 44, minHeight: 44}} aria-label="Retry terminal capacity" title="Retry terminal capacity" disabled={capacityLoading} onClick={() => void refreshCapacity(projectAbortRef.current?.signal)}><RotateCcw className={capacityLoading ? "spin" : undefined} size={16} aria-hidden="true" /></button>
+    {(capacityError || (!capacity && !capacityLoading)) && <p className="terminal-audit-warning" role={capacityError ? "alert" : "status"} aria-busy={capacityLoading}>
+      <AlertTriangle size={16} aria-hidden="true" /><span>{capacityError ? "Project terminal capacity is unavailable. Retry to check whether another terminal can start." : "Check capacity before opening another terminal."}</span>
+      <button className="icon-button subtle" type="button" style={{width: 44, height: 44, minWidth: 44, minHeight: 44}} aria-label={capacityActionLabel} title={capacityActionLabel} disabled={capacityLoading} onClick={() => void refreshCapacity(projectAbortRef.current?.signal)}><RotateCcw className={capacityLoading ? "spin" : undefined} size={16} aria-hidden="true" /></button>
     </p>}
     {!tabs.length && <div className="terminal-empty-state"><SquareTerminal size={28} /><strong>No open terminals</strong><p>Start another isolated Kali container for this Project.</p><button className="button primary" type="button" disabled={!canAdd} onClick={addTerminal}><Plus size={15} /> New terminal</button></div>}
     {tabs.map((tab) => <div
