@@ -117,6 +117,7 @@ class HostMemoryControl:
             self.service,
             auth.require_auth,
             runner_factory=recovery.runner_for_profile,
+            apply_running=self.apply_host_job,
             register_running_apply=False,
         )
 
@@ -140,6 +141,26 @@ class HostMemoryControl:
             return JSONResponse(
                 {"detail": "Memory resource is unavailable"}, status_code=404
             )
+
+    async def apply_host_job(self, job_id, body, actor_id):
+        current = await self.service.get_job(job_id)
+        if current.project_id is not None:
+            raise MemoryBudgetConflict(
+                "Apply this job through its owning project runtime"
+            )
+        owner = self.host.shared_services
+        controller = (
+            getattr(owner.host_settings.observations, "memory_compute", None)
+            if owner is not None
+            else None
+        )
+        if controller is None or controller.service is not self.service.base:
+            raise MemoryEnforcementUnavailable(
+                "The host's owning compute controller is unavailable; current reservations remain charged"
+            )
+        # The admitted controller uses its immutable per-job runner binding.
+        # Never discover a replacement runner or forward a host job to a project.
+        return await controller.apply_running(job_id, body, actor_id)
 
     def register(self, rpc, runtime_id):
         async def dispatch(payload):

@@ -31,6 +31,9 @@ from .model_catalog import (
     OPENROUTER_PROVIDER_DIRECTORY_URL,
     openrouter_upstream_providers,
 )
+from .memory_actor import memory_actor
+from .memory_budget import MemoryJob
+from .memory_policy import MemoryRunningUpdate
 from .provider_settings import (
     ProviderCapabilityVerifyRequest,
     _discover_local_provider_services,
@@ -46,6 +49,11 @@ from .runtime_integration_effects import is_host_integration_write
 from .runtime_global_settings import is_global_settings_host_route
 from .runtime_vault import RuntimeVault
 from .storage import ConflictError, NebulaStore, NotFoundError
+
+_MEMORY_JOB = re.compile(r"/api/v1/memory-budgets/jobs/([A-Za-z0-9_.:-]{1,200})")
+_MEMORY_APPLY = re.compile(
+    r"/api/v1/memory-budgets/jobs/([A-Za-z0-9_.:-]{1,200})/apply"
+)
 
 
 class _Forward(Response):
@@ -78,7 +86,9 @@ class _ReadIntent:
 
 def is_host_settings_route(method, path):
     return (
-        (method, path) in HOST_OBSERVATION_ROUTES
+        (method == "GET" and _MEMORY_JOB.fullmatch(path))
+        or (method == "POST" and _MEMORY_APPLY.fullmatch(path))
+        or (method, path) in HOST_OBSERVATION_ROUTES
         or is_host_integration_write(method, path)
         or is_global_settings_host_route(method, path)
         or (
@@ -180,6 +190,28 @@ class HostSettings:
 
     def _routes(self):
         app, auth = self.app, [Depends(self._authorized)]
+
+        @app.get(
+            "/api/v1/memory-budgets/jobs/{job_id}",
+            response_model=MemoryJob,
+            dependencies=auth,
+        )
+        async def memory_job(job_id: str):
+            # The assistant's apply verification reads the same authoritative
+            # job as the public Memory API, without a project controller.
+            return await self.host.shared_services.memory_control.api.job_details(
+                job_id
+            )
+
+        @app.post(
+            "/api/v1/memory-budgets/jobs/{job_id}/apply",
+            response_model=MemoryJob,
+            dependencies=auth,
+        )
+        async def apply_memory_job(job_id: str, body: MemoryRunningUpdate):
+            return await self.host.shared_services.memory_control.api.apply_job_limits(
+                job_id, body, memory_actor.get() or self.actor.get()
+            )
 
         @app.get("/api/v1/desktop-browser-mode", dependencies=auth)
         async def desktop_browser_mode():
@@ -458,6 +490,13 @@ class HostSettings:
             actor = await principal(request)
             if not is_host_settings_route(request.method, request.url.path):
                 return _Forward(proxy)
+            memory_apply = _MEMORY_APPLY.fullmatch(request.url.path)
+            if memory_apply is not None:
+                job = await self.host.shared_services.memory_control.api.job_details(
+                    memory_apply[1]
+                )
+                if job.project_id is not None:
+                    return _Forward(proxy)
             if request.method == "GET":
                 return await observe(intent_for(request), actor)
             telemetry = request.url.path == "/api/v1/diagnostics/events"
@@ -489,6 +528,7 @@ class HostSettings:
             ("/api/v1/provider-health/refresh", ["POST"]),
             ("/api/v1/runner-profiles/{profile_id}/probe", ["POST"]),
             ("/api/v1/harnesses/{profile_id}/health", ["POST"]),
+            ("/api/v1/memory-budgets/jobs/{job_id}/apply", ["POST"]),
             ("/api/v1/credentials", ["POST"]),
             ("/api/v1/credentials/{path:path}", ["GET", "DELETE"]),
         ):

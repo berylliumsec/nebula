@@ -126,11 +126,7 @@ class MemoryApi:
         )
         async def job(job_id: str, response: Response):
             response.headers["Cache-Control"] = "private, no-store"
-            try:
-                return await self.service.get_job(job_id)
-            except MemoryBudgetError as error:
-                # diagnostic-expected: a deleted or unknown job has no application proof.
-                raise HTTPException(404, str(error)) from error
+            return await self.job_details(job_id)
 
         @app.post(
             prefix + "/runners/{profile_id}/probe",
@@ -159,22 +155,7 @@ class MemoryApi:
             return capability
 
         async def apply(job_id: str, body: MemoryRunningUpdate, request: Request):
-            if self.apply_running is None:
-                raise HTTPException(
-                    503,
-                    "This runner cannot change running limits. Save budgets for new jobs and explicitly retry instead.",
-                )
-            try:
-                return await self.apply_running(job_id, body, self._actor(request))
-            except MemoryBudgetConflict as error:
-                # diagnostic-expected: no stale application may change a job.
-                raise HTTPException(409, str(error)) from error
-            except MemoryEnforcementUnavailable as error:
-                # diagnostic-expected: unsupported limits never fall back to unrestricted execution.
-                raise HTTPException(503, str(error)) from error
-            except MemoryBudgetError as error:
-                # diagnostic-expected: explicit impact acknowledgement and bounds are validated before application.
-                raise HTTPException(422, str(error)) from error
+            return await self.apply_job_limits(job_id, body, self._actor(request))
 
         if register_running_apply:
             app.add_api_route(
@@ -185,6 +166,33 @@ class MemoryApi:
                 tags=["system"],
                 dependencies=dependencies,
             )
+
+    async def job_details(self, job_id: str) -> MemoryJob:
+        try:
+            return await self.service.get_job(job_id)
+        except MemoryBudgetError as error:
+            # diagnostic-expected: a deleted or unknown job has no application proof.
+            raise HTTPException(404, str(error)) from error
+
+    async def apply_job_limits(
+        self, job_id: str, body: MemoryRunningUpdate, actor_id: str
+    ) -> MemoryJob:
+        if self.apply_running is None:
+            raise HTTPException(
+                503,
+                "This runner cannot change running limits. Save budgets for new jobs and explicitly retry instead.",
+            )
+        try:
+            return await self.apply_running(job_id, body, actor_id)
+        except MemoryBudgetConflict as error:
+            # diagnostic-expected: no stale application may change a job.
+            raise HTTPException(409, str(error)) from error
+        except MemoryEnforcementUnavailable as error:
+            # diagnostic-expected: unsupported limits never fall back to unrestricted execution.
+            raise HTTPException(503, str(error)) from error
+        except MemoryBudgetError as error:
+            # diagnostic-expected: explicit impact acknowledgement and bounds are validated before application.
+            raise HTTPException(422, str(error)) from error
 
     @staticmethod
     def _actor(request: Request) -> str:
