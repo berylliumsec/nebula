@@ -29,5 +29,6 @@ selection receipts and results are `/tmp/nebula-memory-import-*`.
 Only repository code and synthetic compatibility files, SQL schemas and inert
 workers were used. No existing installation, operational provider, SSH, deployment
 or compute workload was accessed. This completes the memory-store migration
-boundary; shared knowledge operations, production execution/client/desktop/deployer
+boundary; [shared knowledge operations](shared-knowledge-index.md) are also validated.
+Production execution/client/desktop/deployer
 wiring and final production LAN/WebKit/packaged continuity gates remain pending.

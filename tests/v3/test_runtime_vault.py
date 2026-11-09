@@ -68,3 +68,27 @@ def test_empty_content_is_authenticated_and_old_ciphertext_cannot_replace_anothe
     os.replace(vault.root / empty, vault.root / other)
     with pytest.raises(RuntimeIpcError, match="integrity"):
         vault.get(other, purpose="end")
+
+
+def test_explicit_content_bounds_do_not_change_other_vault_instances(tmp_path):
+    restricted = RuntimeVault(tmp_path / "custom", maximum_bytes=4)
+    reference = restricted.put(b"four", purpose="synthetic")
+    with pytest.raises(RuntimeIpcError, match="storage bound"):
+        restricted.put(b"longer", purpose="synthetic")
+    independent = RuntimeVault(tmp_path / "custom", maximum_bytes=8)
+    assert independent.get(reference, purpose="synthetic") == b"four"
+    assert independent.put(b"longer", purpose="synthetic")
+    for invalid in (0, True, 64 * 1024**2 + 1):
+        with pytest.raises(ValueError):
+            RuntimeVault(tmp_path / "invalid", maximum_bytes=invalid)
+
+
+def test_discard_checks_purpose_and_integrity_before_removing_a_payload(tmp_path):
+    vault = RuntimeVault(tmp_path / "payloads")
+    reference = vault.put(b"synthetic private content", purpose="first")
+    with pytest.raises(RuntimeIpcError, match="integrity"):
+        vault.discard(reference, purpose="other")
+    assert vault.get(reference, purpose="first") == b"synthetic private content"
+    vault.discard(reference, purpose="first")
+    vault.discard(reference, purpose="first")
+    assert not (vault.root / reference).exists()

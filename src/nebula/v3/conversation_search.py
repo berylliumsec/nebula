@@ -14,6 +14,8 @@ Core restart may run it again.
 
 from __future__ import annotations
 
+from .index_calls import index_call
+
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
@@ -169,7 +171,8 @@ async def search_archived_conversation(
         ),
         key=lambda item: (item.sequence, item.created_at, item.id),
     )
-    ranked = rank_chunks(
+    ranked = await index_call(
+        rank_chunks,
         chunk_messages(archived_messages(archived, text_of)),
         (QueryPart(query, 1.0),),
         dense=dense,

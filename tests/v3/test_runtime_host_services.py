@@ -69,6 +69,52 @@ async def shared(managed):
         await asyncio.gather(*(client.close() for client in clients))
 
 
+async def test_real_private_listener_serves_one_host_knowledge_index(managed, tmp_path):
+    from nebula.v3.artifacts import ArtifactStore
+    from nebula.v3.index_calls import index_call
+    from nebula.v3.knowledge import ingest_document
+    from nebula.v3.knowledge_index import ChromaKnowledgeIndex
+    from nebula.v3.remote_knowledge import RemoteKnowledgeIndex
+    from tests.v3.test_knowledge_index import SecurityEmbeddingFunction
+
+    index = ChromaKnowledgeIndex(
+        tmp_path / "host-knowledge", embedding_function=SecurityEmbeddingFunction()
+    )
+    services = HostSharedServices(
+        managed.host, knowledge_index=index, capacity_limits=_LIMITS
+    )
+    await services.start()
+    memory, remote = None, None
+    try:
+        await managed.stage("v1")
+        identity = await managed.host.spawn("v1", "execution")
+        lease = await managed.coordinator.coordination.claim_project(
+            "admitted-project", identity.runtime_id
+        )
+        memory = await peer(managed, identity)
+        remote = RemoteKnowledgeIndex(memory.client, managed.data)
+        with execution_context(lease):
+            await remote.refresh()
+            source = await ingest_document(
+                store=managed.store,
+                artifact_store=ArtifactStore(managed.data / "artifacts"),
+                engagement_id="admitted-project",
+                filename="synthetic.txt",
+                data=b"Authentication login evidence.",
+                knowledge_index=remote,
+            )
+            assert (
+                await index_call(remote.query, "admitted-project", ["login"], limit=8)
+            )[0].source_id == source.id
+        assert services.memory.embedding_index is index
+    finally:
+        if remote is not None:
+            await remote.close()
+        await services.close()
+        if memory is not None:
+            await memory.client.close()
+
+
 async def test_private_host_socket_requires_both_peer_identity_and_its_credential(
     shared,
 ):

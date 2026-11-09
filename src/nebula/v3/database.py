@@ -193,6 +193,20 @@ class ButlerMemoryCursorRow(Base):
     last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
+class RuntimeIndexStateRow(Base):
+    __tablename__ = "runtime_index_state"
+
+    source_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class MemoryBudgetPolicyRow(Base):
     __tablename__ = "memory_budget_policies"
 

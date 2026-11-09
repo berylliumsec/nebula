@@ -21,6 +21,7 @@ from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpc
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
 from .shared_memory_import import CompatibilityMemoryImport
+from .shared_knowledge_rpc import SharedKnowledge
 
 HOST_SOCKET_NAME = "host-services.sock"
 PEER_HEADER = b"x-nebula-ipc-worker"
@@ -52,6 +53,11 @@ class HostSharedServices:
             embedding_index=knowledge_index,
         )
         self.capacity = RuntimeCapacity(self.coordination)
+        self.knowledge = (
+            SharedKnowledge(host, knowledge_index)
+            if knowledge_index is not None
+            else None
+        )
         self.capacity_limits = capacity_limits
         self.endpoint: str | None = None
         self.server = None
@@ -98,6 +104,8 @@ class HostSharedServices:
                     secret = self.host.credentials.read(process.credential_reference)
                     rpc = RuntimeRpcServer(secret)
                     register_shared_memory(rpc, self.memory, runtime_id=runtime_id)
+                    if self.knowledge is not None:
+                        self.knowledge.register(rpc, runtime_id)
                     self._peers[runtime_id] = rpc
                 return self._peers[runtime_id]
 

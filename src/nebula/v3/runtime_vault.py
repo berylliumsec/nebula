@@ -20,7 +20,12 @@ MAX_CONTENT_BYTES = 16 * 1024**2
 
 
 class RuntimeVault:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, maximum_bytes: int = MAX_CONTENT_BYTES):
+        if type(maximum_bytes) is not int or not 1 <= maximum_bytes <= 64 * 1024**2:
+            raise ValueError(
+                "Runtime content bounds must be explicit and at most 64 MiB"
+            )
+        self.maximum_bytes = maximum_bytes
         if root.is_symlink():
             raise RuntimeIpcError("runtime payload storage cannot be a symlink")
         self.root = root.expanduser().absolute()
@@ -94,7 +99,7 @@ class RuntimeVault:
 
     def put(self, raw: bytes, *, purpose: str) -> str:
         self._purpose(purpose)
-        if not isinstance(raw, bytes) or len(raw) > MAX_CONTENT_BYTES:
+        if not isinstance(raw, bytes) or len(raw) > self.maximum_bytes:
             raise RuntimeIpcError("runtime payload exceeds its storage bound")
         reference = self._reference(raw, purpose)
         nonce = secrets.token_bytes(12)
@@ -113,7 +118,9 @@ class RuntimeVault:
             r"[a-f0-9]{64}", reference
         ):
             raise RuntimeIpcError("invalid runtime payload reference")
-        encoded = self._read_file(self.root / reference, maximum=MAX_CONTENT_BYTES + 28)
+        encoded = self._read_file(
+            self.root / reference, maximum=self.maximum_bytes + 28
+        )
         aad = ("nebula.runtime-vault/v1\x00" + purpose + "\x00" + reference).encode()
         try:
             if len(encoded) < 28:
@@ -126,3 +133,10 @@ class RuntimeVault:
         if not hmac.compare_digest(reference, self._reference(raw, purpose)):
             raise RuntimeIpcError("runtime payload failed integrity verification")
         return raw
+
+    def discard(self, reference: str, *, purpose: str) -> None:
+        try:
+            self.get(reference, purpose=purpose)
+        except FileNotFoundError:
+            return
+        (self.root / reference).unlink(missing_ok=True)

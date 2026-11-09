@@ -28,7 +28,7 @@ Ruff and targeted mypy passed. Raw outputs/receipts are
 
 No existing installation, operational provider/service, SSH, deployment or compute
 workload was used. The [compatibility memory import](shared-memory-import.md) is
-now validated; general shared knowledge-index operations and production
-execution-factory wiring remain pending. These are
+now validated, as are [shared knowledge-index operations](shared-knowledge-index.md).
+Production execution-factory wiring remains pending. These are
 backend lifetime checks; production LAN/reconnect, mobile WebKit and packaged
 desktop acceptance evidence are still required for deployment continuity.

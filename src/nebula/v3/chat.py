@@ -22,6 +22,7 @@ from .diagnostics import (
 )
 
 import asyncio
+from contextvars import copy_context
 import base64
 import hashlib
 import json
@@ -242,6 +243,7 @@ from .workspace_provenance import (
 )
 from .operator_help import CORPUS_ID, help_subject, search_operator_help
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
+from .index_calls import index_call
 from .providers import (
     ReasoningEffort,
     ModelMessage,
@@ -11296,8 +11298,8 @@ class ChatService:
             # in the background instead of waiting for a document upload.
             # Until it is ready, catalog search uses keyword ranking.
             self._embedding_warmup = threading.Thread(
-                target=self._warm_embedding_model,
-                args=(index,),
+                target=copy_context().run,
+                args=(self._warm_embedding_model, index),
                 name="nebula-embedding-warmup",
                 daemon=True,
             )
@@ -16328,7 +16330,9 @@ class ChatService:
         candidates = [
             item for item in candidates if not (all_terms and item.score <= 0)
         ]
-        candidates = self._relevant_knowledge(queries, candidates, gate=gate)
+        candidates = await index_call(
+            self._relevant_knowledge, queries, candidates, gate=gate
+        )
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for candidate in candidates:
@@ -16435,12 +16439,17 @@ class ChatService:
                 break
             offset += len(items)
         result_limit = min(64, max(16, len(queries) * 8))
-        matches = self.knowledge_index.query(
+        matches = await index_call(
+            self.knowledge_index.query,
             engagement_id,
             queries,
             limit=result_limit,
         )
-        matches.extend(self.knowledge_index.query_library(queries, limit=result_limit))
+        matches.extend(
+            await index_call(
+                self.knowledge_index.query_library, queries, limit=result_limit
+            )
+        )
         candidates: list[_RetrievedChunk] = []
         for match in matches:
             source = ready_sources.get(match.source_id)

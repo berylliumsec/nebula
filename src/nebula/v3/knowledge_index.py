@@ -194,6 +194,7 @@ class IndexedKnowledgeChunk:
     distance: float
     rank: int
     scope: Literal["engagement", "library"] = "engagement"
+    index_digest: str | None = None
 
 
 class KnowledgeIndex(Protocol):
@@ -397,6 +398,9 @@ class ChromaKnowledgeIndex:
                         "source_id": source.id,
                         "name": source.name,
                     }
+                    digest = source.metadata.get("runtime_index_digest")
+                    if isinstance(digest, str):
+                        metadata["runtime_index_digest"] = digest
                     artifact_id = raw.get("artifact_id") or source.artifact_id
                     if isinstance(artifact_id, str):
                         metadata["artifact_id"] = artifact_id
@@ -446,6 +450,9 @@ class ChromaKnowledgeIndex:
                         "name": item.name,
                         "scope": "library",
                     }
+                    digest = item.metadata.get("runtime_index_digest")
+                    if isinstance(digest, str):
+                        metadata["runtime_index_digest"] = digest
                     artifact_id = raw.get("artifact_id") or item.artifact_id
                     if isinstance(artifact_id, str):
                         metadata["artifact_id"] = artifact_id
@@ -659,6 +666,9 @@ class ChromaKnowledgeIndex:
                     else 1.0,
                     rank=ordinal,
                     scope=scope,
+                    index_digest=metadata.get("runtime_index_digest")
+                    if isinstance(metadata.get("runtime_index_digest"), str)
+                    else None,
                 )
                 previous = candidates.get(candidate.id)
                 if previous is None or candidate.distance < previous.distance:
