@@ -282,7 +282,6 @@ async def test_api_factory_rejects_migration_ownership(boundary):
         "browser-companion/synthetic/actions/synthetic-action",
         "browser-intercepts/synthetic/decision",
         "browser-actions/synthetic/decision",
-        "auth/devices/synthetic-device",
         "harness-turns/synthetic/steer",
         "runs/synthetic/steer",
     ],

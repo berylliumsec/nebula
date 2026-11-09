@@ -215,6 +215,17 @@ class RuntimeCommandRow(Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
+class DevicePairingOfferRow(Base):
+    """Single-use hashed pairing offers shared across replaceable API workers."""
+
+    __tablename__ = "device_pairing_offers"
+    token_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    confirmation_mac: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class RuntimeDeliveryRow(Base):
     """Immutable encrypted HTTP delivery frames, ordered within one command."""
 

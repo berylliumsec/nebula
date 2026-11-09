@@ -71,3 +71,26 @@ deletions on self-revocation work through the real kernel routes. Bearer-only
 dependencies still reject device replay. Concurrent device contexts stay isolated;
 public actor headers do not create or change identity. Local evidence is
 `/tmp/nebula-principal-auth-*`. Execution-role construction is still pending.
+
+## API-owned pairing and device control
+
+Pairing invitations are now additive SQL records, shared by API generations.
+Only a hash of the invitation secret and a keyed confirmation MAC are stored.
+Five wrong confirmations exhaust an invitation; expiry and the 256-pending-offer
+bound are enforced under the same SQLite/PostgreSQL writer serialization as
+single-use redemption. Device insertion and invitation consumption commit or
+roll back together. Pairing responses and device lists carry `private, no-store`.
+
+The API owns pairing, listing, heartbeat and revocation directly. These controls
+do not queue behind project execution, and creation still requires a local bearer
+client, redemption requires HTTPS, and paired mutations require CSRF validation.
+The legacy compatibility factory has not yet switched to this new API boundary.
+
+The 37 collected authentication/API cases passed in 18.88 seconds on isolated
+SQLite and PostgreSQL: 16 new invitation/device cases and 21 affected API boundary
+cases. Coverage includes API replacement, simultaneous redemption, committed
+wrong-code attempts, expiry, capacity, rollback after device insertion, locality,
+TLS, request bounds, heartbeat, revocation and import ownership. Raw evidence is
+`/tmp/nebula-auth-api-tests.txt`; the selection is
+`/tmp/nebula-auth-api-selection.json`. This is backend boundary evidence; the
+production browser and packaged-desktop continuity gates are still pending.

@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from .authentication import CoreAuthentication
+from .authentication_api import AuthenticationApi
 from .deployments import DeploymentCoordinator
 from .runtime_coordination import CoordinationConflict
 from .runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, RuntimeDelivery
@@ -28,8 +29,6 @@ from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_routes import command_lane
 from .storage import NebulaStore, NotFoundError
-
-_PAIRING = {"/api/v1/auth/pairings", "/api/v1/auth/pairings/redeem"}
 
 
 class _Forward(Response):
@@ -75,6 +74,7 @@ def create_api_worker(
     maximum_control_views: int = 8,
     command_start_timeout: float = 15,
     poll_interval: float = 0.25,
+    allow_insecure_device_pairing: bool = False,
 ) -> FastAPI:
     if (
         not operator_token
@@ -116,6 +116,9 @@ def create_api_worker(
     app.state.runtime_delivery = delivery
     app.state.viewer_proxy = proxy
     app.state.store = store
+    app.state.authentication_api = AuthenticationApi(
+        app, store, auth, allow_insecure_pairing=allow_insecure_device_pairing
+    )
 
     @app.exception_handler(CoordinationConflict)
     async def conflict(_request, error):
@@ -270,10 +273,8 @@ def create_api_worker(
         methods=["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
     )
     async def public_request(request: Request):
-        if request.url.path in _PAIRING:
-            # The independent owner retains pending offers and enforces local
-            # creation, bearer auth, one-use redemption and expiry.
-            return _Forward(proxy)
+        if request.url.path.startswith("/api/v1/auth/"):
+            raise HTTPException(404, "Authentication route is unavailable")
         actor = await principal(request, await auth.bearer(request))
         if request.method in {"GET", "HEAD", "OPTIONS"}:
             return _Forward(proxy)

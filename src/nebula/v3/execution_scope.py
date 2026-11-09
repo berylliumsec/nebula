@@ -233,6 +233,7 @@ class ExecutionSQLScope:
                 "project_ownership",
                 "runtime_commands",
                 "runtime_delivery",
+                "device_pairing_offers",
                 "runtime_releases",
                 "runtime_processes",
                 "deployment_host",

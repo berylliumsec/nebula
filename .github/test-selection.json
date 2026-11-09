@@ -1,24 +1,17 @@
 {
-  "change_digest": "9e6edad10e64af200af3d86a2c22f10f591567f0ac2d307a93f526ad946107bf",
+  "change_digest": "016e3a53960eb0371c102e82f87c1905340715513afef046132b757354d90808",
   "reviewed_by": "Codex",
-  "reason": "35 collected principal/auth cases:8 new durable-device/kernel cases across SQLite/PostgreSQL,20 affected delivery cases,7 exact normal cookie/bearer/pairing/WebSocket/non-ASCII regressions. Fresh independent causal validation confirmed internal transport bearer erased a paired principal, breaking actualPUT capability heartbeat and self-revocation cookie clearing. Bind server-only context from the authenticated durable actor, revalidate the device, populate request identity and support current-device lookup without storing credentials. Bearer-only dependencies still reject a replayed device. Test concurrent actor isolation and ignored public principal headers. All35 passed in31.20s; added causal/validation notes after source validation.",
-  "exclusions": "No full suite, existing installation, operational provider/service, SSH or deployment. Synthetic sessions and inert ASGI/real kernel routes only; no compute allocation. Execution factory and full architecture remain disabled. No UI change in this step; production LAN/auth matrices will be rerun after complete role integration.",
+  "reason": "37 collected authentication/API cases:16 new durable pairing/device-control cases across isolated SQLite/PostgreSQL plus21 affected API boundary cases. Verify invitations survive API replacement, concurrent redemption is single-use, bounded attempts/expiry/capacity commit, creation locality and TLS/CSRF controls, atomic device creation rollback, no-store response headers and independent control/import ownership. All37 passed in18.88s; Ruff and targeted mypy passed. Evidence documentation added after the validated source.",
+  "exclusions": "No full suite, existing installation, operational service, provider, SSH or deployment. ASGI clients and synthetic sessions only. No new frontend changes; production LAN/browser/packaged continuity gates remain pending for complete architecture.",
   "expected_tests": {
-    "python": 35,
+    "python": 37,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_principal.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
-    "tests/v3/test_api.py::test_paired_device_is_recognised_beyond_the_first_thousand_sessions",
-    "tests/v3/test_api.py::test_non_ascii_credentials_are_rejected_instead_of_crashing",
-    "tests/v3/test_api.py::test_pairing_redeem_reports_a_wrong_code_and_lets_the_phone_retry",
-    "tests/v3/test_api.py::test_websocket_header_auth_survives_malformed_optional_auth_protocol",
-    "tests/v3/test_api.py::test_websocket_rejects_conflicting_valid_credentials",
-    "tests/v3/test_api.py::test_run_event_rest_and_authenticated_websocket_replay"
+    "tests/v3/test_authentication_api.py",
+    "tests/v3/test_api_worker.py"
   ],
   "frontend": [],
   "native": [],
