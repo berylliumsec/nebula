@@ -3623,6 +3623,40 @@
       "observed_result_test": "ui/tests/host-load.spec.ts::host pressure settings apply live, queue durably and recover",
       "result": "Saved/effective thresholds and readings appear in Settings; queued work resumes below threshold without restarting Core",
       "status": "supported"
+    },
+    {
+      "id": "ui.request_continuity",
+      "entry_point": "Authenticated startup and the Saved requests recovery notice",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::initializeContinuity",
+        "ui/src/pages/SessionsPage.tsx::getContinuityScope",
+        "ui/src/components/RuntimeContinuityNotice.tsx::getContinuityScope",
+        "ui/src/components/RuntimeContinuityNotice.tsx::getPendingRequests",
+        "ui/src/components/RuntimeContinuityNotice.tsx::reconcilePendingRequests",
+        "ui/src/components/RuntimeContinuityNotice.tsx::subscribeContinuity",
+        "ui/src/components/RuntimeContinuityNotice.tsx::dismissCompletedRequest"
+      ],
+      "core_owner": "The requesting browser owns local submission records and scoped drafts. Core remains authoritative for receipt, turn and approval status. Reopening only reads; no draft, decision or resume is automatically submitted. Only a request verified succeeded can be dismissed.",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "The requesting browser owns local submission records and scoped drafts. Core remains authoritative for receipt, turn and approval status. Reopening only reads; no draft, decision or resume is automatically submitted. Only a request verified succeeded can be dismissed.",
+      "observed_result_test": "ui/src/api/client.durableRequests.test.ts::reconciles an unanswered submission on reopen using only authenticated reads",
+      "result": "The client contract preserves immutable submission identity, reconciles by authenticated GET, and exposes an exact saved-conversation link. Local tests cover the contract; production LAN and packaged continuity evidence is recorded separately. No new model action is granted.",
+      "status": "supporting_transport",
+      "transport": {
+        "kind": "request_continuity",
+        "owner": "requesting_browser",
+        "model_operation": false,
+        "workflows": [
+          "chat.start_and_read",
+          "chat.turn_control",
+          "settings.memory_budgets"
+        ],
+        "reason": "The requesting browser owns local submission records and scoped drafts. Core remains authoritative for receipt, turn and approval status. Reopening only reads; no draft, decision or resume is automatically submitted. Only a request verified succeeded can be dismissed."
+      }
     }
   ],
   "ui_api_calls": [
@@ -4723,6 +4757,26 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/RuntimeContinuityNotice.tsx::dismissCompletedRequest",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/RuntimeContinuityNotice.tsx::getContinuityScope",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/RuntimeContinuityNotice.tsx::getPendingRequests",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/RuntimeContinuityNotice.tsx::reconcilePendingRequests",
+      "count": 2
+    },
+    {
+      "key": "ui/src/components/RuntimeContinuityNotice.tsx::subscribeContinuity",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/RuntimeUsagePanel.tsx::getRuntimeUsage",
       "count": 2
     },
@@ -5459,6 +5513,10 @@
       "count": 2
     },
     {
+      "key": "ui/src/pages/SessionsPage.tsx::getContinuityScope",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/SessionsPage.tsx::getControlAssistantSession",
       "count": 1
     },
@@ -5896,6 +5954,10 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::ingestLibraryItem",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::initializeContinuity",
       "count": 1
     },
     {
