@@ -881,6 +881,20 @@ def run(args) -> dict:
                     },
                 },
             )
+            # Global SQL creates do not admit a project's execution owner. Let
+            # this read observe admission before negotiating typed chat; a first
+            # chat sent without an owner uses legacy HTTP delivery with no binding.
+            def project_ready():
+                response = client.get(
+                    "/chat-sessions", params={"engagement_id": project["id"]}
+                )
+                if response.status_code == 503:
+                    return False
+                if require(response) != []:
+                    raise AssertionError("new fixture project already has conversations")
+                return True
+
+            wait_until(project_ready, timeout=90)
             prompt = "Complete this one synthetic continuity check."
             draft = "Unsent packaged draft stays on this device."
             chat = AcceptedChat(
