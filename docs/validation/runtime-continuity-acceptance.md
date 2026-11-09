@@ -8,6 +8,7 @@
 | Cold reserve recovery | Verified production UI and authenticated budgets work before any API can start | Host release selection, auth and memory policy | `test_zero_api_recovery_serves_verified_ui_and_admits_after_reserve_readback` |
 | Running allocator | API replacement still routes a live reduction to the original physical workload | Job ID, original controller, immutable group and kernel readback | `test_live_apply_after_api_replacement_reaches_original_physical_allocator` |
 | Client loses acceptance | Reload reconnects the same request without submitting it again; device draft remains | Core/principal identity, pending request and URL | `runtime-continuity.spec.ts` |
+| Native instruction delivery | Exact standing instructions survive lossy native history and reconnect; edits create a fresh verified native context | Core decision revision, installed system head and real adapter readback | `native standing instructions survive…` in `runtime-continuity.spec.ts` |
 | Launcher continuity | Short-lived connectors leave one stable service; candidate and rollback preserve its identity | Retained release plus persistent service | `test_actual_runtime_service_connector_updates_rolls_back_and_stops` |
 | Packaged desktop | Close/update/reopen retains one accepted turn and candidate-era data; explicit shutdown stops Core | Installed artifact identities plus stable service | `scripts/test_packaged_runtime_continuity.py` |
 
@@ -61,8 +62,8 @@ the packaged driver with distinct real artifacts for that separate gate.
 ## Pending gates
 
 The dedicated Playwright config permanently inherits desktop Chromium 1440/1024,
-Pixel 5 Chromium 320/390/430 and iPhone 13 WebKit 320/390/430. Its four
-journeys collect 32 cases; the physical live-apply journey requires an explicitly
+Pixel 5 Chromium 320/390/430 and iPhone 13 WebKit 320/390/430. Its five
+journeys collect 40 cases: 25 Chromium and 15 WebKit. The physical live-apply journey requires an explicitly
 selected disposable runtime and cached image. Collection is not execution evidence.
 
 The complete current production LAN matrix and packaged continuity remain
@@ -214,3 +215,22 @@ Docker executable/socket, a cached image, cgroup-v2 memory support and a static
 C compiler; without that environment its skip is a missing required gate.
 Official CI WebKit installation may provide the locally unavailable engine,
 but it does not replace physical-device or native installed-GUI evidence.
+
+The native instruction journey separately uses the standalone retained helper
+from `de333676`. Actual public Host API, private IPC, production Grok adapter
+open/run/readback, Core decisions and normal authentication remain in use. Its
+transport is an inert in-process ACP channel with zero native workers. It does
+not establish installed-Grok or production native subprocess memory readiness.
+The browser submits and reads replies normally, while the rule edit uses the
+existing authenticated decision API because no saved-decision editor exists.
+It checks Alpha once in the real native system head through lossy compaction,
+discard/reconnect and API replacement/reload, then requires a fresh Beta native
+identity and exactly one Beta copy without changing the Core chat. Raw ACP
+requests, installed-head hashes and Core delivery receipts are captured before
+cleanup. Its eight collected cases remain unexecuted until the final source pin.
+
+Both scenario initializers run inside the exact retained supervisor before API
+and execution admission. Each execution configures its own retained adapter.
+Bundle capabilities include the exact provider-tools, native-instructions and
+web-search flags only when the pinned source compatibility document declares
+them. Existing older snapshots keep their older capability declarations.

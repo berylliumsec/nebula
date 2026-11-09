@@ -69,7 +69,7 @@ class ContinuityFixture:
     async def initialize(self, *, cold=False, pairing=False, memory=False, scenario=None):
         self.root.mkdir(parents=True)
         if scenario is not None:
-            if scenario != "provider-tools-context":
+            if scenario not in {"provider-tools-context", "standing-instructions-native"}:
                 raise ValueError("unknown isolated acceptance scenario")
             scenario_file = self.root / "acceptance-scenario.json"
             scenario_file.write_text(json.dumps({"scenario": scenario}))

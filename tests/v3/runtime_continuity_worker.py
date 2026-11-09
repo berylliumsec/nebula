@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import importlib
 import json
 import os
 from pathlib import Path
@@ -76,10 +77,13 @@ async def project(context, lease):
         scenario_file = root / "acceptance-scenario.json"
         if scenario_file.exists():
             scenario = json.loads(scenario_file.read_text())["scenario"]
-            if scenario != "provider-tools-context":
+            module = {
+                "provider-tools-context": "acceptance_provider_tools_context",
+                "standing-instructions-native": "acceptance_standing_instructions_native",
+            }.get(scenario)
+            if module is None:
                 raise RuntimeError("unknown retained acceptance scenario")
-            import acceptance_provider_tools_context
-            acceptance_provider_tools_context.configure_app(app, root=root, lease=lease, version=version)
+            importlib.import_module(module).configure_app(app, root=root, lease=lease, version=version)
         from acceptance_allocator import attach_allocator
         attach_allocator(app, root, lease.project_id)
 
@@ -195,6 +199,29 @@ async def serve(config):
             raise HTTPException(401)
         body = await request.json()
         operation = body["operation"]
+        if operation == "initialize-scenario":
+            scenario_file = root / "acceptance-scenario.json"
+            if not scenario_file.is_file():
+                raise HTTPException(409, "select an explicit acceptance scenario")
+            scenario = json.loads(scenario_file.read_text())["scenario"]
+            module = {
+                "provider-tools-context": "acceptance_provider_tools_context",
+                "standing-instructions-native": "acceptance_standing_instructions_native",
+            }.get(scenario)
+            if module is None:
+                raise HTTPException(400, "unknown acceptance scenario")
+            from nebula.v3.domain import ChatSession
+            from nebula.v3.storage import NebulaStore
+
+            observed_store = NebulaStore(database)
+            try:
+                owner = await observed_store.get(ChatSession, body["session_id"])
+                if owner.engagement_id != "continuity-project":
+                    raise HTTPException(403, "the fixture owns only its synthetic project")
+                return await importlib.import_module(module).initialize(observed_store, root=root,
+                    project_id=owner.engagement_id, session_id=owner.id)
+            finally:
+                await observed_store.event_history.close()
         if operation == "api":
             try:
                 identity = await supervisor.prepare_api(body["version"])
@@ -239,6 +266,27 @@ async def serve(config):
                     manifest = await read_manifest(session, project_id=owner.engagement_id, session_id=owner.id)
                 return {"manifest": {**manifest.model_dump(mode="json"), "digest": manifest.digest},
                         "reference": owner.metadata.get("provider_tool_manifest")}
+            finally:
+                await observed_store.event_history.close()
+        if operation == "native-evidence":
+            scenario = root / "acceptance-scenario.json"
+            if not scenario.is_file() or json.loads(scenario.read_text())["scenario"] != "standing-instructions-native":
+                raise HTTPException(409, "select the explicit native instructions fixture")
+            from nebula.v3.domain import ChatSession, HarnessSession
+            from nebula.v3.storage import NebulaStore
+
+            observed_store = NebulaStore(database)
+            try:
+                owner = await observed_store.get(ChatSession, body.get("session_id", "continuity-chat"))
+                if owner.engagement_id != "continuity-project":
+                    raise HTTPException(403, "the fixture owns only its synthetic project")
+                result = importlib.import_module("acceptance_standing_instructions_native").evidence(root)
+                if owner.harness_session_id:
+                    native = await observed_store.get(HarnessSession, owner.harness_session_id)
+                    result["core_harness_session_id"] = native.id
+                    result["channel_receipt"] = native.metadata.get("instruction_channel")
+                    result["standing_snapshot"] = native.metadata.get("standing_instructions")
+                return result
             finally:
                 await observed_store.event_history.close()
         if operation == "inspect":

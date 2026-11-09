@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -102,11 +101,15 @@ async def serve(root: Path):
         authorize(request)
         body = await request.json()
         scenario = body.get("scenario")
-        if scenario is not None and scenario != "provider-tools-context":
+        adapters = {
+            "provider-tools-context": "acceptance_provider_tools_context.py",
+            "standing-instructions-native": "acceptance_standing_instructions_native.py",
+        }
+        if scenario is not None and scenario not in adapters:
             raise HTTPException(400, "unknown isolated acceptance scenario")
-        tools_adapter = bundles[-1].path / "acceptance_provider_tools_context.py"
-        if scenario is not None and not tools_adapter.is_file():
-            raise HTTPException(503, "selected retained bundles do not contain the provider-tools fixture")
+        adapter_path = bundles[-1].path / adapters[scenario] if scenario is not None else None
+        if adapter_path is not None and not adapter_path.is_file():
+            raise HTTPException(503, "selected retained bundles do not contain this acceptance fixture")
         async with serial:
             await close_fixture()
             selected = root / ("installation-" + secrets.token_hex(8))
@@ -122,12 +125,7 @@ async def serve(root: Path):
             ))
             scenario_receipt = None
             if scenario is not None:
-                spec = importlib.util.spec_from_file_location("acceptance_provider_tools_initializer", tools_adapter)
-                adapter = importlib.util.module_from_spec(spec)
-                sys.modules[spec.name] = adapter
-                spec.loader.exec_module(adapter)
-                scenario_receipt = await adapter.initialize(fixture.store, root=fixture.root,
-                                                            project_id="continuity-project", session_id="continuity-chat")
+                scenario_receipt = await fixture.control("initialize-scenario", session_id="continuity-chat")
             if not body.get("cold", False):
                 await fixture.ready()
             return {"token": fixture.token, "index_sha256": bundles[0].index_sha256,
@@ -146,6 +144,7 @@ async def serve(root: Path):
             health = await fixture.client.get("/api/v1/health", timeout=5)
             memory = await fixture.client.get("/api/v1/memory-budgets", timeout=5)
             tools = {}
+            native = None
             scenario = fixture.root / "acceptance-scenario.json"
             if scenario.is_file() and json.loads(scenario.read_text())["scenario"] == "provider-tools-context":
                 for session_id in dict.fromkeys(["continuity-chat", body.get("session_id")]):
@@ -161,6 +160,12 @@ async def serve(root: Path):
                         "context_status": context.status_code,
                         "context": context.json() if "application/json" in context.headers.get("content-type", "") else context.text[-4096:],
                     }
+            if scenario.is_file() and json.loads(scenario.read_text())["scenario"] == "standing-instructions-native":
+                observed = await fixture.client.post("/__acceptance/control", json={
+                    "operation": "native-evidence", "session_id": "continuity-chat",
+                }, timeout=5)
+                native = {"status": observed.status_code,
+                          "evidence": observed.json() if "application/json" in observed.headers.get("content-type", "") else observed.text[-4096:]}
             jobs = {}
             for identity, task in allocations.items():
                 job = await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity, timeout=5)
@@ -177,7 +182,7 @@ async def serve(root: Path):
             return {"status": health.status_code, "health": health.json(),
                     "runtime": await fixture.control("inspect"), "logs": logs,
                     "memory": {"status": memory.status_code, "settings": memory.json()},
-                    "allocations": jobs, "provider_tools": tools}
+                    "allocations": jobs, "provider_tools": tools, "native_instructions": native}
         if operation in {"hold", "release"}:
             if body.get("name") not in {"hold-provider"}:
                 raise HTTPException(400, "unknown fixture barrier")

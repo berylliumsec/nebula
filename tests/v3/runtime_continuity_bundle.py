@@ -95,6 +95,10 @@ def build_bundle(
         Path(__file__).with_name("provider_tools_context_fixture.py"))))
     if tools_fixture.is_file():
         shutil.copy2(tools_fixture, directory / "acceptance_provider_tools_context.py")
+    native_fixture = Path(os.environ.get("NEBULA_ACCEPTANCE_NATIVE_FIXTURE", str(
+        Path(__file__).with_name("standing_instructions_native_fixture.py"))))
+    if native_fixture.is_file():
+        shutil.copy2(native_fixture, directory / "acceptance_standing_instructions_native.py")
     (directory / "entry.py").write_text(
         "import sys\nfrom pathlib import Path\n"
         "root=Path(__file__).resolve().parent\n"
@@ -123,6 +127,11 @@ def build_bundle(
     worker_source = (source / "nebula/v3/runtime_worker.py").read_text()
     for capability in ("project.participants/v1", "project.quiesce/v1"):
         if capability in worker_source:
+            features.append(capability)
+    compatibility = source / "nebula/v3/runtime-compatibility.json"
+    declared = json.loads(compatibility.read_text())["manifest"]["features"] if compatibility.is_file() else []
+    for capability in ("provider.tools-context/v1", "harness.standing-instructions/v1", "host.web-search-query/v1"):
+        if capability in declared:
             features.append(capability)
     heads = sorted(path.stem for path in (source / "nebula/v3/migrations/versions").glob("*.py"))
     manifest = ReleaseManifest(

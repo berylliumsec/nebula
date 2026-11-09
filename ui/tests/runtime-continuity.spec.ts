@@ -18,7 +18,7 @@ async function controller(request: APIRequestContext) {
   const {token, control_origin: origin} = JSON.parse(await readFile(authFile, "utf8"));
   const headers = {Authorization: `Bearer ${token}`};
   return {
-    reset: async (cold = false, memory = false, scenario?: "provider-tools-context") => {
+    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native") => {
       const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario}});
       expect(response.ok(), await response.text()).toBe(true);
       return response.json();
@@ -347,4 +347,141 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   await writeFile(evidence, JSON.stringify({initialization: fixture.scenario_receipt, learned, context, restored,
     forkId, forkManifest: await manifest(forkId), submissions, events: finalEvents}, null, 2));
   await info.attach("durable-provider-tools", {path: evidence, contentType: "application/json"});
+});
+
+test("native standing instructions survive lossy compaction, reconnect and API replacement without transcript injection", async ({page, request}, info) => {
+  test.setTimeout(300_000);
+  const control = await controller(request);
+  const fixture = await control.reset(false, false, "standing-instructions-native");
+  expect(fixture.scenario).toBe("standing-instructions-native");
+  const setup = fixture.scenario_receipt;
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  const read = async (path: string) => {
+    const response = await request.get(fixture.origin + path, {headers});
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  const delivered = async (initial: Awaited<ReturnType<APIRequestContext["post"]>>) => {
+    let response = initial;
+    if (response.status() === 202) {
+      const saved = await response.json();
+      const identity = saved.command_id ?? saved.receipt.command_id;
+      await expect.poll(async () => {
+        response = await request.get(`${fixture.origin}/api/v1/runtime/requests/${identity}/response`, {headers});
+        return response.status();
+      }, {timeout: 30_000}).not.toBe(202);
+    }
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  let controls = 0;
+  const native = async (operation: "capture" | "compact" | "reconnect") => delivered(await request.post(
+    fixture.origin + setup.control_path, {
+      headers: {...headers, "Idempotency-Key": `native-fixture-${operation}-${++controls}`}, data: {operation},
+    }));
+  const captures: Record<string, unknown>[] = [];
+  const capture = async () => {
+    let value = await native("capture");
+    await expect.poll(async () => {
+      value = await native("capture");
+      return value.turn_active;
+    }).toBe(false);
+    captures.push(value);
+    return value;
+  };
+  const checkHead = (value: Record<string, any>, alpha: number, beta: number) => {
+    expect(value.system_head_available).toBe(true);
+    expect(value.alpha_copies).toBe(alpha);
+    expect(value.beta_copies).toBe(beta);
+    expect(value.effective_context.startsWith(value.system_head)).toBe(true);
+    expect(createHash("sha256").update(value.system_head).digest("hex")).toBe(value.system_head_sha256);
+    expect(createHash("sha256").update(value.standing_snapshot.text).digest("hex")).toBe(value.standing_snapshot.sha256);
+    expect(value.system_head.split(value.standing_snapshot.text)).toHaveLength(2);
+    expect(value.channel_receipt.sha256).toBe(value.standing_snapshot.sha256);
+    expect(value.channel_receipt.external_session_id).toBe(value.active_native_session_id);
+  };
+  await pair(page, request, fixture);
+  await page.goto(`/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`);
+  const composer = page.locator(".chat-composer textarea");
+  await expect(composer).toBeVisible();
+  await expect(page.locator(".chat-composer footer")).toContainText(setup.profile_name);
+  let sent = 0;
+  let submissions = 0;
+  page.on("request", value => {if (value.method() === "POST" && value.url().includes("/chat/completions")) submissions++;});
+  const send = async (text: string, answer: string) => {
+    const previous = await page.locator(".chat-message.assistant").count();
+    await composer.fill(text);
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    sent++;
+    await expect.poll(() => submissions).toBe(sent);
+    await expect(page.locator(".chat-message.assistant")).toHaveCount(previous + 1);
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toHaveText(answer, {timeout: 60_000});
+    await expect(page.getByRole("button", {name: "Stop response", exact: true})).toBeHidden();
+    return capture();
+  };
+  const first = await send("Confirm the initial native instruction fixture.", "Native fixture confirmed ALPHA.");
+  checkHead(first, 1, 0);
+  const initialNativeId = first.active_native_session_id;
+  expect(initialNativeId).toBeTruthy();
+  const compacted = await native("compact");
+  expect(compacted.native.compactions).toHaveLength(1);
+  expect(compacted.native.compactions[0].removed_items).toBeGreaterThan(0);
+  expect(compacted.native.compactions[0].system_sha256_after).toBe(compacted.native.compactions[0].system_sha256_before);
+  const afterCompaction = await send("Confirm the fixture after its lossy native summary.", "Native fixture confirmed ALPHA.");
+  checkHead(afterCompaction, 1, 0);
+  expect(afterCompaction.active_native_session_id).toBe(initialNativeId);
+  expect(afterCompaction.system_head_sha256).toBe(first.system_head_sha256);
+  await native("reconnect");
+  const afterReconnect = await send("Confirm the fixture after native transport reconnect.", "Native fixture confirmed ALPHA.");
+  checkHead(afterReconnect, 1, 0);
+  expect(afterReconnect.active_native_session_id).toBe(initialNativeId);
+  expect(afterReconnect.system_head_sha256).toBe(first.system_head_sha256);
+  await control.control("api", {version: "acceptance-v2"});
+  await page.reload();
+  await expect(composer).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`session=${fixture.session_id}`));
+  await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toHaveText("Native fixture confirmed ALPHA.");
+  const afterApi = await send("Confirm the same native session after API replacement and reload.", "Native fixture confirmed ALPHA.");
+  checkHead(afterApi, 1, 0);
+  expect(afterApi.active_native_session_id).toBe(initialNativeId);
+  const decisions = await read(`/api/v1/chat/sessions/${fixture.session_id}/decisions`);
+  const decision = decisions.find((item: {id: string}) => item.id === setup.decision_id);
+  expect(decision.text).toBe(setup.rule_alpha);
+  const edited = await delivered(await request.put(`${fixture.origin}/api/v1/chat/sessions/${fixture.session_id}/decisions/${setup.decision_id}`, {
+    headers: {...headers, "Idempotency-Key": "native-fixture-save-beta"},
+    data: {expected_revision: decision.revision, kind: "constraint", text: setup.rule_beta, action: "save"},
+  }));
+  expect(edited.text).toBe(setup.rule_beta);
+  expect(edited.revision).toBe(decision.revision + 1);
+  const observedDecision = (await read(`/api/v1/chat/sessions/${fixture.session_id}/decisions`)).find((item: {id: string}) => item.id === setup.decision_id);
+  expect(observedDecision.text).toBe(setup.rule_beta);
+  expect(observedDecision.revision).toBe(edited.revision);
+  const beta = await send("Confirm the fixture after the saved operator constraint changed.", "Native fixture confirmed BETA.");
+  checkHead(beta, 0, 1);
+  expect(beta.active_native_session_id).not.toBe(initialNativeId);
+  expect(beta.system_head_sha256).not.toBe(first.system_head_sha256);
+  expect((await read(`/api/v1/chat/sessions/${fixture.session_id}`)).id).toBe(fixture.session_id);
+  const prompts = beta.native.requests.filter((item: {managed: boolean; method: string}) => item.managed && item.method === "session/prompt");
+  expect(prompts).toHaveLength(sent);
+  expect(beta.native.requests.some((item: {managed: boolean; method: string}) => item.managed && item.method === "session/load")).toBe(true);
+  const inspected = await control.control("inspect");
+  const original = inspected.events.find((item: {event: string; version: string}) => item.event === "project-constructed" && item.version === "acceptance-v1");
+  const retained = original.source.split("/source/nebula/")[0];
+  expect(prompts.every((item: {release_version: string; fixture_source: string; python: string; params: {prompt: unknown}}) =>
+    item.release_version === "acceptance-v1" && item.fixture_source.startsWith(retained + "/") && item.python.startsWith(retained + "/python/")
+    && !JSON.stringify(item.params.prompt).includes(setup.rule_alpha) && !JSON.stringify(item.params.prompt).includes(setup.rule_beta))).toBe(true);
+  expect(submissions).toBe(sent);
+  await composer.focus();
+  expect(await composer.evaluate(element => {
+    const box = element.getBoundingClientRect(); const viewport = visualViewport;
+    return !viewport || (box.bottom <= viewport.offsetTop + viewport.height + 1 && box.top >= viewport.offsetTop - 1);
+  })).toBe(true);
+  expect((await new AxeBuilder({page}).include(".chat-message.assistant").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({path: info.outputPath("native-standing-instructions.png"), fullPage: true});
+  const evidence = info.outputPath("native-standing-instructions.json");
+  await writeFile(evidence, JSON.stringify({scope: "in-process zero-worker ACP transport; actual Grok adapter and public Core routes",
+    mutation: "operator decision updated through authenticated public API; replies and reload through visible UI",
+    initialization: setup, captures, edited, submissions, native: beta.native, runtime: inspected}, null, 2));
+  await info.attach("native-instruction-delivery", {path: evidence, contentType: "application/json"});
 });
