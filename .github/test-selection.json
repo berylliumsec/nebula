@@ -1,17 +1,18 @@
 {
-  "change_digest": "ba3d083795e43e896269ea9169185d97d0f356aed8cc06a85fae0adbd25ff96b",
+  "change_digest": "79b9607efd00a347eac103658dda9ac08581fab45f81ab8b0a8a29d7fd2b1232",
   "reviewed_by": "Codex",
-  "reason": "Seven collected checks for independently validated startup and live-control faults: clean SQLite skips PG budget requirements, PG retains strict declared budgets, fresh/reopen/offline initialization stays guarded, and memory apply uses an independent control consumer while allocation work remains running on each SQL backend. Physical allocator and frozen acceptance follow separately. All seven cases passed in3.45s; focused code checks passed. Physical allocator and frozen revalidation remain pending.",
-  "exclusions": "No full suite, live providers, existing installation or deployment. Isolated SQL/ASGI checks only; physical and packaged continuation are owned by acceptance and packaging agents.",
+  "reason": "Twelve collected SQLite/PostgreSQL checks validate startup/periodic positive-evidence reconciliation and unchanged shutdown refusal/exit contracts after wiring the already-tested reconciliation method. Reviewed manifest now advertises implemented participant and quiescence capabilities. All twelve cases passed in22.51s; two upstream deprecation warnings only.",
+  "exclusions": "No full suite or live deployments. Only isolated inert worker processes and SQL. Actual source/frozen workflows run in separate acceptance tracks.",
   "expected_tests": {
-    "python": 7,
+    "python": 12,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_service.py",
-    "tests/v3/test_api_worker.py::test_live_memory_apply_uses_control_while_original_work_is_running"
+    "tests/v3/test_runtime_reconciliation.py",
+    "tests/v3/test_runtime_management.py::test_real_idle_api_shutdown_notifies_only_after_verified_process_retirement",
+    "tests/v3/test_runtime_management.py::test_owned_project_refuses_real_shutdown_without_notifying_launcher"
   ],
   "frontend": [],
   "native": [],

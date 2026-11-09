@@ -129,6 +129,7 @@ class RuntimeSupervisor:
         self._close_task: asyncio.Task[None] | None = None
         self._handoff_task = None
         self._handoff_serial = asyncio.Lock()
+        self._next_process_reconciliation = 0.0
         self._activated_handoffs: set[str] = set()
         self.viewers: set[asyncio.Task] = set()
         authentication = CoreAuthentication(self.store, operator_token)
@@ -240,6 +241,10 @@ class RuntimeSupervisor:
             if not self.started:
                 await self.host.start()
                 try:
+                    await self.host.reconcile_processes()
+                    self._next_process_reconciliation = (
+                        asyncio.get_running_loop().time() + 5
+                    )
                     if self._recovery_version is not None:
                         await self.bootstrap.select_release(self._recovery_version)
                     await self.shared_services.start()
@@ -366,6 +371,10 @@ class RuntimeSupervisor:
     async def _handoff_loop(self):
         while not self.closed and not self.host.closed:
             try:
+                now = asyncio.get_running_loop().time()
+                if now >= self._next_process_reconciliation:
+                    await self.host.reconcile_processes()
+                    self._next_process_reconciliation = now + 5
                 await self.advance_project_handoffs()
             except Exception as error:
                 record_caught_exception(

@@ -15,7 +15,8 @@
       "chat.accept/v1",
       "chat.resume/v1",
       "project.handoff/v1",
-      "project.participants/v1"
+      "project.participants/v1",
+      "project.quiesce/v1"
     ]
   }
 }
