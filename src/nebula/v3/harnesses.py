@@ -45,12 +45,12 @@ from .harness_quota import HarnessQuotaSnapshot, claude_quota_snapshot
 from .settings_assistant_api import SettingsAssistantApi
 
 import asyncio
-import time
 import inspect
 import json
 import os
 import re
 import sys
+from builtins import BaseExceptionGroup
 from abc import ABC, abstractmethod
 from collections import OrderedDict, deque
 from collections.abc import (

@@ -1,7 +1,7 @@
 {
-  "change_digest": "a2bff41d3a3101d8ec8ea80946bb1895c540cbb41810525b719d821bb859138a",
+  "change_digest": "50a30919e69805fde7f054a62bc1b5c70ae3a9d83f5fddfd8c4a44c0f85e1f1c",
   "reviewed_by": "Codex; reviewed supervisor and legacy health contracts and connection cleanup",
-  "reason": "Seven handshake variants, paired TLS TUI with supervisor health and real Core chat routes, client packaging, and help synchronization.",
+  "reason": "Seven handshake variants, paired TLS TUI with supervisor health and real Core chat routes, client packaging, and help synchronization. Includes a behavior-neutral baseline lint correction: remove unused time import and explicitly import the Python 3.11 builtin exception group.",
   "exclusions": "Python terminal handshake only; browser, frontend and native UI unchanged. No broad regression suites.",
   "python_versions": [
     "3.12"
