@@ -215,7 +215,13 @@ async def test_held_admission_releases_host_capacity_and_keeps_the_turn_queued(p
     assert await queue_state(project, turn.id) == "queued"
 
 
-async def test_queued_producer_moves_without_cancel_pause_or_a_second_turn(project):
+@pytest.mark.parametrize(
+    "queued_state",
+    [ChatTurnStatus.QUEUED, ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING],
+)
+async def test_queued_producer_moves_without_cancel_pause_or_a_second_turn(
+    project, queued_state
+):
     await project.durable.create(
         ProviderProfile(
             id="provider",
@@ -276,12 +282,17 @@ async def test_queued_producer_moves_without_cancel_pause_or_a_second_turn(proje
                     stream=True,
                 )
             )
+            if queued_state != ChatTurnStatus.QUEUED:
+                prepared.turn = await project.store.update(
+                    ChatTurn,
+                    prepared.turn.id,
+                    {"status": queued_state},
+                    expected_revision=prepared.turn.revision,
+                )
             turn_id = await source.start_provider_turn(prepared)
             assert await source.park_queued_for_handoff() == [turn_id]
         assert await queue_state(project, turn_id) == "queued"
-        assert (
-            await project.durable.get(ChatTurn, turn_id)
-        ).status == ChatTurnStatus.QUEUED
+        assert (await project.durable.get(ChatTurn, turn_id)).status == queued_state
         assert target_calls == []
         frames = await journal.coordination.replay_stream(turn_id)
         assert not {frame.event_type for frame in frames} & {
@@ -294,6 +305,7 @@ async def test_queued_producer_moves_without_cancel_pause_or_a_second_turn(proje
         )
         lease = await project.coordinator.transfer("one")
         with execution_context(lease):
+            target.restoring_handoff = True
             await target.startup()
             await project.coordinator.verified(
                 lease,

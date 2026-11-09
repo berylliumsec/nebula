@@ -39,6 +39,8 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     from .runtime_platform import default_runtime_platform
     from .runtime_chat_stream import RuntimeChatJournal
     from .runtime_chat_acceptance import CHAT_ACCEPT_FEATURE
+    from .runtime_project_admission import HANDOFF_FEATURE
+    from .runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
     from .storage import NebulaStore
 
     bootstrap = context.bootstrap
@@ -76,6 +78,11 @@ async def project_application(context, lease) -> AsyncIterator[object]:
         platform = default_runtime_platform(
             store=store, artifact_store=artifacts, data_root=root
         )
+        restore_digest = (
+            await restored_checkpoint(context.coordinator, lease)
+            if HANDOFF_FEATURE in context.manifest.features
+            else None
+        )
         app = create_execution_kernel(
             store,
             artifact_store=artifacts,
@@ -94,6 +101,13 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             durable_chat_acceptance=CHAT_ACCEPT_FEATURE in context.manifest.features,
             durable_chat_resume="chat.resume/v1" in context.manifest.features,
         )
+        if HANDOFF_FEATURE in context.manifest.features:
+            app.state.control_assistant_work.chat.restoring_handoff = (
+                restore_digest is not None
+            )
+            app.state.runtime_handoff = ProjectHandoffAgent(
+                context, lease, app, restored_digest=restore_digest
+            )
         async with app.router.lifespan_context(app):
             yield app
     finally:
@@ -123,6 +137,7 @@ class ProjectExecution:
         self._lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._close_task: asyncio.Task | None = None
+        self.restored_checkpoint_digest = None
         context.rpc.register("execution.attach/v1", self.attach)
         context.rpc.register("execution.status/v1", self.status)
 
@@ -133,6 +148,7 @@ class ProjectExecution:
             "runtime_id": self.context.bootstrap.identity.runtime_id,
             "state": self.state,
             "lease": asdict(self.lease) if self.lease is not None else None,
+            "restored_checkpoint_digest": self.restored_checkpoint_digest,
         }
 
     async def attach(self, payload):
@@ -170,6 +186,11 @@ class ProjectExecution:
                     async with self.context.coordinator.coordination.fenced(lease):
                         pass
                     self.application, self.state = app, "ready"
+                    handoff_agent = getattr(
+                        getattr(app, "state", None), "runtime_handoff", None
+                    )
+                    if handoff_agent is not None:
+                        self.restored_checkpoint_digest = handoff_agent.restored_digest
                     delivery = RuntimeDelivery(
                         self.context.coordinator.coordination,
                         RuntimeVault(
@@ -219,6 +240,24 @@ class ProjectExecution:
                                 self.state = "fenced"
                                 self._stop.set()
 
+                    async def watch_handoff():
+                        while not self._stop.is_set():
+                            try:
+                                await handoff_agent.tick()
+                            except LeaseLost:
+                                self.state = "fenced"
+                                self._stop.set()
+                                return
+                            except Exception as error:
+                                record_caught_exception(
+                                    "runtime",
+                                    "runtime.handoff.waiting",
+                                    "Project transfer is waiting for its current resources.",
+                                    error,
+                                    stage="handoff",
+                                )
+                            await asyncio.sleep(1)
+
                     tasks = [
                         asyncio.create_task(
                             consume("work"), name="nebula-project-work"
@@ -228,6 +267,12 @@ class ProjectExecution:
                         ),
                         asyncio.create_task(watch_lease(), name="nebula-project-lease"),
                     ]
+                    if handoff_agent is not None:
+                        tasks.append(
+                            asyncio.create_task(
+                                watch_handoff(), name="nebula-project-handoff"
+                            )
+                        )
                     try:
                         await self._stop.wait()
                     finally:

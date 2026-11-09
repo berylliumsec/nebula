@@ -15,7 +15,12 @@ import uvicorn
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from .database import Database, RuntimeChatBindingRow, RuntimeProcessRow
+from .database import (
+    Database,
+    ProjectHandoffRow,
+    RuntimeChatBindingRow,
+    RuntimeProcessRow,
+)
 from .database_pool import PoolSettings
 from .deployment_protocol import ReleaseManifest
 from .deployments import DeploymentCoordinator
@@ -113,7 +118,11 @@ async def run_worker(
             raise RuntimeIpcError(
                 "worker version differs from its retained application"
             )
-        if set(manifest.features) - {"chat.accept/v1", "chat.resume/v1"}:
+        if set(manifest.features) - {
+            "chat.accept/v1",
+            "chat.resume/v1",
+            "project.handoff/v1",
+        }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
             )
@@ -132,6 +141,14 @@ async def run_worker(
             except SQLAlchemyError:
                 raise RuntimeIpcError(
                     "The supervisor must apply additive chat migrations before worker readiness"
+                ) from None
+        if "project.handoff/v1" in manifest.features:
+            try:
+                async with database.session() as session:
+                    await session.execute(select(ProjectHandoffRow).limit(0))
+            except SQLAlchemyError:
+                raise RuntimeIpcError(
+                    "The supervisor must apply additive handoff migrations before readiness"
                 ) from None
         from .diagnostics import configure_diagnostics
 

@@ -5120,6 +5120,13 @@ class SubagentService:
         """Settle one child the previous Core left running, or leave it to its recovery."""
 
         turn = await self._child_turn(record)
+        if getattr(self.chat, "restoring_handoff", False) and turn is not None:
+            from .database import ProviderTurnQueueRow
+
+            async with self.store.database.session() as session:
+                queued = await session.get(ProviderTurnQueueRow, turn.id)
+                if queued is not None and queued.state == "queued":
+                    return
         if turn is not None and turn.status == ChatTurnStatus.WAITING_APPROVAL:
             return
         if turn is not None and turn.status == ChatTurnStatus.WAITING_CALLBACK:

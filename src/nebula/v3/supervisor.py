@@ -17,11 +17,13 @@ from .async_utils import finish_cleanup
 from .authentication import CoreAuthentication
 from .database import (
     ProjectOwnershipRow,
+    ProjectHandoffRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
 )
 from .deployment_protocol import ReleaseManifest, WorkerIdentity
+from .diagnostics import record_caught_exception
 from .deployments import _RESIDENT
 from .release_store import ReleaseStore
 from .runtime_coordination import CoordinationConflict, ProjectLease
@@ -113,6 +115,8 @@ class RuntimeSupervisor:
         self.started, self.closed = False, False
         self._operations = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
+        self._handoff_task = None
+        self._handoff_serial = asyncio.Lock()
         self.viewers: set[asyncio.Task] = set()
         authentication = CoreAuthentication(self.store, operator_token)
 
@@ -195,6 +199,120 @@ class RuntimeSupervisor:
                     await self.host.close()
                     raise
                 self.started = True
+                self._handoff_task = asyncio.create_task(
+                    self._handoff_loop(), name="nebula-host-handoffs"
+                )
+
+    async def request_project_handoff(self, project_id, target_runtime_id):
+        async with self._operations:
+            self._active()
+            async with self.coordinator.database.session() as session:
+                owner = await session.get(ProjectOwnershipRow, project_id)
+                source = (
+                    await session.get(RuntimeProcessRow, owner.runtime_id)
+                    if owner and owner.runtime_id
+                    else None
+                )
+                target = await session.get(RuntimeProcessRow, target_runtime_id)
+                for process in (source, target):
+                    release = (
+                        await session.get(RuntimeReleaseRow, process.version)
+                        if process
+                        else None
+                    )
+                    if (
+                        release is None
+                        or "project.handoff/v1"
+                        not in ReleaseManifest.model_validate(release.manifest).features
+                    ):
+                        raise CoordinationConflict(
+                            "Both execution versions must support verified project handoff"
+                        )
+            client = await self.host.rpc(target_runtime_id)
+            try:
+                status = await client.call("execution.status/v1", {}, timeout=5)
+                binding = status.get("lease")
+                if status.get("state") != "unassigned" and (
+                    not binding or binding.get("project_id") != project_id
+                ):
+                    raise CoordinationConflict(
+                        "Prepare an unassigned execution process for this project"
+                    )
+            finally:
+                await client.close()
+            await self.coordinator.request_handoff(project_id, target_runtime_id)
+
+    async def advance_project_handoffs(self):
+        async with self._handoff_serial:
+            self._active()
+            async with self.coordinator.database.session() as session:
+                rows = list(
+                    await session.scalars(
+                        select(ProjectHandoffRow)
+                        .where(
+                            ProjectHandoffRow.phase.in_(("transferable", "transferred"))
+                        )
+                        .limit(64)
+                    )
+                )
+            for row in rows:
+                if row.checkpoint.get("format") != "nebula.project-checkpoint/v1":
+                    continue
+                try:
+                    await self._advance_project_handoff(row)
+                except Exception as error:
+                    # A blocked target must not starve transfers for other projects.
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.project_restore.waiting",
+                        "This project remains held pending target restoration.",
+                        error,
+                        stage="handoff",
+                    )
+                    async with self.coordinator.coordination._write() as session:
+                        pending = await session.get(ProjectHandoffRow, row.project_id)
+                        if pending is not None and pending.phase == "transferred":
+                            pending.blockers = [
+                                "Target runtime "
+                                + pending.target_runtime_id
+                                + " has not verified restoration; queued work remains held"
+                            ]
+                            pending.revision += 1
+
+    async def _advance_project_handoff(self, row):
+        if row.phase == "transferable":
+            async with self._operations:
+                self._active()
+                await self.coordinator.transfer(row.project_id)
+        lease = await self.attach_execution(row.project_id, row.target_runtime_id)
+        client = await self.host.rpc(row.target_runtime_id)
+        try:
+            status = await client.call("execution.status/v1", {}, timeout=5)
+        finally:
+            await client.close()
+        if status.get("state") != "ready" or not status.get(
+            "restored_checkpoint_digest"
+        ):
+            raise CoordinationConflict(
+                "The target has not verified its restored project state"
+            )
+        await self.coordinator.verified(
+            lease, restored_checkpoint_digest=status["restored_checkpoint_digest"]
+        )
+
+    async def _handoff_loop(self):
+        while not self.closed and not self.host.closed:
+            try:
+                await self.advance_project_handoffs()
+            except Exception as error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.handoff.reconciliation_waiting",
+                    "Project transfers retain their saved phase while waiting for readiness.",
+                    error,
+                    stage="handoff",
+                )
+            await asyncio.sleep(0.5)
 
     async def stage(self, source: Path, *, manifest_sha256: str) -> ReleaseManifest:
         async with self._operations:
@@ -400,6 +518,9 @@ class RuntimeSupervisor:
 
     async def _detach_resources(self, caller):
         failures = []
+        if self._handoff_task is not None and self._handoff_task is not caller:
+            self._handoff_task.cancel()
+            await asyncio.gather(self._handoff_task, return_exceptions=True)
         try:
             await self.proxy.close()
         except BaseException as error:

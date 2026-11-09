@@ -1,24 +1,23 @@
 {
-  "change_digest": "a5685a8fafd2d90041d71074be243d8061087cfda51fb4b811cb4b5845ac18af",
+  "change_digest": "7b7921a426cd31f5b2d7c4c7401959e0ee674f10234406ecfd02d2ac33fac626",
   "reviewed_by": "Codex",
-  "reason": "30 distinct passing cases:29initial in17.44s and1 cancellation fixture in2.22s after independently validated pre-existing wait-write race synchronized. Eight new cases pass on SQLite/PostgreSQL: root freeze/admission serialization, admitted descendant completion, release of held host capacity, pinned/re-draining inventory and actual ChatService queued transfer preserving1turn/session with no cancel/pause and1target provider execution. Affected compensation, legacy admission/resume, shared provider schedulers and prestart-stop cases pass. Ruff and targeted mypy pass. Evidence-only docs and formatting followed source validation.",
-  "exclusions": "No full suite, live provider/harness, existing installation, operational deployment, browser or compute workload. Disposable SQL schemas, inert sleeping process identities and FakeProvider only. Physical controller inventory, automatic orchestration, retained-process active-work handoff and final LAN/WebKit/desktop gates remain subsequent integration.",
+  "reason": "65 distinct passing cases:63initial and2 retained-process cases50.95s after independently validated inert-provider installation timing corrected in fixture only. Source inventory, bounded revision proof, held-capacity safety and target verification pass; queued/routing/finalizing restore, permanent grants and durable phase reconstruction pass on SQLite/PostgreSQL. Actual kernels complete v1 admitted work and exactly2 v2 queued producers while another project remains pinned usable on v1, then retire empty source. Independent active-provider classification review and regression keep new roots held while original producer finishes. Ruff and targeted mypy pass. Final CI union65 collected; evidence-only docs added.",
+  "exclusions": "No full suite, live provider/harness, existing installation, operational deployment, browser, SSH or compute workload. Disposable SQLite/PostgreSQL schemas, private retained source processes and inert model barriers only. New physical-resource inventory is conservative; final production LAN/mobile WebKit/packaged desktop and crash orchestration acceptance remain separate work.",
   "expected_tests": {
-    "python": 30,
+    "python": 65,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_project_handoff_agent.py",
     "tests/v3/test_project_handoff_admission.py",
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_runtime_capacity.py::test_real_provider_schedulers_share_capacity_across_generations",
-    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
-    "tests/v3/test_chat_throughput.py::test_queued_cancellation_prevents_provider_admission",
-    "tests/v3/test_chat_throughput.py::test_admission_starts_only_a_new_turn_routing",
-    "tests/v3/test_chat_throughput.py::test_startup_restores_a_resume_the_previous_core_never_admitted",
-    "tests/v3/test_deployment_lifecycle.py::test_pinned_project_remains_usable_while_another_transfers",
-    "tests/v3/test_runtime_chat_stream.py::test_stop_before_first_producer_step_persists_cancelled_end_once"
+    "tests/v3/test_execution_worker_process.py::test_active_execution_handoff_preserves_queued_turns_while_another_project_is_pinned",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_deployment_lifecycle.py::test_supervisor_reconstruction_preserves_every_handoff_phase",
+    "tests/v3/test_deployment_lifecycle.py::test_controls_after_checkpoint_require_a_fresh_boundary",
+    "tests/v3/test_runtime_capacity.py::test_held_capacity_prevents_worker_retirement",
+    "tests/v3/test_chat_throughput.py::test_startup_restores_a_resume_the_previous_core_never_admitted"
   ],
   "frontend": [],
   "native": [],

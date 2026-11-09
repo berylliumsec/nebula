@@ -41,7 +41,63 @@ Ruff and targeted mypy passed. Raw outputs:
 `/tmp/nebula-handoff-admission-tests.txt` and
 `/tmp/nebula-handoff-admission-rerun-tests.txt`.
 
-Automatic controller inventory, physical retained-process handoff orchestration,
-full resume/approval/goal restoration and crash recovery still need integration.
-The table above describes the full contract, not evidence that those remaining
-steps have passed.
+## Automatic retained-process handoff evidence
+
+The optional `project.handoff/v1` feature now connects the source worker and host
+supervisor. A source checks its real controller handle maps, durable process
+states, charged compute jobs, active provider segments and host capacity. Idle
+vendor connections, terminals, kernels and other handles without restoration
+adapters pin the project with an explicit reason. Missing participant contracts
+and oversized inventory/checkpoints also retain a usable old project. No timer
+kills pinned work. Running provider segments drain with admission held; they do
+not require a candidate adapter because they finish on their original worker.
+
+The source checkpoints project entity revisions and provider queue state. SQL
+payloads and credentials are excluded. Transfer rechecks that proof, active
+resources, unfinished commands and held host capacity in the ownership
+transaction. A target validates the same checkpoint before constructing its
+controllers and reports its restoration digest. Queued creation, routing and
+finalization intents restore without orphan-interruption semantics, and queued
+child rounds retain their parent links. The host releases work only after
+matching target verification. A failed target does not prevent the host from
+checking other projects.
+
+The checkpoint currently bounds project rows and queue rows at 10,000 each.
+Projects exceeding that bound remain on their current version with an explicit
+blocker until a paged checkpoint adapter is available. Inventory bounds are 100
+resident resource explanations per project. These are explicit transfer limits,
+not reasons to stop existing work.
+
+Sixty-five distinct cases passed: 63 in the initial 111.65 s run, followed by the
+two retained-process cases in 50.95 s after an independently validated fixture
+repair. The fixture initially installed its inert provider after lifespan startup
+had captured the real localhost adapter for restored work. Configuring the
+kernel before its lifespan corrected that fixture; product code did not change
+after the initial run. An earlier independent source review also established
+that treating an active provider as an indefinitely pinned unsupported resource
+prematurely reopened admission; the focused regression now keeps that resource
+finishing while new roots wait.
+
+The process journey runs the actual kernel through retained source wrappers and
+normal authenticated public chat routes on both SQLite and PostgreSQL. One chat
+streams `First ` on v1 and waits; a second turn is accepted but unadmitted. A
+separate project has an inert terminal resource without a restoration adapter.
+Both request handoff, and a third message is accepted during draining. Releasing
+the first producer lets the transferable project reach verified ownership on
+v2. The existing queued turn and newly accepted message both complete there,
+with provider starts exactly `[v1, v2, v2]`, three total turns and no pause or
+cancel frames. The pinned project retains its v1 PID and open admission. The
+emptied source worker retires with verified process disappearance.
+
+Additional cases cover resource closure, missing adapters, revision changes
+before transfer and target restoration, late capacity reservations, all durable
+handoff phases on supervisor reconstruction, and permanent worker grant/fencing
+behavior. Raw results: `/tmp/nebula-handoff-agent-tests.txt` and
+`/tmp/nebula-handoff-agent-process-rerun-tests.txt`. Ruff and targeted mypy pass.
+
+This proves the selected source/backend journeys using inert model and terminal
+fixtures. It does not prove physical terminal/vendor restoration, complete
+approval/schedule/callback/goal journeys, orchestration crashes in every phase,
+expired-owner recovery, or packaged cross-version compatibility. Those cases,
+client reconnect/drafts, launchers/deployer and the required production LAN,
+mobile WebKit and packaged desktop continuity gates remain outstanding.

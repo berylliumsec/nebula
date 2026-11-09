@@ -9,6 +9,7 @@ from __future__ import annotations
 from .async_utils import MaybeAsync
 
 from .database import DatabaseBusyError, EntityRow, ProviderTurnQueueRow
+from sqlalchemy import select
 
 from .async_utils import async_done_callback, call_async, finish_cleanup
 
@@ -2721,6 +2722,7 @@ class ChatService:
         self._sealed_reasoning_lock = threading.Lock()
         self.runtime_capacity = runtime_capacity
         self.stream_journal = stream_journal
+        self.restoring_handoff = False
         self.provider_scheduler = ProviderScheduler(
             store, worker_id=self.worker_id, runtime_capacity=runtime_capacity
         )
@@ -2828,6 +2830,14 @@ class ChatService:
             )
             if item.backend == ChatBackend.PROVIDER
         ]
+        if self.restoring_handoff:
+            async with self.store.database.session() as session:
+                queued_ids = set(await session.scalars(select(
+                    ProviderTurnQueueRow.turn_id
+                ).where(ProviderTurnQueueRow.state == "queued")))
+            # A positively verified handoff checkpoint contains no executing
+            # producer. These are accepted resume intents, not orphaned effects.
+            turns = [turn for turn in turns if turn.id not in queued_ids]
         for turn in turns:
             try:
                 for _ in range(3):
@@ -2989,11 +2999,14 @@ class ChatService:
                     )
                     (await self.provider_scheduler.cancel(turn_id))
                     continue
-                if turn.status not in {
+                restorable_states = {
                     ChatTurnStatus.QUEUED,
                     ChatTurnStatus.WAITING_APPROVAL,
                     ChatTurnStatus.WAITING_CALLBACK,
-                } or self.has_active_provider_turn(turn_id):
+                }
+                if self.restoring_handoff:
+                    restorable_states.update({ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING})
+                if turn.status not in restorable_states or self.has_active_provider_turn(turn_id):
                     continue
                 (await self.start_provider_turn((await self.prepare_resume(turn_id))))
             except Exception as exc:
@@ -4218,6 +4231,16 @@ class ChatService:
             runtime.done = True
             parked.append(turn_id)
         return parked
+
+    async def restore_locally_parked_turns(self):
+        for turn_id, runtime in list(self._active_provider_turns.items()):
+            if not runtime.handoff_parked or not runtime.done:
+                continue
+            async with self.store.database.session() as session:
+                queue = await session.get(ProviderTurnQueueRow, turn_id)
+                if queue is None or queue.state != "queued":
+                    continue
+            await self.start_provider_turn(await self.prepare_resume(turn_id))
 
     async def _run_provider_turn(
         self,

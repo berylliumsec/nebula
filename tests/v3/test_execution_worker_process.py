@@ -615,3 +615,252 @@ async def test_explicit_resume_detaches_and_replays_its_new_segment_after_api_re
                 assert same_process(execution.pid, execution.process_birth)
     finally:
         release.write_text("Fixture cleanup")
+
+
+_HANDOFF_WORKER = r"""
+import asyncio, sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+sys.path.insert(0, __REPOSITORY__)
+from tests.v3.test_chat import FakeProvider
+import nebula.v3.execution_kernel as kernel
+from nebula.v3.execution_worker import ProjectExecution, project_application
+from nebula.v3.providers import ModelStreamEvent, StreamEventType
+from nebula.v3.runtime_processes import read_worker_bootstrap
+from nebula.v3.runtime_worker import run_worker
+
+@asynccontextmanager
+async def project(context, lease):
+    root = Path(context.bootstrap.data_root)
+    class InertProvider(FakeProvider):
+        async def stream(self, request):
+            with (root / 'fixture-provider-starts').open('a') as output:
+                output.write(context.bootstrap.identity.version + '\n')
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta='First ')
+            while not (root / 'fixture-provider-release').exists():
+                await asyncio.sleep(.02)
+            yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta='last')
+            response = (await super().complete(request)).model_copy(update={'text':'First last'})
+            yield ModelStreamEvent(type=StreamEventType.COMPLETED, response=response)
+    original = kernel.create_execution_kernel
+    def configured_kernel(*args, **kwargs):
+        app = original(*args, **kwargs)
+        chat = app.state.control_assistant_work.chat
+        chat.provider_factory = lambda profile: InertProvider(profile.id, local=True)
+        chat.provider_scheduler.host_load = None
+        return app
+    # Startup restoration captures its provider before the app yields. Install
+    # the inert dependency at construction, before any lifespan controller runs.
+    kernel.create_execution_kernel = configured_kernel
+    try:
+        async with project_application(context, lease) as app:
+            yield app
+    finally:
+        kernel.create_execution_kernel = original
+
+@asynccontextmanager
+async def execution(context):
+    worker = ProjectExecution(context, application_factory=project)
+    try:
+        yield worker.app
+    finally:
+        await worker.close()
+
+asyncio.run(run_worker(read_worker_bootstrap(sys.stdin.buffer), execution_factory=execution))
+""".replace("__REPOSITORY__", repr(str(Path(__file__).resolve().parents[2])))
+
+
+async def test_active_execution_handoff_preserves_queued_turns_while_another_project_is_pinned(
+    supervised,
+):
+    from sqlalchemy import select
+    from nebula.v3.database import RuntimeCommandRow
+    from nebula.v3.deployment_protocol import ResourceSnapshot
+    from nebula.v3.domain import Engagement
+
+    root, fixture = supervised.supervisor, supervised.managed
+    await fixture.store.create(
+        ProviderProfile(
+            id="inert-provider",
+            name="Inert",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    await fixture.store.create(
+        Engagement(id="pinned-project", name="Pinned synthetic project")
+    )
+    features = ["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"]
+    await fixture.stage("v1", _HANDOFF_WORKER, features=features)
+    await fixture.stage("v2", _HANDOFF_WORKER, features=features)
+    limits = await root.shared_services.capacity.status()
+    await root.shared_services.capacity.configure(
+        {"provider": 1, "background": 1, "tool": 2, "cpu": 2},
+        expected_revision=limits["revision"],
+    )
+    source = await root.prepare_execution("v1")
+    await root.attach_execution("admitted-project", source.runtime_id)
+    pinned = await root.prepare_execution("v1")
+    pinned_lease = await root.attach_execution("pinned-project", pinned.runtime_id)
+    await root.coordinator.resource(
+        pinned_lease,
+        ResourceSnapshot(
+            id="synthetic-terminal",
+            project_id="pinned-project",
+            runtime_id=pinned.runtime_id,
+            fencing_token=pinned_lease.fencing_token,
+            kind="terminal",
+            state="active",
+            restoration="pinned",
+            detail="The inert terminal has no restoration adapter",
+        ),
+    )
+    candidate = await root.prepare_execution("v2")
+    pinned_candidate = await root.prepare_execution("v2")
+    api = await root.prepare_api("v2")
+    await root.promote_api(
+        api.runtime_id, expected_revision=(await root.coordinator.status()).revision
+    )
+    release = fixture.data / "fixture-provider-release"
+    starts = fixture.data / "fixture-provider-starts"
+    auth = {"Authorization": "Bearer " + _TOKEN}
+    base_body = {
+        "provider_id": "inert-provider",
+        "engagement_id": "admitted-project",
+        "model": "model-a",
+        "include_knowledge": False,
+        "stream": True,
+    }
+    pending = None
+
+    async def capture(client, key, until):
+        async with client.stream(
+            "POST",
+            "/api/v1/chat/completions",
+            json={**base_body, "messages": [{"role": "user", "content": key}]},
+            headers={**auth, "Idempotency-Key": key},
+        ) as response:
+            assert response.status_code == 200, await response.aread()
+            frames = []
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    frames.append(json.loads(line[6:]))
+                    if frames[-1].get("type") == until:
+                        return response.headers["x-nebula-command-id"], frames
+
+    async def phases():
+        return {
+            item.project_id: item for item in (await root.coordinator.status()).projects
+        }
+
+    try:
+        async with server(root.app) as endpoint:
+            async with httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(uds=endpoint[7:]),
+                base_url="http://synthetic-listener",
+                trust_env=False,
+                timeout=45,
+            ) as client:
+                first, first_frames = await capture(client, "admitted-first", "delta")
+                first_turn = next(
+                    frame["turn_id"]
+                    for frame in first_frames
+                    if frame.get("type") == "started"
+                )
+                second, queued_frames = await capture(
+                    client, "accepted-before-handoff", "queued"
+                )
+                second_turn = queued_frames[-1]["turn_id"]
+                await root.request_project_handoff(
+                    "admitted-project", candidate.runtime_id
+                )
+                await root.request_project_handoff(
+                    "pinned-project", pinned_candidate.runtime_id
+                )
+                async with asyncio.timeout(12):
+                    while True:
+                        state = await phases()
+                        if (
+                            state["admitted-project"].phase == "finishing"
+                            and state["pinned-project"].blockers
+                        ):
+                            break
+                        await asyncio.sleep(0.05)
+                assert state["admitted-project"].runtime_id == source.runtime_id
+                assert state["admitted-project"].admission_held
+                assert state["pinned-project"].runtime_id == pinned.runtime_id
+                assert not state["pinned-project"].admission_held
+                assert any(
+                    "terminal" in detail for detail in state["pinned-project"].blockers
+                )
+                pending = asyncio.create_task(
+                    client.post(
+                        "/api/v1/chat/completions",
+                        json={
+                            **base_body,
+                            "messages": [
+                                {"role": "user", "content": "Accepted during drain"}
+                            ],
+                        },
+                        headers={**auth, "Idempotency-Key": "during-handoff"},
+                    )
+                )
+                async with asyncio.timeout(8):
+                    while True:
+                        async with fixture.database.session() as session:
+                            commands = list(
+                                await session.scalars(select(RuntimeCommandRow))
+                            )
+                        if len(commands) == 3:
+                            break
+                        await asyncio.sleep(0.02)
+                assert (
+                    next(
+                        command
+                        for command in commands
+                        if command.idempotency_key == "during-handoff"
+                    ).state
+                    == "queued"
+                )
+                assert starts.read_text().splitlines() == ["v1"]
+                release.write_text("Finish original version")
+                finished = await client.get(
+                    f"/api/v1/chat/turns/{first_turn}/events?after={first_frames[-1]['sequence']}",
+                    headers=auth,
+                )
+                assert "event: done" in finished.text
+                async with asyncio.timeout(30):
+                    while (await phases())["admitted-project"].phase != "verified":
+                        await asyncio.sleep(0.05)
+                state = await phases()
+                assert state["admitted-project"].runtime_id == candidate.runtime_id
+                assert state["pinned-project"].runtime_id == pinned.runtime_id
+                # Reconnect to the receipt accepted on the old owner. Its queued
+                # segment may end during detach; the fresh journal continues it.
+                async with asyncio.timeout(15):
+                    while (
+                        await fixture.store.get(ChatTurn, second_turn)
+                    ).final_message_id is None:
+                        await asyncio.sleep(0.05)
+                replay = await client.get(
+                    f"/api/v1/runtime/requests/{second}/response", headers=auth
+                )
+                assert (
+                    "event: done" in replay.text
+                    and "event: cancelled" not in replay.text
+                    and "event: paused" not in replay.text
+                )
+                third = await asyncio.wait_for(pending, 15)
+                assert third.status_code == 200 and "event: done" in third.text
+                assert starts.read_text().splitlines() == ["v1", "v2", "v2"]
+                assert len(await fixture.store.list_entities(ChatTurn)) == 3
+                assert same_process(pinned.pid, pinned.process_birth)
+                await root.host.retire(source.runtime_id)
+                assert not same_process(source.pid, source.process_birth)
+    finally:
+        release.write_text("Fixture cleanup")
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)

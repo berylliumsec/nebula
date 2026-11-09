@@ -688,10 +688,15 @@ class DeploymentCoordinator:
                     or resource.restoration == "pinned"
                     or resource.kind not in supported
                 ):
+                    finishing_provider = (
+                        resource.kind == "provider_turn"
+                        and resource.state == "active"
+                        and resource.restoration == "durable"
+                    )
                     pinned = (
                         pinned
                         or resource.restoration == "pinned"
-                        or resource.kind not in supported
+                        or (resource.kind not in supported and not finishing_provider)
                         or resource.state == "uncertain"
                     )
                     observed.append(
@@ -712,6 +717,21 @@ class DeploymentCoordinator:
             if commands:
                 observed.append(
                     f"{commands} unfinished or uncertain command(s) require their current owner"
+                )
+            capacity = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(RuntimeCapacityReservationRow)
+                    .where(
+                        RuntimeCapacityReservationRow.project_id == lease.project_id,
+                        RuntimeCapacityReservationRow.state == "held",
+                    )
+                )
+                or 0
+            )
+            if capacity:
+                observed.append(
+                    f"{capacity} host capacity reservation(s) still require positive completion evidence"
                 )
             if not row.admission_held and not pinned:
                 # The old runtime remained usable while pinned. Re-draining
@@ -807,10 +827,28 @@ class DeploymentCoordinator:
                 )
                 .limit(1)
             )
-            if unfinished is not None or resources is not None:
+            capacity = await session.scalar(
+                select(RuntimeCapacityReservationRow.id)
+                .where(
+                    RuntimeCapacityReservationRow.project_id == project_id,
+                    RuntimeCapacityReservationRow.state == "held",
+                )
+                .limit(1)
+            )
+            if unfinished is not None or resources is not None or capacity is not None:
                 raise CoordinationConflict(
                     "project changed after its transferable checkpoint"
                 )
+            if handoff.checkpoint.get("format") == "nebula.project-checkpoint/v1":
+                from .runtime_project_handoff import project_sql_checkpoint
+
+                if (
+                    await project_sql_checkpoint(session, project_id)
+                    != handoff.checkpoint
+                ):
+                    raise CoordinationConflict(
+                        "Project state changed after its handoff checkpoint; verify a fresh boundary"
+                    )
             source_expiry = owner.lease_expires_at_ms
             owner.runtime_id, owner.fencing_token, owner.lease_expires_at_ms = (
                 handoff.target_runtime_id,
