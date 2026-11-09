@@ -168,7 +168,9 @@ def test_openai_responses_bounds_wire_metadata_without_changing_diagnostics():
 
 def test_openai_responses_omits_metadata_when_no_entries_fit():
     provider = OpenAIResponsesProvider(_config(ProviderKind.OPENAI_RESPONSES))
-    request = ModelRequest(messages=[], instructions="Reply.", metadata={"limits": "x" * 513})
+    request = ModelRequest(
+        messages=[], instructions="Reply.", metadata={"limits": "x" * 513}
+    )
 
     assert "metadata" not in provider._payload(request, "gpt-6-sol")
 

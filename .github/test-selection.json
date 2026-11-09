@@ -1,7 +1,7 @@
 {
-  "change_digest": "e66b0ec336c25365b68f8ded811bc75c131e5355cd8d39df68e38d3910f4c3f8",
+  "change_digest": "ac0fd21dc38e6fc74ef5c02dee849b0d7f936332a0d5e067780a62feb79e07fc",
   "reviewed_by": "Codex; independently validated API-worker header admission and every sync/async terminal transport path",
-  "reason": "Two transport cases cover mutation methods, safe reads, explicit keys, streams, auth retention and no retries. TLS LAN TUI covers paired sends, MCP settings and goal changes under mutation-key admission. Package and product guidance sync remain selected.",
+  "reason": "Two transport cases cover mutation methods, safe reads, explicit keys, streams, auth retention and no retries. TLS LAN TUI covers paired sends, MCP settings and goal changes under mutation-key admission. Package and product guidance sync remain selected. Includes formatter-only corrections to two baseline tests with verified identical AST; no behavioral test expansion.",
   "exclusions": "Shared Python terminal HTTP transport only. Browser/frontend/native UI not changed; no broad suites.",
   "python_versions": [
     "3.12"
