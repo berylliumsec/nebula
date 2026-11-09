@@ -23,7 +23,11 @@ if __package__ in {None, ""}:
 from scripts.generate_third_party_notices import generate_notices
 from scripts.build_product_knowledge import ensure as ensure_product_knowledge
 from scripts.nebula3_version import check_versions
-from scripts.package_audit import FORBIDDEN_MODULES, inspect_pyinstaller_binary
+from scripts.package_audit import (
+    FORBIDDEN_MODULES,
+    inspect_pyinstaller_binary,
+    inspect_pyinstaller_directory,
+)
 
 
 REQUIRED_RUNTIME_IMPORTS = (
@@ -307,6 +311,18 @@ def main() -> None:
     suffix = ".exe" if sys.platform == "win32" else ""
     source = root / "dist" / f"nebula-core{suffix}"
     audit = inspect_pyinstaller_binary(source)
+    # A onefile executable has an extraction parent and a separate Python PID.
+    # Keep it only as the compatibility connector. Retained supervisors/workers
+    # need onedir so Popen.pid is the actual process checked by the host.
+    runtime_arguments = arguments.copy()
+    runtime_arguments[runtime_arguments.index("--onefile")] = "--onedir"
+    runtime_arguments[runtime_arguments.index("--name") + 1] = "nebula-runtime"
+    runtime_arguments[-1:-1] = ["--contents-directory", "_internal"]
+    subprocess.run(runtime_arguments, cwd=root, check=True)
+    runtime_directory = root / "dist" / "nebula-runtime"
+    runtime_name = f"nebula-runtime{suffix}"
+    runtime_executable = runtime_directory / runtime_name
+    runtime_audit = inspect_pyinstaller_directory(runtime_directory, runtime_name)
     destination = (
         root / "ui" / "src-tauri" / "binaries" / f"nebula-core-{target}{suffix}"
     )
@@ -335,13 +351,19 @@ def main() -> None:
     shutil.copy2(root / "security-proxy" / "addon.py", proxy_resource / "addon.py")
     resources["security-proxy"] = proxy_resource
     manifest, manifest_digest = build_frozen_bundle(
-        source, frontend, runtime_bundle, resources=resources
+        runtime_executable,
+        frontend,
+        runtime_bundle,
+        runtime_directory=runtime_directory,
+        resources=resources,
     )
     print(
         json.dumps(
             {
                 "artifact": str(destination),
                 "audit": audit,
+                "runtime_audit": runtime_audit,
+                "runtime_artifact": str(runtime_directory),
                 "build": identity,
                 "third_party_distributions": notice_count,
                 "runtime_bundle": str(runtime_bundle),

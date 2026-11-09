@@ -76,6 +76,37 @@ def _copy_tree(source: Path, destination: Path) -> None:
             shutil.copy2(path, target)
 
 
+def _copy_runtime_tree(source: Path, destination: Path) -> None:
+    """Materialize a complete onedir tree without external filesystem links."""
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError("The frozen runtime must be a real onedir directory")
+    source = source.resolve(strict=True)
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        selected = path
+        if path.is_symlink():
+            try:
+                selected = path.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise ValueError(
+                    f"Invalid runtime dependency link: {relative}"
+                ) from error
+            if not selected.is_relative_to(source):
+                raise ValueError(
+                    f"Runtime dependency link escapes its bundle: {relative}"
+                )
+            if selected.is_dir():
+                raise ValueError(
+                    f"Runtime directory symlinks are unsupported: {relative}"
+                )
+        if selected.is_file():
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(selected, target)
+        elif not selected.is_dir():
+            raise ValueError(f"Unsupported runtime dependency: {relative}")
+
+
 def complete_bundle(
     directory: Path, *, version: str | None = None
 ) -> tuple[ReleaseManifest, str]:
@@ -106,16 +137,36 @@ def build_frozen_bundle(
     ui_directory: Path,
     destination: Path,
     *,
+    runtime_directory: Path,
     resources: dict[str, Path] | None = None,
     version: str | None = None,
 ) -> tuple[ReleaseManifest, str]:
+    internal = runtime_directory / "_internal"
+    if internal.is_symlink() or not internal.is_dir():
+        raise ValueError(
+            "A retained frozen runtime requires its complete onedir _internal tree"
+        )
+    if (
+        executable.is_symlink()
+        or executable.parent.resolve() != runtime_directory.resolve()
+    ):
+        raise ValueError("The frozen executable must belong to its onedir runtime root")
+    if not executable.is_file():
+        raise ValueError("The onedir runtime executable is missing")
     if destination.exists() and any(
         path.name != ".gitignore" for path in destination.iterdir()
     ):
         raise ValueError("Build runtime bundles in an empty directory")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "bin").mkdir()
-    shutil.copy2(executable, destination / "bin/nebula-core")
+    _copy_runtime_tree(runtime_directory, destination / "bin")
+    installed_executable = destination / "bin" / executable.name
+    if installed_executable.name != "nebula-core":
+        if (destination / "bin/nebula-core").exists():
+            raise ValueError(
+                "The runtime already contains the reserved Core executable path"
+            )
+        installed_executable.rename(destination / "bin/nebula-core")
     _copy_tree(ui_directory, destination / "ui")
     for name, source in (resources or {}).items():
         if name not in {"playwright-browsers", "notebook-runtime", "security-proxy"}:

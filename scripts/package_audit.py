@@ -202,9 +202,7 @@ def validate_members(members: Iterable[str]) -> dict[str, object]:
     }
 
 
-def inspect_pyinstaller_binary(binary: Path) -> dict[str, object]:
-    """Inspect both the outer CArchive and embedded PYZ, failing if unreadable."""
-
+def _pyinstaller_members(binary: Path) -> set[str]:
     binary = binary.resolve()
     if not binary.is_file():
         raise ArtifactAuditError(f"artifact does not exist: {binary}")
@@ -224,9 +222,62 @@ def inspect_pyinstaller_binary(binary: Path) -> dict[str, object]:
         raise ArtifactAuditError(
             f"cannot inspect PyInstaller artifact {binary}"
         ) from exc
-    report = validate_members(members)
+    return members
+
+
+def inspect_pyinstaller_binary(binary: Path) -> dict[str, object]:
+    """Inspect both the outer CArchive and embedded PYZ, failing if unreadable."""
+    binary = binary.resolve()
+    report = validate_members(_pyinstaller_members(binary))
     report["artifact"] = str(binary)
     report["size_bytes"] = binary.stat().st_size
+    return report
+
+
+def inspect_pyinstaller_directory(
+    directory: Path, executable_name: str
+) -> dict[str, object]:
+    """Audit the executable plus every dependency in a PyInstaller onedir tree."""
+    if directory.is_symlink() or not directory.is_dir():
+        raise ArtifactAuditError("the runtime must be a real onedir directory")
+    directory = directory.resolve()
+    executable = directory / executable_name
+    if executable.parent != directory or executable.is_symlink():
+        raise ArtifactAuditError("the runtime executable must be in its onedir root")
+    members = _pyinstaller_members(executable)
+    size = 0
+    files = 0
+    for path in directory.rglob("*"):
+        if path.is_symlink():
+            try:
+                target = path.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise ArtifactAuditError(
+                    "runtime dependency link is invalid"
+                ) from error
+            if not target.is_relative_to(directory) or target.is_dir():
+                raise ArtifactAuditError(
+                    "runtime dependency links must target files inside the onedir tree"
+                )
+        if not path.is_file():
+            if not path.is_dir():
+                raise ArtifactAuditError("runtime dependencies must be regular files")
+            continue
+        relative = path.relative_to(directory)
+        normalized = relative.as_posix()
+        if relative.parts[0] == "_internal":
+            normalized = relative.relative_to("_internal").as_posix()
+        members.add(normalized)
+        files += 1
+        size += path.stat().st_size
+    report = validate_members(members)
+    report.update(
+        artifact=str(directory),
+        runtime_executable=executable_name,
+        file_count=files,
+        size_bytes=size,
+        format="pyinstaller-onedir",
+    )
     return report
 
 
