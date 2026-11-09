@@ -1,20 +1,18 @@
 {
-  "change_digest": "9f87c7fb2caedb5df63ac9c9421005b4a7d91c3d257779fa88c5855a6fd7c669",
+  "change_digest": "0b4ddba03ffb2d7d8e35aaa01cd403622260c3ae969e8cff4051994ad23ae155",
   "reviewed_by": "Codex",
-  "reason": "Twelve distinct passing cases: nine presentation/policy cases across two focused runs, plus three actual Chroma/source-sync checks. Large Core inventories retain structured partial job summaries through typed Butler and the private host channel on both SQL backends. Ninety profile overrides survive save/readback; oversized envelopes remain explicit, and generic truncated GET reads report success. Independent validation identified the original missing-result failure and the invalid synthetic runner basename. Ruff and targeted mypy passed. Product knowledge was rebuilt and verified at 407 passages, source e1cfebe0f4c0, and host Chroma synchronization/restart passed. Final union collected 12 cases.",
-  "exclusions": "No full suite, live services, existing installation, deployment, browser, provider, SSH or compute workload. Synthetic SQL records, inert private peers and validated APIs only. These checks prove presentation and readback. Final production LAN, mobile WebKit and packaged-desktop gates remain outstanding.",
+  "reason": "Nineteen distinct selected cases passed: 15 initial passes and four successful reruns after independent causal review corrected the tests to use the established paired-device cookie. Covers SQLite/PostgreSQL identity and actor-scoped lookup, concurrent initialization, lost-response replay, and API role purity. Additive schema initialized in the same fixtures; lifecycle behavior has its own track. Shared runtime contract documentation added.",
+  "exclusions": "No full suite, browser, live service, deployment or existing installation. Dedicated UI, host bootstrap, recovery and packaging selections are owned by parallel tracks and will be integrated separately.",
   "expected_tests": {
-    "python": 12,
+    "python": 19,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_memory_assistant_result.py",
-    "tests/v3/test_memory_api.py::test_butler_discovers_typed_actions_saves_and_verifies_with_actor_audit",
-    "tests/v3/test_memory_api.py::test_concurrent_browser_and_butler_saves_have_one_winner",
-    "tests/v3/test_runtime_host_services.py::test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_runtime_identity.py",
+    "tests/v3/test_api_worker.py::test_api_replacement_replays_saved_response_without_reexecution",
+    "tests/v3/test_api_worker.py::test_api_role_import_does_not_import_the_execution_factory_or_chat_runtime"
   ],
   "frontend": [],
   "native": [],

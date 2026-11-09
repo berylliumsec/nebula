@@ -296,6 +296,24 @@ class RuntimeDelivery:
             apply=terminal,
         )
 
+    async def lookup(self, actor_id: str, idempotency_key: str) -> str:
+        """Find a lost acceptance without submitting or revealing another actor's work."""
+        self._intent_purpose(actor_id)
+        if re.fullmatch(r"[!-~]{1,200}", idempotency_key) is None:
+            raise ValueError(
+                "Idempotency-Key must contain 1 to 200 visible ASCII characters"
+            )
+        async with self.coordination.database.session() as session:
+            command_id = await session.scalar(
+                select(RuntimeCommandRow.id).where(
+                    RuntimeCommandRow.actor_id == actor_id,
+                    RuntimeCommandRow.idempotency_key == idempotency_key,
+                )
+            )
+        if command_id is None:
+            raise NotFoundError("accepted request is unavailable")
+        return command_id
+
     async def page(
         self, actor_id: str, command_id: str, *, after=0, limit=64
     ) -> DeliveryPage:

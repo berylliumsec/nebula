@@ -30,6 +30,7 @@ from .runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, RuntimeDelivery
 from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_routes import command_lane
+from .runtime_identity import mount_runtime_identity
 from .storage import NebulaStore, NotFoundError
 
 
@@ -124,6 +125,7 @@ def create_api_worker(
     app.state.authentication_api = AuthenticationApi(
         app, store, auth, allow_insecure_pairing=allow_insecure_device_pairing
     )
+    mount_runtime_identity(app, store, auth)
 
     @app.exception_handler(CoordinationConflict)
     async def conflict(_request, error):
@@ -278,8 +280,7 @@ def create_api_worker(
     async def deployment_status(_actor=Depends(principal)):
         return await coordinator.status()
 
-    @app.get("/api/v1/runtime/requests/{command_id}")
-    async def request_status(command_id: str, _actor=Depends(principal)):
+    async def status_payload(command_id: str, _actor: str):
         page = await delivery.page(_actor, command_id, limit=1)
         binding = await delivery.chat_binding(_actor, command_id)
         return {
@@ -297,6 +298,19 @@ def create_api_worker(
                 else {}
             ),
         }
+
+    @app.get("/api/v1/runtime/requests/lookup")
+    async def lookup_request(
+        idempotency_key: str = Query(min_length=1, max_length=200, pattern=r"^[!-~]+$"),
+        _actor=Depends(principal),
+    ):
+        return await status_payload(
+            await delivery.lookup(_actor, idempotency_key), _actor
+        )
+
+    @app.get("/api/v1/runtime/requests/{command_id}")
+    async def request_status(command_id: str, _actor=Depends(principal)):
+        return await status_payload(command_id, _actor)
 
     @app.get("/api/v1/runtime/requests/{command_id}/response")
     async def request_response(
