@@ -148,7 +148,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history"],
+    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history", "standing instructions", "instruction updates", "compaction", "reconnect"],
   },
   {
     id: "settings.mcp",
@@ -198,11 +198,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.network-scope",
     label: "Project policy and network scope",
-    description: "Control targets, ports, URLs, approvals and limits, or review targets extracted from a private scope document",
+    description: "Control targets, ports, URLs, approvals, limits and Always loaded tools, or review targets extracted from a private scope document",
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index", "scope import", "scope document", "review targets", "discard import"],
+    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "loaded schemas", "tool context", "tool compaction", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index", "scope import", "scope document", "review targets", "discard import"],
   },
   {
     id: "settings.operators",

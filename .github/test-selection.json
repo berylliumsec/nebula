@@ -1,22 +1,21 @@
 {
-  "change_digest": "ab74ccc97fc94fd3f17230c96a88431ff1132d3ca068932df84e33e00f482243",
+  "change_digest": "b93bedb396aa00a4bc3c1fa1937cbeaad37e4528790f5a04279ba25dc351b701",
   "reviewed_by": "Codex",
-  "reason": "Fourteen collected tests verify query-only versus host observation capability, typed refusal evidence, original-controller cleanup, real kernel publication/daemon identity checks and effective pressure selection. Fresh independent validation classified the five expected failure projections without changing audit rules. Full Core Mypy now passes344modules. CI retained bundles explicitly build/verify current product guidance.",
-  "exclusions": "No full suite, operational search/provider, deployment or browser run. Physical cases use only an explicitly selected disposable daemon and cached image; GUI/browser acceptance is separately selected.",
+  "reason": "Six collected product-help cases regenerate/verify the current bundled index, discover durable provider tools and authoritative native instructions, explain canonical host settings/search and preserved memory-runner limitations, and verify the same digest synchronizes into an actual isolated Chroma collection. Catalog changes add discovery aliases only.",
+  "exclusions": "No full suite, operational provider or deployment. Frontend labels/aliases contain no interaction changes; production UI/browser and actual Core host bootstrap are separately selected integration gates.",
   "expected_tests": {
-    "python": 14,
+    "python": 6,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_managed_search_runtime.py::test_real_service_uses_one_reservation_and_verified_nonroot_loopback_group",
-    "tests/v3/test_managed_search_runtime.py::test_real_service_refuses_changed_publication_or_daemon_identity",
-    "tests/v3/test_managed_search_runtime.py::test_pressure_threshold_is_rejected_only_when_selected_policy_requires_it",
-    "tests/v3/test_web_search.py::test_status_reports_an_unconfigured_runtime_without_failing",
-    "tests/v3/test_web_search.py::test_status_counts_only_projects_that_can_actually_search",
-    "tests/v3/test_runtime_host_search.py::test_failed_host_admission_never_falls_back_and_preserves_job_evidence",
-    "tests/v3/test_runtime_host_search.py::test_default_platform_never_constructs_a_search_service"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_durable_provider_tool_context",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_authoritative_native_instruction_versions",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_canonical_host_settings_and_search",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_search_service_memory_and_daemon_dependency"
   ],
   "frontend": [],
   "native": [],

@@ -625,16 +625,55 @@ startup, Core mirrors the bundled passages and their precomputed vectors into
 the local Chroma product-help collection. The source digest and passage count
 determine whether the mirror needs replacement; product help remains searchable
 from the bundled index if Chroma is unavailable.
-For MCP cost questions, the assistant explains that unticked, on-demand servers
-contribute a compact name-and-purpose directory to each provider routing request,
-while checked servers and tools pinned under Project policy contribute full
-function schemas each time. It points to Assistant settings for checked servers
-and Project policy for Always loaded tools; unchecking a global server keeps it
-available through the on-demand catalog.
+For MCP cost questions, the assistant points to Assistant settings for checked
+servers and Project policy for Always loaded tools. Provider chats keep complete
+loaded schemas in a durable Core tools context through compaction, reconnect and
+restart. Each assembled request has one canonical definition per loaded tool;
+stateless providers still receive their required native declarations on every
+request. A directory entry or ranking suggestion is not a loaded schema.
+Unchecking a chat source can leave its already loaded definitions known while the
+source remains eligible on demand. Disabling or revoking the source removes its
+active definitions and execution permission; historical calls remain. Jev is
+optional, respects the existing project privacy opt-in, and ranks only eligible
+definitions absent at their current complete digest. Native harness tool loading
+keeps its existing behavior. Prompt-cache savings are not implied by persistence.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
 fast selection. An existing harness conversation may rebind to its advertised
 fast sibling while retaining the Core transcript.
+
+### Standing instructions and retained native sessions
+
+Current standing instructions are authoritative independently of a lossy summary.
+Core saves exact instruction and goal-skill snapshots. Supported stateful native
+channels retain unchanged instructions once per native context; reconnect and
+compaction preserve that channel. An instruction edit or removal starts a fresh
+native context when the adapter cannot replace its current instruction head,
+keeping the Core conversation and a bounded historical handoff. Core reports the
+change in the same chat. Unknown or unverified native instruction delivery fails
+visibly before a message is sent; it is not reported as delivered.
+
+Stateless provider requests continue carrying the current instructions on every
+request. Native harness processes still require their advertised protected memory
+runner; an unavailable runner or unverified installed vendor channel is a concrete
+capability limitation. Do not claim an installed vendor passed merely from an
+inert protocol fixture. A code rollback leaves projects needing these context
+capabilities on a compatible execution worker, while compatible API/UI updates
+and other projects may proceed.
+
+### Canonical host Settings and public web search
+
+The independent Core host owns shared Settings observations, session credentials
+and external setup effects. Butler's allowed Settings requests reach the same
+canonical host state as the browser. A pending durable receipt is not a saved or
+applied result; follow it and read back the authoritative value.
+
+Project policy's Web Search opt-in uses one host-managed service and the host's
+saved engines. Queries create no project-owned service or duplicate reservation.
+A memory-admission or readiness refusal remains visible; an explicit retry uses
+the same owner and never falls back to an unrestricted local launch. Image
+download/build remains unavailable without a verified daemon-side memory runner;
+inspect and use only a fully verified cached image in that environment.
 
 The focused test selection must cover the capability catalog, provider and
 harness tool paths, Core authorization and read-back, shell visibility, settings

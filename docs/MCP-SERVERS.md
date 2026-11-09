@@ -151,7 +151,9 @@ the file wins over the Tool approval chosen for the import.
 In a provider chat, the servers ticked under MCP servers in Assistant settings
 are always sent: every usable tool they offer is in the function list of every
 request. Every other enabled, probed server with at least one usable tool is
-available on demand. Their full schemas are not sent with the request. A
+available on demand. Unloaded tools contribute a schema-free directory; a
+successful load or preload adds their complete definitions to the conversation's
+durable tools context. A
 server that is disabled, has not been probed, or has no usable tool left is not
 offered and does not fail the turn. The on-demand servers join only a turn that
 already uses tools, such as a command-runtime chat or one with a ticked server,
@@ -161,7 +163,7 @@ on-demand catalog. Both paths retain project policy, data-transfer consent,
 tool approvals and narrowed child assignments. Notebook MCP requires explicit
 selection on both backends and is excluded from automatic discovery.
 
-The provider assistant receives a compact directory of every on-demand tool's name,
+The provider assistant receives a compact directory of each unloaded on-demand tool's name,
 server, and short purpose on each routing request. Nebula derives the purpose
 from the tool description supplied by the MCP server; an empty purpose means
 the server supplied none. The directory omits parameter schemas and lives in
@@ -179,17 +181,26 @@ Core runs the real tool behind `tool_catalog.call`, so its arguments are
 validated against the tool's own schema and its approval, risk, and scope rules
 apply unchanged. Transcripts, approvals, and tool cards show the real tool name.
 
-The full function list and directory stay stable across a turn, including a
-resumed turn. A later turn sees updated MCP descriptions or availability. A
-provider may cache the repeated prefix, but cache use depends on its route.
+Native function declarations remain stable for an admitted turn. Core records
+explicitly loaded definitions in immutable session-manifest revisions and restores
+the referenced context on resume. Each assembled request contains one canonical
+complete definition per loaded tool, outside summarizable transcript history.
+Compaction, reconnect and Core restart therefore preserve exact schemas. A later
+turn reconciles changed definitions or availability. Disabling or revoking a
+source removes active definitions and execution permission while preserving
+historical calls. Unchecking a chat source can retain known schemas when it is
+still eligible on demand. A provider may cache the repeated prefix, but persistence
+alone does not establish cache savings.
 
 Search runs on the Nebula host with the same local embedding model used for
 project documents (all-MiniLM-L6-v2 in the local Chroma index), combined with
 keyword matching. Nothing about the tools or the request leaves the machine for
 search. Until the model has been downloaded and loaded, search uses keyword
 matching only. Before each turn, the same search ranks the tools against the
-operator's latest message: a strong match has its schema included for that
-turn, and weaker matches are named as hints.
+operator's latest message: only current definitions absent from the conversation
+are candidates. A strong match loads its complete schema into durable context,
+and weaker matches are named as hints. A directory entry or hint never establishes
+that a schema was loaded. Native harness tool-loading behavior is unchanged.
 
 Loading on demand is on for every project. Set `on_demand_tools` to `false` on
 a project's scope (`PUT /api/v1/engagements/{id}/scope`) to turn it off: only
@@ -203,7 +214,9 @@ server names and descriptions, and tool names and descriptions — never tool
 output.
 
 Jev ranks two things in one call: the on-demand servers and their individual
-tools. Ticked servers are already loaded, so Jev is not asked about them. It is never asked whether the turn needs a tool at all; every question
+tools. Ticked servers are already loaded, so Jev is not asked about them. Deferred
+tools whose current complete definition is already present are also excluded.
+It is never asked whether the turn needs a tool at all; every question
 carries a "none of these" option instead. A server's rank weights the tools
 that come from it — the top-ranked server's tools keep their full score and
 the bottom-ranked server's tools keep half — and at most three tools survive:
@@ -213,7 +226,7 @@ question rated "none of these" higher is never preloaded, only hinted.
 
 Jev is asked once per turn, and a ranking is reused when the request that
 produced it recurs: the cache key covers the operator's message, the selected
-skills, the tool list and the source descriptions, so a retried turn or a
+skills, complete current tool-definition digests and the source descriptions, so a retried turn or a
 repeated question against an unchanged catalog costs nothing, while the next
 message, a new MCP server or a changed server description asks again. The cache
 holds the newest 64 rankings in the Core process, records nothing on disk, and

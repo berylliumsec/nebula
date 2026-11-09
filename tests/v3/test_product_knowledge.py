@@ -65,6 +65,39 @@ def test_product_search_explains_search_service_memory_and_daemon_dependency(
     assert any("memory-budget-settings" in item["text"] for item in matches)
 
 
+def test_product_help_explains_durable_provider_tool_context(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "loaded schemas compaction reconnect Core restart canonical definition"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "compaction" in text and "complete" in text and "restart" in text
+    matches = search_product_knowledge(
+        "Jev optional eligible absent current complete digest"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "jev" in text and "optional" in text and "digest" in text
+
+
+def test_product_help_explains_authoritative_native_instruction_versions(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "standing instructions authoritative native context compaction reconnect"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "authoritative" in text and "lossy summary" in text
+    assert "stateless" in text and "fresh" in text
+
+
+def test_product_help_finds_canonical_host_settings_and_search(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "canonical Core host Settings public web search saved engines pending receipt"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "canonical" in text and "pending" in text and "saved engines" in text
+
+
 def test_product_search_finds_core_performance_telemetry(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
