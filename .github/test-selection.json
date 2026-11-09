@@ -1,8 +1,8 @@
 {
-  "change_digest": "f0560c63834d522c82a15de6d8720aedbe1800e75b67d863f15d35f7760f72ed",
+  "change_digest": "ffe1dfc32c624866507de1fee7f5a1e3adb7182c4fe3e4da6394656c096ba9cf",
   "reviewed_by": "Codex",
-  "reason": "OpenAI Responses now sends the optional Daybreak Blue access program saved on an OpenAI provider. Four focused Python cases cover wire payload, profile validation, and bundled guidance; 22 selected frontend cases cover key entry, option persistence, provider status, and assistant discovery; eight real-Core production-browser cases exercise the Settings save/retry, reload, provider chat, key use, and outbound Responses payload on the permanent desktop and mobile profiles. The changed real-core.spec.ts is a shared test file, so its new exact case is selected through the reviewed openai-daybreak catalog area.",
-  "exclusions": "Native Rust is unchanged. Unrelated provider, harness, workspace, and broad interface suites are excluded. External OpenAI entitlement and a physical mobile device are outside synthetic acceptance; the live fixture verifies the request contract without sending a real key to OpenAI.",
+  "reason": "OpenAI Responses now sends the optional Daybreak Blue access program saved on an OpenAI provider. Four focused Python cases cover wire payload, profile validation, and bundled guidance; 22 selected frontend cases cover key entry, option persistence, provider status, and assistant discovery; eight real-Core production-browser cases exercise the Settings save/retry, reload, provider chat, key use, and outbound Responses payload on the permanent desktop and mobile profiles. The changed real-core.spec.ts is a shared test file, so its new exact case is selected through the reviewed openai-daybreak catalog area. A one-line comment classifies an expected malformed optional cgroup I/O sample for the existing diagnostic audit; it changes no host-load behavior.",
+  "exclusions": "Native Rust is unchanged. Unrelated provider, harness, workspace, host-load browser journeys, and broad interface suites are excluded; the host-load edit is a diagnostic classification comment only. External OpenAI entitlement and a physical mobile device are outside synthetic acceptance; the live fixture verifies the request contract without sending a real key to OpenAI.",
   "expected_tests": {
     "python": 4,
     "frontend": 22,
