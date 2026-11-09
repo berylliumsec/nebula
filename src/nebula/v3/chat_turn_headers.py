@@ -25,9 +25,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from .database import EntityRow
 from .domain import ChatSession, ChatTurn
@@ -266,6 +267,42 @@ async def engagement_turn_headers(
         for item in (await sessions_turn_headers(database, session_ids))
         if item.engagement_id == engagement_id
     ]
+
+
+async def pending_engagement_turn_headers(
+    database: AsyncSession, engagement_id: str, *, statuses: Sequence[str]
+) -> list[ChatTurnHeader]:
+    """Resolve only indexed pending candidates, including legacy unknowns.
+
+    Cold activity polls must not hydrate every historical turn while execution
+    fencing prevents the worker heartbeat from renewing its lease.
+    """
+    conversation = aliased(EntityRow)
+    versions = [
+        (row.id, row.revision, row.created_at)
+        for row in await database.execute(
+            select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
+            .join(conversation, conversation.id == EntityRow.chat_session_id)
+            .where(
+                EntityRow.kind == ChatTurn.entity_kind,
+                EntityRow.engagement_id == engagement_id,
+                conversation.kind == ChatSession.entity_kind,
+                conversation.engagement_id == engagement_id,
+                or_(
+                    EntityRow.chat_turn_status.is_(None),
+                    and_(
+                        EntityRow.chat_turn_status.in_(statuses),
+                        or_(
+                            EntityRow.chat_turn_status != "interrupted",
+                            EntityRow.chat_turn_recovery_visible.is_not(False),
+                        ),
+                    ),
+                ),
+            )
+            .order_by(EntityRow.created_at, EntityRow.id)
+        )
+    ]
+    return await _resolve(database, versions)
 
 
 async def turn_header(

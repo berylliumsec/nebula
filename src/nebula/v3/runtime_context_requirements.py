@@ -54,6 +54,7 @@ async def required_context_features(session, project_id: str) -> set[str]:
         .where(
             part.id == snapshot["snapshot_parts"]["model_request"].as_string(),
             part.kind == "chat_snapshot_parts",
+            part.engagement_id == project_id,
             part.engagement_id == turn.engagement_id,
             part.payload["session_id"].as_string()
             == turn.payload["session_id"].as_string(),

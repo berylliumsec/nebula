@@ -142,6 +142,37 @@ async def test_openai_responses_translates_flattened_tools_and_parses_calls():
     assert response.usage.total_tokens == 8
 
 
+def test_openai_responses_bounds_wire_metadata_without_changing_diagnostics():
+    provider = OpenAIResponsesProvider(_config(ProviderKind.OPENAI_RESPONSES))
+    full_limits = json.dumps({"diagnostics": "x" * 536})
+    original = {
+        "chat_session_id": "session-a",
+        "resolved_context_limits": full_limits,
+        "k" * 64: "v" * 512,
+        "k" * 65: "invalid key",
+        "too_long": "v" * 513,
+        **{f"extra_{i}": str(i) for i in range(20)},
+    }
+    request = ModelRequest(messages=[], instructions="Reply.", metadata=dict(original))
+
+    payload = provider._payload(request, "gpt-6-sol")
+
+    assert len(payload["metadata"]) == 16
+    assert payload["metadata"]["chat_session_id"] == "session-a"
+    assert payload["metadata"]["k" * 64] == "v" * 512
+    assert "resolved_context_limits" not in payload["metadata"]
+    assert "too_long" not in payload["metadata"]
+    assert "k" * 65 not in payload["metadata"]
+    assert request.metadata == original
+
+
+def test_openai_responses_omits_metadata_when_no_entries_fit():
+    provider = OpenAIResponsesProvider(_config(ProviderKind.OPENAI_RESPONSES))
+    request = ModelRequest(messages=[], instructions="Reply.", metadata={"limits": "x" * 513})
+
+    assert "metadata" not in provider._payload(request, "gpt-6-sol")
+
+
 async def test_openai_compatible_uses_chat_completions_shape():
     observed = {}
 

@@ -1572,6 +1572,11 @@ class DeploymentCoordinator:
             blockers = await self._recovery_blockers(
                 session, project_id, target_runtime_id
             )
+            # Context and checkpoint reads must not consume the new owner's
+            # lease before the recovery grant is committed.
+            now = await self.coordination._live_execution(
+                session, target_runtime_id, now
+            )
             owner.runtime_id, owner.fencing_token, owner.lease_expires_at_ms = (
                 target_runtime_id,
                 owner.fencing_token + 1,
