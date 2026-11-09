@@ -59,8 +59,28 @@ CARGO_HOME=/workspace/nebula-package-toolchain/cargo RUSTUP_HOME=/workspace/nebu
 PYTHONPATH=src NEBULA_TEST_FROZEN_CORE=/workspace/nebula-frozen-baseline/dist/nebula-core NEBULA_TEST_FROZEN_BUNDLE=/workspace/nebula-frozen-baseline/ui/src-tauri/resources/nebula-runtime /workspace/nebula/.venv/bin/python -m pytest -q tests/v3/test_frozen_core_runtime.py --basetemp=/workspace/nebula-frozen-evidence/baseline-557
 ```
 
-A distinct assembled candidate is still required for real code promotion and
-rollback evidence; the earlier failed artifacts are diagnostic evidence only.
+A distinct candidate at `66fdcac0` contains the assembled `ef6f8694` code, including
+the later global reads, Settings and API recovery changes. Its production UI and
+canonical dual freezer builds passed. A second actual frozen run passed once in
+54.80 seconds: working baseline startup and reconnect, verified candidate
+migration/preparation/promotion, candidate-era project creation, retained baseline
+code rollback, durable SQL and unchanged identity, then normal explicit shutdown.
+The exit check covered all four registered workers, including the draining
+candidate API. The synthetic data, retained copies and home were removed.
+
+The [promotion receipt](frozen-core-promotion-receipt.json) includes the unmodified
+driver fields and artifact provenance recorded afterward. The candidate manifest
+version and digest match the canonical build; the packaged runtime executable
+matches the retained executable byte for byte. Both candidate audits report zero
+forbidden members. This run used the same selected Python case with:
+
+```sh
+PYTHONPATH=src NEBULA_TEST_FROZEN_CORE=/workspace/nebula-frozen-baseline/dist/nebula-core NEBULA_TEST_FROZEN_BUNDLE=/workspace/nebula-frozen-baseline/ui/src-tauri/resources/nebula-runtime NEBULA_TEST_FROZEN_CANDIDATE=/workspace/nebula-frozen-final-core/ui/src-tauri/resources/nebula-runtime /workspace/nebula/.venv/bin/python -m pytest -q tests/v3/test_frozen_core_runtime.py --basetemp=/workspace/nebula-frozen-evidence/promotion-66
+```
+
+These are genuine distinct code artifacts; the earlier failed artifacts remain
+diagnostic evidence only. Settings UI behavior across an older retained host is
+outside this Core-only receipt.
 
 The frozen driver records registered worker PID/birth identities and verifies
 that they are gone after normal explicit shutdown. A native installed GUI, its

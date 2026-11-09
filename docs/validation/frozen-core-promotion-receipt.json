@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "result": "passed",
+  "surface": "frozen Core; no installed GUI",
+  "startup_configuration": "clean_sqlite",
+  "core_sha256": "97cc4c3e35fb722cd7fe1a901c283eb3514dcb6d436f236e4d21a64d959af1b6",
+  "archive_audit": {
+    "status": "ok",
+    "member_count": 11834,
+    "forbidden_member_count": 0,
+    "artifact": "/workspace/nebula-frozen-baseline/dist/nebula-core",
+    "size_bytes": 196725136
+  },
+  "runtime_archive_audit": {
+    "status": "ok",
+    "member_count": 11835,
+    "forbidden_member_count": 0,
+    "artifact": "/workspace/nebula-frozen-baseline/ui/src-tauri/resources/nebula-runtime/bin",
+    "runtime_executable": "nebula-core",
+    "file_count": 8091,
+    "size_bytes": 569048772,
+    "format": "pyinstaller-onedir"
+  },
+  "runtime_executable_sha256": "f16b29ef0457c8326b93fa032b8125151db7234220cc4cf96e37515c57ace1cf",
+  "manifest_sha256": "1b1e296d11873480b0c6fa33b2ba9d0fb70901b524ab9ad6a4a64a5a2432c851",
+  "baseline_version": "3.0.0-beta.3+3583bd1fbb6ed666",
+  "candidate_version": "3.0.0-beta.3+53606eec46a0d651",
+  "identity": {
+    "core_id": "9efa0adb-dde5-4221-aee4-cfd545b622c0",
+    "principal_id": "operator"
+  },
+  "runtime_processes": [
+    {
+      "runtime_id": "e82ff1d5-6285-4f36-9658-3ae162c5c379",
+      "role": "api",
+      "pid": 136882,
+      "process_birth": "linux:f5b0a3ca-0861-4981-9972-7b6213f7a92c:6232730",
+      "state_before_shutdown": "retired"
+    },
+    {
+      "runtime_id": "fd966910-c521-4799-b79f-51447ee7abc6",
+      "role": "execution",
+      "pid": 136977,
+      "process_birth": "linux:f5b0a3ca-0861-4981-9972-7b6213f7a92c:6233732",
+      "state_before_shutdown": "retired"
+    },
+    {
+      "runtime_id": "2b44d752-7f32-44dd-b9fc-f4ff0cdf8708",
+      "role": "api",
+      "pid": 137005,
+      "process_birth": "linux:f5b0a3ca-0861-4981-9972-7b6213f7a92c:6234615",
+      "state_before_shutdown": "draining"
+    },
+    {
+      "runtime_id": "54412839-249a-4fe5-b0e8-c6db2dece15f",
+      "role": "api",
+      "pid": 137065,
+      "process_birth": "linux:f5b0a3ca-0861-4981-9972-7b6213f7a92c:6235161",
+      "state_before_shutdown": "ready"
+    }
+  ],
+  "checks": [
+    "authenticated stable listener and API role ready",
+    "connector exit/reconnect preserves endpoint, credential and principal",
+    "packaged execution-role startup, private IPC and retirement",
+    "candidate promotion and retained code rollback preserve SQL and identity",
+    "explicit shutdown observes service exit after durable success"
+  ],
+  "artifact_provenance": {
+    "recorded_after_run": true,
+    "baseline_source_commit": "557ffd7d316a272283ed7064496d38baadb69ffe",
+    "candidate_core_sha256": "d2950612f3aa99e16eec103dddcee81bb954d51916c45edbd2445b01823e8973",
+    "candidate_runtime_executable_sha256": "f09f916564c67eab3580787889315fe6d4b19ba5b674b3ca7d850293539a9169",
+    "candidate_manifest_sha256": "852c389096b712d350c0796aa205ecb1cc80a30ec7f17353aa8e978bdf9ac3df",
+    "candidate_canonical_build": {
+      "artifact": "/workspace/nebula-frozen-final-core/ui/src-tauri/binaries/nebula-core-x86_64-unknown-linux-gnu",
+      "audit": {
+        "artifact": "/workspace/nebula-frozen-final-core/dist/nebula-core",
+        "forbidden_member_count": 0,
+        "member_count": 11840,
+        "size_bytes": 196770088,
+        "status": "ok"
+      },
+      "build": {
+        "build_timestamp": "2026-11-09T13:34:47.949187Z",
+        "commit": "66fdcac0cebc2aafd2b2b767dbc0be2d80964bf3",
+        "distribution_channel": "qa",
+        "target": "x86_64-unknown-linux-gnu",
+        "version": "3.0.0-beta.3"
+      },
+      "manifest_sha256": "852c389096b712d350c0796aa205ecb1cc80a30ec7f17353aa8e978bdf9ac3df",
+      "runtime_artifact": "/workspace/nebula-frozen-final-core/dist/nebula-runtime",
+      "runtime_audit": {
+        "artifact": "/workspace/nebula-frozen-final-core/dist/nebula-runtime",
+        "file_count": 8091,
+        "forbidden_member_count": 0,
+        "format": "pyinstaller-onedir",
+        "member_count": 11841,
+        "runtime_executable": "nebula-runtime",
+        "size_bytes": 569094021,
+        "status": "ok"
+      },
+      "runtime_bundle": "/workspace/nebula-frozen-final-core/ui/src-tauri/resources/nebula-runtime",
+      "runtime_version": "3.0.0-beta.3+53606eec46a0d651",
+      "third_party_distributions": 830
+    }
+  }
+}
