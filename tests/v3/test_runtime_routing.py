@@ -1,5 +1,8 @@
+import asyncio
 import json
 
+from fastapi import FastAPI
+import httpx
 import pytest
 
 from nebula.v3.database import DeploymentHostRow, RuntimeProcessRow, RuntimeResourceRow
@@ -8,9 +11,11 @@ from nebula.v3.domain import ChatSession
 from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS
 from nebula.v3.runtime_delivery import HttpIntent
 from nebula.v3.runtime_ipc import RuntimeIpcError
+from nebula.v3.runtime_http import PrivateRuntimeHttp, RuntimeHttpProxy
 from nebula.v3.runtime_routing import RuntimeRouting
 from tests.v3.test_runtime_coordination import cluster as cluster
 from tests.v3.test_runtime_coordination import location as location
+from tests.v3.test_runtime_http import server
 
 pytestmark = pytest.mark.anyio
 
@@ -196,3 +201,65 @@ async def test_reference_scanning_is_bounded_and_invalid_json_never_routes(
     )
     with pytest.raises(CoordinationConflict, match="Invalid JSON"):
         await routing.project_for(malformed)
+
+
+async def test_promoted_api_controls_cross_first_hop_when_all_view_connections_are_busy(
+    cluster, tmp_path
+):
+    (first, _), _, _clock = cluster
+    routing = RuntimeRouting(first, tmp_path / "private")
+    await first.register_runtime("api", "synthetic", role="api")
+    key = await registered(routing, "api", "api")
+    application = FastAPI()
+    entered, release = asyncio.Event(), asyncio.Event()
+    count = 0
+
+    @application.get("/held")
+    async def held():
+        nonlocal count
+        count += 1
+        if count == 64:
+            entered.set()
+        await release.wait()
+        return {"released": True}
+
+    @application.post("/api/v1/chat/turns/synthetic/cancel")
+    async def stop():
+        return {"control": "accepted"}
+
+    gate = PrivateRuntimeHttp(application, key)
+    async with server(gate) as endpoint:
+        async with first.database.session() as session:
+            row = await session.get(RuntimeProcessRow, "api")
+            row.endpoint = endpoint
+            session.add(
+                DeploymentHostRow(
+                    key="host", revision=1, api_runtime_id="api", detail="Synthetic API"
+                )
+            )
+        proxy = RuntimeHttpProxy(routing.api_upstream)
+        requests = []
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy),
+                base_url="http://stable-listener",
+            ) as client:
+                requests = [asyncio.create_task(client.get("/held")) for _ in range(64)]
+                await asyncio.wait_for(entered.wait(), 10)
+                response = await asyncio.wait_for(
+                    client.post("/api/v1/chat/turns/synthetic/cancel"), 2
+                )
+                assert response.status_code == 200 and response.json() == {
+                    "control": "accepted"
+                }
+                assert len(gate.seen["control"]) == 1
+                release.set()
+                assert all(
+                    response.status_code == 200
+                    for response in await asyncio.gather(*requests)
+                )
+        finally:
+            release.set()
+            if requests:
+                await asyncio.gather(*requests, return_exceptions=True)
+            await proxy.close()

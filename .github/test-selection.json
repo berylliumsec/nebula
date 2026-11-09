@@ -1,17 +1,16 @@
 {
-  "change_digest": "2584313f92acd882c9d45ece456830154278631a35a2ad6c1e86f0ab8f7c54de",
+  "change_digest": "7a0a998ff126d839d7b6d48b0c0190e2d7b03f957f1b1a36430cbdf5dbab7c0f",
   "reviewed_by": "Codex",
-  "reason": "Four collected real API OS-process cases across SQLite/disposable PostgreSQL. Retained synthetic launch scripts enter the production worker lifecycle/API factory, validate bound incarnation and retained hashes, require both private transport and public bearer auth, promote a ready replacement while the old API stays alive, prevent retirement of the promoted API, and retire only after promotion. Prior16 routing/retirement reruns passed in12.48s; avoid repetition. All four passed in10.82s. Added consolidated local evidence report; source remained unchanged after these passing cases.",
-  "exclusions": "No full suite, existing installation, operational provider/service, SSH or deployment. ASGI mutations are inert synthetic fixtures; this validates delivery boundaries, not complete role/CLI wiring or packaged desktop continuity. No frontend change in this step.",
+  "reason": "Two collected rollback cases repeat only because the scenario now commits a project edit under APIv2 and verifies it remains after routing back to retained APIv1. This directly guards against restoring a pre-deployment SQL snapshot. The other24 stable-listener/control cases already passed; all26 passed in25.90s before this added assertion. Fixture now exposes its already-owned store; no product source changed after the26 passing cases. Both passed in9.94s. Added the local stable-listener evidence report after source validation.",
+  "exclusions": "No full suite, existing installation, operational service/provider, SSH or deployment. Worker fixtures import repository code and serve inert retained HTML; no immutable packaged dependency or desktop continuity claim. Execution factory, shared host services, production memory admission and compatibility-launcher wiring remain pending. No frontend change in this step.",
   "expected_tests": {
-    "python": 4,
+    "python": 2,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_processes.py::test_real_api_role_requires_both_private_channel_and_public_auth",
-    "tests/v3/test_runtime_processes.py::test_real_api_promotion_keeps_old_worker_until_replacement_is_ready"
+    "tests/v3/test_supervisor.py::test_one_listener_routes_static_builds_through_api_promotion_and_code_rollback"
   ],
   "frontend": [],
   "native": [],

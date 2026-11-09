@@ -162,6 +162,7 @@ async def managed(location, tmp_path):
             stage=stage,
             new_host=new_host,
             database=database,
+            store=store,
         )
     finally:
         async with database.session() as session:

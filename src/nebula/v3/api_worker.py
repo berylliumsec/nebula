@@ -13,7 +13,6 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import re
-from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials
@@ -27,19 +26,10 @@ from .runtime_coordination import CoordinationConflict
 from .runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, RuntimeDelivery
 from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
+from .runtime_routes import command_lane
 from .storage import NebulaStore, NotFoundError
 
 _PAIRING = {"/api/v1/auth/pairings", "/api/v1/auth/pairings/redeem"}
-_CONTROL = re.compile(
-    r"^/api/v1/(?:approvals/[^/]+/decision|chat/turns/[^/]+/cancel|"
-    r"auth/devices/[^/]+|harness-interactions/[^/]+/decision|"
-    r"harness-turns/[^/]+/steer|runs/[^/]+/steer|"
-    r"browser-companion/[^/]+/actions/[^/]+|"
-    r"browser-actions/[^/]+/decision|browser-intercepts/[^/]+/decision|"
-    r"chat/sessions/[^/]+/subagents(?:/[^/]+)?/stop|"
-    r"harness-turns/[^/]+(?:/tasks/[^/]+)?/stop|"
-    r"runs/[^/]+(?:/browser-automation)?/stop|executions/[^/]+/cancel)$"
-)
 
 
 class _Forward(Response):
@@ -311,9 +301,7 @@ def create_api_worker(
             raise HTTPException(
                 422, "The request cannot be represented as a bounded durable command"
             ) from None
-        lane: Literal["work", "control"] = (
-            "control" if _CONTROL.fullmatch(intent.path) else "work"
-        )
+        lane = command_lane(intent.path)
         receipt = await delivery.accept(
             intent,
             project_id=await project_for(intent),

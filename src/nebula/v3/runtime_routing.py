@@ -22,6 +22,7 @@ from .runtime_coordination import CoordinationConflict, RuntimeCoordination
 from .runtime_delivery import HttpIntent
 from .runtime_http import HttpUpstream
 from .runtime_ipc import RuntimeCredentials, RuntimeIpcError
+from .runtime_routes import forwarding_lane
 
 
 def _references(path: str, query: bytes, payload) -> tuple[set[str], set[str]]:
@@ -162,16 +163,15 @@ class RuntimeRouting:
             now = await self.coordination._clock_ms(session)
             if owner is None or owner.lease_expires_at_ms <= now:
                 raise RuntimeIpcError("The project has no live execution owner")
-            lane: Literal["read", "control"] = (
-                "read"
-                if scope.get("method", "GET") in {"GET", "HEAD", "OPTIONS"}
-                else "control"
-            )
+            lane = forwarding_lane(scope)
             return await self._target(session, owner.runtime_id, "execution", lane)
 
-    async def api_upstream(self, _scope: dict) -> HttpUpstream:
+    async def api_upstream(self, scope: dict) -> HttpUpstream:
         async with self.coordination.database.session() as session:
             host = await session.get(DeploymentHostRow, "host")
             return await self._target(
-                session, host.api_runtime_id if host else None, "api", "read"
+                session,
+                host.api_runtime_id if host else None,
+                "api",
+                forwarding_lane(scope),
             )

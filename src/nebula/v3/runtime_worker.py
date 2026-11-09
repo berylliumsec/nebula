@@ -168,7 +168,22 @@ async def run_worker(
                 if scope["type"] == "http" and scope["path"] == RPC_PATH:
                     await rpc.app(scope, receive, send)
                 else:
-                    await private(scope, receive, send)
+
+                    async def identified(message):
+                        if message["type"] == "http.response.start":
+                            message = {
+                                **message,
+                                "headers": [
+                                    *message.get("headers", []),
+                                    (
+                                        b"x-nebula-api-version",
+                                        bootstrap.identity.version.encode(),
+                                    ),
+                                ],
+                            }
+                        await send(message)
+
+                    await private(scope, receive, identified)
 
             server = uvicorn.Server(
                 uvicorn.Config(
