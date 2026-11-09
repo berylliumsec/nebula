@@ -20,6 +20,7 @@ from .knowledge_index import KnowledgeIndexError
 from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity
 from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
+from .runtime_memory_recovery import HostMemoryRecovery
 from .shared_butler_memory import SharedButlerMemory
 from .shared_memory_rpc import register_shared_memory
 from .shared_memory_import import CompatibilityMemoryImport
@@ -46,7 +47,15 @@ class _HostServer(uvicorn.Server):
 
 
 class HostSharedServices:
-    def __init__(self, host, *, knowledge_index=None, capacity_limits=None):
+    def __init__(
+        self,
+        host,
+        *,
+        knowledge_index=None,
+        capacity_limits=None,
+        memory_budgets=None,
+        cleanup_runner_factory=None,
+    ):
         self.host = host
         self.coordination = host.coordinator.coordination
         self.memory = SharedButlerMemory(
@@ -55,6 +64,9 @@ class HostSharedServices:
             embedding_index=knowledge_index,
         )
         self.capacity = RuntimeCapacity(self.coordination)
+        self.recovery = HostMemoryRecovery(
+            host, budgets=memory_budgets, runner_factory=cleanup_runner_factory
+        )
         self.knowledge = (
             SharedKnowledge(host, knowledge_index)
             if knowledge_index is not None
@@ -249,6 +261,7 @@ class HostSharedServices:
                     )
         if self.closed or self.host.closed:
             raise RuntimeError("Shared-service startup was detached")
+        await self.recovery.start()
         self.endpoint = "unix://" + str(path)
         self.server = _HostServer(
             uvicorn.Config(
@@ -274,6 +287,7 @@ class HostSharedServices:
         self._socket_identity = (details.st_dev, details.st_ino)
 
     async def _stop_owned(self):
+        await self.recovery.close()
         if self.server is not None:
             self.server.should_exit = True
         try:

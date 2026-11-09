@@ -89,7 +89,12 @@ class RuntimeSupervisor:
         if not operator_token:
             raise ValueError("supervisor requires normal Core authentication")
         self.host, self.coordinator = host, host.coordinator
-        self.shared_services = shared_services or HostSharedServices(host)
+        self.shared_services = shared_services or HostSharedServices(
+            host,
+            memory_budgets=worker_admission.budgets
+            if isinstance(worker_admission, RuntimeMemoryAdmission)
+            else None,
+        )
         if self.shared_services.host is not host:
             raise ValueError("Shared services must use this supervisor's process host")
         self.store = NebulaStore(self.coordinator.database)

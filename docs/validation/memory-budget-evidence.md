@@ -158,3 +158,11 @@ Linux PID namespace and the original Docker daemon ID. Hidden/foreign namespaces
 Podman without a certified agent, changed/unreachable runners and unacknowledged
 creation stay unknown and charged. Deployment, desktop and code-rollback gates
 remain part of the continuing architecture implementation.
+
+## Host lifecycle integration
+
+The versioned supervisor now owns lost-controller reconciliation independently of
+execution workers. [Host-owned recovery evidence](host-memory-recovery.md)
+records the real 32 MiB controller-crash cleanup, immutable runner checks,
+close/drain barrier and 50 focused passing cases. This does not change the
+remaining platform-enforcement or full desktop-continuity acceptance limits.

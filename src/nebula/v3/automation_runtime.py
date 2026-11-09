@@ -49,7 +49,6 @@ from .domain import (
     CommandExecutionStatus,
     Engagement,
     RiskClass,
-    RunnerIsolation,
     RunnerProfile as StoredRunnerProfile,
     ScopePolicy,
     VpnProfile,
@@ -60,13 +59,9 @@ from .domain import (
 from .redaction import redact_text
 from .sandbox import (
     ContainerEgressController,
-    ContainerRuntimeType,
     ContainerSandboxRunner,
     EgressLease,
     EgressRule,
-    RunnerIsolationMode,
-    RunnerPlatform,
-    RunnerProfile,
     SandboxContainerUser,
     SandboxExecutionKind,
     SandboxLimits,
@@ -2279,34 +2274,9 @@ class AutomationRuntimeManager:
         helper_image: str | None = None,
         workspace: Path | None = None,
     ) -> ContainerSandboxRunner:
-        platform = (
-            RunnerPlatform.LINUX
-            if stored.isolation == RunnerIsolation.ROOTLESS
-            else RunnerPlatform.MACOS
-        )
-        if stored.isolation == RunnerIsolation.ROOTLESS:
-            isolation = RunnerIsolationMode.LINUX_ROOTLESS
-            machine = None
-        elif stored.isolation == RunnerIsolation.PODMAN_MACHINE:
-            isolation = RunnerIsolationMode.PODMAN_MACHINE
-            machine = stored.context or "podman-machine-default"
-        else:
-            isolation = RunnerIsolationMode.DOCKER_DESKTOP_VM
-            machine = None
-        profile = RunnerProfile(
-            runtime_type=ContainerRuntimeType(stored.runtime.value),
-            executable=Path(stored.executable),
-            platform=platform,
-            isolation_mode=isolation,
-            context=stored.context,
-            socket=stored.socket
-            if stored.isolation == RunnerIsolation.ROOTLESS
-            else None,
-            machine_name=machine,
-            seccomp_profile=Path(stored.seccomp_profile)
-            if stored.seccomp_profile
-            else None,
-        )
+        from .runner_profiles import container_runner_profile
+
+        profile = container_runner_profile(stored)
         workspace_roots = [self.data_root]
         if workspace is not None:
             resolved_workspace = workspace.expanduser().resolve(strict=True)

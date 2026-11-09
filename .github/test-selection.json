@@ -1,21 +1,17 @@
 {
-  "change_digest": "54c3808b601bfbfccbc6a93327410480597c0dcf87a0f9be3eb7a0d542228de6",
+  "change_digest": "0492bfeccc6605ef9027ee7203c2ae07f88eee20a488268cacaeebc474587d14",
   "reviewed_by": "Codex",
-  "reason": "36 distinct passing cases collected as final CI union. Initial20pass14.19s; cursor/process24:22pass2fixture failures; corrected actual-process2pass20.93s; resume/close14pass29.15s; prestart stop/legacy4pass4.21s. Every final case passed in a focused run; unchanged passing cases not repeated. Actual kernel producer survives API promotion/retirement and reconnect with durable cursor on SQLite/PostgreSQL. Independent causal validators checked fixture delta identity, producer type invariant, old-segment replay/prefix import, close ordering and pre-first-step stop before repairs. Ruff and targeted mypy passed. Evidence-only notes added after source validation.",
-  "exclusions": "No full suite, live provider/harness/service, existing installation, deployment, model download, browser, SSH or compute workload. Inert local model fixtures, disposable SQL, retained source wrappers and private Unix listeners only. No visible controls changed; final production LAN/mobile WebKit and packaged desktop gates remain pending. Accepted-turn detachment and complete project handoff remain separate integration stages.",
+  "reason": "50 distinct passing cases collected for final CI union:16 new SQLite/PostgreSQL authority/drain cases,3 shared profile-conversion cases,1 actual32MiB OCI/controller-SIGKILL automatic host cleanup case,30 affected private host service cases. Initial50 yielded49pass1fixture failure56s; corrected exactPodman case passed1.32s after independent validation identified invalid Docker executable input before conversion. No product repair or unrelated rerun. Host releases only after immutable group/helper proof, retains live/unknown/drifted work and joins cleanup before host lock release. Ruff and targeted mypy passed. Evidence docs added after validated source.",
+  "exclusions": "No full suite, live service/provider/harness, existing installation, deployment, SSH, model download or benchmark. Synthetic SQL and explicit disposable Docker daemon only; actual allocator4MiB under32MiB group uses cached digest-pinned postgres fixture image. Kernel adapter certifies only this fixture, not production rootless support. Existing mobile WebKit and packaged desktop acceptance remain unavailable/pending.",
   "expected_tests": {
-    "python": 36,
+    "python": 50,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_chat_stream.py",
-    "tests/v3/test_chat_stream_follow.py::test_a_cursor_from_another_runtime_replays_this_runtime_from_its_first_frame",
-    "tests/v3/test_chat_stream_follow.py::test_a_reconnecting_viewer_receives_the_retained_pause_frame",
-    "tests/v3/test_execution_worker_process.py::test_api_promotion_reconnects_durable_chat_without_restarting_producer",
-    "tests/v3/test_chat_api.py::test_stopping_provider_chat_cancels_the_core_owned_turn",
-    "tests/v3/test_chat_api.py::test_stopping_provider_chat_ends_followers_with_a_cancelled_event"
+    "tests/v3/test_runtime_memory_recovery.py",
+    "tests/v3/test_runtime_host_services.py"
   ],
   "frontend": [],
   "native": [],
