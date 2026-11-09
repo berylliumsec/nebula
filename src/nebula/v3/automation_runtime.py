@@ -49,7 +49,6 @@ from .domain import (
     CommandExecutionStatus,
     Engagement,
     RiskClass,
-    RunnerIsolation,
     RunnerProfile as StoredRunnerProfile,
     ScopePolicy,
     VpnProfile,
@@ -60,13 +59,9 @@ from .domain import (
 from .redaction import redact_text
 from .sandbox import (
     ContainerEgressController,
-    ContainerRuntimeType,
     ContainerSandboxRunner,
     EgressLease,
     EgressRule,
-    RunnerIsolationMode,
-    RunnerPlatform,
-    RunnerProfile,
     SandboxContainerUser,
     SandboxExecutionKind,
     SandboxLimits,
@@ -298,6 +293,7 @@ class SessionLaunch:
     image: str
     workspace: Path
     limits: SandboxLimits
+    project_id: str | None = None
     egress_rules: tuple[EgressRule, ...] = ()
     egress_domains: tuple[str, ...] = ()
     egress_ports: tuple[int, ...] = ()
@@ -522,6 +518,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         self.runner = runner
         self.container_name = container_name
         self.lease = lease
+        self.memory_job = None
         self._closed = False
 
     @staticmethod
@@ -576,6 +573,29 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         )
         workspace = launch.runner._validate(request)
         container_name = cls.name_for_session(launch.session_id)
+        if launch.runner.memory_compute is not None:
+            if launch.project_id is None:
+                raise AutomationRuntimeUnavailable(
+                    "Managed sessions require a durable project identity"
+                )
+            memory_job = await launch.runner.memory_compute.open_persistent(
+                launch.runner,
+                request,
+                job_id="session-" + launch.session_id,
+                project_id=launch.project_id,
+                resource_kind="automation_session",
+                resource_id=launch.session_id,
+                container_name=container_name,
+                loopback_only=launch.loopback_only,
+                vpn_config=launch.vpn_config,
+            )
+            result = cls(
+                runner=launch.runner,
+                container_name=container_name,
+                lease=memory_job.guard.egress_lease,
+            )
+            result.memory_job = memory_job
+            return result
         lease: EgressLease | None = None
         if has_boundary:
             if not launch.runner.egress_controller.certified:
@@ -684,6 +704,10 @@ class ContainerRuntimeSession(RuntimeBackendSession):
     ) -> RuntimeBackendProcess:
         if self._closed:
             raise AutomationRuntimeUnavailable("automation session is closed")
+        if self.memory_job is not None and self.memory_job.task.done():
+            raise AutomationRuntimeUnavailable(
+                "This worker ended. Inspect its memory outcome and retry explicitly after changing the budget or workload."
+            )
         wrapped = command
         if extra_env:
             exports = "; ".join(
@@ -763,6 +787,10 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         if self._closed:
             return
         self._closed = True
+        if self.memory_job is not None:
+            await self.memory_job.close()
+            self.lease = None
+            return
         try:
             await self.runner._force_remove(self.container_name)
         finally:
@@ -891,6 +919,12 @@ class AutomationRuntimeManager:
         self.store = store
         self.artifact_store = artifact_store
         self.data_root = Path(data_root).expanduser().resolve()
+        from .memory_budget import MemoryBudgetService
+        from .memory_runtime import MemoryComputeController
+
+        self.memory_compute = MemoryComputeController(
+            MemoryBudgetService(store.database), self.data_root
+        )
         self.workspace_resolver = workspace_resolver
         self.runtime_image = runtime_image or ""
         self.runtime_digest = runtime_image.rsplit("@", 1)[1] if runtime_image else ""
@@ -1231,9 +1265,10 @@ class AutomationRuntimeManager:
                     "enable project networking before selecting a VPN profile"
                 )
             vpn = await self.store.get(VpnProfile, vpn_profile_id)
-            if (
-                self.credential_store is None
-                or not self.credential_store.status(vpn.secret_ref).available
+            from .runtime_credential_access import credential_available_async
+
+            if self.credential_store is None or not await credential_available_async(
+                self.credential_store, vpn.secret_ref, purpose="vpn", profile_id=vpn.id
             ):
                 raise AutomationRuntimeUnavailable(
                     "selected VPN profile is unavailable"
@@ -1989,6 +2024,13 @@ class AutomationRuntimeManager:
             engagement = await self.store.get(Engagement, engagement_id)
             policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
+                await self.memory_compute.reject_unsupported(
+                    "local",
+                    project_id=engagement_id,
+                    resource_kind="host_command_session",
+                    resource_id=owner_id,
+                    detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
+                )
                 if not policy.host_access_acknowledged:
                     raise AutomationPolicyDenied(
                         "Host access has not been acknowledged"
@@ -2091,8 +2133,15 @@ class AutomationRuntimeManager:
                         "VPN secret storage is unavailable"
                     )
                 vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
-                vpn_config = self.credential_store.resolve(
-                    vpn.secret_ref
+                from .runtime_credential_access import resolve_credential_async
+
+                vpn_config = (
+                    await resolve_credential_async(
+                        self.credential_store,
+                        vpn.secret_ref,
+                        purpose="vpn",
+                        profile_id=vpn.id,
+                    )
                 ).get_secret_value()
             has_network_boundary = bool(rules or domains)
             session = AutomationSession(
@@ -2136,6 +2185,7 @@ class AutomationRuntimeManager:
                 backend = await self.session_factory(
                     SessionLaunch(
                         session_id=session.id,
+                        project_id=engagement_id,
                         runner=self._runner(profile, workspace=workspace),
                         image=self.runtime_image,
                         workspace=workspace,
@@ -2232,34 +2282,9 @@ class AutomationRuntimeManager:
         helper_image: str | None = None,
         workspace: Path | None = None,
     ) -> ContainerSandboxRunner:
-        platform = (
-            RunnerPlatform.LINUX
-            if stored.isolation == RunnerIsolation.ROOTLESS
-            else RunnerPlatform.MACOS
-        )
-        if stored.isolation == RunnerIsolation.ROOTLESS:
-            isolation = RunnerIsolationMode.LINUX_ROOTLESS
-            machine = None
-        elif stored.isolation == RunnerIsolation.PODMAN_MACHINE:
-            isolation = RunnerIsolationMode.PODMAN_MACHINE
-            machine = stored.context or "podman-machine-default"
-        else:
-            isolation = RunnerIsolationMode.DOCKER_DESKTOP_VM
-            machine = None
-        profile = RunnerProfile(
-            runtime_type=ContainerRuntimeType(stored.runtime.value),
-            executable=Path(stored.executable),
-            platform=platform,
-            isolation_mode=isolation,
-            context=stored.context,
-            socket=stored.socket
-            if stored.isolation == RunnerIsolation.ROOTLESS
-            else None,
-            machine_name=machine,
-            seccomp_profile=Path(stored.seccomp_profile)
-            if stored.seccomp_profile
-            else None,
-        )
+        from .runner_profiles import container_runner_profile
+
+        profile = container_runner_profile(stored)
         workspace_roots = [self.data_root]
         if workspace is not None:
             resolved_workspace = workspace.expanduser().resolve(strict=True)
@@ -2275,6 +2300,8 @@ class AutomationRuntimeManager:
                 helper_image=helper_image or self.runtime_image
             ),
             workspace_roots=workspace_roots,
+            memory_compute=self.memory_compute,
+            memory_profile_id=stored.id,
         )
 
     @staticmethod

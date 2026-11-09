@@ -14,7 +14,7 @@ export interface ApiRuntime {
 interface BackendSession {
   endpoint: string;
   token: string;
-  protocol: "nebula-sidecar-v1" | "nebula-remote-core-v1";
+  protocol: "nebula-desktop-runtime-v1" | "nebula-remote-core-v1";
   source?: "local" | "remote";
 }
 
@@ -183,4 +183,18 @@ export async function resolveApiRuntime(): Promise<ApiRuntime> {
     mode: "browser",
     state: "ready",
   };
+}
+
+/** Explicit operator action; closing the viewer never calls this. */
+export async function shutdownLocalRuntime(): Promise<void> {
+  const electron = electronDesktop();
+  if (electron) {
+    await electron.shutdownCore();
+    return;
+  }
+  if (isTauriRuntime()) {
+    await invoke<void>("stop_local_backend");
+    return;
+  }
+  throw new Error("Local Core shutdown is available in the native desktop.");
 }

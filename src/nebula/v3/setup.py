@@ -214,6 +214,7 @@ class ImagePreparationRequest(NebulaModel):
 
 
 class ImagePreparationCancellationRequest(NebulaModel):
+    project_id: str | None = Field(default=None, min_length=1, max_length=200)
     operation_id: str = Field(
         pattern=(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
@@ -668,9 +669,50 @@ class SetupService:
 
     async def status(self) -> SetupStatus:
         (await self.start())
-        # The snapshot reads persisted profiles. A busy database must not hold
-        # the HTTP event loop while the UI checks health or setup status.
+        # Provider profiles are persisted; terminal/image state belongs to this
+        # owner. Async SQL must not block the UI's health or setup polling.
         return await self._snapshot()
+
+    async def reconcile_configured_runner(self) -> SetupStatus:
+        """Recover an unresolved Project from the host's saved runner observation."""
+        await self.start()
+
+        def eligible():
+            refresh = self._refresh_task
+            return (
+                self.tool_platform is not None
+                and self.tool_platform.execution_enabled
+                and self._terminal.status
+                in {
+                    TerminalSetupState.NEEDS_RUNNER,
+                    TerminalSetupState.ERROR,
+                }
+                and self._image_preparation.operation_id is None
+                and not self._preparation_running()
+                and (refresh is None or refresh.done())
+            )
+
+        if not eligible() or self._refresh_lock.locked():
+            return await self._snapshot()
+        async with self._refresh_lock:
+            if not eligible():
+                return await self._snapshot()
+            profiles = [
+                profile
+                async for profile in self.store.iter_readable_entities(
+                    StoredRunnerProfile
+                )
+            ]
+            # Preparing an image does not take the detection lock. Recheck
+            # after SQL so its newly assigned identity/progress cannot be lost.
+            if not eligible():
+                return await self._snapshot()
+            candidates = [self._configured_candidate(profile) for profile in profiles]
+            terminal = self._resolve_candidates(candidates)
+            if terminal.runner_profile_id is not None:
+                self._set_terminal(terminal)
+                await self._emit(SetupEventReason.RUNNER_SELECTED)
+            return await self._snapshot()
 
     async def refresh(self) -> SetupStatus:
         if self.tool_platform is None or not self.tool_platform.execution_enabled:
@@ -932,7 +974,10 @@ class SetupService:
     ) -> SetupControlResponse:
         async with self._preparation_lock:
             current = self._image_preparation
-            if current.operation_id != request.operation_id:
+            if current.operation_id != request.operation_id or (
+                request.project_id is not None
+                and current.project_id != request.project_id
+            ):
                 raise SetupServiceError(
                     "image_preparation_not_found",
                     "the image-preparation operation does not exist",
@@ -1392,18 +1437,23 @@ class SetupService:
                         stage="setup",
                     )
                     refreshed = await self.store.get(StoredRunnerProfile, profile.id)
+        return self._configured_candidate(refreshed, detail=detail)
+
+    def _configured_candidate(
+        self, profile: StoredRunnerProfile, *, detail: str | None = None
+    ) -> RunnerCandidate:
         return RunnerCandidate(
-            candidate_id=self._candidate_id_for_executable(refreshed.executable),
-            runner_profile_id=refreshed.id,
+            candidate_id=self._candidate_id_for_executable(profile.executable),
+            runner_profile_id=profile.id,
             source=RunnerCandidateSource.CONFIGURED,
-            name=refreshed.name,
-            runtime=refreshed.runtime,
-            executable=refreshed.executable,
-            context=refreshed.context,
-            platform=cast(Literal["linux/amd64", "linux/arm64"], refreshed.platform),
-            isolation=refreshed.isolation,
-            healthy=bool(refreshed.enabled and refreshed.healthy),
-            detail=detail,
+            name=profile.name,
+            runtime=profile.runtime,
+            executable=profile.executable,
+            context=profile.context,
+            platform=cast(Literal["linux/amd64", "linux/arm64"], profile.platform),
+            isolation=profile.isolation,
+            healthy=bool(profile.enabled and profile.healthy),
+            detail=detail if detail is not None else profile.last_health_detail,
         )
 
     async def _detect_fixed_candidates(self) -> list[RunnerCandidate]:

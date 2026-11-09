@@ -1,20 +1,26 @@
 {
-  "change_digest": "127dbb9cc9ce4814a1b1153210e3d1ed1a332653fde2b71a5ac2e06f6b8628ad",
-  "reviewed_by": "Codex",
-  "reason": "OpenAI Responses now sends the optional Daybreak Blue access program saved on an OpenAI provider. Four focused Python cases cover wire payload, profile validation, and bundled guidance; 22 selected frontend cases cover key entry, option persistence, provider status, and assistant discovery; eight real-Core production-browser cases exercise the Settings save/retry, session credential on available or unavailable vaults, reload, provider chat, key use, and outbound Responses payload on the permanent desktop and mobile profiles. The changed real-core.spec.ts is a shared test file, so its new exact case is selected through the reviewed openai-daybreak catalog area. A one-line comment classifies an expected malformed optional cgroup I/O sample for the existing diagnostic audit; it changes no host-load behavior.",
-  "exclusions": "Native Rust is unchanged. Unrelated provider, harness, workspace, host-load browser journeys, and broad interface suites are excluded; the host-load edit is a diagnostic classification comment only. External OpenAI entitlement and a physical mobile device are outside synthetic acceptance; the live fixture verifies the request contract without sending a real key to OpenAI.",
-  "expected_tests": {
-    "python": 4,
-    "frontend": 22,
-    "native": 0,
-    "playwright": 8
-  },
-  "python": ["tests/v3/test_openai_daybreak.py"],
-  "frontend": [
-    "ui/src/pages/SettingsPage.test.tsx",
-    "ui/src/components/ProviderHealthCard.test.tsx",
-    "ui/src/settingsCatalog.openai.test.ts"
+  "change_digest": "32335e2885b12e6f06b3531a6cf5d837ad17e27e1f319dc93409e7711b6efb84",
+  "reviewed_by": "Codex coordinator; fresh validate_held_item_cause confirmed the API/scheduler status distinction and reviewed the exact helper extraction; diagnose_held_item independently audited zero-test PR/main workflow routing",
+  "reason": "The user explicitly requested fixing and running only the failed held-turn assertion locally, no more CI tests, then merging when normal required checks permit. The exact local schema-backed item reproduced the impossible running expectation (1 failed in 3.26s), then passed with the correct ChatTurn routing state (1 passed in 2.44s). Every original guard is retained. No further tests are selected; this is an explicit local-only verification scope, not a passing full desktop receipt.",
+  "exclusions": "All CI tests and test-related builds are excluded on this push and main: portable Python, packaged/native desktop, browser, frontend, Rust, migrations and every previously passing case. Empty arrays intentionally route only normal selection/security metadata/omission/empty-browser gate checks. The full packaged journey last failed at 29766d18 and is not rerun or relabeled as passing; later native lifecycle phases and the separately documented host/global/operator/platform gaps remain unverified. No full suite, extra journey, live provider, existing installation, deployment or release.",
+  "python_versions": [
+    "3.12"
   ],
+  "python_node": false,
+  "python_browser": false,
+  "checks": [],
+  "expected_tests": {
+    "python": 0,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "expected_python_jobs": {
+    "portable": 0,
+    "packaged_native": 0
+  },
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:openai-daybreak"]
+  "playwright": []
 }

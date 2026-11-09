@@ -19,6 +19,7 @@ from alembic.config import Config
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -100,6 +101,388 @@ class ProjectCreateRequestRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
+
+
+class RuntimeInstanceRow(Base):
+    """One process incarnation; IDs must never be reused after lease expiry."""
+
+    __tablename__ = "runtime_instances"
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    version: Mapped[str] = mapped_column(String(200), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    heartbeat_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    lease_expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ProjectOwnershipRow(Base):
+    """The durable fencing counter survives every owner, including no owner."""
+
+    __tablename__ = "project_ownership"
+    __table_args__ = (Index("ix_project_ownership_runtime", "runtime_id"),)
+
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    admission_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    runtime_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runtime_instances.id"), nullable=True
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    lease_expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    command_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeCapacityPolicyRow(Base):
+    __tablename__ = "runtime_capacity_policy"
+
+    key: Mapped[str] = mapped_column(String(30), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    limits: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+
+
+class RuntimeCapacityReservationRow(Base):
+    __tablename__ = "runtime_capacity_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "runtime_id",
+            "project_id",
+            "fencing_token",
+            "request_key",
+            name="uq_runtime_capacity_request",
+        ),
+        Index("ix_runtime_capacity_state", "state", "runtime_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    demands: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    released_at_ms: Mapped[int | None] = mapped_column(BigInteger)
+    release_reason: Mapped[str | None] = mapped_column(String(100))
+
+
+class ButlerMemoryItemRow(Base):
+    __tablename__ = "butler_memory_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope", "scope_key", "content_hash", name="uq_butler_memory_content"
+        ),
+        Index("ix_butler_memory_scope", "scope", "scope_key", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(30), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(String(800), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_label: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_ref: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ButlerMemoryCursorRow(Base):
+    __tablename__ = "butler_memory_cursors"
+
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeIndexStateRow(Base):
+    __tablename__ = "runtime_index_state"
+
+    source_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class MemoryBudgetPolicyRow(Base):
+    __tablename__ = "memory_budget_policies"
+
+    scope_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class MemoryJobRow(Base):
+    __tablename__ = "memory_jobs"
+    __table_args__ = (Index("ix_memory_jobs_state", "state", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(String(200))
+    resource_kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(40), nullable=False)
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    launch_owner: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    launch_groups: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    pending_limits: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    application_state: Mapped[str] = mapped_column(String(30), nullable=False)
+    outcome: Mapped[str | None] = mapped_column(String(40))
+    detail: Mapped[str | None] = mapped_column(String(4000))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class MemoryBudgetAuditRow(Base):
+    __tablename__ = "memory_budget_audit"
+    __table_args__ = (Index("ix_memory_budget_audit_scope", "scope_key", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    previous: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    proposed: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RuntimeCommandRow(Base):
+    """An immutable submission identity and its separately evolving outcome."""
+
+    __tablename__ = "runtime_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "actor_id", "idempotency_key", name="uq_runtime_command_request"
+        ),
+        UniqueConstraint("project_id", "sequence", name="uq_runtime_command_sequence"),
+        Index("ix_runtime_command_dispatch", "project_id", "state", "sequence"),
+        Index("ix_runtime_command_name", "name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    lane: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="work", server_default="work"
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    accepted_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    runtime_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fencing_token: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class RuntimeWorkBatchProjectRow(Base):
+    """Durable participants in an atomic SQL-only Work batch."""
+
+    __tablename__ = "runtime_work_batch_projects"
+    __table_args__ = (
+        Index("ix_runtime_work_batch_project_state", "project_id", "state"),
+    )
+
+    batch_id: Mapped[str] = mapped_column(
+        String(200),
+        ForeignKey("runtime_commands.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    barrier_command_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    barrier_sequence: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    runtime_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fencing_token: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class DevicePairingOfferRow(Base):
+    """Single-use hashed pairing offers shared across replaceable API workers."""
+
+    __tablename__ = "device_pairing_offers"
+    token_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    confirmation_mac: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class RuntimeDeliveryRow(Base):
+    """Immutable encrypted HTTP delivery frames, ordered within one command."""
+
+    __tablename__ = "runtime_delivery"
+    __table_args__ = (
+        UniqueConstraint("command_id", "sequence", name="uq_runtime_delivery_sequence"),
+        Index("ix_runtime_delivery_project", "project_id", "command_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    command_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    content_reference: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class RuntimeChatBindingRow(Base):
+    """Command identity committed atomically with the accepted conversation turn."""
+
+    __tablename__ = "runtime_chat_bindings"
+    __table_args__ = (Index("ix_runtime_chat_binding_turn", "project_id", "turn_id"),)
+    command_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    stream_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class RuntimeReleaseRow(Base):
+    __tablename__ = "runtime_releases"
+    version: Mapped[str] = mapped_column(String(200), primary_key=True)
+    manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    install_path: Mapped[str] = mapped_column(String(4096), nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    staged_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeProcessRow(Base):
+    __tablename__ = "runtime_processes"
+    runtime_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    version: Mapped[str] = mapped_column(String(200), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    process_birth: Mapped[str] = mapped_column(String(200), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(4096), nullable=False)
+    credential_reference: Mapped[str] = mapped_column(String(200), nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class DeploymentHostRow(Base):
+    __tablename__ = "deployment_host"
+    key: Mapped[str] = mapped_column(String(20), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    api_runtime_id: Mapped[str | None] = mapped_column(String(200))
+    target_version: Mapped[str | None] = mapped_column(String(200))
+    rollback_version: Mapped[str | None] = mapped_column(String(200))
+    detail: Mapped[str] = mapped_column(String(4000), nullable=False)
+    shutdown_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+
+
+class RuntimeCoreIdentityRow(Base):
+    """Nonsecret installation identity, independent of credentials and workers."""
+
+    __tablename__ = "runtime_core_identity"
+    key: Mapped[str] = mapped_column(String(20), primary_key=True)
+    core_id: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeRecoveryRow(Base):
+    """Durable, idempotent recovery evidence for an exact ownership transition."""
+
+    __tablename__ = "runtime_recoveries"
+    __table_args__ = (Index("ix_runtime_recovery_project", "project_id"),)
+    operation_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_runtime_id: Mapped[str | None] = mapped_column(String(200))
+    source_fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_handoff_revision: Mapped[int | None] = mapped_column(Integer)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class DeploymentOperationRow(Base):
+    """Authenticated management intent and outcome retained across host restarts."""
+
+    __tablename__ = "deployment_operations"
+    __table_args__ = (
+        Index("ix_deployment_operation_actor", "actor_id", "updated_at_ms"),
+    )
+    operation_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    claim_owner: Mapped[str] = mapped_column(String(200), nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ProjectHandoffRow(Base):
+    __tablename__ = "project_handoffs"
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False)
+    admission_held: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+    blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    admitted_turn_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeResourceRow(Base):
+    __tablename__ = "runtime_resources"
+    __table_args__ = (Index("ix_runtime_resource_owner", "runtime_id", "state"),)
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    restoration: Mapped[str] = mapped_column(String(30), nullable=False)
+    detail: Mapped[str] = mapped_column(String(4000), nullable=False)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class DeploymentReceiptRow(Base):
+    __tablename__ = "deployment_receipts"
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    occurred_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class EntityRow(Base):
@@ -556,6 +939,26 @@ class ChatTurnCheckpointRow(Base):
     )
 
 
+class ProviderToolManifestRow(Base):
+    """Immutable complete tool knowledge at one provider-session revision."""
+
+    __tablename__ = "provider_tool_manifests"
+    __table_args__ = (
+        Index("ix_provider_tools_project_session", "project_id", "session_id"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProviderTurnQueueRow(Base):
     """Durable admission record; provider capacity is process-local."""
 
@@ -610,7 +1013,11 @@ def _prevent_chat_turn_ledger_change(*_: object) -> None:
     raise RuntimeError("chat turn ledgers are append-only")
 
 
-for _append_only_model in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
+for _append_only_model in (
+    ChatTurnStepEventRow,
+    ChatTurnCheckpointRow,
+    ProviderToolManifestRow,
+):
     event.listen(_append_only_model, "before_update", _prevent_chat_turn_ledger_change)
     event.listen(_append_only_model, "before_delete", _prevent_chat_turn_ledger_change)
 
@@ -633,12 +1040,16 @@ class Database:
         echo: bool = False,
         bootstrap: bool = True,
         pool_settings: PoolSettings | None = None,
+        execution_runtime_id: str | None = None,
     ) -> None:
         self.url = self._normalize_url(location)
         self.performance = PerformanceTelemetry()
         self._echo = echo
         self._bootstrap = bootstrap
         self._pool_settings = pool_settings
+        if execution_runtime_id is not None and bootstrap:
+            raise ValueError("execution workers must validate schema without migrating")
+        self.execution_runtime_id = execution_runtime_id
         self._initialized = False
         self._initialize_lock = asyncio.Lock()
         self._active_session: ContextVar[
@@ -696,6 +1107,10 @@ class Database:
 
         event.listen(engine.sync_engine, "checkout", checkout)
         event.listen(engine.sync_engine, "checkin", checkin)
+        if self.execution_runtime_id is not None:
+            from .execution_scope import ExecutionSQLScope
+
+            ExecutionSQLScope(self.execution_runtime_id).install(engine.sync_engine)
         return engine
 
     @staticmethod

@@ -163,6 +163,11 @@ export interface StorageDispatch {
 export interface StorageDashboard {
   sources: StorageSource[]; devices: StorageDevice[]; volumes: StorageVolume[];
   incidents: StorageIncident[]; actions: StorageAction[]; dispatches: StorageDispatch[];
+  partial?: boolean;
+  offset?: number;
+  limit?: number;
+  next_offset?: number | null;
+  next_offsets?: Record<string, number>;
 }
 
 export interface AssistantDefaults {
@@ -2229,6 +2234,7 @@ export interface ProviderRequestInput {
 
 export type ChatStreamEvent =
   | { type: "connection"; state: "connected" | "reconnecting" }
+  | { type: "accepted"; commandId: string }
   | { type: "task_plan"; plan: ChatTaskPlan }
   | {
       type: "queued";
@@ -3088,6 +3094,8 @@ export interface HealthResponse {
   containerTerminal: "configured" | "unavailable";
   diagnosticsDegraded?: boolean;
   browserDiagnosticIngress: "enabled" | "disabled";
+  apiReady?: boolean;
+  recoveryPath?: string;
 }
 
 export interface RunnerCandidate {

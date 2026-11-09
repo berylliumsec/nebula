@@ -30,6 +30,16 @@ if __name__ == "__main__":
     freeze_support()
     if sys.argv[1:2] == [GATEWAY_COMMAND]:
         raise SystemExit(run_gateway_shim(sys.argv[2:]))
+    if sys.argv[1:] == ["runtime-worker", "--bootstrap-stdin"]:
+        from nebula.v3.runtime_worker import main as worker_main
+
+        worker_main()
+        raise SystemExit(0)
+    if sys.argv[1:] == ["runtime-migrate", "--bootstrap-stdin"]:
+        from nebula.v3.runtime_worker import migration_main
+
+        migration_main()
+        raise SystemExit(0)
     from nebula.v3.cli import main
 
     main()

@@ -403,12 +403,16 @@ def unwrap_call(
 
 
 def _schema_view(
-    spec: ToolSpec, *, description_chars: int, source: str | None = None
+    spec: ToolSpec, *, description_chars: int | None, source: str | None = None
 ) -> dict[str, Any]:
     return {
         "name": spec.name,
         **({"source": source} if source else {}),
-        "description": " ".join(spec.description.split())[:description_chars],
+        "description": (
+            spec.description
+            if description_chars is None
+            else " ".join(spec.description.split())[:description_chars]
+        ),
         "input_schema": spec.input_schema,
     }
 
@@ -498,10 +502,15 @@ def catalog_instructions(
 
 class ToolCatalogBroker:
     def __init__(
-        self, deferred: Mapping[str, ToolSpec], *, index: ToolIndex | None = None
+        self,
+        deferred: Mapping[str, ToolSpec],
+        *,
+        index: ToolIndex | None = None,
+        complete_definitions: bool = False,
     ):
         self.deferred = dict(deferred)
         self.index = index
+        self.complete_definitions = complete_definitions
 
     async def execute(
         self,
@@ -558,7 +567,10 @@ class ToolCatalogBroker:
             raise InvalidToolArguments(f"not on-demand tools: {sorted(unknown)}")
         return {
             "loaded": [
-                _schema_view(self.deferred[name], description_chars=10_000)
+                _schema_view(
+                    self.deferred[name],
+                    description_chars=None if self.complete_definitions else 10_000,
+                )
                 for name in names
             ],
             "note": f"Call these through {CATALOG_CALL} with their name and arguments.",
@@ -570,6 +582,7 @@ def catalog_components(
     *,
     deferred: Iterable[str],
     index: ToolIndex | None = None,
+    complete_definitions: bool = False,
 ) -> RuntimeToolComponents | None:
     names = sorted(set(deferred) & set(components.specs))
     if not names:
@@ -643,7 +656,9 @@ def catalog_components(
         )
     }
     return RuntimeToolComponents(
-        broker=ToolCatalogBroker(specs, index=index),
+        broker=ToolCatalogBroker(
+            specs, index=index, complete_definitions=complete_definitions
+        ),
         scope=components.scope,
         workspace=components.workspace,
         specs=catalog,

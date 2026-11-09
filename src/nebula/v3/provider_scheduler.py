@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any
 from uuid import uuid4
@@ -18,6 +19,10 @@ from .host_load import HostLoadGate
 from .host_admission import save_host_wait
 from .async_utils import finish_cleanup
 from .diagnostics import create_diagnostic_task
+from .execution_scope import current_execution_lease
+from .runtime_capacity import CapacityReservation, RuntimeCapacity
+from .runtime_coordination import LeaseLost
+from .runtime_project_admission import HANDOFF_WAIT, turn_admission_allowed
 
 # A turn waiting in one of these states resumes through admission again, so
 # its admission stays parked until it does.
@@ -122,6 +127,7 @@ class ProviderAdmission:
         # lost to cancellation. An older token cannot close a later lease.
         self.lease_owner = uuid4().hex
         self._release_task: asyncio.Task[None] | None = None
+        self.host_slot: AbstractAsyncContextManager[CapacityReservation] | None = None
 
     async def release(self, turn_id: str) -> None:
         # The turn frees its slot as soon as provider work ends, before it
@@ -146,10 +152,14 @@ class ProviderAdmission:
         try:
             await self.scheduler._complete(turn_id, self.lease_owner)
         finally:
-            # A database failure must not permanently consume process capacity.
-            if self.lane == "background":
-                self.scheduler._background.release()
-            self.scheduler._provider.release()
+            try:
+                if self.host_slot is not None:
+                    await self.host_slot.__aexit__(None, None, None)
+            finally:
+                # A database failure must not permanently consume process capacity.
+                if self.lane == "background":
+                    self.scheduler._background.release()
+                self.scheduler._provider.release()
 
 
 class ProviderScheduler:
@@ -162,6 +172,7 @@ class ProviderScheduler:
         worker_id: str,
         config: ProviderSchedulerConfig | None = None,
         host_load: HostLoadGate | None = None,
+        runtime_capacity: RuntimeCapacity | None = None,
     ) -> None:
         self.store = store
         self.worker_id = worker_id
@@ -178,6 +189,7 @@ class ProviderScheduler:
         self._positions_generation = 0
         self._positions_lock = asyncio.Lock()
         self.host_load = host_load
+        self.runtime_capacity = runtime_capacity
         self._host_reasons: dict[str, str] = {}
 
     def queue_detail(self, turn_id: str) -> str:
@@ -215,6 +227,8 @@ class ProviderScheduler:
         async def acquire() -> ProviderAdmission:
             performance = self.store.database.performance
             background = False
+            provider = False
+            admission = ProviderAdmission(self, turn.capacity_lane)
             try:
                 if turn.capacity_lane == "background":
                     if self._background.locked():
@@ -226,11 +240,30 @@ class ProviderScheduler:
                     await deferred("Waiting for provider capacity")
                 with performance.span("provider.capacity.shared"):
                     await self._provider.acquire()
+                provider = True
+                if self.runtime_capacity is not None:
+                    lease = current_execution_lease()
+                    if lease is None or lease.project_id != turn.engagement_id:
+                        raise LeaseLost(
+                            "Provider capacity requires the exact project execution context"
+                        )
+                    demands = {"provider": 1}
+                    if turn.capacity_lane == "background":
+                        demands["background"] = 1
+                    admission.host_slot = self.runtime_capacity.slot(
+                        lease,
+                        "provider:" + admission.lease_owner,
+                        demands,
+                        on_wait=deferred,
+                    )
+                    await admission.host_slot.__aenter__()
             except BaseException:
                 if background:
                     self._background.release()
+                if provider:
+                    self._provider.release()
                 raise
-            return ProviderAdmission(self, turn.capacity_lane)
+            return admission
 
         if self.host_load is None or turn.status != ChatTurnStatus.QUEUED:
             return await acquire()
@@ -293,39 +326,20 @@ class ProviderScheduler:
                         await admission.release(turn_id)
                         admission = None
                         continue
-                break
-            latest = await self.store.get(ChatTurn, turn_id)
-            if latest.status == ChatTurnStatus.CANCELLED:
-                raise asyncio.CancelledError
-            admitted_at = utc_now()
-            changes: dict[str, Any] = {
-                "admitted_at": admitted_at,
-                "admission_reason": None,
-            }
-            # Only a new turn starts routing here. A resumed turn keeps the
-            # state it parked in (waiting for an approval or a callback, or
-            # finalizing a retried answer): that state selects how it resumes.
-            if latest.status == ChatTurnStatus.QUEUED:
-                changes["status"] = ChatTurnStatus.ROUTING
-            async with self.store.transaction() as transaction:
-                row = await transaction.session.get(ProviderTurnQueueRow, turn_id)
-                if row is None or row.state != "queued":
-                    raise ConflictError("provider turn is no longer queued")
-                updated = await transaction.update(
-                    ChatTurn,
-                    turn_id,
-                    changes,
-                    expected_revision=latest.revision,
-                )
-                row.state = "running"
-                row.admitted_at = admitted_at
-                row.lease_owner = admission.lease_owner
-                row.lease_expires_at = admitted_at + timedelta(hours=24)
-                (await transaction.session.flush())
+                latest = await self.store.get(ChatTurn, turn_id)
+                if latest.status == ChatTurnStatus.CANCELLED:
+                    raise asyncio.CancelledError
+                if await self._commit_admission(latest, admission):
+                    break
+                # The gate and queue transition share the ownership lock.
+                # A handoff cannot slip between a check and provider start.
+                await admission.release(turn_id)
+                admission = None
+                await deferred(HANDOFF_WAIT)
+                await asyncio.sleep(0.1)
             self._active[turn_id] = lane
             self._active_owners[turn_id] = admission.lease_owner
             self._invalidate_positions()
-            del updated
             self._host_reasons.pop(turn_id, None)
             return admission
         except BaseException:
@@ -335,6 +349,33 @@ class ProviderScheduler:
             if admission is not None:
                 await admission.release(turn_id)
             raise
+
+    async def _commit_admission(self, turn, admission):
+        admitted_at = utc_now()
+        changes: dict[str, Any] = {
+            "admitted_at": admitted_at,
+            "admission_reason": None,
+        }
+        # A resumed turn retains the state selecting its recovery path.
+        if turn.status == ChatTurnStatus.QUEUED:
+            changes["status"] = ChatTurnStatus.ROUTING
+        async with self.store.transaction() as transaction:
+            if self.runtime_capacity is not None and not await turn_admission_allowed(
+                transaction.session, turn
+            ):
+                return False
+            row = await transaction.session.get(ProviderTurnQueueRow, turn.id)
+            if row is None or row.state != "queued":
+                raise ConflictError("provider turn is no longer queued")
+            await transaction.update(
+                ChatTurn, turn.id, changes, expected_revision=turn.revision
+            )
+            row.state = "running"
+            row.admitted_at = admitted_at
+            row.lease_owner = admission.lease_owner
+            row.lease_expires_at = admitted_at + timedelta(hours=24)
+            await transaction.session.flush()
+        return True
 
     async def _complete(self, turn_id: str, lease_owner: str) -> None:
         if self._active_owners.get(turn_id) == lease_owner:

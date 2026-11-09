@@ -270,7 +270,9 @@ export function RunnerSettings() {
       setSelectedId(saved.id);
       setSelectedRevision(saved.revision);
       setExternallyChanged(false);
-      announceSettingsSaved("Runner profile verified and updated.");
+      announceSettingsSaved(saved.state === "ready"
+        ? "Runner profile verified and updated."
+        : "Runner profile saved. Host verification is still required.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.tooling_settings.caught_failure_03", "A handled interface operation failed.", saveError, "tooling_settings");
       setError(saveError instanceof Error ? saveError.message : "Could not save the runner profile.");

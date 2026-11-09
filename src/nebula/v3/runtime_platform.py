@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +50,12 @@ from .sandbox import (
     SandboxError,
 )
 from .storage import NebulaStore
+from .runtime_prepared_catalog import (
+    RuntimeCatalogError,
+    persist_runtime_metadata,
+    read_runtime_metadata,
+    automation_runtime_metadata,
+)
 from .tool_results import ToolOutputService
 from .tools import (
     InvalidToolArguments,
@@ -63,7 +68,12 @@ from .tools import (
     ToolSpec,
     register_artifact_retrieval_tools,
 )
-from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
+from .web_search import (
+    SearchQueryRuntime,
+    UnavailableProjectSearch,
+    WebSearchTool,
+    web_search_enabled,
+)
 from .working_notes import WriteNotesTool
 from .settings_assistant_api import SettingsAssistantApi
 
@@ -343,10 +353,17 @@ class RuntimePlatform:
         execution_enabled: bool = False,
         kali_source_image: str = DEFAULT_KALI_SOURCE_IMAGE,
         kali_repository: str = DEFAULT_KALI_REPOSITORY,
+        search_runtime: SearchQueryRuntime | None = None,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
         self.data_root = data_root.expanduser().resolve()
+        from .memory_budget import MemoryBudgetService
+        from .memory_runtime import MemoryComputeController
+
+        self.memory_compute = MemoryComputeController(
+            MemoryBudgetService(store.database), self.data_root
+        )
         self.butler_instructions_root: Path | None = None
         self.data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.data_root.chmod(0o700)
@@ -360,7 +377,9 @@ class RuntimePlatform:
         self.kali_source_image = kali_source_image
         self.kali_repository = kali_repository
         self.runtime_metadata_path = self.data_root / "kali-runtime.json"
-        self.search_runtime = SearchRuntime(store=store, data_root=self.data_root)
+        self.search_runtime = (
+            search_runtime if search_runtime is not None else UnavailableProjectSearch()
+        )
         self._prepared_images: dict[tuple[str, int], PreparedContainerImage] = {}
         self._image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.mcp_service: McpProbeService | None = None
@@ -477,7 +496,9 @@ class RuntimePlatform:
                     registry.register(plugin)
             except Exception as exc:
                 raise RuntimePlatformError(str(exc)) from exc
-        for plugin in build_ssh_tool_plugins(ssh_environments):
+        for plugin in build_ssh_tool_plugins(
+            ssh_environments, memory_compute=self.memory_compute
+        ):
             registry.register(plugin)
         register_artifact_retrieval_tools(
             registry,
@@ -593,64 +614,13 @@ class RuntimePlatform:
     def _persist_runtime_metadata(
         self, profile: StoredRunnerProfile, image: PreparedContainerImage
     ) -> None:
-        payload = {
-            "schema": KALI_RUNTIME_METADATA_SCHEMA,
-            "verified_at": utc_now().isoformat(),
-            "runner_profile_id": profile.id,
-            "runner_profile_revision": profile.revision,
-            "runner_profile_fingerprint": _runner_profile_fingerprint(profile),
-            "source_reference": image.source_reference,
-            "source_is_digest_pinned": "@sha256:" in image.source_reference,
-            "base_resolved_reference": image.base_resolved_reference,
-            "base_digest": image.base_digest,
-            "resolved_reference": image.resolved_reference,
-            "image_digest": image.digest,
-            "platform": image.platform,
-            "installed_packages": list(image.installed_packages),
-            "security_tools": list(image.security_tools),
-            "security_tool_packages": list(image.security_tool_packages),
-            "security_tool_provenance": {
-                tool: list(packages)
-                for tool, packages in image.security_tool_provenance
-            },
-            "security_tool_manifest_sha256": image.security_tool_manifest_sha256,
-            "binary_inventory": [
-                {"name": name, "path": path, "version": version}
-                for name, path, version in image.binary_inventory
-            ],
-            "registry_refreshed": image.refreshed,
-        }
-        temporary: Path | None = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                prefix=".kali-runtime-",
-                suffix=".tmp",
-                dir=self.data_root,
-                delete=False,
-            ) as stream:
-                json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-                temporary = Path(stream.name)
-            temporary.chmod(0o600)
-            temporary.replace(self.runtime_metadata_path)
-        except OSError as exc:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            raise RuntimePlatformError(
-                "verified Kali runtime metadata could not be persisted"
-            ) from exc
+            persist_runtime_metadata(self.data_root, profile, image)
+        except RuntimeCatalogError as error:
+            raise RuntimePlatformError(str(error)) from error
 
     def _runtime_metadata(self) -> dict[str, Any] | None:
-        try:
-            payload = json.loads(self.runtime_metadata_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            # diagnostic-expected: absent/invalid cached metadata means no verified inventory.
-            return None
-        return payload if isinstance(payload, dict) else None
+        return read_runtime_metadata(self.data_root)
 
     def last_human_terminal_security_inventory(
         self,
@@ -679,45 +649,7 @@ class RuntimePlatform:
         return image_digest, inventory_digest, tuple(tools)
 
     def last_automation_runtime_metadata(self) -> dict[str, Any] | None:
-        payload = self._runtime_metadata()
-        if payload is None:
-            return None
-        image_digest = payload.get("image_digest")
-        runner_id = payload.get("runner_profile_id")
-        runner_revision = payload.get("runner_profile_revision")
-        runner_fingerprint = payload.get("runner_profile_fingerprint")
-        inventory = payload.get("binary_inventory")
-        if (
-            payload.get("schema") != KALI_RUNTIME_METADATA_SCHEMA
-            or not isinstance(image_digest, str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None
-            or not isinstance(runner_id, str)
-            or not isinstance(runner_revision, int)
-            or not isinstance(inventory, list)
-            or not inventory
-            or any(
-                not isinstance(item, dict)
-                or not isinstance(item.get("name"), str)
-                or not isinstance(item.get("path"), str)
-                or not isinstance(item.get("version"), str)
-                for item in inventory
-            )
-        ):
-            return None
-        return {
-            "image": image_digest,
-            "digest": image_digest,
-            "runner_profile_id": runner_id,
-            "runner_profile_revision": runner_revision,
-            "runner_profile_fingerprint": (
-                runner_fingerprint
-                if isinstance(runner_fingerprint, str)
-                and re.fullmatch(r"[0-9a-f]{64}", runner_fingerprint)
-                else None
-            ),
-            "inventory": inventory,
-            "detail": "using the verified prepared Kali headless image",
-        }
+        return automation_runtime_metadata(self.data_root)
 
     async def resolve_human_terminal_profile(
         self, engagement_id: str
@@ -902,11 +834,17 @@ class RuntimePlatform:
             profile=profile,
             egress_controller=egress,
             workspace_roots=workspace_roots,
+            memory_compute=self.memory_compute,
+            memory_profile_id=stored.id,
         )
 
 
 def default_runtime_platform(
-    *, store: NebulaStore, artifact_store: ArtifactStore, data_root: Path
+    *,
+    store: NebulaStore,
+    artifact_store: ArtifactStore,
+    data_root: Path,
+    search_runtime: SearchQueryRuntime | None = None,
 ) -> RuntimePlatform:
     source = (
         os.getenv("NEBULA_KALI_SOURCE_IMAGE")
@@ -930,6 +868,7 @@ def default_runtime_platform(
         data_root=data_root,
         execution_enabled=True,
         kali_source_image=source,
+        search_runtime=search_runtime,
     )
 
 

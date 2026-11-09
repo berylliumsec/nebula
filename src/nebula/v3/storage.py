@@ -62,6 +62,7 @@ from .database import (
     EntityRow,
     OperationEventRow,
     ProviderTurnQueueRow,
+    ProviderToolManifestRow,
     RunBudgetCounterRow,
     RunEventRow,
     SearchDocumentRow,
@@ -857,7 +858,7 @@ class NebulaStore:
         """Serialize sequence assignment for one run on supported databases."""
 
         dialect = self.database.engine.dialect.name
-        if dialect == "sqlite":
+        if dialect == "sqlite" and self.database.execution_runtime_id is None:
             (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             return
         (await connection.begin())
@@ -880,7 +881,11 @@ class NebulaStore:
         if self.database.task_session() is not None:
             raise RuntimeError("nested writes must use the existing StoreTransaction")
         async with self.database.session() as session:
-            if immediate and self.database.engine.dialect.name == "sqlite":
+            if (
+                immediate
+                and self.database.engine.dialect.name == "sqlite"
+                and self.database.execution_runtime_id is None
+            ):
                 # Report ingestion reads an absent incident before writing it.
                 # Take SQLite's writer lock first so concurrent agents cannot
                 # both conclude that they need to create the same incident.
@@ -1355,7 +1360,10 @@ class NebulaStore:
 
         connection = await self.database.connect()
         try:
-            if self.database.engine.dialect.name == "sqlite":
+            if (
+                self.database.engine.dialect.name == "sqlite"
+                and self.database.execution_runtime_id is None
+            ):
                 (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             else:
                 (await connection.begin())
@@ -1936,7 +1944,9 @@ class NebulaStore:
             return int(
                 (
                     await session.scalar(
-                        statement.with_only_columns(func.count()).order_by(None)
+                        statement.with_only_columns(func.count(EntityRow.id)).order_by(
+                            None
+                        )
                     )
                 )
                 or 0
@@ -2813,6 +2823,11 @@ class NebulaStore:
                 )
             )
             (await _delete_chat_turn_ledgers(session, chat_turn_ids))
+            await session.execute(
+                delete(ProviderToolManifestRow).where(
+                    ProviderToolManifestRow.session_id.in_(session_ids)
+                )
+            )
             # The chat and harness turns' run and operation events go once
             # they are gone; the triggers refuse while the owners exist.
             event_owner_ids = list(
@@ -3026,6 +3041,11 @@ class NebulaStore:
                 )
             )
             (await _delete_chat_turn_ledgers(session, project_chat_turn_ids))
+            await session.execute(
+                delete(ProviderToolManifestRow).where(
+                    ProviderToolManifestRow.project_id == engagement_id
+                )
+            )
             # Run events are keyed by Missions, chat and harness turns; every
             # operation event carries the project.
             run_owner_ids = list(

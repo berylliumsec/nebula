@@ -236,7 +236,9 @@ async def test_harness_submits_and_freezes_explicit_context(tmp_path):
         mcp_server_ids=[],
     )
     assert turn.request_snapshot["operator_decisions"][0]["id"] == decision.id
-    assert "Explain uncertainty explicitly" in harness_turn.prompt
+    assert "Explain uncertainty explicitly" not in harness_turn.prompt
+    frozen = harness_turn.metadata["standing_instructions"]["text"]
+    assert "Explain uncertainty explicitly" in frozen
     (
         await store.update(
             ChatDecision,
@@ -245,7 +247,7 @@ async def test_harness_submits_and_freezes_explicit_context(tmp_path):
             expected_revision=decision.revision,
         )
     )
-    assert "Only future work" not in harness_turn.prompt
+    assert "Only future work" not in frozen
 
 
 pytestmark = pytest.mark.anyio

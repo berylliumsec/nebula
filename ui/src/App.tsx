@@ -5,6 +5,9 @@ import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRout
 import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
 import { isNebulaShell } from "./hooks/useCompactLayout";
+import { MemoryBudgetSettings } from "./components/MemoryBudgetSettings";
+import { RuntimeContinuityNotice } from "./components/RuntimeContinuityNotice";
+import { NavigationContinuity } from "./state/NavigationContinuityBoundary";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
@@ -21,7 +24,7 @@ function route(element: ReactNode) {
 
 function CanonicalProjectBoundary() {
   const { projectId = "" } = useParams();
-  const { engagement, engagements, selectEngagement, workspaceState } = useWorkspace();
+  const { continuityScope, engagement, engagements, selectEngagement, workspaceState } = useWorkspace();
   const requested = engagements.find((item) => item.id === projectId);
 
   useEffect(() => {
@@ -35,7 +38,7 @@ function CanonicalProjectBoundary() {
   if (!requested) {
     // Nothing is substituted, but the operator still needs a way back: the
     // project they were using, or any active one.
-    const rememberedId = rememberedProjectId();
+    const rememberedId = rememberedProjectId(continuityScope);
     const escape = engagement ?? engagements.find((item) => item.id === rememberedId) ?? engagements[0];
     return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={isNebulaShell() ? `${projectSurface(escape.id, "workbench")}?view=chat` : projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
   }
@@ -119,10 +122,10 @@ function WorkbenchRoute() {
 }
 
 function AssistantShellLanding() {
-  const { engagement, engagements, resourceStatus, workspaceState } = useWorkspace();
+  const { continuityScope, engagement, engagements, resourceStatus, workspaceState } = useWorkspace();
   const location = useLocation();
   if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening chats…</div>;
-  const selected = engagement ?? engagements.find(item => item.id === rememberedProjectId()) ?? engagements[0];
+  const selected = engagement ?? engagements.find(item => item.id === rememberedProjectId(continuityScope)) ?? engagements[0];
   if (selected) {
     const params = new URLSearchParams({ view: "chat" });
     const requestedSession = new URLSearchParams(location.search).get("session");
@@ -140,6 +143,20 @@ function AssistantShellHandoff() {
 }
 
 export function App() {
+  const { api, health, reconnect } = useWorkspace();
+  const location = useLocation();
+  if (health?.apiReady === false) return <main className="page" id="main-content">
+    <h1>Core recovery</h1>
+    <p>Core needs a memory budget before the workspace can start. Saved work remains available after recovery.</p>
+    <Link className="button primary" to="/settings#memory-budget-settings">Memory Settings</Link>
+    <button className="button quiet" type="button" onClick={reconnect}>Check workspace availability</button>
+    <RuntimeContinuityNotice api={api} />
+    {location.pathname === "/settings" && <MemoryBudgetSettings api={api} />}
+  </main>;
+  return <NavigationContinuity><ApplicationRoutes /></NavigationContinuity>;
+}
+
+function ApplicationRoutes() {
   if (isNebulaShell()) return <Routes><Route element={<AppShell />}>
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
       <Route path="workbench" element={route(<WorkbenchRoute />)} />

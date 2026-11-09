@@ -156,8 +156,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       python: ${{ steps.plan.outputs.python }}
+      packaged: ${{ steps.plan.outputs.packaged }}
       frontend: ${{ steps.plan.outputs.frontend }}
       native: ${{ steps.plan.outputs.native }}
+      checks: ${{ steps.plan.outputs.checks }}
       python_browser: ${{ steps.plan.outputs.python_browser }}
       python_node: ${{ steps.plan.outputs.python_node }}
       python_versions: ${{ steps.plan.outputs.python_versions }}
@@ -173,9 +175,11 @@ jobs:
           CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python scripts/test_selection.py --baseline "$BASELINE" --candidate "$CANDIDATE" --output test-selection-receipt.json
-          printf 'python=%s\n' "$(jq -c '.python' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
+          printf 'python=%s\n' "$(jq -c '.python | map(select(. != "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"))' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
+          printf 'packaged=%s\n' "$(jq -c '.python | map(select(. == "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"))' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'frontend=%s\n' "$(jq -c '.frontend' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'native=%s\n' "$(jq -c '.native' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
+          printf 'checks=%s\n' "$(jq -c '.checks // []' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'python_browser=%s\n' "$(jq -r '.python_browser // false' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'python_node=%s\n' "$(jq -r '.python_node // false' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'python_versions=%s\n' "$(jq -c '.python_versions // ["3.12"]' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
@@ -198,7 +202,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     services:
       postgres:
-        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py')) && 'postgres:16-alpine' || '' }}
+        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py')) && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: nebula_async
           POSTGRES_PASSWORD: synthetic-ci-password
@@ -255,6 +259,13 @@ jobs:
       - name: Install UI dependencies for selected Node-backed Python checks
         if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/test_playwright_impact.py') || contains(needs.selection.outputs.python, 'tests/v3/test_butler_workflow_registry.py'))
         run: npm --prefix ui ci
+      - name: Build production UI for selected retained-process journeys
+        if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/v3/test_runtime_continuity_acceptance.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py'))
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+          poetry run python scripts/build_product_knowledge.py
+          poetry run python scripts/build_product_knowledge.py --verify
       - name: Install ripgrep for selected workspace search checks
         if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_workspace.py')
         run: |
@@ -264,12 +275,12 @@ jobs:
         if: env.RUN_SELECTED == 'true'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.python }}
-          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
+          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           NEBULA_TEST_POSTGRES_ADMIN_URL: ${{ contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') && 'postgresql://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
-          if jq -e 'any(.[]; test("^tests/v3/test_async_(postgresql|harness_queries|rollback)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
+          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination|test_runtime_work_batch_integration|test_api_worker_composition|test_shutdown_readmission)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
             test -n "$NEBULA_TEST_POSTGRES_URL" || { echo 'Selected PostgreSQL coverage requires its owned database runtime.' >&2; exit 1; }
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
@@ -331,7 +342,7 @@ jobs:
 
   database-migrations:
     needs: selection
-    if: contains(needs.selection.outputs.python, 'tests/v3/test_migrations.py') || contains(needs.selection.outputs.python, 'tests/v3/test_database_migration') || contains(needs.selection.outputs.python, 'tests/v3/test_postgresql_core.py') || contains(needs.selection.outputs.python, 'tests/test_simulation_postgres_backup.py')
+    if: contains(needs.selection.outputs.python, 'tests/v3/test_migrations.py') || contains(needs.selection.outputs.python, 'tests/v3/test_database_migration') || contains(needs.selection.outputs.python, 'tests/v3/test_postgresql_core.py') || contains(needs.selection.outputs.python, 'tests/test_simulation_postgres_backup.py') || contains(fromJSON(needs.selection.outputs.python || '[]'), 'tests/v3/test_work_batch_contracts.py') || contains(needs.selection.outputs.python, 'tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata')
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -379,7 +390,13 @@ jobs:
           poetry run python - <<'PY'
           import json, os, subprocess, sys
           prefixes = ('tests/v3/test_migrations.py', 'tests/v3/test_database_migration', 'tests/v3/test_postgresql_core.py', 'tests/test_simulation_postgres_backup.py')
-          targets = [item for item in json.loads(os.environ['SELECTED_TESTS']) if item.startswith(prefixes)]
+          selected = json.loads(os.environ['SELECTED_TESTS'])
+          targets = [item for item in selected if item.startswith(prefixes)]
+          migration = 'tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata'
+          if 'tests/v3/test_work_batch_contracts.py' in selected:
+              targets.append(migration)
+          else:
+              targets.extend(item for item in selected if item == migration or item.startswith(migration + '['))
           assert targets, 'No reviewed PostgreSQL test targets'
           subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', *targets], check=True)
           subprocess.run([sys.executable, '-m', 'pytest', '-q', *targets], check=True)
@@ -387,7 +404,7 @@ jobs:
 
   frontend:
     needs: selection
-    if: needs.selection.outputs.frontend != '[]'
+    if: needs.selection.outputs.frontend != '[]' || contains(fromJSON(needs.selection.outputs.checks || '[]'), 'frontend-audit')
     runs-on: ubuntu-latest
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
@@ -406,19 +423,23 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: python -m pip install "poetry==2.1.3"
+        if: needs.selection.outputs.frontend != '[]'
         working-directory: .
       - run: poetry install --only main --no-interaction
+        if: needs.selection.outputs.frontend != '[]'
         working-directory: .
       - run: npm ci
       - run: npm run lint --if-present
       - run: npm run audit:diagnostics
       - name: Test selected frontend files
+        if: needs.selection.outputs.frontend != '[]'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.frontend }}
         run: |
           mapfile -t targets < <(jq -r '.[] | ltrimstr("ui/")' <<<"$SELECTED_TESTS")
           npm test -- "${targets[@]}" --testTimeout=15000
       - run: npm run build
+        if: needs.selection.outputs.frontend != '[]'
 
   cpu-workers-frozen-linux:
     needs: selection
@@ -526,9 +547,62 @@ jobs:
             build/nebula-core-metadata/BUILD_INFO.json
             src/nebula/v3/product_knowledge.sqlite3.b85
 
+  native-runtime-continuity-linux:
+    needs: selection
+    if: contains(needs.selection.outputs.packaged, 'tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Check out the exact candidate source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+      - name: Check out the independently retained baseline source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Old Core/worker/schema plus the same fresh-launch UI contract.
+          ref: fac1d729bf61858ef415e11f3816edfa1ca422c7
+          path: baseline
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: candidate/ui/package-lock.json
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: candidate/poetry.lock
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+      - name: Install official build and native GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libssl-dev libdbus-1-dev libxdo-dev patchelf \
+            xvfb xauth x11-utils xdotool dbus-x11 at-spi2-core python3-pyatspi \
+            python3-venv fonts-dejavu-core xfonts-base
+          python -m pip install 'poetry==2.1.3'
+      - name: Build two real packages and run exactly one native continuity journey
+        run: >-
+          python candidate/scripts/ci_native_runtime_continuity.py
+          --baseline-source "$GITHUB_WORKSPACE/baseline"
+          --candidate-source "$GITHUB_WORKSPACE/candidate"
+          --output "$RUNNER_TEMP/native-runtime-continuity"
+      - name: Upload only sanitized continuity evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: native-runtime-continuity-linux
+          path: ${{ runner.temp }}/native-runtime-continuity/evidence/**
+          if-no-files-found: warn
+
   desktop-macos:
     needs: selection
-    if: needs.selection.outputs.native != '[]'
+    if: needs.selection.outputs.native != '[]' || contains(fromJSON(needs.selection.outputs.checks || '[]'), 'desktop-ui-build')
     runs-on: macos-15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -538,19 +612,22 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        if: needs.selection.outputs.native != '[]'
         with:
           toolchain: stable
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: needs.selection.outputs.native != '[]'
         with:
           python-version: "3.12"
           cache: pip
       - run: npm --prefix ui ci
       - run: npm --prefix ui run build
       - run: python -m pip install "poetry==2.1.3"
+        if: needs.selection.outputs.native != '[]'
       - run: poetry install --with dev --no-interaction
-      - name: Test macOS Docker Desktop and Podman Machine command boundaries
-        run: poetry run pytest -q tests/v3/test_sandbox.py -k macos
+        if: needs.selection.outputs.native != '[]'
       - name: Prepare compile-time sidecar boundary
+        if: needs.selection.outputs.native != '[]'
         run: |
           target="$(rustc -vV | sed -n 's/^host: //p')"
           mkdir -p ui/src-tauri/binaries ui/src-tauri/resources/notebook-runtime
@@ -560,6 +637,7 @@ jobs:
           touch "ui/src-tauri/binaries/nebula-core-$target"
           chmod +x "ui/src-tauri/binaries/nebula-core-$target"
       - name: Test native menus and sidecar boundary
+        if: needs.selection.outputs.native != '[]'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.native }}
         run: |

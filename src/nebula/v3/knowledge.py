@@ -26,7 +26,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+from uuid import uuid4
 from urllib.parse import SplitResult, unquote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
@@ -36,6 +37,7 @@ from pypdf import PdfReader
 from .artifacts import ArtifactIntegrityError, ArtifactStore
 from .domain import Artifact, Engagement, KnowledgeSource, LibraryItem, utc_now
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
+from .index_calls import index_call, index_digest
 from .storage import ConflictError, NebulaStore
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
@@ -94,6 +96,24 @@ class LibraryItemIndexError(KnowledgeIndexError):
     def __init__(self, item: LibraryItem, cause: KnowledgeIndexError) -> None:
         super().__init__(str(cause) or "the local Library index write failed")
         self.item = item
+
+
+_IndexSource = TypeVar("_IndexSource", KnowledgeSource, LibraryItem)
+
+
+async def _finish_index(
+    store: NebulaStore, model: type[_IndexSource], submitted: _IndexSource, status: str
+) -> _IndexSource:
+    current = await store.get(model, submitted.id)
+    if current.metadata.get("runtime_index_request") != submitted.metadata.get(
+        "runtime_index_request"
+    ):
+        raise ConflictError(
+            "A newer indexing request changed this source; refresh its current state"
+        )
+    return await store.update(
+        model, current.id, {"status": status}, expected_revision=current.revision
+    )
 
 
 class BrowserRuntimeUnavailableError(SourceFetchError):
@@ -379,6 +399,7 @@ async def ingest_document(
                 **_index_metadata(
                     stored.artifact,
                     chunks=chunks if knowledge_index is None else None,
+                    index_chunks=chunks,
                     chunk_count=len(chunks),
                     indexed_at=utc_now().isoformat(),
                     index_descriptor=(
@@ -406,24 +427,11 @@ async def ingest_document(
     if knowledge_index is None:
         return source
     try:
-        knowledge_index.upsert_source(source, chunks)
+        await index_call(knowledge_index.upsert_source, source, chunks)
     except KnowledgeIndexError as exc:
-        current = await store.get(KnowledgeSource, source.id)
-        errored = await store.update(
-            KnowledgeSource,
-            source.id,
-            {"status": "error"},
-            expected_revision=current.revision,
-        )
+        errored = await _finish_index(store, KnowledgeSource, source, "error")
         raise KnowledgeSourceIndexError(errored, exc) from exc
-    current = await store.get(KnowledgeSource, source.id)
-    source = await store.update(
-        KnowledgeSource,
-        source.id,
-        {"status": "ready"},
-        expected_revision=current.revision,
-    )
-    return source
+    return await _finish_index(store, KnowledgeSource, source, "ready")
 
 
 def fetch_url_document(url: str) -> FetchedUrlDocument:
@@ -777,6 +785,7 @@ async def reindex_document(
         _index_metadata(
             artifact,
             chunks=chunks if knowledge_index is None else None,
+            index_chunks=chunks,
             chunk_count=len(chunks),
             indexed_at=utc_now().isoformat(),
             index_descriptor=(
@@ -801,25 +810,11 @@ async def reindex_document(
     if knowledge_index is None:
         return indexing
     try:
-        knowledge_index.upsert_source(indexing, chunks)
+        await index_call(knowledge_index.upsert_source, indexing, chunks)
     except KnowledgeIndexError:
-        current = await store.get(KnowledgeSource, indexing.id)
-        (
-            await store.update(
-                KnowledgeSource,
-                indexing.id,
-                {"status": "error"},
-                expected_revision=current.revision,
-            )
-        )
+        await _finish_index(store, KnowledgeSource, indexing, "error")
         raise
-    current = await store.get(KnowledgeSource, indexing.id)
-    return await store.update(
-        KnowledgeSource,
-        indexing.id,
-        {"status": "ready"},
-        expected_revision=current.revision,
-    )
+    return await _finish_index(store, KnowledgeSource, indexing, "ready")
 
 
 def knowledge_summary(source: KnowledgeSource) -> KnowledgeSource:
@@ -871,6 +866,7 @@ async def ingest_library_item(
             "metadata": _index_metadata(
                 stored.artifact,
                 chunks=chunks if knowledge_index is None else None,
+                index_chunks=chunks,
                 chunk_count=len(chunks),
                 indexed_at=utc_now().isoformat(),
                 index_descriptor=(
@@ -890,23 +886,11 @@ async def ingest_library_item(
     if knowledge_index is None:
         return item
     try:
-        knowledge_index.upsert_library_item(item, chunks)
+        await index_call(knowledge_index.upsert_library_item, item, chunks)
     except KnowledgeIndexError as exc:
-        current = await store.get(LibraryItem, item.id)
-        errored = await store.update(
-            LibraryItem,
-            item.id,
-            {"status": "error"},
-            expected_revision=current.revision,
-        )
+        errored = await _finish_index(store, LibraryItem, item, "error")
         raise LibraryItemIndexError(errored, exc) from exc
-    current = await store.get(LibraryItem, item.id)
-    return await store.update(
-        LibraryItem,
-        item.id,
-        {"status": "ready"},
-        expected_revision=current.revision,
-    )
+    return await _finish_index(store, LibraryItem, item, "ready")
 
 
 async def reindex_library_item(
@@ -947,6 +931,7 @@ async def reindex_library_item(
         _index_metadata(
             artifact,
             chunks=chunks if knowledge_index is None else None,
+            index_chunks=chunks,
             chunk_count=len(chunks),
             indexed_at=utc_now().isoformat(),
             index_descriptor=(
@@ -974,25 +959,11 @@ async def reindex_library_item(
     if knowledge_index is None:
         return indexing
     try:
-        knowledge_index.upsert_library_item(indexing, chunks)
+        await index_call(knowledge_index.upsert_library_item, indexing, chunks)
     except KnowledgeIndexError:
-        current = await store.get(LibraryItem, indexing.id)
-        (
-            await store.update(
-                LibraryItem,
-                indexing.id,
-                {"status": "error"},
-                expected_revision=current.revision,
-            )
-        )
+        await _finish_index(store, LibraryItem, indexing, "error")
         raise
-    current = await store.get(LibraryItem, indexing.id)
-    return await store.update(
-        LibraryItem,
-        indexing.id,
-        {"status": "ready"},
-        expected_revision=current.revision,
-    )
+    return await _finish_index(store, LibraryItem, indexing, "ready")
 
 
 def library_item_summary(item: LibraryItem) -> LibraryItem:
@@ -1019,7 +990,19 @@ async def migrate_inline_knowledge_indexes(
         chunks = _inline_chunks(source.status, source.metadata)
         if chunks is None:
             continue
-        knowledge_index.upsert_source(source, chunks)
+        source = await store.update(
+            KnowledgeSource,
+            source.id,
+            {
+                "metadata": {
+                    **source.metadata,
+                    "runtime_index_digest": index_digest(chunks),
+                    "runtime_index_request": str(uuid4()),
+                }
+            },
+            expected_revision=source.revision,
+        )
+        await index_call(knowledge_index.upsert_source, source, chunks)
         metadata = dict(source.metadata)
         metadata.pop("chunks", None)
         metadata.update(knowledge_index.descriptor)
@@ -1036,7 +1019,19 @@ async def migrate_inline_knowledge_indexes(
         chunks = _inline_chunks(item.status, item.metadata)
         if chunks is None:
             continue
-        knowledge_index.upsert_library_item(item, chunks)
+        item = await store.update(
+            LibraryItem,
+            item.id,
+            {
+                "metadata": {
+                    **item.metadata,
+                    "runtime_index_digest": index_digest(chunks),
+                    "runtime_index_request": str(uuid4()),
+                }
+            },
+            expected_revision=item.revision,
+        )
+        await index_call(knowledge_index.upsert_library_item, item, chunks)
         metadata = dict(item.metadata)
         metadata.pop("chunks", None)
         metadata.update(knowledge_index.library_descriptor)
@@ -1070,6 +1065,7 @@ def _index_metadata(
     artifact: Artifact,
     *,
     chunks: list[dict[str, Any]] | None,
+    index_chunks: list[dict[str, Any]] | None = None,
     chunk_count: int | None = None,
     indexed_at: str,
     index_descriptor: dict[str, str] | None = None,
@@ -1082,6 +1078,10 @@ def _index_metadata(
         "chunk_count": len(chunks or []) if chunk_count is None else chunk_count,
         "indexed_at": indexed_at,
         "ingestion_version": INGESTION_VERSION,
+        "runtime_index_digest": index_digest(
+            index_chunks if index_chunks is not None else chunks or []
+        ),
+        "runtime_index_request": str(uuid4()),
     }
     if chunks is not None:
         metadata["chunks"] = chunks

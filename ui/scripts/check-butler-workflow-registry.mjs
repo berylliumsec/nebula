@@ -21,6 +21,7 @@ const transportMethods = new Map([
   ["authenticated_media", new Set(["fetchChatImagePreview", "uploadChatImage"])],
   ["device_handoff_protocol", new Set(["createHandoff", "cancelHandoff", "consumeHandoff", "resolveHandoff"])],
   ["connection_auth", new Set(["getToken", "health", "setupStatus"])],
+  ["request_continuity", new Set(["initializeContinuity", "getContinuityScope", "getPendingRequests", "reconcilePendingRequests", "subscribeContinuity", "dismissCompletedRequest"])],
   ["ui_projection", new Set(["resolveResourceActions", "resolveResource", "listResourceRelations"])],
   ["browser_worker_protocol", new Set(["claimSecurityBrowserCommand", "createSecurityBrowserIntercept", "finishSecurityBrowserCommand", "getEngagementScope", "getSecurityBrowserAutomation", "getSecurityBrowserResearch", "getSecurityBrowserWorkspace", "recordSecurityBrowserAttackResult", "recordSecurityBrowserRepeaterResult", "recordSecurityBrowserSiteNode", "transitionSecurityBrowserAttack", "transitionSecurityBrowserCrawl", "transitionSecurityBrowserRepeaterTab", "uploadEvidence", "uploadSecurityBrowserBodyArtifact", "recordSecurityBrowserTraffic", "recordSecurityBrowserWebSocketFrame"])],
 ]);
@@ -133,7 +134,7 @@ function main() {
   }
   const available = new Set(current.map(({ key }) => key));
   const catalogs = ["settings_assistant_tools.py", "butler_capabilities.py", "control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_workspace.py", "butler_library.py", "butler_reports.py", "butler_terminal.py", "butler_storage.py", "butler_devices.py", "butler_credentials.py", "butler_providers.py", "butler_harnesses.py", "butler_mcp.py", "butler_notes.py", "butler_records.py", "butler_sources.py", "butler_data.py", "butler_inspection.py", "butler_diagnostics.py"]
-    .concat(["butler_administration.py"])
+    .concat(["butler_administration.py", "memory_tools.py"])
     .map((name) => readFileSync(resolve(repoRoot, "src/nebula/v3", name), "utf8"))
     .join("\n");
   const ids = new Set();

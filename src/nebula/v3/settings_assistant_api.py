@@ -27,6 +27,8 @@ from .mcp_import import export_mcp_config
 from .mcp_scope import mcp_metadata_is_visible, project_mcp_profiles
 from .storage import NotFoundError
 from .tools import GuidedToolError
+from .memory_actor import memory_actor
+from .memory_assistant_result import MEMORY_SETTINGS_LIMIT, memory_assistant_result
 
 
 _PROJECT_SETTING = re.compile(
@@ -40,10 +42,19 @@ _GLOBAL_SETTINGS = re.compile(
     r"providers|provider-catalog|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|skills|"
     r"integrations|automation/runtime|diagnostics/(?:settings|performance)|voice/settings|butler/(?:instructions|check-interval)|"
-    r"hooks|project-instructions|runtime-usage|host-load|host-pressure|host-cpu-budget|setup|release"
+    r"hooks|project-instructions|runtime-usage|host-load|host-pressure|host-cpu-budget|memory-budgets|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_HOST_SETUP_ACTIONS = {
+    "/api/v1/setup/runtime/refresh",
+    "/api/v1/setup/runtime/select",
+}
+_PROJECT_SETUP_ACTIONS = {
+    "/api/v1/setup/image/prepare",
+    "/api/v1/setup/image/retry",
+    "/api/v1/setup/image/cancel",
+}
 _BOOLEAN = TypeAdapter(bool)
 _PROFILE_MODELS: dict[str, type[BaseModel]] = {
     "providers": ProviderProfile,
@@ -461,7 +472,9 @@ async def _check_runtime_mutation(
     if family == "runner-profiles":
         # Match the route's effective defaults, including omitted fields that clear
         # an existing context/socket/seccomp selection. Import after API startup.
-        from .api import RunnerProfileRequest
+        from .runtime_global_settings import (
+            RunnerSettingsRequest as RunnerProfileRequest,
+        )
 
         try:
             candidate = RunnerProfileRequest.model_validate(body).model_dump(
@@ -540,6 +553,11 @@ async def _check_runtime_mutation(
 
 def _action_readback(method: str, path: str) -> str | None:
     if method == "POST":
+        memory_job = re.fullmatch(r"(/api/v1/memory-budgets/jobs/[^/]+)/apply", path)
+        if memory_job:
+            return memory_job[1]
+        if re.fullmatch(r"/api/v1/memory-budgets/runners/[^/]+/probe", path):
+            return "/api/v1/memory-budgets"
         if re.fullmatch(
             r"/api/v1/setup/(?:runtime/(?:select|refresh)|image/(?:prepare|retry|cancel))",
             path,
@@ -577,6 +595,7 @@ async def _settings_request(
     expected_revision: int | None = None,
     *,
     before_execution: bool = True,
+    project_setup: bool = True,
 ) -> httpx.Response:
     """Keep MCP profiles and setup image controls within the selected project."""
 
@@ -594,7 +613,17 @@ async def _settings_request(
         # omitted. An interactive Butler request must retain its own scope.
         body = {**(body or {}), "project_id": project_id}
     if method == "POST" and path == "/api/v1/setup/image/cancel":
-        current = await client.get("/api/v1/setup/status", headers=headers)
+        if body is not None and not isinstance(body, dict):
+            raise ValueError(
+                "provide a setup cancellation object for the selected project"
+            )
+        if isinstance(body, dict) and body.get("project_id") not in (None, project_id):
+            raise ValueError("cancel only an image operation in the selected project")
+        current = await client.get(
+            "/api/v1/setup/status",
+            headers=headers,
+            params={"project_id": project_id},
+        )
         if not current.is_success:
             return current
         preparation = current.json()["terminal"]["image_preparation"]
@@ -607,6 +636,7 @@ async def _settings_request(
             raise ValueError("cancel only an image operation in the selected project")
         # Core still checks the exact operation ID, including races and
         # idempotent cancellation; never substitute a newer operation here.
+        body = {**(body or {}), "project_id": project_id}
     if method == "GET" and path in {
         "/api/v1/mcp-servers",
         "/api/v1/mcp-servers/export",
@@ -673,6 +703,8 @@ async def _settings_request(
         params["engagement_id"] = project_id
     if method == "GET" and path == "/api/v1/automation/runtime" and before_execution:
         params["engagement_id"] = project_id
+    if method == "GET" and path == "/api/v1/setup/status" and project_setup:
+        params["project_id"] = project_id
     if method == "GET" and path == "/api/v1/ssh-environments":
         params["resolve"] = "false"
     if method == "DELETE" and re.fullmatch(r"/api/v1/ssh-environments/[^/]+", path):
@@ -680,6 +712,15 @@ async def _settings_request(
     response = await client.request(
         method, path, json=body, headers=headers, params=params
     )
+    if (
+        method == "GET"
+        and path == "/api/v1/setup/status"
+        and project_setup
+        and response.is_success
+    ):
+        preparation = response.json()["terminal"]["image_preparation"]
+        if preparation.get("project_id") not in (None, project_id):
+            raise ValueError("setup status belongs to another project")
     if exact and not exact[3] and exact[2] != "schema" and response.is_success:
         if response.content:
             _require_mcp_scope(response.json(), project_id)
@@ -780,6 +821,7 @@ async def execute_settings_api(
     path: str,
     body: dict[str, Any] | list[Any] | None = None,
     expected_revision: int | None = None,
+    transport_app=None,
 ) -> dict[str, Any]:
     """Call only an existing Settings route, with the active project supplied by Core."""
 
@@ -816,7 +858,9 @@ async def execute_settings_api(
             "read the exact profile and supply expected_revision before deleting"
         )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
+        transport=httpx.ASGITransport(
+            app=transport_app if transport_app is not None else app
+        ),
         base_url="http://127.0.0.1",
         timeout=30.0,
     ) as client:
@@ -928,31 +972,53 @@ async def execute_settings_api(
                 "GET",
                 readback_path,
                 before_execution=False,
+                project_setup=not (
+                    selected == "POST" and candidate in _HOST_SETUP_ACTIONS
+                ),
             )
             if readback.is_success:
                 value = readback.json()
-                if not (
-                    selected == "POST" and isinstance(result, dict) and "id" in result
-                ) or (isinstance(value, dict) and value.get("id") == result["id"]):
+                exact_image_operation = (
+                    selected != "POST"
+                    or candidate not in _PROJECT_SETUP_ACTIONS
+                    or (
+                        isinstance(result, dict)
+                        and result.get("operation_id") is not None
+                        and value["terminal"]["image_preparation"].get("operation_id")
+                        == result["operation_id"]
+                    )
+                )
+                if exact_image_operation and (
+                    not (
+                        selected == "POST"
+                        and isinstance(result, dict)
+                        and "id" in result
+                    )
+                    or (isinstance(value, dict) and value.get("id") == result["id"])
+                ):
                     observed = value
             elif selected == "DELETE" and readback.status_code == 404:
                 observed = {"deleted": True}
-        rendered = json.dumps(
-            _safe_result(
-                result
-                if action_readback is not None
-                else observed
-                if observed is not None
-                else result
-            ),
-            default=str,
+        safe_result = _safe_result(
+            result
+            if action_readback is not None
+            else observed
+            if observed is not None
+            else result
         )
+        rendered = json.dumps(safe_result, default=str)
         if len(rendered) > 30_000:
+            safe_result = memory_assistant_result(candidate, safe_result)
+            rendered = json.dumps(safe_result, default=str)
+        result_limit = (
+            MEMORY_SETTINGS_LIMIT if candidate == "/api/v1/memory-budgets" else 30_000
+        )
+        if len(rendered) > result_limit:
             outcome: dict[str, Any] = {
                 "status": response.status_code,
-                "read_back": observed is not None,
+                "read_back": observed is not None or selected == "GET",
                 "truncated": True,
-                "result_excerpt": rendered[:30_000],
+                "result_excerpt": rendered[:result_limit],
             }
         else:
             outcome = {
@@ -1052,9 +1118,13 @@ async def execute_settings_api(
 class SettingsAssistantApi:
     """Core-owned gateway; bearer token and selected project remain server-side."""
 
-    def __init__(self, app: FastAPI, token: str) -> None:
+    def __init__(
+        self, app: FastAPI, token: str, *, memory_request=None, host_request=None
+    ) -> None:
         self.app = app
         self.token = token
+        self.memory_request = memory_request
+        self.host_request = host_request
 
     def schema(
         self, *, path: str | None = None, method: str | None = None
@@ -1072,12 +1142,50 @@ class SettingsAssistantApi:
     ) -> dict[str, Any]:
         if not isinstance(method, str) or not isinstance(path, str):
             raise ValueError("provide a Settings method and path")
-        return await execute_settings_api(
-            self.app,
-            self.token,
-            project_id,
-            method=method,
-            path=path,
-            body=body,
-            expected_revision=expected_revision,
-        )
+        candidate = _clean_path(path)
+        _require_public_input(method.upper(), candidate)
+        if (
+            self.memory_request is not None
+            and (
+                candidate == "/api/v1/memory-budgets"
+                or candidate.startswith("/api/v1/memory-budgets/")
+            )
+            and not re.fullmatch(r"/api/v1/memory-budgets/jobs/[^/]+/apply", candidate)
+        ):
+            return await self.memory_request(
+                project_id,
+                method=method.upper(),
+                path=candidate,
+                body=body,
+                expected_revision=expected_revision,
+            )
+        # Host discovery and selection do not own a project's image operation.
+        # Its status and controls must remain on this exact fenced application.
+        project_setup = (
+            method.upper() == "GET" and candidate == "/api/v1/setup/status"
+        ) or (method.upper() == "POST" and candidate in _PROJECT_SETUP_ACTIONS)
+        if (
+            self.host_request is not None
+            and not project_setup
+            and self.host_request.supports(method.upper(), candidate)
+        ):
+            return await self.host_request.request(
+                project_id,
+                method=method.upper(),
+                path=candidate,
+                body=body,
+                expected_revision=expected_revision,
+            )
+        attribution = memory_actor.set(f"butler:{project_id}")
+        try:
+            return await execute_settings_api(
+                self.app,
+                self.token,
+                project_id,
+                method=method,
+                path=path,
+                body=body,
+                expected_revision=expected_revision,
+            )
+        finally:
+            memory_actor.reset(attribution)

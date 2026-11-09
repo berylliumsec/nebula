@@ -2986,8 +2986,10 @@ async def test_butler_harness_has_scoped_capability_gateway_and_isolated_session
         "native_capabilities"
     ] == HarnessNativeCapabilities().model_dump(mode="json")
     assert chat_turn.tools_enabled is True
-    assert "You are Butler, the second-in-command" in turn.prompt
-    assert "nebula.capabilities.search" in turn.prompt
+    assert "You are Butler, the second-in-command" not in turn.prompt
+    standing = turn.metadata["standing_instructions"]["text"]
+    assert "You are Butler, the second-in-command" in standing
+    assert "nebula.capabilities.search" in standing
     assert turn.metadata["knowledge_access"] is False
     assert {
         item["name"]

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect, useRef } from "react";
 import { WorkspaceProvider, useWorkspace, useWorkspaceEvents, useWorkspaceMissions } from "./WorkspaceContext";
+import { rememberProject, rememberedNavigation } from "./navigationContinuity";
 
 const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined, coreCommits: 0, errors: [] as string[] }));
 vi.mock("../api/runtime", () => ({ resolveApiRuntime: async () => ({ state: "ready", baseUrl: "http://core/api/v1" }) }));
@@ -71,12 +72,13 @@ beforeEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
   window.history.replaceState({}, "", "/");
-  localStorage.setItem("nebula.engagement", "project");
+  rememberProject({key: "core:operator", persistent: true}, "project");
   fixture.methods = Object.fromEntries([
     "listApprovals", "listAssets", "listFindings", "listEvidence", "listObservations", "listKnowledgeSources", "listReports", "listLibraryItems", "listProviders",
   ].map((name) => [name, vi.fn().mockResolvedValue({ items: [] })]));
   Object.assign(fixture.methods, {
-    getToken: vi.fn(), health: vi.fn().mockResolvedValue({ status: "ok" }),
+    getToken: vi.fn(), initializeContinuity: vi.fn().mockResolvedValue({key: "core:operator", persistent: true}),
+    health: vi.fn().mockResolvedValue({ status: "ok" }),
     listEngagements: vi.fn().mockResolvedValue({ items: [{ id: "project", name: "Project", status: "active" }] }),
     listHarnesses: vi.fn().mockResolvedValue([]), listProviderCatalog: vi.fn().mockResolvedValue([]),
     listOperatorProfiles: vi.fn().mockResolvedValue([]),
@@ -86,6 +88,52 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it.each(["other-core:operator", "core:device:other"])("ignores another scope and legacy project preference for %s", async key => {
+    localStorage.setItem("nebula.engagement", "project");
+    fixture.methods.initializeContinuity.mockResolvedValue({key, persistent: true});
+    fixture.methods.listEngagements.mockResolvedValue({items: [
+      {id: "project-b", name: "Other project", status: "active"},
+      {id: "project", name: "Remembered in another scope", status: "active"},
+    ]});
+    await mount();
+    expect(state().engagement).toBe("project-b");
+    expect(fixture.methods.listRuns).toHaveBeenCalledTimes(1);
+    expect(fixture.methods.listRuns.mock.calls[0][0]).toBe("project-b");
+  });
+
+  it("gives a canonical project URL authority over scoped memory without duplicate loads", async () => {
+    window.history.replaceState({}, "", "/projects/project-b/findings");
+    fixture.methods.listEngagements.mockResolvedValue({items: [
+      {id: "project", name: "Remembered", status: "active"},
+      {id: "project-b", name: "Explicit", status: "active"},
+    ]});
+    await mount();
+    expect(state().engagement).toBe("project-b");
+    expect(fixture.methods.listRuns).toHaveBeenCalledTimes(1);
+    expect(rememberedNavigation({key: "core:operator", persistent: true})?.projectId).toBe("project-b");
+  });
+
+  it("keeps scoped project memory when the project catalog cannot be read", async () => {
+    fixture.methods.listEngagements.mockRejectedValue(new Error("Projects temporarily unavailable"));
+    await mount();
+    expect(state().engagement).toBeUndefined();
+    expect(rememberedNavigation({key: "core:operator", persistent: true})?.projectId).toBe("project");
+  });
+
+  it("makes host-only recovery available without waiting for Core catalogs", async () => {
+    fixture.methods.health.mockResolvedValue({status: "degraded", apiReady: false, recoveryPath: "/settings#memory-budget-settings"});
+    await mount();
+    expect(state().workspace).toBe("degraded");
+    expect(fixture.methods.listEngagements).not.toHaveBeenCalled();
+    expect(fixture.methods.listProviders).not.toHaveBeenCalled();
+    expect(fixture.methods.listHarnesses).not.toHaveBeenCalled();
+    expect(fixture.methods.setupStatus).not.toHaveBeenCalled();
+    fixture.methods.health.mockResolvedValue({status: "ok", apiReady: true});
+    fireEvent.click(screen.getByText("Retry Core"));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+    expect(fixture.methods.listEngagements).toHaveBeenCalledOnce();
+  });
+
   it("refreshes the selected project folder from the exact Core record", async () => {
     fixture.methods.listEngagements.mockResolvedValue({items: [
       {id: "project", name: "Project", status: "active", workspacePath: "/srv/old"},
@@ -111,7 +159,7 @@ describe("workspace resource recovery", () => {
     await waitFor(() => expect(state().projects).toContain("created"));
     expect(state().engagement).toBe("project");
     expect(state().workspace).toBe("ready");
-    expect(localStorage.getItem("nebula.engagement")).toBe("project");
+    expect(rememberedNavigation({key: "core:operator", persistent: true})?.projectId).toBe("project");
     expect(fixture.methods.listAssets).toHaveBeenCalledTimes(resourceCalls);
   });
 
@@ -413,7 +461,7 @@ describe("offline and stale-link safety", () => {
     ] });
     await mount();
     expect(state().engagement).toBeUndefined();
-    expect(localStorage.getItem("nebula.engagement")).toBe("project");
+    expect(rememberedNavigation({key: "core:operator", persistent: true})?.projectId).toBe("project");
   });
 
   it("starts without browser storage", async () => {

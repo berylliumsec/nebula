@@ -1,0 +1,84 @@
+{
+  "schema": "nebula.work-batch-integration-evidence/v1",
+  "date": "2026-11-09",
+  "test_module": "tests/v3/test_runtime_work_batch_integration.py",
+  "test_commit": "f391c88a",
+  "distinct_collected": 6,
+  "distinct_passed_across_phases": 6,
+  "one_final_six_case_run": false,
+  "source": {
+    "base_commit": "5fb00b8a1460175b0d8dea514319adb6d8b6c2c1",
+    "captured_worktree": true,
+    "source_tree_sha256": "ef183ee52baa9ec53ac6a3abebacf5e9cfdeb6911799afd080fc521ac0bd02ff",
+    "captured_patch_sha256": "59ae5948df122fd78e6f092a1d4b66d476a16a1bbfefc56415d84a32c5d91a87",
+    "product_knowledge_b85_sha256": "73c2b698ad6f198eacbe668e4fd10eab23a033bdb1d75fdc2a073543e5303b76",
+    "static_ui_commit": "4a39c121975bcdad01f1cbddc1c94b934ef6dc15",
+    "static_ui_index_sha256": "7f9b70965a8b2842c119b9aab05e12d2998c9274ca2bab7de8d4a112e4224976",
+    "claim": "Backend only; captured working-tree source, verified older static assets, no current UI claim"
+  },
+  "phases": [
+    {
+      "selected": 6,
+      "passed": 4,
+      "failed": 2,
+      "new_distinct_passes": 4,
+      "seconds": 152.79,
+      "fixture_sha256": "a3e065600fe74ca08e7f9b762f48af84522f0f5173fa124a426203738d70e259",
+      "raw_receipt": "/tmp/nebula-work-batch-integration-tests.txt",
+      "raw_sha256": "cf372bca050040f935e24a05fe871de5c6ffa78ae9ac0c8fb07ce13c8bdf2cc4",
+      "junit_receipt": "/tmp/nebula-work-batch-integration-junit.xml",
+      "junit_sha256": "b9c5305341e45ff2bf771eddbac3d298cbd3b81377119cb0ce9ed7c6d3e46f67"
+    },
+    {
+      "selected": 2,
+      "passed": 1,
+      "failed": 1,
+      "new_distinct_passes": 1,
+      "seconds": 182.34,
+      "fixture_sha256": "a9780fe62b60f10aeadbf3fa0f43238e96639d2d7f11fdfc5a967b5d5bee81f0",
+      "raw_receipt": "/tmp/nebula-work-batch-integration-repaired-tests.txt",
+      "raw_sha256": "8107d7cf6a328203117765c85046234e6fe19aea6006fb12fbc0cd7b8d950b24",
+      "junit_receipt": "/tmp/nebula-work-batch-integration-repaired-junit.xml",
+      "junit_sha256": "d983633cfce8164f8f0a34846d38d89f50d5b3f5e74df88005a2fa2341a07c2f"
+    },
+    {
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "new_distinct_passes": 1,
+      "seconds": 115.39,
+      "fixture_sha256": "f2a75907f9d57b59961518d50828537fa43e96f93bb83f2d262ace09bd6285ec",
+      "raw_receipt": "/tmp/nebula-work-batch-integration-final-tests.txt",
+      "raw_sha256": "2f2148c8a60293213c3fbbcf8c2d061a17b1aa5e5e09059b2c596ea30715b904",
+      "junit_receipt": "/tmp/nebula-work-batch-integration-final-junit.xml",
+      "junit_sha256": "7565a330be4a0b9ff1c2ddd97153641e142aba1a5a4f21fbac68a6c28dcd1265"
+    }
+  ],
+  "invariants": [
+    "Signed API peer has only Work coordinator capability; execution peers cannot invoke it.",
+    "Readiness, cached peer process state, runtime expiry and incorrect secret are enforced.",
+    "An accepted import moves queued to succeeded through the host loop after exact API termination, without Work status polling or resubmission.",
+    "Same operator/core identity and original actor/key lookup survive a distinct authoritative API replacement and explicit candidate promotion.",
+    "Two imported projects own their default scopes, Work items and updates; metadata-only batches create no execution worker or global project owner.",
+    "Multi-project hierarchy and Work edits increment each revision once; a hierarchy cycle saves HTTP409 without mutation.",
+    "Normal runtime-stop succeeds; exact Core and registered worker births are absent and owned runtime data is removed."
+  ],
+  "preserved_failures": [
+    "/tmp/nebula-work-batch-integration-first-failure",
+    "/tmp/nebula-work-batch-integration-second-failure"
+  ],
+  "causal_limits": "PriorPGpromotion preciseCoordinationConflict branch and initialPGcleanup precisecause were not retained; no productcause/fix claimed. Validated fixture readiness inference and supported503/retirement/HTTPauth contracts corrected. FinalPGsuccess does not recreate erased details.",
+  "local_consolidated_receipt": "/tmp/nebula-work-batch-integration-complete-execution.json",
+  "local_inputs_receipt": "/tmp/nebula-work-batch-integration-final-inputs.json",
+  "local_plan_receipts": [
+    "/tmp/nebula-work-batch-integration-selection-receipt.json",
+    "/tmp/nebula-work-batch-integration-repaired-selection-receipt.json",
+    "/tmp/nebula-work-batch-integration-final-selection-receipt.json"
+  ],
+  "limits": [
+    "Loopback desktop connector/actual source Core evidence only.",
+    "No current production LAN/browser, physical device, native GUI, or released binary compatibility claim.",
+    "All projects, identities and peers are synthetic; no vendor, installed harness, OCI or existing installation was used.",
+    "Foreign paired-actor receipt isolation requires the separate HTTPS authentication fixture."
+  ]
+}

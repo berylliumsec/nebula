@@ -16,9 +16,7 @@ import secrets
 import socket
 import sys
 import tempfile
-import threading
 import time
-import webbrowser
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -31,9 +29,8 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
 from .api import create_app
-from .async_utils import call_async
 from .artifacts import ArtifactStore
-from .automation_runtime import AutomationRuntimeManager, resolve_callback_origin
+from .automation_runtime import AutomationRuntimeManager
 from .automation_tools import (
     AutomationToolPlatform,
     PROCESS_IO_NAME,
@@ -70,8 +67,6 @@ from .mcp_import import (
 from .event_history import pause_between_batches, prune_orphaned_event_history
 from .exporter import ExportError, export_engagement
 from .importer import import_2x_engagement
-from .knowledge_index import ChromaKnowledgeIndex
-from .knowledge_rerank import CrossEncoderReranker
 from .orchestration import (
     ModelSpecialist,
     SpecialistRole,
@@ -501,217 +496,46 @@ async def serve(
         not tls_cert.is_file() or not tls_key or not tls_key.is_file()
     ):
         raise typer.BadParameter("TLS certificate and key must be readable files")
+    from .runtime_launcher import retain_bundle
+    from .runtime_service import serve_runtime
+
+    root = _data_dir(data_dir)
+    if not sys.platform.startswith("linux"):
+        raise typer.BadParameter(
+            "Independent local Core requires Linux pidfd support; configure a remote Core on this platform"
+        )
     if handshake_stdout:
-        if not _is_loopback(host):
-            raise typer.BadParameter("desktop sidecars may bind only to loopback")
-        raw = sys.stdin.buffer.readline(16_385)
-        if len(raw) > 16_384 or not raw.endswith(b"\n"):
-            raise typer.BadParameter("invalid desktop bootstrap frame")
+        raise typer.BadParameter(
+            "desktop lifetime protocol has changed; use desktop-connect --bootstrap-stdin"
+        )
+    if allow_unauthenticated_remote:
+        raise typer.BadParameter(
+            "independent Core requires authentication; use normal device pairing"
+        )
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as probe:
         try:
-            bootstrap = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            record_caught_exception(
-                "diagnostics",
-                "diagnostics.cli.caught_failure_003",
-                "A handled diagnostics operation raised an exception.",
-                exc,
-                stage="cli",
-            )
-            raise typer.BadParameter("malformed desktop bootstrap frame") from exc
-        if (
-            not isinstance(bootstrap, dict)
-            or bootstrap.get("protocol") != "nebula-sidecar-v1"
-            or not isinstance(bootstrap.get("ipc_token"), str)
-            or not 32 <= len(bootstrap["ipc_token"]) <= 256
-        ):
-            raise typer.BadParameter("unsupported desktop bootstrap protocol")
-        auth_token = bootstrap["ipc_token"]
-    else:
-        auth_token = token or secrets.token_urlsafe(32)
-    root, store, artifacts = _services(
-        data_dir, diagnostics_level=diagnostics_level, runtime_pool=True
-    )
-    await store.database.initialize()
-    reranker = CrossEncoderReranker(
-        Path(os.getenv("NEBULA_V3_KNOWLEDGE_MODELS_DIR", root / "knowledge-models")),
-        # "off" keeps retrieval as it was, and nothing is downloaded.
-        enabled=os.getenv("NEBULA_V3_KNOWLEDGE_RERANKER", "on").strip().casefold()
-        not in {"0", "false", "no", "off"},
-    )
-    knowledge_index = await asyncio.to_thread(
-        ChromaKnowledgeIndex,
-        Path(os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR", root / "knowledge-index")),
-        reranker=reranker,
-    )
-    # A model already on disk is verified and loaded now, not on the first turn.
-    await asyncio.to_thread(reranker.start_if_present)
-    record_diagnostic(
-        "info",
-        "api",
-        "api.process.starting",
-        "Nebula Core API is starting.",
-        outcome="started",
-        metadata={"mode": "desktop" if handshake_stdout else "headless"},
-    )
-    tool_platform = default_runtime_platform(
-        store=store, artifact_store=artifacts, data_root=root
-    )
-    api = await call_async(
-        create_app,
-        store,
-        artifact_store=artifacts,
-        auth_token=auth_token,
-        static_dir=static_dir,
-        tool_platform=tool_platform,
-        execution_data_root=root,
-        mission_checkpoint_path=(
-            root / "mission-checkpoints.db"
-            if store.database.engine.dialect.name == "postgresql"
-            else None
-        ),
-        knowledge_index=knowledge_index,
-        bootstrap_workspace=True,
-        # The authenticated browser workspace served by a loopback Core owns
-        # its interface diagnostics just like the native shell does. Remote
-        # bindings remain closed to browser diagnostic ingress by default.
-        allow_browser_diagnostic_events=_browser_diagnostic_ingress_allowed(
-            host,
-            handshake_stdout=handshake_stdout,
-            allow_remote=allow_remote,
-            explicitly_enabled=allow_browser_diagnostics,
-        ),
-        allow_insecure_device_pairing=allow_insecure_device_pairing,
-        allow_unauthenticated=allow_unauthenticated_remote,
-    )
-    try:
-        bind_address = ipaddress.ip_address(host)
-    except ValueError as caught_error:
-        record_caught_exception(
-            "diagnostics",
-            "diagnostics.cli.caught_failure_004",
-            "A handled diagnostics operation raised an exception.",
-            caught_error,
-            stage="cli",
-        )
-        bind_address = None
-    family = (
-        socket.AF_INET6
-        if bind_address is not None and bind_address.version == 6
-        else socket.AF_INET
-    )
-    listener = socket.socket(family, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        listener.bind((host, port))
-    except OSError as exc:
-        record_caught_exception(
-            "diagnostics",
-            "diagnostics.cli.caught_failure_011",
-            "A handled diagnostics operation raised an exception.",
-            exc,
-            stage="cli",
-        )
-        listener.close()
-        typer.echo(f"cannot bind {host}:{port}: {exc.strerror or exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    listener.listen(2048)
-    port = int(listener.getsockname()[1])
-    runtime = getattr(api.state, "automation_runtime", None)
-    if runtime is not None:
-        runtime.callback_origin = resolve_callback_origin(
-            host=host, port=port, tls=tls_cert is not None
-        )
-    if handshake_stdout:
-        # The desktop supervisor deliberately reads exactly one bounded line.
-        sys.stdout.write(
-            json.dumps(
-                {
-                    "protocol": "nebula-sidecar-v1",
-                    "host": "127.0.0.1",
-                    "port": port,
-                },
-                separators=(",", ":"),
-            )
-            + "\n"
-        )
-        sys.stdout.flush()
-    else:
-        display_host = f"[{host}]" if family == socket.AF_INET6 else host
-        scheme = "https" if tls_cert is not None else "http"
-        _print(
-            {
-                "kind": "nebula-api-ready",
-                "url": f"{scheme}://{display_host}:{port}",
-                "token": None if allow_unauthenticated_remote else auth_token,
-                "local_only": _is_loopback(host),
-                "authentication": "disabled"
-                if allow_unauthenticated_remote
-                else "bearer",
-            }
-        )
-        if allow_unauthenticated_remote:
+            probe.bind((host, port))
+        except OSError as error:
             typer.echo(
-                "WARNING: unauthenticated LAN mode grants every reachable device full Nebula access.",
-                err=True,
+                f"cannot bind {host}:{port}: {error.strerror or error}", err=True
             )
-    if open_browser:
-        browser_scheme = "https" if tls_cert is not None else "http"
-        webbrowser.open(f"{browser_scheme}://127.0.0.1:{port}/#token={auth_token}")
-    # Request summaries are emitted by the sanitizing API middleware. Raw
-    # server access logs can include untrusted path/query data and stay off.
-    config = uvicorn.Config(
-        api,
+            raise typer.Exit(code=1) from error
+    bundle, digest = await asyncio.to_thread(retain_bundle, root, static_dir=static_dir)
+    await serve_runtime(
+        data_root=root,
+        bundle=bundle,
+        manifest_sha256=digest,
         host=host,
         port=port,
-        log_level="error",
-        access_log=False,
-        ssl_certfile=str(tls_cert) if tls_cert else None,
-        ssl_keyfile=str(tls_key) if tls_key else None,
+        token=token,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
+        allow_insecure_device_pairing=allow_insecure_device_pairing,
+        allow_browser_diagnostics=allow_browser_diagnostics,
+        open_browser=open_browser,
+        print_ready=True,
+        diagnostics_level=diagnostics_level,
     )
-    server = uvicorn.Server(config)
-    if handshake_stdout:
-
-        def stop_when_desktop_disconnects() -> None:
-            try:
-                while sys.stdin.buffer.read(4096):
-                    pass
-            finally:
-                server.should_exit = True
-
-        threading.Thread(
-            target=stop_when_desktop_disconnects,
-            name="nebula-desktop-lifetime",
-            daemon=True,
-        ).start()
-    try:
-        await server.serve(sockets=[listener])
-    except BaseException as exc:
-        record_caught_exception(
-            "diagnostics",
-            "diagnostics.cli.caught_failure_005",
-            "A handled diagnostics operation raised an exception.",
-            exc,
-            stage="cli",
-        )
-        record_diagnostic(
-            "critical",
-            "api",
-            "api.process.failed",
-            "Nebula Core API stopped unexpectedly.",
-            outcome="failure",
-            stage="server",
-            retryable=True,
-            exception=exc,
-        )
-        raise
-    finally:
-        record_diagnostic(
-            "info",
-            "api",
-            "api.process.stopped",
-            "Nebula Core API stopped.",
-            outcome="success",
-        )
 
 
 @app.command()
@@ -1675,6 +1499,139 @@ async def doctor(
     _print(report)
     if report["status"] != "ok":
         raise typer.Exit(code=1)
+
+
+@app.command("runtime-worker", hidden=True)
+def runtime_worker_command(
+    bootstrap_stdin: Annotated[bool, typer.Option()] = False,
+) -> None:
+    """Start one verified retained role using a bounded private bootstrap."""
+    if not bootstrap_stdin:
+        raise typer.BadParameter("runtime workers require --bootstrap-stdin")
+    from .runtime_worker import main as worker_main
+
+    worker_main()
+
+
+@app.command("runtime-service", hidden=True)
+@_async_command(server_loop=True)
+async def runtime_service_command(
+    bundle: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    manifest_sha256: Annotated[str, typer.Option()],
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    host: Annotated[str, typer.Option()] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=0, max=65535)] = 0,
+    startup_id: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    from .runtime_service import serve_runtime
+
+    if not _is_loopback(host):
+        raise typer.BadParameter("internal desktop startup requires loopback")
+    await serve_runtime(
+        data_root=_data_dir(data_dir),
+        bundle=bundle,
+        manifest_sha256=manifest_sha256,
+        host=host,
+        port=port,
+        startup_id=startup_id,
+    )
+
+
+@app.command("runtime-migrate", hidden=True)
+def runtime_migrate_command(
+    bootstrap_stdin: Annotated[bool, typer.Option()] = False,
+) -> None:
+    """Run one supervisor-authorized migration from retained source."""
+    if not bootstrap_stdin:
+        raise typer.BadParameter("runtime migration requires --bootstrap-stdin")
+    from .runtime_worker import migration_main
+
+    migration_main()
+
+
+@app.command("desktop-connect", hidden=True)
+def desktop_connect_command(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    static_dir: Annotated[Path | None, typer.Option()] = None,
+    bootstrap_stdin: Annotated[bool, typer.Option()] = False,
+) -> None:
+    from .runtime_launcher import DESKTOP_PROTOCOL, desktop_connection
+
+    if bootstrap_stdin:
+        raw = sys.stdin.buffer.readline(16385)
+        try:
+            frame = json.loads(raw)
+        except (ValueError, UnicodeError) as error:
+            raise typer.BadParameter("invalid desktop bootstrap frame") from error
+        if (
+            len(raw) > 16384
+            or not raw.endswith(b"\n")
+            or not isinstance(frame, dict)
+            or frame.get("protocol") != DESKTOP_PROTOCOL
+        ):
+            raise typer.BadParameter("unsupported desktop bootstrap protocol")
+    from httpx import HTTPError
+
+    try:
+        result = desktop_connection(_data_dir(data_dir), static_dir=static_dir)
+    except (OSError, ValueError, RuntimeError, HTTPError) as error:
+        raise typer.BadParameter(str(error)) from None
+    typer.echo(json.dumps(result, separators=(",", ":")))
+
+
+@app.command("runtime-stop")
+def runtime_stop_command(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Explicitly stop local Core after its durable work is safe to stop."""
+    from .runtime_launcher import shutdown_runtime
+    from httpx import HTTPError
+
+    try:
+        _print(shutdown_runtime(_data_dir(data_dir)))
+    except (OSError, ValueError, RuntimeError, HTTPError) as error:
+        raise typer.BadParameter(str(error)) from None
+
+
+@app.command("runtime-adopt")
+def runtime_adopt_command(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    confirm_core_stopped: Annotated[
+        bool,
+        typer.Option(help="Confirm every legacy Core using this database is stopped."),
+    ] = False,
+) -> None:
+    """Prepare an existing data root for one coordinated legacy restart."""
+    if not confirm_core_stopped:
+        raise typer.BadParameter(
+            "Stop every legacy Core and pass --confirm-core-stopped"
+        )
+    from .runtime_launcher import (
+        operator_token,
+        runtime_root,
+        startup_lock,
+        write_private,
+    )
+    from .runtime_service import OFFLINE_ADOPTION
+
+    root = _data_dir(data_dir)
+    with startup_lock(root):
+        state = runtime_root(root)
+        if (state / "releases").exists() or (state / "connection.json").exists():
+            raise typer.BadParameter(
+                "This root already has retained runtime state; use its supervisor's verified migration or recovery operation"
+            )
+        operator_token(root, os.getenv("NEBULA_V3_API_TOKEN"), adopt_legacy=True)
+        write_private(
+            state / OFFLINE_ADOPTION,
+            json.dumps(
+                {
+                    "state": "offline-legacy-adoption",
+                    "data_root": str(root),
+                }
+            ).encode(),
+        )
+    _print({"state": "adopted", "data_dir": str(root), "data_preserved": True})
 
 
 def main() -> None:

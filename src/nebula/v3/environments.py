@@ -422,6 +422,7 @@ def build_ssh_tool_plugins(
     environments: tuple[SshEnvironment, ...],
     *,
     config_path: Path | str | None = None,
+    memory_compute=None,
 ) -> list[Any]:
     """One broker plugin per enabled host; ``ask`` hosts require approval."""
 
@@ -466,6 +467,17 @@ def build_ssh_tool_plugins(
 
         async def execute(self, invocation: Any, runner: Any) -> Any:
             del runner
+            if memory_compute is None:
+                raise ValueError(
+                    "SSH compute requires a memory-runner/v1 agent; no unrestricted SSH fallback is permitted"
+                )
+            await memory_compute.reject_unsupported(
+                "ssh",
+                project_id=invocation.engagement_id,
+                resource_kind="ssh_command",
+                resource_id=invocation.id,
+                detail="This SSH host has no authenticated memory-runner/v1 agent that verifies descendant cleanup. Connect a supported remote runner before running compute; raw SSH is unavailable for required budgets.",
+            )
             arguments = invocation.arguments
             cwd = arguments.get("cwd") or self.environment.working_directory
             timeout = int(

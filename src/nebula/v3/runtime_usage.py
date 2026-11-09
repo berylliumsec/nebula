@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import math
 import time
 from datetime import datetime, timezone
@@ -27,13 +28,15 @@ from .domain import (
     ProviderProfile,
     RunBackend,
 )
-from .harnesses import CodexAppServerAdapter, GrokAcpAdapter
+from .harness_account_reader import guarded_harness_account_read
 from .harness_quota import (
     HarnessQuotaSnapshot,
     codex_quota_snapshots,
     grok_quota_snapshots,
 )
 from .storage import NebulaStore
+from .memory_policy import MemoryEnforcementUnavailable
+from .runtime_coordination import LeaseLost
 
 
 class RecordedUsage(BaseModel):
@@ -388,10 +391,15 @@ class RuntimeUsageService:
         credentials: CredentialStore,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        harness_account_reader: Callable[
+            [HarnessProfile, CredentialStore], Awaitable[dict[str, Any]]
+        ]
+        | None = None,
     ) -> None:
         self.store = store
         self.credentials = credentials
         self.transport = transport
+        self.harness_account_reader = harness_account_reader
         self._cache: dict[tuple[str, str, int], tuple[float, VendorUsage]] = {}
 
     async def _vendor(
@@ -435,15 +443,17 @@ class RuntimeUsageService:
                 )
         try:
             if isinstance(profile, HarnessProfile):
-                if profile.kind.value == "grok_acp":
-                    payload = await GrokAcpAdapter().read_account_usage(
+                if self.harness_account_reader is not None:
+                    payload = await self.harness_account_reader(
                         profile, self.credentials
                     )
+                else:
+                    payload = await guarded_harness_account_read(
+                        profile, self.credentials
+                    )
+                if profile.kind.value == "grok_acp":
                     value = parse_grok_usage(payload)
                 else:
-                    payload = await CodexAppServerAdapter().read_account_usage(
-                        profile, self.credentials
-                    )
                     value = parse_codex_usage(payload)
             else:
                 secret_ref = profile.secret_ref
@@ -475,6 +485,20 @@ class RuntimeUsageService:
                     if profile.provider_type == "openrouter"
                     else parse_deepseek_usage(payload)
                 )
+        except LeaseLost:
+            # A retired project must not turn a lost ownership grant into an
+            # ordinary vendor error or retain the account observation.
+            raise
+        except MemoryEnforcementUnavailable as error:
+            # diagnostic-expected: protected account admission is unavailable.
+            # Local recovery text is safe to surface; unsupported readers retain
+            # a blocked job, while an uninitialized controller starts no reader.
+            value = VendorUsage(
+                state="unavailable",
+                source="Harness account",
+                detail=str(error),
+                checked_at=datetime.now(timezone.utc),
+            )
         except Exception:
             # Credential, transport and vendor errors can contain secret-bearing
             # URLs or response bodies. The operator needs a safe retry message.

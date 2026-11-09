@@ -2,7 +2,8 @@ import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Contrast, KeyRound, Minus, Pencil, Plus, RefreshCw, RotateCcw, Server, Trash2, UserRound, X } from "lucide-react";
-import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
+import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SetupStatus, SkillCatalogInfo } from "../api/types";
+import type { ApiClient } from "../api/client";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { UpstreamProviderPicker, upstreamCatalog, type UpstreamProviderOption } from "../components/UpstreamProviderPicker";
 import { PageHeader } from "../components/PageHeader";
@@ -22,6 +23,7 @@ import { ButlerInstructionsSettings } from "../components/ButlerInstructionsSett
 import { ButlerCheckIntervalSettings } from "../components/ButlerCheckIntervalSettings";
 import {HostPressureSettings} from "../components/HostPressureSettings";
 import { HostCpuBudgetSettings } from "../components/HostCpuBudgetSettings";
+import { MemoryBudgetSettings } from "../components/MemoryBudgetSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
@@ -32,7 +34,7 @@ import { ShowMeHow } from "../guides/ShowMeHow";
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
-import { isTauriRuntime } from "../api/runtime";
+import { isTauriRuntime, isElectronRuntime, shutdownLocalRuntime } from "../api/runtime";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { CompactSettingsList } from "../components/CompactSettingsList";
@@ -70,7 +72,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
   if (["usage-settings", "runtime-usage"].includes(hash)) return "usage-settings";
-  if (["automation-settings", "butler-check-interval-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
+  if (["automation-settings", "memory-budget-settings", "butler-check-interval-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
   if (["integrations-settings", "storage-integration-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
@@ -168,6 +170,19 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [insecureTransport, setInsecureTransport] = useState(false);
   const [coreConnectionBusy, setCoreConnectionBusy] = useState(false);
   const [coreConnectionError, setCoreConnectionError] = useState<string>();
+  const [coreShutdownComplete, setCoreShutdownComplete] = useState(false);
+
+  const shutDownCore = async () => {
+    if (!await confirm({title: "Shut down Core?", message: "Closing this window leaves Core and saved work running. This action asks Core to stop once its work is safe to stop; active effects may block shutdown.", confirmLabel: "Shut down Core", tone: "danger"})) return;
+    setCoreConnectionBusy(true); setCoreConnectionError(undefined);
+    try {
+      await shutdownLocalRuntime();
+      setCoreShutdownComplete(true);
+    } catch (error) {
+      logCaughtDiagnostic("interface.settings_page.core_shutdown_failed", "The local Core could not shut down.", error, "core-shutdown");
+      setCoreConnectionError(error instanceof Error ? error.message : String(error));
+    } finally { setCoreConnectionBusy(false); }
+  };
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -214,12 +229,52 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [preparationClock, setPreparationClock] = useState(Date.now());
   const [selectingRuntime, setSelectingRuntime] = useState<string>();
   const [setupError, setSetupError] = useState<string>();
+  const [projectSetupAttempt, setProjectSetupAttempt] = useState(0);
+  const [projectSetup, setProjectSetup] = useState<{api: ApiClient; projectId: string; status?: SetupStatus; error?: string}>();
+  const setupProjectRef = useRef({api, projectId: engagement?.id});
+  setupProjectRef.current = {api, projectId: engagement?.id};
+  const currentProjectSetup = projectSetup?.api === api && projectSetup?.projectId === engagement?.id ? projectSetup : undefined;
+  const isSetupProjectCurrent = (projectId: string | undefined) => setupProjectRef.current.api === api
+    && setupProjectRef.current.projectId === projectId;
   const [detectedLocalProviders, setDetectedLocalProviders] = useState<LocalProviderDetection[]>([]);
   const [detectingLocalProviders, setDetectingLocalProviders] = useState(false);
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalogInfo>();
   const [nativeSkills, setNativeSkills] = useState<HarnessSkillSummary[]>([]);
   const [skillCatalogError, setSkillCatalogError] = useState<string>();
   const [skillCatalogLoading, setSkillCatalogLoading] = useState(false);
+
+  useEffect(() => {
+    setCheckingTerminal(false);
+    setSetupError(undefined);
+    if (!api || !engagement?.id || settingsSection !== "setup-settings" || !["ready", "degraded"].includes(workspaceState)) {
+      setProjectSetup(undefined);
+      return;
+    }
+    const projectId = engagement.id;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    setProjectSetup({api, projectId});
+    const load = async () => {
+      try {
+        const status = await api.setupStatus(controller.signal, projectId);
+        if (controller.signal.aborted) return;
+        setProjectSetup({api, projectId, status});
+        if (status.terminal.status === "detecting_runner"
+          || ["queued", "resolving_runtime", "preparing_image", "cancelling"].includes(status.terminal.imagePreparation.phase)) {
+          timer = window.setTimeout(() => void load(), 1_000);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return; // diagnostic-expected: a new Project or view supersedes this read.
+        logCaughtDiagnostic("interface.settings_page.project_setup_load_failed", "The selected Project's Terminal setup could not be loaded.", error, "project-setup");
+        setProjectSetup({api, projectId, error: error instanceof Error ? error.message : "Project Terminal setup could not be loaded. Check again."});
+      }
+    };
+    void load();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [api, engagement?.id, projectSetupAttempt, settingsSection, workspaceState]);
 
   useEffect(() => {
     if (!api || !["ready", "degraded"].includes(workspaceState)) {
@@ -713,32 +768,40 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     }
   };
   const checkTerminalSetup = async () => {
+    const projectId = engagement?.id;
     setCheckingTerminal(true);
     setSetupError(undefined);
     try {
-      if (api && ["error", "cancelled"].includes(setupStatus?.terminal.imagePreparation.phase ?? "")) {
-        await api.retrySetupImage(setupStatus?.scratchProjectId);
+      const preparation = currentProjectSetup?.status?.terminal.imagePreparation;
+      if (api && projectId && preparation?.projectId === projectId && ["error", "cancelled"].includes(preparation.phase)) {
+        await api.retrySetupImage(projectId);
+      } else {
+        await refreshSetupRuntime();
       }
-      await refreshSetupRuntime();
+      if (isSetupProjectCurrent(projectId)) setProjectSetupAttempt(value => value + 1);
     } catch (error) {
+      if (!isSetupProjectCurrent(projectId)) return; // diagnostic-expected: the selected Project changed during the action.
       void logCaughtDiagnostic("interface.settings_page.caught_failure_09", "A handled interface operation failed.", error, "settings_page");
       setSetupError(error instanceof Error ? error.message : "Could not check Terminal setup.");
     } finally {
-      setCheckingTerminal(false);
+      if (isSetupProjectCurrent(projectId)) setCheckingTerminal(false);
     }
   };
   const cancelImagePreparation = async () => {
-    if (!api || !setupStatus?.terminal.imagePreparation.operationId) return;
+    const projectId = engagement?.id;
+    const preparation = currentProjectSetup?.status?.terminal.imagePreparation;
+    if (!api || !projectId || !preparation?.operationId || preparation.projectId !== projectId) return;
     setCheckingTerminal(true);
     setSetupError(undefined);
     try {
-      await api.cancelSetupImage(setupStatus.terminal.imagePreparation.operationId);
-      await refreshSetupRuntime();
+      await api.cancelSetupImage(preparation.operationId, projectId);
+      if (isSetupProjectCurrent(projectId)) setProjectSetupAttempt(value => value + 1);
     } catch (error) {
+      if (!isSetupProjectCurrent(projectId)) return; // diagnostic-expected: the selected Project changed during the action.
       void logCaughtDiagnostic("interface.settings_page.image_preparation_cancel_failed", "Kali runtime preparation could not be cancelled.", error, "settings_page");
       setSetupError(error instanceof Error ? error.message : "Could not cancel Kali runtime preparation.");
     } finally {
-      setCheckingTerminal(false);
+      if (isSetupProjectCurrent(projectId)) setCheckingTerminal(false);
     }
   };
   const selectRuntime = async (candidateId: string) => {
@@ -748,6 +811,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     try {
       await api.selectSetupRuntime(candidateId);
       await refreshSetupRuntime();
+      setProjectSetupAttempt(value => value + 1);
     } catch (error) {
       void logCaughtDiagnostic("interface.settings_page.caught_failure_10", "A handled interface operation failed.", error, "settings_page");
       setSetupError(error instanceof Error ? error.message : "Could not select the container runtime.");
@@ -802,9 +866,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const moreProviderCatalog = providerCatalog.filter(
     (entry) => !primaryProviderFlavors.includes(entry.flavor),
   );
-  const imagePreparation = setupStatus?.terminal.imagePreparation;
-  const imagePreparationActive = setupStatus?.terminal.status === "preparing_image";
-  const imagePreparationFailed = imagePreparation?.phase === "error" || imagePreparation?.phase === "cancelled";
+  const terminalSetup = engagement?.id ? currentProjectSetup?.status?.terminal : setupStatus?.terminal;
+  const projectSetupPending = Boolean(api && engagement?.id && !currentProjectSetup?.status && !currentProjectSetup?.error);
+  const imagePreparation = currentProjectSetup?.status?.terminal.imagePreparation;
+  const imagePreparationOwned = Boolean(engagement?.id && imagePreparation?.projectId === engagement.id);
+  const imagePreparationActive = imagePreparationOwned && ["queued", "resolving_runtime", "preparing_image", "cancelling"].includes(imagePreparation?.phase ?? "");
+  const imagePreparationFailed = imagePreparationOwned && (imagePreparation?.phase === "error" || imagePreparation?.phase === "cancelled");
   const imagePreparationIndeterminate = imagePreparation?.progressIndeterminate === true
     || imagePreparation?.progressPercent === undefined;
   useEffect(() => {
@@ -832,26 +899,27 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
         <HostCpuBudgetSettings api={api} previewMode={previewMode} />
         <HostPressureSettings api={api} previewMode={previewMode} />
-        {isTauriRuntime() && <section className="panel setup-card core-connection-settings" aria-labelledby="core-connection-title">
+        {(isTauriRuntime() || isElectronRuntime()) && <section id="core-connection-settings" className="panel setup-card core-connection-settings" aria-labelledby="core-connection-title">
           <header><span className={`status-dot ${coreConnection?.mode === "remote" ? "healthy" : "warning"}`} /><div><small>UI shell connection</small><h3 id="core-connection-title">{coreConnection?.mode === "remote" ? "Remote Core selected" : "Supervised local Core"}</h3></div></header>
-          <p>{coreConnection?.mode === "remote" ? `${coreConnection.endpoint ?? "Remote endpoint"} · this UI shell sends projects, terminals, chats, missions, events, and WebSockets to that Core.` : "This UI shell starts and uses its bundled local Core."}</p>
-          <form className="core-connection-form" onSubmit={(event) => void configureRemoteCore(event)}>
+          <p>{coreConnection?.mode === "remote" ? `${coreConnection.endpoint ?? "Remote endpoint"} · this UI shell sends projects, terminals, chats, missions, events, and WebSockets to that Core.` : "Core continues running when you close or update this window. Reopening reconnects to saved work."}</p>
+          {isTauriRuntime() && <form className="core-connection-form" onSubmit={(event) => void configureRemoteCore(event)}>
             <label><span>Remote Core origin</span><input value={remoteEndpoint} onChange={(event) => setRemoteEndpoint(event.target.value)} placeholder="https://nebula.example" autoComplete="url" /></label>
             <label><span>Bearer token</span><input value={remoteToken} onChange={(event) => setRemoteToken(event.target.value)} type="password" placeholder={coreConnection?.tokenAvailable ? "Saved token; enter a replacement" : "Remote Core token"} autoComplete="off" required /></label>
             <label className="core-connection-insecure"><input type="checkbox" checked={insecureTransport} onChange={(event) => setInsecureTransport(event.target.checked)} /><span><strong>Allow HTTP for this connection</strong><small>Bearer tokens can be intercepted on an insecure network.</small></span></label>
             <div className="core-connection-actions"><button className="button primary" type="submit" disabled={coreConnectionBusy}>{coreConnectionBusy ? "Testing…" : "Connect UI shell to remote Core"}</button>{coreConnection?.mode === "remote" && <button className="button secondary" type="button" disabled={coreConnectionBusy} onClick={() => void invoke("use_local_backend").then(() => window.location.reload()).catch((error) => { void logCaughtDiagnostic("interface.settings_page.local_core_switch_failed", "The UI shell could not switch back to its local Core.", error, "settings_page"); setCoreConnectionError(error instanceof Error ? error.message : String(error)); })}>Use local Core</button>}</div>
-          </form>
+          </form>}
+          {coreConnection?.mode !== "remote" && <div className="core-connection-actions"><button className="button secondary" type="button" disabled={coreConnectionBusy || coreShutdownComplete || (isTauriRuntime() && !coreConnection)} onClick={() => void shutDownCore()}>{coreConnectionBusy ? "Waiting for Core…" : "Shut down Core"}</button>{coreShutdownComplete && <p role="status">Core has shut down. Reopen the desktop to start it again.</p>}</div>}
           <p className="core-connection-boundary"><strong>Native execution stays on this desktop:</strong> Browser tabs, identity storage, proxy traffic, and keyring credentials run locally. Their sessions, commands, rules, receipts, and evidence synchronize with the selected Core.</p>
           {coreConnectionError && <DiagnosticErrorNotice error={coreConnectionError} fallback="The Core connection could not be updated." compact />}
         </section>}
         <div className="setup-card-grid">
           <article className="panel setup-card">
-            <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Kali runtime ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
-            {!imagePreparationActive && !imagePreparationFailed && <p>{setupStatus?.terminal.detail ?? (setupStatus?.terminal.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>}
+            <header><span className={`status-dot ${terminalSetup?.status === "ready" ? "healthy" : projectSetupPending || ["detecting_runner", "preparing_image"].includes(terminalSetup?.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{projectSetupPending ? "Checking Project setup…" : terminalSetup?.status === "ready" ? "Kali runtime ready" : terminalSetup?.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : terminalSetup?.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>
+            {!imagePreparationActive && !imagePreparationFailed && <p>{terminalSetup?.detail ?? (terminalSetup?.status === "ready" ? "A verified local container runtime is ready for project terminals." : "Nebula checks trusted local Docker and Podman installations automatically.")}</p>}
             {(imagePreparationActive || imagePreparationFailed) && <ProgressState
               className="setup-preparation-progress"
               stage={imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : "Preparing Kali runtime"}
-              detail={imagePreparation?.detail ?? setupStatus?.terminal.detail ?? "Preparing the verified project image."}
+              detail={imagePreparation?.detail ?? terminalSetup?.detail ?? "Preparing the verified project image."}
               progressLabel="Kali runtime preparation progress"
               elapsed={elapsedLabel(imagePreparation?.startedAt, preparationClock)}
               progress={imagePreparationIndeterminate ? undefined : imagePreparation?.progressPercent}
@@ -872,6 +940,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         </div>
         {setupStatus?.scratchProjectId && <p className="setup-footnote"><Check size={14} /> Scratch Project is ready.</p>}
         {setupError && <DiagnosticErrorNotice error={setupError} fallback="Setup could not complete the operation." />}
+        {currentProjectSetup?.error && <DiagnosticErrorNotice error={currentProjectSetup.error} fallback="Project Terminal setup could not be loaded. Check again." />}
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
@@ -907,6 +976,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
+      <MemoryBudgetSettings api={api} previewMode={previewMode} />
       </SettingsGroup>
       <SettingsGroup id="environments-settings" title="Environments" summary="SSH hosts from ~/.ssh/config" open={openAdvancedGroup === "environments-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "environments-settings"}>
       <EnvironmentSettings />

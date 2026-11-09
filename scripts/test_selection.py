@@ -42,6 +42,17 @@ def validate(plan: dict, digest: str) -> dict:
         raise ValueError(
             "Coverage review required: missing/stale change_digest; regenerate the selection for this diff."
         )
+    checks = plan.get("checks", [])
+    if (
+        not isinstance(checks, list)
+        or any(
+            not isinstance(item, str)
+            or item not in {"frontend-audit", "desktop-ui-build"}
+            for item in checks
+        )
+        or len(checks) != len(set(checks))
+    ):
+        raise ValueError("Select only supported individual checks without duplicates.")
     versions = plan.get("python_versions", ["3.12"])
     if (
         not isinstance(versions, list)

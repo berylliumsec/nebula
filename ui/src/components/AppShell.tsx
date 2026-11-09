@@ -17,6 +17,7 @@ import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 import { SettingsLens } from "./SettingsLens";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
+import { RuntimeContinuityNotice } from "./RuntimeContinuityNotice";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
 import { useNavigationChords } from "../state/useNavigationChords";
@@ -281,6 +282,7 @@ export function AppShell() {
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><DiagnosticErrorNotice error={coreError ?? "Check the Core connection and retry."} title={authorizationRecovery === "pair" ? "Pair this phone to continue." : "Core is unavailable."} fallback="Check the Core connection and retry." compact /><button className="button primary" type="button" onClick={reconnect}>Retry connection</button><a className="button quiet" href="nebula://settings">App connection</a></div>}
                 {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><strong>Some Core features are unavailable.</strong>{coreError && <small>{coreError}</small>}<button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
+                <RuntimeContinuityNotice api={api} />
                 <Outlet />
               </main>
               {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} statusMode={settingLens.statusMode} onClose={() => setSettingLens(undefined)} />}
@@ -324,6 +326,7 @@ export function AppShell() {
                 <UpdateBanner />
                 <HandoffRecoveryNotice />
                 </div>
+                <RuntimeContinuityNotice api={api} />
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("nebulaDesktop", Object.freeze({
   kind: "electron",
   resolveBackendConnection: () => invoke("nebula:core-connection"),
   deviceId: () => invoke("nebula:device-id"),
+  shutdownCore: () => invoke("nebula:shutdown-core"),
   setZoom: (scale) => invoke("nebula:set-zoom", scale),
   browser: Object.freeze({
     open: (projectId) => invoke("nebula:browser-open", projectId),

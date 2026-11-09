@@ -2031,7 +2031,10 @@ class ToolBroker:
                 prepared.call, ToolCallStatus.RUNNING
             )
             try:
-                result = await plugin.execute(invocation, self.runner)
+                from .memory_runtime import managed_compute
+
+                with managed_compute(invocation.engagement_id, "tool", running.id):
+                    result = await plugin.execute(invocation, self.runner)
                 if not isinstance(plugin, AnalysisTool):
                     if self.evidence_recorder is None:
                         raise ToolBrokerError(

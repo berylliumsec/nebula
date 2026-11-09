@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -71,11 +71,10 @@ def progress_id(operator_key: str, guide_id: str) -> str:
     return f"guide-progress:{operator_key}:{guide_id}"
 
 
-def guides_router(
-    store: NebulaStore,
-    operators: OperatorProfileService,
-    workspace_for: (MaybeAsync[[str], Path]),
+def guide_progress_router(
+    store: NebulaStore, operators: OperatorProfileService
 ) -> APIRouter:
+    """SQL-only guide state, independently mountable without workspace access."""
     router = APIRouter(tags=["guides"])
 
     async def operator_key() -> str:
@@ -83,7 +82,11 @@ def guides_router(
         return active.id if active else UNNAMED_OPERATOR
 
     @router.get("/guides/progress", response_model=list[GuideProgress])
-    async def read_progress() -> list[GuideProgress]:
+    async def read_progress(
+        response: Response,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=1000),
+    ) -> list[GuideProgress]:
         async with store.database.session() as database:
             rows = await database.scalars(
                 select(EntityRow)
@@ -93,8 +96,14 @@ def guides_router(
                     == (await operator_key()),
                 )
                 .order_by(EntityRow.created_at, EntityRow.id)
+                .offset(offset)
+                .limit(limit + 1)
             )
-            return [GuideProgress.model_validate(row.payload) for row in rows]
+            values = list(rows)
+            if len(values) > limit:
+                response.headers["X-Nebula-Next-Offset"] = str(offset + limit)
+            response.headers["Cache-Control"] = "no-store"
+            return [GuideProgress.model_validate(row.payload) for row in values[:limit]]
 
     @router.put("/guides/progress/{guide_id}", response_model=GuideProgress)
     async def write_progress(guide_id: str, body: GuideProgressWrite) -> GuideProgress:
@@ -148,6 +157,17 @@ def guides_router(
         ):  # diagnostic-expected: resetting an unstarted guide is a no-op
             pass
         return Response(status_code=204)
+
+    return router
+
+
+def guides_router(
+    store: NebulaStore,
+    operators: OperatorProfileService,
+    workspace_for: (MaybeAsync[[str], Path]),
+) -> APIRouter:
+    router = APIRouter(tags=["guides"])
+    router.include_router(guide_progress_router(store, operators))
 
     @router.get(
         "/project-instructions",
@@ -315,6 +335,7 @@ __all__ = [
     "ProjectInstructionsStatus",
     "StarterFilesRequest",
     "StarterFilesResult",
+    "guide_progress_router",
     "guides_router",
     "progress_id",
 ]

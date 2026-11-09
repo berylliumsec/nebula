@@ -212,7 +212,13 @@ async def test_queued_cancellation_prevents_provider_admission(tmp_path):
         (await scheduler.enqueue(second))
         first_admission = await scheduler.admit(first.id)
         waiting = asyncio.create_task(scheduler.admit(second.id))
-        await asyncio.sleep(0)
+        # Wait for the explanation's durable write before taking the revision
+        # used by this explicit cancellation. One event-loop turn does not join it.
+        async with asyncio.timeout(5):
+            while (
+                await store.get(ChatTurn, second.id)
+            ).admission_reason != "Waiting for provider capacity":
+                await asyncio.sleep(0.01)
         (await scheduler.cancel(second.id))
         latest = await store.get(ChatTurn, second.id)
         (

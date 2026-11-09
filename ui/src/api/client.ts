@@ -1,5 +1,8 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
+  receiptId, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
+  type RuntimeRequestStatus } from "./durableRequests";
 import { mapTerminalSessionList, type TerminalSessionList, type WireTerminalSessionList } from "./terminalTypes";
 import type { StorageAction, StorageDashboard, StorageSource } from "./types";
 import type {
@@ -5397,6 +5400,10 @@ export class ApiClient {
   readonly baseUrl: string;
   private readonly tokenSource?: ApiClientOptions["token"];
   private readonly fetchImpl: typeof globalThis.fetch;
+  private pendingStore = new PendingRequestStore(ephemeralScope());
+  private continuityInitialization?: Promise<ContinuityScope>;
+  private readonly continuityListeners = new Set<() => void>();
+  private readonly responseAttempts = new WeakMap<Response, PendingRequest>();
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
@@ -5404,8 +5411,125 @@ export class ApiClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  storageDashboard(signal?: AbortSignal): Promise<StorageDashboard> {
-    return this.request<StorageDashboard>("storage", { signal });
+  getContinuityScope(): ContinuityScope { return this.pendingStore.scope; }
+
+  /** Resolve an authenticated storage namespace; never derive one from a token or URL. */
+  initializeContinuity(): Promise<ContinuityScope> {
+    this.continuityInitialization ??= this.request<RuntimeIdentity>("runtime/identity").then(identity => {
+      let scope: ContinuityScope;
+      try { scope = identityScope(identity); }
+      catch (error) {
+        logCaughtDiagnostic("interface.client.continuity_identity_invalid", "Core returned an invalid storage identity. Recovery is limited to this window.", error, "continuity-identity");
+        return this.pendingStore.scope;
+      }
+      this.pendingStore = new PendingRequestStore(scope);
+      this.notifyContinuity();
+      return scope;
+    }).catch(error => {
+      if (error instanceof ApiError && [404, 405].includes(error.status)) return this.pendingStore.scope;
+      this.continuityInitialization = undefined;
+      throw error;
+    });
+    return this.continuityInitialization;
+  }
+
+  subscribeContinuity(listener: () => void): () => void {
+    this.continuityListeners.add(listener);
+    return () => { this.continuityListeners.delete(listener); };
+  }
+
+  private notifyContinuity(): void { this.continuityListeners.forEach(listener => listener()); }
+
+  getPendingRequests(): Promise<PendingRequest[]> { return this.pendingStore.list(); }
+
+  async lookupRuntimeRequest(key: string, signal?: AbortSignal): Promise<RuntimeRequestStatus | undefined> {
+    try { return await this.request<RuntimeRequestStatus>(`runtime/requests/lookup?idempotency_key=${encodeURIComponent(key)}`, {signal}); }
+    catch (error) { if (error instanceof ApiError && error.status === 404) return undefined; throw error; }
+  }
+
+  /** Reopening only reads saved work. It never submits a draft, decision, or resume. */
+  async reconcilePendingRequests(signal?: AbortSignal): Promise<PendingRequest[]> {
+    const records = await this.pendingStore.list();
+    for (const record of records) {
+      if (signal?.aborted) break;
+      const status = record.commandId
+        ? await this.request<RuntimeRequestStatus>(`runtime/requests/${encodeURIComponent(record.commandId)}`, {signal})
+        : await this.lookupRuntimeRequest(record.key, signal);
+      if (!status) continue;
+      record.commandId = status.command_id;
+      record.status = status;
+      record.state = status.state === "failed" || status.state === "uncertain" ? status.state : "accepted";
+      await this.pendingStore.save(record);
+    }
+    this.notifyContinuity();
+    return this.pendingStore.list();
+  }
+
+  async dismissCompletedRequest(key: string): Promise<void> {
+    const record = (await this.pendingStore.list()).find(item => item.key === key);
+    if (record?.status?.state !== "succeeded") throw new Error("Check this request's outcome before dismissing it.");
+    await this.pendingStore.remove(key);
+    this.notifyContinuity();
+  }
+
+  private async prepareRequest(path: string, method: string, headers: Headers, body?: BodyInit | null): Promise<PendingRequest> {
+    const record = await this.pendingStore.prepare(await requestIntent(path, method, headers, body), headers.get("Idempotency-Key") ?? undefined);
+    headers.set("Idempotency-Key", record.key);
+    this.notifyContinuity();
+    return record;
+  }
+
+  private async saveReceipt(record: PendingRequest, response: Response, body?: unknown): Promise<void> {
+    const id = receiptId(response, body);
+    if (!id) return;
+    record.commandId = id;
+    const state = body && typeof body === "object" ? (body as {state?: string}).state : undefined;
+    record.state = state === "uncertain" || state === "failed" ? state : "accepted";
+    try { await this.pendingStore.save(record); }
+    catch { throw new PendingRequestError("The request was accepted, but its receipt could not be saved. Keep this window open and check saved work.", record); }
+    this.notifyContinuity();
+  }
+
+  private async resolveReceipt(response: Response, record: PendingRequest, signal?: AbortSignal | null): Promise<Response> {
+    const deadline = Date.now() + 120_000;
+    while (true) {
+      const body: unknown = response.status === 202 || response.status === 409 ? await response.clone().json() : undefined;
+      await this.saveReceipt(record, response, body);
+      if (response.status !== 202) return response;
+      if (!record.commandId || Date.now() >= deadline) {
+        throw new PendingRequestError("Your request is saved. Check saved requests to follow its outcome; it has not been submitted again.", record);
+      }
+      await waitForReceipt(response, signal ?? undefined);
+      const headers = this.authorizeHeaders(new Headers({Accept: new Headers(record.headers).get("Accept") ?? "application/json"}));
+      response = await this.fetchImpl(`${this.baseUrl}/runtime/requests/${encodeURIComponent(record.commandId)}/response`, {
+        headers, method: "GET", credentials: "same-origin", signal,
+      });
+    }
+  }
+
+  private async completeRequest(record?: PendingRequest): Promise<void> {
+    if (!record) return;
+    try { await this.pendingStore.remove(record.key); }
+    catch { throw new PendingRequestError("Core completed the request, but its local recovery record could not be cleared. Check saved work before trying again.", record); }
+    this.notifyContinuity();
+  }
+
+  private async definitiveRejection(response: Response): Promise<boolean> {
+    if (response.status < 400 || response.status >= 500 || [408, 429].includes(response.status)) return false;
+    try {
+      const value = await response.clone().json() as {state?: string};
+      return value.state !== "uncertain" && value.state !== "failed";
+    } catch {
+      // diagnostic-expected: an unreadable rejection cannot prove nonacceptance; retain the request identity while send reports the HTTP failure.
+      return false;
+    }
+  }
+
+  storageDashboard(signal?: AbortSignal, options: {offset?: number; limit?: number} = {}): Promise<StorageDashboard> {
+    const query = new URLSearchParams();
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return this.request<StorageDashboard>(`storage${query.size ? `?${query}` : ""}`, { signal });
   }
 
   createStorageSource(body: Record<string, unknown>): Promise<{ source: StorageSource; token: string; webhook_url: string }> {
@@ -5481,10 +5605,9 @@ export class ApiClient {
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await this.send(path, init);
-    if (response.status === 204) {
-      return undefined as T;
-    }
-    return this.parseJson<T>(response, init);
+    const value = response.status === 204 ? undefined as T : await this.parseJson<T>(response, init);
+    await this.completeRequest(this.responseAttempts.get(response));
+    return value;
   }
 
   async watchWorkChanges(
@@ -5511,6 +5634,7 @@ export class ApiClient {
         let end = pending.indexOf("\n\n");
         while (end >= 0) {
           const frame = pending.slice(0, end);
+          if (encodedBytes(frame) > 1024 * 1024) throw new Error("The event stream exceeded its safe frame size. Reconnect to read saved work.");
           pending = pending.slice(end + 2);
           const event = frame.split("\n").find((line) => line.startsWith("event: "))?.slice(7);
           if (event === "ready") onReady();
@@ -5521,6 +5645,7 @@ export class ApiClient {
           }
           end = pending.indexOf("\n\n");
         }
+        if (encodedBytes(pending) > 1024 * 1024) throw new Error("The event stream exceeded its safe frame size. Reconnect to read saved work.");
       }
     } finally {
       await reader.cancel().catch(() => { /* diagnostic-expected: a closed stream needs no further cancellation. */ });
@@ -5547,7 +5672,7 @@ export class ApiClient {
 
   private async send(path: string, init: RequestInit, acceptNotModified = false): Promise<Response> {
     const headers = new Headers(init.headers);
-    headers.set("Accept", "application/json");
+    if (!headers.has("Accept")) headers.set("Accept", "application/json");
     if (init.body && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
@@ -5556,6 +5681,8 @@ export class ApiClient {
     if (!headers.has("X-Nebula-Operation-ID")) {
       headers.set("X-Nebula-Operation-ID", newOperationId());
     }
+    const pending = !["GET", "HEAD", "OPTIONS"].includes(method)
+      ? await this.prepareRequest(path, method, headers, init.body) : undefined;
 
     let response: Response;
     try {
@@ -5567,10 +5694,16 @@ export class ApiClient {
           credentials: "same-origin",
         },
       );
+      if (pending) response = await this.resolveReceipt(response, pending, init.signal);
     } catch (error) {
       // A request the interface abandoned (view change, project switch, health
       // deadline) is a cancellation: Core was never shown to be unreachable.
       const cancelled = requestWasCancelled(error, init.signal);
+      if (pending) {
+        if (!pending.commandId) pending.state = "unconfirmed";
+        await this.pendingStore.save(pending);
+        this.notifyContinuity();
+      }
       void logDiagnostic({
         level: cancelled ? "debug" : "error",
         eventCode: cancelled ? "interface.api.request_cancelled" : "interface.api.transport_failed",
@@ -5586,7 +5719,11 @@ export class ApiClient {
     }
 
     if (!response.ok && !(acceptNotModified && response.status === 304)) {
+      const rejected = await this.definitiveRejection(response);
       const error = await responseError(response);
+      if (pending && rejected) {
+        await this.completeRequest(pending);
+      }
       void logDiagnostic({
         level: response.status >= 500 ? "error" : "warning",
         eventCode: "interface.api.request_failed",
@@ -5609,6 +5746,7 @@ export class ApiClient {
       });
       throw error;
     }
+    if (pending) this.responseAttempts.set(response, pending);
     return response;
   }
 
@@ -5633,6 +5771,13 @@ export class ApiClient {
       });
       throw error;
     }
+  }
+
+  private async requestBlob(path: string, init: RequestInit): Promise<Blob> {
+    const response = await this.send(path, init);
+    const result = await response.blob();
+    await this.completeRequest(this.responseAttempts.get(response));
+    return result;
   }
 
   listResourceRelations(
@@ -6001,18 +6146,7 @@ export class ApiClient {
       Accept: "application/zip",
       "X-Nebula-Operation-ID": newOperationId(),
     });
-    this.authorizeHeaders(headers, "POST");
-    const response = await this.fetchImpl(
-      `${this.baseUrl}/diagnostics/export`,
-      {
-        method: "POST",
-        headers,
-        credentials: "same-origin",
-        signal,
-      },
-    );
-    if (!response.ok) throw await responseError(response);
-    return response.blob();
+    return this.requestBlob("diagnostics/export", {method: "POST", headers, signal});
   }
 
   private async listAll<T>(
@@ -6038,6 +6172,8 @@ export class ApiClient {
       Partial<HealthResponse> & {
         api_version?: string;
         dialect?: string;
+        api_ready?: boolean;
+        recovery_path?: string;
         container_terminal?: "configured" | "unavailable";
         diagnostics?: { degraded?: boolean; browser_event_ingress?: "enabled" | "disabled" };
       }
@@ -6052,13 +6188,21 @@ export class ApiClient {
       containerTerminal: health.container_terminal ?? "unavailable",
       diagnosticsDegraded: health.diagnostics?.degraded === true,
       browserDiagnosticIngress: health.diagnostics?.browser_event_ingress ?? "disabled",
+      apiReady: health.api_ready,
+      recoveryPath: health.recovery_path,
     }));
   }
 
-  setupStatus(signal?: AbortSignal): Promise<SetupStatus> {
-    return this.request<WireSetupStatus>("setup/status", { signal }).then(
-      mapSetupStatus,
-    );
+  setupStatus(signal?: AbortSignal, projectId?: string): Promise<SetupStatus> {
+    const query = projectId === undefined ? "" : `?${new URLSearchParams({project_id: projectId})}`;
+    return this.request<WireSetupStatus>(`setup/status${query}`, { signal }).then(value => {
+      const status = mapSetupStatus(value);
+      if (projectId !== undefined && status.terminal.imagePreparation.projectId
+        && status.terminal.imagePreparation.projectId !== projectId) {
+        throw new Error("Core returned image preparation for another Project. Refresh this Project's setup before continuing.");
+      }
+      return status;
+    });
   }
 
   refreshSetupRuntime(signal?: AbortSignal): Promise<SetupStatus> {
@@ -6095,11 +6239,12 @@ export class ApiClient {
 
   cancelSetupImage(
     operationId: string,
+    projectId: string,
     signal?: AbortSignal,
   ): Promise<SetupControlResponse> {
     return this.request<WireSetupControlResponse>("setup/image/cancel", {
       method: "POST",
-      body: JSON.stringify({ operation_id: operationId }),
+      body: JSON.stringify({ project_id: projectId, operation_id: operationId }),
       signal,
     }).then(mapSetupControlResponse);
   }
@@ -7066,6 +7211,7 @@ export class ApiClient {
         let end = pending.indexOf("\n\n");
         while (end >= 0) {
           const frame = pending.slice(0, end);
+          if (encodedBytes(frame) > 1024 * 1024) throw new Error("The notebook event stream exceeded its safe frame size. Reconnect to read saved work.");
           pending = pending.slice(end + 2);
           if (frame.split("\n").some(line => line === "event: notebook")) {
             const data = frame.split("\n").find(line => line.startsWith("data: "))?.slice(6);
@@ -7073,6 +7219,7 @@ export class ApiClient {
           }
           end = pending.indexOf("\n\n");
         }
+        if (encodedBytes(pending) > 1024 * 1024) throw new Error("The notebook event stream exceeded its safe frame size. Reconnect to read saved work.");
       }
     } finally {
       await reader.cancel().catch(() => { /* diagnostic-expected: an already closed stream needs no further cancellation. */ });
@@ -8027,13 +8174,7 @@ export class ApiClient {
       Accept: "application/zip",
       "X-Nebula-Sensitive-Data-Acknowledged": "true",
     });
-    this.authorizeHeaders(headers, "POST");
-    const response = await this.fetchImpl(
-      `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/export-bundle`,
-      { method: "POST", headers, signal, credentials: "same-origin" },
-    );
-    if (!response.ok) throw await responseError(response);
-    return response.blob();
+    return this.requestBlob(`engagements/${encodeURIComponent(engagementId)}/export-bundle`, {method: "POST", headers, signal});
   }
 
   listProviders(signal?: AbortSignal): Promise<Page<ProviderHealth>> {
@@ -8968,10 +9109,11 @@ export class ApiClient {
   }
 
   containerTerminalCapacity(
+    engagementId: string,
     signal?: AbortSignal,
   ): Promise<ContainerTerminalCapacity> {
     return this.request<WireContainerTerminalCapacity>(
-      "container-terminal/capacity",
+      `container-terminal/capacity?${new URLSearchParams({engagement_id: engagementId})}`,
       { signal },
     ).then((value) => ({
       activeSessions: value.active_sessions,
@@ -9533,8 +9675,14 @@ export class ApiClient {
       path,
       overwrite: String(overwrite),
     });
-    const response = await this.fetchImpl(
-      `${this.baseUrl}/engagements/${encodeURIComponent(engagementId)}/workspace/file?${parameters}`,
+    const value = await this.request<{
+      engagement_id: string;
+      path: string;
+      size: number;
+      sha256: string;
+      overwritten: boolean;
+    }>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/file?${parameters}`,
       {
         method: "PUT",
         headers,
@@ -9543,14 +9691,6 @@ export class ApiClient {
         credentials: "same-origin",
       },
     );
-    if (!response.ok) throw await responseError(response);
-    const value = (await response.json()) as {
-      engagement_id: string;
-      path: string;
-      size: number;
-      sha256: string;
-      overwritten: boolean;
-    };
     return {
       engagementId: value.engagement_id,
       path: value.path,
@@ -10371,6 +10511,13 @@ export class ApiClient {
     // ends this stream on purpose; Core resumes it later in a new runtime.
     let pausedForCallback = false;
     let cancelled = false;
+    let resumeFrameReceived = false;
+    let pending: PendingRequest | undefined;
+    if (!followOnly) {
+      const path = resumeTurnId ? `chat/turns/${encodeURIComponent(resumeTurnId)}/resume` : "chat/completions";
+      pending = await this.prepareRequest(path, "POST", new Headers({Accept: "text/event-stream", "Content-Type": "application/json"}),
+        resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true)));
+    }
     // The first queued frame waits here until its wait has lasted; any later
     // frame of the turn means Core moved on and drops it. Once reported, each
     // new position is passed on at once.
@@ -10406,6 +10553,7 @@ export class ApiClient {
           data,
         );
       }
+      resumeFrameReceived = true;
       if (wire.turn_id && !wire.harness_turn_id || wire.type === "started" && wire.turn_id) turnId = wire.turn_id;
       // Sequence numbers count one Core runtime's frames. A turn resumed after
       // a restart or a pause runs in a new runtime that replays from its first
@@ -10423,6 +10571,10 @@ export class ApiClient {
       // Durable sequence numbers are scoped to the accepted turn. Unsequenced
       // final snapshots remain deliverable after an interrupted final frame.
       if (typeof wire.sequence === "number") {
+        if (!Number.isSafeInteger(wire.sequence) || wire.sequence < 1) {
+          protocolFailure = true;
+          throw new ApiError("Nebula Core returned an invalid chat stream cursor.", 502);
+        }
         if (wire.sequence <= cursor) return;
         cursor = wire.sequence;
         attempts = 0;
@@ -10751,17 +10903,40 @@ export class ApiClient {
           if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
           const headers = new Headers({Accept: "text/event-stream", "Content-Type": "application/json"});
           this.authorizeHeaders(headers, recovering ? "GET" : "POST");
-          const response = await this.fetchImpl(
+          if (!recovering && pending) headers.set("Idempotency-Key", pending.key);
+          const recoverReceipt = recovering && pending && (!turnId || (resumeTurnId && !resumeFrameReceived));
+          if (recoverReceipt && pending && !pending.commandId) {
+            const status = await this.lookupRuntimeRequest(pending.key, attemptController.signal);
+            if (!status) throw new PendingRequestError("The request has not been found yet. Check saved requests before sending it again.", pending);
+            pending.commandId = status.command_id;
+            pending.status = status;
+            pending.state = "accepted";
+            await this.pendingStore.save(pending);
+            this.notifyContinuity();
+          }
+          let response = await this.fetchImpl(
             recovering
-              ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId!)}/events?after=${cursor}${epoch ? `&epoch=${encodeURIComponent(epoch)}` : ""}`
+              ? turnId && !recoverReceipt
+                ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId)}/events?after=${cursor}${epoch ? `&epoch=${encodeURIComponent(epoch)}` : ""}`
+                : `${this.baseUrl}/runtime/requests/${encodeURIComponent(pending!.commandId!)}/response?after=${cursor}`
               : resumeTurnId
                 ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
                 : `${this.baseUrl}/chat/completions`,
             {method: recovering ? "GET" : "POST", headers, signal: attemptController.signal, credentials: "same-origin",
-              body: recovering || resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true))},
+              body: recovering || resumeTurnId ? undefined : pending?.body ?? JSON.stringify(chatRequestBody(body, true))},
           );
+          if (pending && (!recovering || recoverReceipt)) {
+            response = await this.resolveReceipt(response, pending, attemptController.signal);
+            if (pending.commandId) onEvent({type: "accepted", commandId: pending.commandId});
+          }
           clearTimeout(headerTimer);
-          if (!response.ok) throw await responseError(response);
+          if (!response.ok) {
+            if (pending && await this.definitiveRejection(response)) {
+              await this.completeRequest(pending);
+              pending = undefined;
+            }
+            throw await responseError(response);
+          }
           if (!response.body) throw new Error("The chat response stream was empty.");
           reader = response.body.getReader();
           if (recovering) onEvent({type: "connection", state: "connected"});
@@ -10774,10 +10949,18 @@ export class ApiClient {
             let separator = buffer.search(/\r?\n\r?\n/);
             while (separator >= 0) {
               const block = buffer.slice(0, separator);
+              if (encodedBytes(block) > 1024 * 1024) {
+                protocolFailure = true;
+                throw new ApiError("The chat stream exceeded its safe frame size. Reload to read saved work.", 502);
+              }
               const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
               buffer = buffer.slice(separator + (match?.[0].length ?? 2));
               processBlock(block);
               separator = buffer.search(/\r?\n\r?\n/);
+            }
+            if (encodedBytes(buffer) > 1024 * 1024) {
+              protocolFailure = true;
+              throw new ApiError("The chat stream exceeded its safe frame size. Reload to read saved work.", 502);
             }
             if (completed || pausedForApproval || pausedForCallback || cancelled) return completed;
             if (done) break;
@@ -10792,7 +10975,7 @@ export class ApiClient {
           // error reference) is the definitive outcome: nothing is uncertain.
           if (!turnId && error instanceof ApiError) throw error;
           // A lost initial acceptance response is uncertain: never POST again.
-          if (!turnId) throw new Error("The chat connection was lost before acceptance was confirmed. Reload the conversation to check whether the message was accepted before sending it again.");
+          if (!turnId && (!pending || !this.getContinuityScope().persistent)) throw new Error("The chat connection was lost before acceptance was confirmed. Reload the conversation to check whether the message was accepted before sending it again.");
           if (attempts >= 8) throw new Error("Could not reconnect to this turn. Reload the conversation to read its saved state; the message has not been resubmitted.");
           recovering = true;
           onEvent({type: "connection", state: "reconnecting"});
@@ -10810,6 +10993,7 @@ export class ApiClient {
     } finally {
       // A wait still held when the stream ends is never reported.
       dropHeldQueue();
+      if (pending && (completed || pausedForApproval || pausedForCallback || cancelled)) await this.completeRequest(pending);
     }
   }
 

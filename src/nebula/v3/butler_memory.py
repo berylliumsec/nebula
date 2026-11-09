@@ -1,8 +1,8 @@
 """Butler's durable, scoped memory with a rebuildable local vector index.
 
-The SQLite file is authoritative and separate from Nebula Core's database.
-Chroma stores only derived vectors and visibility metadata. Every search hit
-is re-read from SQLite under the selected project's visibility rules.
+The compatibility backend uses a separate SQLite file. The shared host backend
+uses fenced Core SQL. Chroma stores derived vectors and visibility metadata;
+search hits are restricted to authoritative rows in the selected project's view.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -120,6 +120,10 @@ _SECRET = re.compile(
     r"[A-Za-z0-9_+.-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
     re.IGNORECASE,
 )
+
+
+class MemoryRow(Protocol):
+    def __getitem__(self, key: str) -> Any: ...
 
 
 class MemoryConflictError(ValueError):
@@ -345,11 +349,11 @@ class ButlerMemoryService:
         )
 
     @staticmethod
-    def _visible(row: sqlite3.Row, engagement_id: str) -> bool:
+    def _visible(row: MemoryRow, engagement_id: str) -> bool:
         return row["scope"] != "project_lesson" or row["scope_key"] == engagement_id
 
     @staticmethod
-    def _public(row: sqlite3.Row, engagement_id: str) -> ButlerMemoryItem:
+    def _public(row: MemoryRow, engagement_id: str) -> ButlerMemoryItem:
         same_project = row["source_project_id"] == engagement_id
         return ButlerMemoryItem(
             id=row["id"],
@@ -766,12 +770,7 @@ class ButlerMemoryService:
             if token.casefold() not in _NOVELTY_STOPWORDS
         }
 
-    async def _novel_review_lesson(self, project_id: str, candidate: str) -> bool:
-        """Keep one useful precedent, not repeated rewordings of a checkpoint."""
-
-        tokens = self._lesson_tokens(candidate)
-        if len(tokens) < 6:
-            return False
+    async def _review_lesson_contents(self, project_id: str) -> list[str]:
         (await self._ensure_ready())
         async with self._connect() as connection:
             previous = await (
@@ -783,8 +782,16 @@ class ButlerMemoryService:
                     (project_id,),
                 )
             ).fetchall()
-        for row in previous:
-            prior_tokens = self._lesson_tokens(row["content"])
+        return [row["content"] for row in previous]
+
+    async def _novel_review_lesson(self, project_id: str, candidate: str) -> bool:
+        """Keep one useful precedent, not repeated rewordings of a checkpoint."""
+
+        tokens = self._lesson_tokens(candidate)
+        if len(tokens) < 6:
+            return False
+        for content in await self._review_lesson_contents(project_id):
+            prior_tokens = self._lesson_tokens(content)
             if prior_tokens and (
                 len(tokens & prior_tokens) / min(len(tokens), len(prior_tokens)) >= 0.8
             ):
@@ -993,20 +1000,7 @@ class ButlerMemoryService:
             )
         return None
 
-    async def capture_pivotal_project_events(
-        self, store: NebulaStore, project_id: str, *, limit: int = 100
-    ) -> int:
-        """Consume only salient committed review/action events after Core commits.
-
-        The separate SQLite cursor advances after each candidate is handled.
-        A crash can replay the event; content hashing makes that harmless.
-        """
-
-        from .butler_oversight import project_stream_id
-
-        if not 1 <= limit <= 500:
-            raise ValueError("Pivotal event page must be 1 through 500")
-        (await store.get(Engagement, project_id))
+    async def _read_event_cursor(self, project_id: str) -> int:
         (await self._ensure_ready())
         async with self._connect() as connection:
             row = await (
@@ -1015,7 +1009,34 @@ class ButlerMemoryService:
                     (project_id,),
                 )
             ).fetchone()
-        cursor = int(row["last_event_sequence"]) if row else 0
+        return int(row["last_event_sequence"]) if row else 0
+
+    async def _advance_event_cursor(self, project_id: str, sequence: int) -> None:
+        async with self._lock, self._connect() as connection:
+            (await connection.execute("BEGIN IMMEDIATE"))
+            (
+                await connection.execute(
+                    """INSERT INTO butler_memory_event_cursors
+                   (project_id, last_event_sequence) VALUES (?, ?)
+                   ON CONFLICT(project_id) DO UPDATE SET
+                     last_event_sequence=MAX(
+                       last_event_sequence, excluded.last_event_sequence)""",
+                    (project_id, sequence),
+                )
+            )
+            (await connection.commit())
+
+    async def capture_pivotal_project_events(
+        self, store: NebulaStore, project_id: str, *, limit: int = 100
+    ) -> int:
+        """Consume salient committed events; content hashing makes replay harmless."""
+
+        from .butler_oversight import project_stream_id
+
+        if not 1 <= limit <= 500:
+            raise ValueError("Pivotal event page must be 1 through 500")
+        (await store.get(Engagement, project_id))
+        cursor = await self._read_event_cursor(project_id)
         events = await store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=cursor,
@@ -1028,22 +1049,10 @@ class ButlerMemoryService:
         )
         for event in events:
             (await self._capture_pivotal_event(store, project_id, event))
-            async with self._lock, self._connect() as connection:
-                (await connection.execute("BEGIN IMMEDIATE"))
-                (
-                    await connection.execute(
-                        """INSERT INTO butler_memory_event_cursors
-                       (project_id, last_event_sequence) VALUES (?, ?)
-                       ON CONFLICT(project_id) DO UPDATE SET
-                         last_event_sequence=MAX(
-                           last_event_sequence, excluded.last_event_sequence)""",
-                        (project_id, event.sequence),
-                    )
-                )
-                (await connection.commit())
+            await self._advance_event_cursor(project_id, event.sequence)
         return len(events)
 
-    async def _authorized_rows(self, engagement_id: str) -> list[sqlite3.Row]:
+    async def _authorized_rows(self, engagement_id: str) -> list[MemoryRow]:
         (await self._ensure_ready())
         async with self._connect() as connection:
             return await (
@@ -1065,7 +1074,7 @@ class ButlerMemoryService:
             index_status=self._index_status(),
         )
 
-    def _index_one(self, row: sqlite3.Row) -> None:
+    def _index_one(self, row: MemoryRow) -> None:
         vector = self._embed([row["content"]])
         collection = self._vector_collection() if vector is not None else None
         if collection is None or vector is None:
@@ -1097,7 +1106,7 @@ class ButlerMemoryService:
                 stage="memory_vector_write",
             )
 
-    def _sync_index(self, rows: Sequence[sqlite3.Row]) -> None:
+    def _sync_index(self, rows: Sequence[MemoryRow]) -> None:
         if not self._embedding_ready():
             return
         collection = self._vector_collection()

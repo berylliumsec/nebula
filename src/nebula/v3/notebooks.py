@@ -1213,6 +1213,13 @@ class NotebookService:
         if self.automation_runtime is None:
             raise NotebookRuntimeUnavailable("project runtime is unavailable")
         if policy.execution_mode == "host":
+            await self.automation_runtime.memory_compute.reject_unsupported(
+                "local",
+                project_id=engagement_id,
+                resource_kind="notebook_kernel",
+                resource_id=engagement_id,
+                detail="Host Notebook kernels need a protected memory-runner/v1 agent. Select Docker mode and a verified runner; the kernel will not start without memory enforcement.",
+            )
             if not policy.host_access_acknowledged:
                 raise NotebookPermissionRequired(
                     "Acknowledge host access in Project settings"

@@ -115,6 +115,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
+import { RequestNotSentError } from "../api/durableRequests";
 import { ChatPreviewCache } from "./chatPreviewCache";
 import { chatImageKey, chatImagePalette, chatImageWidth, ChatImagePreviewCache, renderChatImagePreview, type ChatImagePreview } from "./chatImagePreview";
 import { groupByAssistantId } from "./chatRenderGroups";
@@ -222,9 +223,10 @@ import {
 import { latestProgressPreview, splitSavedProgress } from "./chatProgressContent";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { readConversationPanelOpen, writeConversationPanelOpen } from "./workbenchPreferences";
-import { ChatDraftStore, chatDraftStorageKey } from "./chatDraftStorage";
+import { ChatDraftStore, chatDraftStorageKey, chatStorageForScope } from "./chatDraftStorage";
 import {
   chatFollowUpStorageKey,
+  bindsUnattachedFollowUps,
   maxChatFollowUps,
   clearChatFollowUps,
   readChatFollowUps,
@@ -699,6 +701,7 @@ interface TranscriptRowApproval {
 
 interface TranscriptRowProps {
   message: ConversationMessage;
+  messageNumber: number;
   shared: TranscriptRowShared;
   actions: TranscriptRowActions;
   editing?: MessageEdit;
@@ -766,7 +769,7 @@ function ChatSubagentTranscriptGroup({groupKey, messages, results, selectedMessa
  * streaming turn re-renders only its own row.
  */
 const ChatTranscriptRow = memo(function ChatTranscriptRow({
-  message, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
+  message, messageNumber, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
   taskPlan, planDirective,
   historicalState, historicalError, subagentResult, bookmarked, interactions, answers, waitingLabel,
   harnessProgressDetail, approval, focusPendingAction,
@@ -790,14 +793,15 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   const answerBlockOrdinalOffset = savedProviderContent.progress
     ? parseExactFences(savedProviderContent.progress).blocks.length
     : 0;
+  const activityTitle = `Work summary for message ${messageNumber}`;
   const activityLedgerBase = messageActivityItems.length > 0
-    ? activityLedgerFromHarness("Work summary", message.state, messageActivityItems)
+    ? activityLedgerFromHarness(activityTitle, message.state, messageActivityItems)
     : messageToolCards.length > 0
-      ? activityLedgerFromNative("Work summary", message.state, messageToolCards)
+      ? activityLedgerFromNative(activityTitle, message.state, messageToolCards)
       : historicalTurnId
-        ? activityLedgerFromHarness("Work summary", message.state, [])
+        ? activityLedgerFromHarness(activityTitle, message.state, [])
         : progressContent
-          ? activityLedgerFromHarness("Work summary", message.state, [])
+          ? activityLedgerFromHarness(activityTitle, message.state, [])
         : undefined;
   const activityLedger = activityLedgerBase && message.elapsedMs !== undefined
     ? { ...activityLedgerBase, durationMs: message.elapsedMs }
@@ -1898,7 +1902,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const liveGoalStreamDirtyRef = useRef(false);
   const streamFrameRef = useRef<number | undefined>(undefined);
   const draftStorageKeyRef = useRef("");
-  const draftStore = useMemo(() => new ChatDraftStore(sessionStorage), []);
+  const [draftStorageNotice, setDraftStorageNotice] = useState<string>();
+  const storageScope = api?.getContinuityScope();
+  const scopedChatStorage = useMemo(() => chatStorageForScope(storageScope ?? {key: "unconnected", persistent: false}), [storageScope?.key]);
+  const draftStore = useMemo(() => new ChatDraftStore(scopedChatStorage, setDraftStorageNotice), [scopedChatStorage]);
   const followUpStorageKeyRef = useRef("");
   const followUpAutoDrainRef = useRef(false);
   const followUpDrainIdRef = useRef<string | undefined>(undefined);
@@ -1987,10 +1994,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     performance.measure("nebula.side_chat.open", "nebula.side_chat.open_start", "nebula.side_chat.ready");
   }, [embeddedSideChat, loadingHistory, requestedSessionId, sessionId, sessionReadReady]);
   const activeDraftStorageKey = engagement
-    ? chatDraftStorageKey(engagement.id, sessionId || undefined)
+    ? chatDraftStorageKey(engagement.id, sessionId || undefined, storageScope?.key)
     : "";
   const activeFollowUpStorageKey = engagement
-    ? chatFollowUpStorageKey(engagement.id, sessionId || undefined)
+    ? chatFollowUpStorageKey(engagement.id, sessionId || undefined, storageScope?.key)
     : "";
   useEffect(() => {
     if (!activeDraftStorageKey || draftStorageKeyRef.current !== activeDraftStorageKey) return;
@@ -2010,25 +2017,22 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [activeDraftStorageKey, draftStore]);
   useEffect(() => {
     if (!activeFollowUpStorageKey || followUpStorageKeyRef.current !== activeFollowUpStorageKey) return;
-    writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, queuedFollowUps);
+    if (!writeChatFollowUps(scopedChatStorage, activeFollowUpStorageKey, queuedFollowUps)) {
+      setDraftStorageNotice("Queued drafts could not be saved on this device. Keep this window open or copy the text before closing it.");
+    }
   }, [activeFollowUpStorageKey, queuedFollowUps]);
   useEffect(() => {
     const previousKey = followUpStorageKeyRef.current;
-    let recovered = activeFollowUpStorageKey ? readChatFollowUps(sessionStorage, activeFollowUpStorageKey) : [];
-    const movingFromUnattachedConversation = Boolean(
-      previousKey
-      && activeFollowUpStorageKey
-      && previousKey.endsWith(":new")
-      && !activeFollowUpStorageKey.endsWith(":new"),
-    );
+    let recovered = activeFollowUpStorageKey ? readChatFollowUps(scopedChatStorage, activeFollowUpStorageKey) : [];
+    const movingFromUnattachedConversation = bindsUnattachedFollowUps(previousKey, activeFollowUpStorageKey,
+      engagement ? chatFollowUpStorageKey(engagement.id, undefined, storageScope?.key) : "");
     if (movingFromUnattachedConversation) {
-      const unattached = readChatFollowUps(sessionStorage, previousKey);
+      const unattached = readChatFollowUps(scopedChatStorage, previousKey);
       if (unattached.length) {
         recovered = [...recovered, ...unattached]
           .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
           .slice(0, maxChatFollowUps());
-        writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, recovered);
-        clearChatFollowUps(sessionStorage, previousKey);
+        if (writeChatFollowUps(scopedChatStorage, activeFollowUpStorageKey, recovered)) clearChatFollowUps(scopedChatStorage, previousKey);
       }
     }
     followUpStorageKeyRef.current = activeFollowUpStorageKey;
@@ -3224,8 +3228,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       chatPreviews.delete(session.id);
       chatImagePreviews.delete(session.id);
       if (engagement) {
-        draftStore.clear(chatDraftStorageKey(engagement.id, session.id));
-        clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, session.id));
+        draftStore.clear(chatDraftStorageKey(engagement.id, session.id, storageScope?.key));
+        clearChatFollowUps(scopedChatStorage, chatFollowUpStorageKey(engagement.id, session.id, storageScope?.key));
       }
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (sessionId === session.id) {
@@ -3272,8 +3276,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     deletedIds.forEach(id => { chatPreviews.delete(id); chatImagePreviews.delete(id); });
     if (engagement) {
       for (const deletedId of deletedIds) {
-        draftStore.clear(chatDraftStorageKey(engagement.id, deletedId));
-        clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, deletedId));
+        draftStore.clear(chatDraftStorageKey(engagement.id, deletedId, storageScope?.key));
+        clearChatFollowUps(scopedChatStorage, chatFollowUpStorageKey(engagement.id, deletedId, storageScope?.key));
       }
     }
     let authoritativeSessions: ChatSessionSummary[] | undefined;
@@ -3394,8 +3398,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         for (const id of result.succeededIds) {
           chatPreviews.delete(id);
           chatImagePreviews.delete(id);
-          draftStore.clear(chatDraftStorageKey(projectId, id));
-          clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(projectId, id));
+          draftStore.clear(chatDraftStorageKey(projectId, id, storageScope?.key));
+          clearChatFollowUps(scopedChatStorage, chatFollowUpStorageKey(projectId, id, storageScope?.key));
         }
         if (sessionId && result.succeededIds.includes(sessionId)) {
           resetConversation(false, { discardDraft: true });
@@ -4645,8 +4649,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       chatPreviews.delete(closingId);
       chatImagePreviews.delete(closingId);
       if (engagement) {
-        draftStore.clear(chatDraftStorageKey(engagement.id, closingId));
-        clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, closingId));
+        draftStore.clear(chatDraftStorageKey(engagement.id, closingId, storageScope?.key));
+        clearChatFollowUps(scopedChatStorage, chatFollowUpStorageKey(engagement.id, closingId, storageScope?.key));
       }
       setSideChatLookup(current => current?.parentId === closingParentId
         ? {...current, items: current.items.filter(item => item.id !== closingId)} : current);
@@ -5854,7 +5858,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         setChatError(error instanceof Error ? error.message : "The response completed, but the conversation could not be refreshed.");
         return;
       }
-      if (error instanceof ToolResultSharingDeclinedError) {
+      if (error instanceof ToolResultSharingDeclinedError || error instanceof RequestNotSentError) {
         // Core refused before accepting the turn and the operator declined:
         // nothing was saved, so the message leaves the transcript and goes
         // back where it can be sent again rather than reading as a failure.
@@ -5976,6 +5980,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       return;
     }
     setApprovalDecisionBusy(true);
+    let resumeViewer: ReturnType<typeof beginGuardedStream> | undefined;
     try {
       let editedArguments: Record<string, unknown> | undefined;
       if (decision === "edit") {
@@ -6027,15 +6032,19 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
         ? { ...message, state: "streaming", content: "", reasoning: "" }
         : message));
+      resumeViewer = beginGuardedStream(
+        {generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef}, "provider",
+      );
       const response = await api.resumeChatTurn(
         pendingResponse.turnId,
         pendingResponse.request,
-        (streamEvent) => selectionIsCurrent() && applyChatEvent(
+        resumeViewer.guard((streamEvent) => applyChatEvent(
           streamEvent,
           pendingResponse.assistantId,
           pendingResponse.userId,
           pendingResponse.request,
-        ),
+        )),
+        resumeViewer.controller.signal,
       );
       if (!selectionIsCurrent()) return;
       if (response?.sessionId) {
@@ -6045,6 +6054,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_15", "A handled interface operation failed.", error, "sessions_page");
       if (selectionIsCurrent()) setChatError(error instanceof Error ? error.message : "Could not resume the response.");
     } finally {
+      resumeViewer?.release();
       if (selectionIsCurrent()) { setApprovalDecisionBusy(false); setSending(false); }
     }
   };
@@ -6820,6 +6830,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return <ChatTranscriptRow
       key={message.runtimeId ?? message.id}
       message={message}
+      messageNumber={visibleMessages.findIndex(item => item.id === message.id) + 1}
       shared={transcriptShared}
       actions={transcriptActions}
       editing={editing}
@@ -7035,6 +7046,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
+              {draftStorageNotice && <p role="status" className="chat-recovery-notice">{draftStorageNotice}</p>}
               {chatError !== undefined && (failedProviderRecovery
                 ? // The turn is resumable and needs nothing decided: its tool
                   // results, reasoning and partial state are all preserved and

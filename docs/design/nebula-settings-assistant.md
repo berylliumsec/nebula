@@ -1,5 +1,45 @@
 # Nebula assistant contract
 
+Memory budgets include the observed resident-runtime reserve and minimum Core
+reserve. Butler reads these through the same API as Settings. It must not lower
+Core reserve below resident requirements or describe declared service capacity as
+measured job usage or kernel enforcement; retire unused runtimes or increase the
+reserve when new admissions are held.
+
+In supervisor mode, the stable host serves memory policy, usage and runner
+checks independently of replaceable API workers. Project Butler uses that same
+validated API through its authenticated, lease-bound host channel; direct
+project execution services cannot edit global policy. Running-job changes go
+to the project's current execution owner and require its observed runner
+application. An unavailable owning runner leaves the job charged and the
+application unresolved.
+
+Memory budgets are a host-wide Settings destination (`memory-budgets`, target
+`memory-budget-settings`). Butler discovers typed `nebula.settings.memory_budget`,
+`memory_usage`, `set_memory_budget`, `verify_memory_job` and `apply_memory_limit`
+actions. Read before changing, retain unrelated policy fields, use fresh
+revisions, and verify the authenticated Core read-back. State whether a policy
+is saved for new jobs, a worker's limits are verified, or application is pending,
+failed or unsupported. Lowering running limits requires an explicit impact
+acknowledgement; a memory failure never authorizes automatic retry, a larger
+budget or goal resume. See [Compute memory budgets](../MEMORY_BUDGETS.md) for
+precedence, units, scope and runner dependencies.
+
+Local search has one persistent `web_search_service` entry in the aggregate job
+budget, with no per-query or additional runtime-reserve charge. Butler reports
+its frozen effective policy and observed kernel evidence, including failed or
+uncertain cleanup; it does not equate a saved limit with a running worker limit.
+The service request caps RAM at 512 MiB and swap at zero while preserving stricter
+administrator/environment/profile settings. Cached official images can start;
+image download/build needs a daemon-worker memory adapter and is otherwise held.
+
+Large memory inventories retain structured job summaries with explicit
+`at_limit` and `summary_only` flags. They are partial observations, not a complete
+job roster; use `verify_memory_job` for full saved evidence. Profile metadata
+may be previewed, while the policy retains unrelated overrides within its
+bounded structured response. Never construct a policy update from a truncated
+excerpt or treat missing measurements as zero usage.
+
 Entry: the persistent assistant icon in the shared shell opens one movable,
 hideable control conversation. Closing the window preserves its Core transcript.
 The operator may open Settings from a catalog result without losing the draft.
@@ -589,16 +629,73 @@ startup, Core mirrors the bundled passages and their precomputed vectors into
 the local Chroma product-help collection. The source digest and passage count
 determine whether the mirror needs replacement; product help remains searchable
 from the bundled index if Chroma is unavailable.
-For MCP cost questions, the assistant explains that unticked, on-demand servers
-contribute a compact name-and-purpose directory to each provider routing request,
-while checked servers and tools pinned under Project policy contribute full
-function schemas each time. It points to Assistant settings for checked servers
-and Project policy for Always loaded tools; unchecking a global server keeps it
-available through the on-demand catalog.
+For MCP cost questions, the assistant points to Assistant settings for checked
+servers and Project policy for Always loaded tools. Provider chats keep complete
+loaded schemas in a durable Core tools context through compaction, reconnect and
+restart. Each assembled request has one canonical definition per loaded tool;
+stateless providers still receive their required native declarations on every
+request. A directory entry or ranking suggestion is not a loaded schema.
+Unchecking a chat source can leave its already loaded definitions known while the
+source remains eligible on demand. Disabling or revoking the source removes its
+active definitions and execution permission; historical calls remain. Jev is
+optional, respects the existing project privacy opt-in, and ranks only eligible
+definitions absent at their current complete digest. Native harness tool loading
+keeps its existing behavior. Prompt-cache savings are not implied by persistence.
 Provider turns request low effort; Core's provider adapter maps or omits that
 control for the selected model. Harness model options determine low effort and
 fast selection. An existing harness conversation may rebind to its advertised
 fast sibling while retaining the Core transcript.
+
+### Standing instructions and retained native sessions
+
+Current standing instructions are authoritative independently of a lossy summary.
+Core saves exact instruction and goal-skill snapshots. Supported stateful native
+channels retain unchanged instructions once per native context; reconnect and
+compaction preserve that channel. An instruction edit or removal starts a fresh
+native context when the adapter cannot replace its current instruction head,
+keeping the Core conversation and a bounded historical handoff. Core reports the
+change in the same chat. Unknown or unverified native instruction delivery fails
+visibly before a message is sent; it is not reported as delivered.
+
+Stateless provider requests continue carrying the current instructions on every
+request. Native harness processes still require their advertised protected memory
+runner; an unavailable runner or unverified installed vendor channel is a concrete
+capability limitation. Do not claim an installed vendor passed merely from an
+inert protocol fixture. A code rollback leaves projects needing these context
+capabilities on a compatible execution worker, while compatible API/UI updates
+and other projects may proceed.
+
+### Canonical host Settings and public web search
+
+The independent Core host owns shared Settings observations, session credentials
+and external setup effects. Butler's allowed Settings requests reach the same
+canonical host state as the browser. A pending durable receipt is not a saved or
+applied result; follow it and read back the authoritative value.
+
+Runtime discovery and selection belong to the host. Image preparation, its
+status, cancellation and retry belong to the selected Project and exact accepted
+operation. A host runtime repair must become visible to that Project without
+replacing an existing image operation. Terminal capacity is observed for that
+Project; unknown or unavailable capacity offers a check or retry and never
+implies an available terminal slot.
+
+Account observations use the same protected reader from Settings, Butler and
+automatic quota updates. An unsupported native reader reports unavailable and
+retains its blocked memory job; it must not start an unrestricted account process.
+A configured account endpoint remains an observation of that endpoint.
+
+The host owns global Library uploads, derived-index publication and verified
+artifact downloads. An indexed result is ready only for the matching saved
+request and content digest. Removing a Library entry removes it from retrieval
+while retaining its immutable artifact. These operations do not create a global
+execution Project or grant an API worker host execution authority.
+
+Project policy's Web Search opt-in uses one host-managed service and the host's
+saved engines. Queries create no project-owned service or duplicate reservation.
+A memory-admission or readiness refusal remains visible; an explicit retry uses
+the same owner and never falls back to an unrestricted local launch. Image
+download/build remains unavailable without a verified daemon-side memory runner;
+inspect and use only a fully verified cached image in that environment.
 
 The focused test selection must cover the capability catalog, provider and
 harness tool paths, Core authorization and read-back, shell visibility, settings
@@ -927,3 +1024,33 @@ choose **Open investigation and subagents** to inspect the case's saved chat,
 provider or harness transcript, and child results. Each case has a separate
 conversation. Reloading preserves the same case and investigation, and restarting
 Core reattaches to existing investigation turns rather than duplicating work.
+
+
+## Closing the desktop and shutting down Core
+
+On Linux, local Core runs independently of its desktop viewer. Closing, updating,
+or restarting the desktop leaves admitted work running. Reopening uses the same
+private local connection and saved Core identity. **Settings → Terminal and Core
+setup → Shut down Core** is the separate, explicit shutdown action. It confirms
+the request, waits for Core's durable shutdown decision and observed process exit,
+and reports blockers instead of treating an accepted request as completion.
+The current window stays disconnected after shutdown; reopen it to start Core.
+
+The settings assistant should direct an operator who wants to close the window
+to the normal desktop close action. If the operator explicitly wants to shut down
+Core, open Terminal and Core setup and explain the confirmation and possible
+active-work blocker. Never infer a Core shutdown request from closing the viewer.
+Remote Core is controlled by its own host; the local shutdown control is hidden
+when the desktop is connected to a remote Core.
+
+An existing installation that predates independent Core needs one coordinated
+restart before adoption. Follow the project's Butler deployment coordination
+procedure, stop every legacy Core using that database, then run
+`nebula-core runtime-adopt --confirm-core-stopped --data-dir <existing-directory>`.
+Keep any configured administration credential in `NEBULA_V3_API_TOKEN` for this
+command. Adoption preserves the database and files in place; it does not merge
+different desktop data directories. New roots need no adoption step.
+
+Local detached workers currently require Linux pidfd support. Other desktop
+platforms can connect to a remote Core; local continuity on them remains
+unavailable. The retained runtime rejects unauthenticated remote mode explicitly.

@@ -264,7 +264,7 @@ class StubTerminalPlatform:
         del engagement_id
         return self.workspace
 
-    def resolve_human_terminal_profile(self, engagement_id: str) -> RunnerProfile:
+    async def resolve_human_terminal_profile(self, engagement_id: str) -> RunnerProfile:
         del engagement_id
         return self.profile
 

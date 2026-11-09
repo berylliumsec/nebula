@@ -21,7 +21,7 @@ import secrets
 import socket
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import httpx
 from pydantic import Field
@@ -90,6 +90,34 @@ class WebSearchResult(NebulaModel):
     snippet: str = Field(default="", max_length=MAX_SNIPPET_CHARS)
     engine: str | None = Field(default=None, max_length=40)
     published_at: str | None = Field(default=None, max_length=40)
+
+
+class SearchQueryRuntime(Protocol):
+    """Query-only access; project runtimes never own the shared service."""
+
+    async def search(
+        self,
+        query: str,
+        *,
+        count: int = DEFAULT_RESULTS,
+        freshness: Freshness = "any",
+    ) -> list[WebSearchResult]: ...
+
+
+class UnavailableProjectSearch:
+    async def search(
+        self,
+        query: str,
+        *,
+        count: int = DEFAULT_RESULTS,
+        freshness: Freshness = "any",
+    ) -> list[WebSearchResult]:
+        raise SearchRuntimeUnavailable(
+            "The host search service is unavailable. Retry after the host is ready."
+        )
+
+    async def close(self) -> None:
+        pass
 
 
 async def load_settings(store: NebulaStore) -> WebSearchSettings | None:
@@ -758,7 +786,7 @@ def web_search_spec() -> ToolSpec:
 class WebSearchTool(ToolPlugin):
     """Ask the local metasearch runtime, refusing to disclose scope targets."""
 
-    def __init__(self, runtime: SearchRuntime, scope: ScopePolicy) -> None:
+    def __init__(self, runtime: SearchQueryRuntime, scope: ScopePolicy) -> None:
         self.spec = web_search_spec()
         self.runtime = runtime
         self.scope = scope
@@ -799,7 +827,7 @@ class WebSearchTool(ToolPlugin):
                 stage="search",
                 metadata={"operation": "web_search"},
             )
-            return self._failure(started, str(exc))
+            return self._failure(started, str(exc), error=exc)
 
         completed = utc_now()
         return ToolExecutionResult(
@@ -819,8 +847,20 @@ class WebSearchTool(ToolPlugin):
             },
         )
 
-    def _failure(self, started: Any, detail: str) -> ToolExecutionResult:
+    def _failure(
+        self, started: Any, detail: str, *, error: WebSearchError | None = None
+    ) -> ToolExecutionResult:
         completed = utc_now()
+        memory = {
+            name: value
+            for name in (
+                "memory_job_id",
+                "memory_state",
+                "memory_outcome",
+                "memory_enforcement",
+            )
+            if error is not None and (value := getattr(error, name, None)) is not None
+        }
         return ToolExecutionResult(
             output={
                 "tool": WEB_SEARCH_TOOL_NAME,
@@ -834,6 +874,7 @@ class WebSearchTool(ToolPlugin):
             exit_code=1,
             execution={
                 "runtime": "web_search",
+                **memory,
                 "started_at": started.isoformat(),
                 "completed_at": completed.isoformat(),
                 "duration_seconds": max(0.0, (completed - started).total_seconds()),
@@ -845,7 +886,9 @@ __all__ = [
     "CONTAINER_NAME",
     "SETTINGS_ID",
     "SearchRuntime",
+    "SearchQueryRuntime",
     "SearchRuntimeUnavailable",
+    "UnavailableProjectSearch",
     "WebSearchError",
     "WebSearchResult",
     "WebSearchTool",

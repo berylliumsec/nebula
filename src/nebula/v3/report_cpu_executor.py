@@ -11,12 +11,14 @@ from collections.abc import Callable
 import math
 import os
 import sys
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .cpu_workers import CpuWorkerBusy, CpuWorkerClosed, CpuWorkerPool
 from .diagnostics import create_diagnostic_task, record_caught_exception
 
 _T = TypeVar("_T")
+if TYPE_CHECKING:
+    from .memory_runtime import MemoryComputeController
 
 
 class ReportCpuExecutor:
@@ -33,6 +35,7 @@ class ReportCpuExecutor:
         self._closed = False
         self._transition: asyncio.Task | None = None
         self._legacy: set[asyncio.Task] = set()
+        self.memory_compute: MemoryComputeController | None = None
 
     @staticmethod
     def support_reason() -> str | None:
@@ -141,6 +144,18 @@ class ReportCpuExecutor:
         input_bytes: int = 0,
         on_start: (MaybeAsync[[], None] | None) = None,
     ) -> _T:
+        if self.memory_compute is not None:
+            from .memory_runtime import compute_context
+            from uuid import uuid4
+
+            context = compute_context.get()
+            await self.memory_compute.reject_unsupported(
+                "cpu-worker",
+                project_id=context.project_id if context else None,
+                resource_kind="report_pdf",
+                resource_id=context.resource_id if context else uuid4().hex,
+                detail="PDF computation requires a memory-managed CPU runner. The host thread and affinity-only worker fallbacks are disabled; configure a supported runner before explicitly retrying this report.",
+            )
         if self._closed:
             raise CpuWorkerClosed("Background PDF workers are shutting down")
         if self.state == "disabled" and not self.enabled:

@@ -4,6 +4,7 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import type {AutomationRuntimeInfo, RunnerProfile, VpnProfile} from "../api/types";
 import {AutomationRuntimeSettings, RunnerSettings} from "./ToolingSettings";
 import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
+import {announceSettingsSaved} from "./SettingsSaveFeedback";
 
 const api = {
   listRunnerProfiles: vi.fn(), updateRunnerProfile: vi.fn(),
@@ -61,6 +62,17 @@ describe("runner settings", () => {
 
     await waitFor(() => expect(name).toHaveValue("Docker Desktop (edited)"));
     expect(api.listRunnerProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["ready", "unavailable"] as const)("reports a saved runner's observed %s state", async state => {
+    api.listRunnerProfiles.mockResolvedValue([runner("local", "Local Podman")]);
+    api.updateRunnerProfile.mockResolvedValue({...runner("local", "Local Podman"), state, revision: 2});
+    render(<RunnerSettings />);
+    await waitFor(() => expect(screen.getByRole("textbox", {name: "Profile name"})).toHaveValue("Local Podman"));
+    await userEvent.click(screen.getByRole("button", {name: "Save and check"}));
+    await waitFor(() => expect(announceSettingsSaved).toHaveBeenCalledWith(state === "ready"
+      ? "Runner profile verified and updated."
+      : "Runner profile saved. Host verification is still required."));
   });
 });
 

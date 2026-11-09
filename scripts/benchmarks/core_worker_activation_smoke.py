@@ -43,6 +43,10 @@ def run(binary: Path, output: Path) -> None:
         name: hashlib.sha256((repository / name).read_bytes()).hexdigest()
         for name in (
             "src/nebula/v3/api.py",
+            "src/nebula/v3/execution_kernel.py",
+            "src/nebula/v3/authentication.py",
+            "src/nebula/v3/memory_budget.py",
+            "src/nebula/v3/runtime_memory.py",
             "src/nebula/v3/cpu_workers.py",
             "src/nebula/v3/host_cpu_budget.py",
             "src/nebula/v3/report_cpu_executor.py",

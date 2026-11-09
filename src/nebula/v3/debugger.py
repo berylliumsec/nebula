@@ -205,6 +205,7 @@ class DebugService:
         backend = await ContainerRuntimeSession.start(
             SessionLaunch(
                 session_id=f"debug-{session_id}",
+                project_id=engagement_id,
                 runner=resolution.runner,
                 image=resolution.image.resolved_reference,
                 workspace=resolution.workspace,

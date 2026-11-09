@@ -16,6 +16,15 @@ export function settingOpensInButler(entry: SettingCatalogEntry): boolean {
 
 export const settingCatalog: SettingCatalogEntry[] = [
   {
+    id: "settings.memory-budgets",
+    label: "Memory budgets",
+    description: "Set job memory, swap and total capacity; reserve Core and runtime memory; inspect enforced limits and usage",
+    category: "Automation",
+    scope: "Workspace",
+    target: "memory-budget-settings",
+    keywords: ["memory", "ram", "gib", "worker", "budget", "out of memory", "oom", "limits", "swap", "reserve", "compute", "pressure", "butler", "search service", "searxng"],
+  },
+  {
     id: "settings.butler-instructions",
     label: "Nebula-wide Butler instructions",
     description: "Open Nebula-wide BUTLER.md directly in the Markdown code editor, or upload a replacement",
@@ -139,7 +148,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history"],
+    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history", "standing instructions", "instruction updates", "compaction", "reconnect"],
   },
   {
     id: "settings.mcp",
@@ -189,11 +198,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.network-scope",
     label: "Project policy and network scope",
-    description: "Control targets, ports, URLs, approvals and limits, or review targets extracted from a private scope document",
+    description: "Control targets, ports, URLs, approvals, limits and Always loaded tools, or review targets extracted from a private scope document",
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index", "scope import", "scope document", "review targets", "discard import"],
+    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "loaded schemas", "tool context", "tool compaction", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index", "scope import", "scope document", "review targets", "discard import"],
   },
   {
     id: "settings.operators",
@@ -243,11 +252,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.setup",
     label: "Terminal and Core setup",
-    description: "Choose a verified runtime, enable background PDF workers with this host's CPU budget, or inspect host pressure telemetry",
+    description: "Choose a verified runtime, inspect host pressure, or explicitly shut down local Core on the desktop. Closing or updating the window keeps Core and work running",
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",
-    keywords: ["setup", "terminal", "terminal TUI", "full-screen chat", "live agent progress", "nebula-chat", "core", "remote core", "connection", "readiness", "kali", "host load", "host-load", "CPU", "memory", "capacity", "fresh host load", "I/O pressure", "load average", "sample age", "host telemetry", "CPU budget", "per host", "automatic", "custom CPU limit", "applied quota", "enable background PDF workers", "disable workers", "Linux CPU affinity", "draining", "worker activation", "nebula.work.host_load", "nebula.global.host_load", "nebula.work.host_cpu_budget", "nebula.global.host_cpu_budget"],
+    keywords: ["shut down Core", "stop Core", "close window", "background work", "reopen", "setup", "terminal", "terminal TUI", "full-screen chat", "live agent progress", "nebula-chat", "core", "remote core", "connection", "readiness", "kali", "host load", "host-load", "CPU", "memory", "capacity", "fresh host load", "I/O pressure", "load average", "sample age", "host telemetry", "CPU budget", "per host", "automatic", "custom CPU limit", "applied quota", "enable background PDF workers", "disable workers", "Linux CPU affinity", "draining", "worker activation", "nebula.work.host_load", "nebula.global.host_load", "nebula.work.host_cpu_budget", "nebula.global.host_cpu_budget"],
   },
 ];
 

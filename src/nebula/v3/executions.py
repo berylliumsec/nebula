@@ -968,7 +968,15 @@ class ExecutionService:
                         "execution was cancelled before launch",
                     )
                     return
-                await self._run_isolated(current)
+                from .memory_runtime import managed_compute
+
+                with managed_compute(
+                    current.engagement_id,
+                    "operator_execution",
+                    current.id,
+                    job_id="execution-" + current.id,
+                ):
+                    await self._run_isolated(current)
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
                 "executions",
@@ -1213,6 +1221,14 @@ class ExecutionService:
                 error_detail = str(failure)[:4000]
                 exit_code = None
                 truncated = False
+            elif (
+                result is not None and result.memory_outcome == "memory_limit_exceeded"
+            ):
+                terminal = OperatorExecutionStatus.FAILED
+                error_code = "memory_limit_exceeded"
+                error_detail = "The job exceeded its enforced memory budget. Review saved logs and artifacts; retry explicitly after changing the budget or workload."
+                exit_code = result.exit_code
+                truncated = result.output_truncated
             elif result is not None and result.timed_out:
                 terminal = OperatorExecutionStatus.TIMED_OUT
                 error_code = "timeout"

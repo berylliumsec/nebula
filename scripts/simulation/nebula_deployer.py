@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Prepare exact Nebula commits and promote only while the live Core is idle.
+"""Prepare exact commits and promote through the selected deployment protocol.
 
-Install beside nebula_deploy_gate.py on simulation. The initial same-build
+Install beside nebula_deploy_gate.py and nebula_staged_deployer.py on simulation. The initial same-build
 cutover provisions current and its user service separately; this deployer
 handles later main updates. It never changes the development checkout.
 """
@@ -26,8 +26,10 @@ import tarfile
 import time
 from typing import Any
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 from nebula_deploy_gate import CoreClient, blockers, service_token
+from nebula_staged_deployer import StagedDeployer
 from nebula_postgres_backup import (
     BACKUP_FILES,
     configured_postgres,
@@ -60,6 +62,61 @@ PATH = "/home/simulation/.cargo/bin:/home/simulation/.local/bin:/usr/local/bin:/
 SERVICE = "nebula-core.service"
 EDGE = "nebula-lan-tls.service"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+
+
+class _LegacyAttempt:
+    def __init__(self, previous: str, candidate: str):
+        self.previous, self.candidate = previous, candidate
+
+
+def require_legacy_protocol(
+    record: dict,
+    *,
+    expected_version: str | None = None,
+    attempt: _LegacyAttempt | None = None,
+) -> None:
+    """A missing local mode is never evidence permitting data restoration."""
+    verified_attempt = bool(
+        attempt
+        and record.get("previous") == attempt.previous
+        and record.get("promoting") == attempt.candidate
+    )
+    client = api()
+    try:
+        status = client.get("deployment/status")
+    except HTTPError as error:
+        if error.code != 404:
+            if verified_attempt:
+                return
+            raise RuntimeError(
+                "Live deployment protocol is unavailable; retain state until it is verified"
+            ) from error
+    except OSError as error:
+        if verified_attempt:
+            return
+        raise RuntimeError(
+            "Live deployment protocol is unavailable; retain state until it is verified"
+        ) from error
+    else:
+        if isinstance(status, dict) and status.get("protocol") == "nebula.runtime/v1":
+            raise RuntimeError(
+                "The live Core is supervised; adopt-supervisor before promotion or code rollback"
+            )
+        raise RuntimeError(
+            "The live deployment protocol is unrecognized; offline mutation is blocked"
+        )
+    if verified_attempt:
+        return
+    health = client.get("health")
+    expected = expected_version or record.get("active")
+    if (
+        not isinstance(health, dict)
+        or health.get("status") != "ok"
+        or health.get("commit") != expected
+    ):
+        raise RuntimeError(
+            "A healthy exact legacy Core identity is required before offline mutation"
+        )
 
 
 def run(
@@ -137,6 +194,23 @@ def commit_at(path: Path) -> str:
 
 
 def baseline() -> str:
+    record = state()
+    if record.get("deployment_mode") == "supervisor":
+        status = api().get("deployment/status")
+        active = status.get("api_version")
+        if (
+            status.get("protocol") != "nebula.runtime/v1"
+            or not isinstance(active, str)
+            or not SHA.fullmatch(active)
+        ):
+            raise RuntimeError(
+                "The supervisor has no verified exact-commit API release"
+            )
+        if record.get("active") != active:
+            raise RuntimeError(
+                "Deployer state differs from the supervisor; reconcile the saved operation journal"
+            )
+        return active
     if CURRENT.is_symlink():
         active = CURRENT.resolve(strict=True)
         if active.parent != RELEASES or not SHA.fullmatch(active.name):
@@ -366,6 +440,46 @@ def browser_args(entry: dict[str, Any]) -> list[str]:
     return args
 
 
+def write_runtime_manifest(directory: Path, version: str, **compatibility) -> str:
+    files = {}
+    for path in [
+        directory / "dist/nebula-core",
+        *sorted((directory / "ui/dist").rglob("*")),
+    ]:
+        if path.is_symlink():
+            raise RuntimeError("Runtime bundles cannot contain symlinked assets")
+        if path.is_file():
+            files[path.relative_to(directory).as_posix()] = sha256(path)
+    manifest = {
+        "format": "nebula.runtime-bundle/v1",
+        "version": version,
+        "supervisor_protocol": "nebula.runtime/v1",
+        "core_executable": "dist/nebula-core",
+        "ui_directory": "ui/dist",
+        "files": files,
+    }
+    for key in (
+        "supervisor_protocol",
+        "api_protocol_min",
+        "api_protocol_max",
+        "execution_protocol_min",
+        "execution_protocol_max",
+        "schema_family",
+        "schema_min",
+        "schema_max",
+        "additive_migrations",
+        "migration_head",
+        "features",
+        "required_api_features",
+        "restorable_resources",
+        "execution_reserve_bytes",
+    ):
+        if key in compatibility:
+            manifest[key] = compatibility[key]
+    atomic_json(directory / "nebula-runtime.json", manifest)
+    return sha256(directory / "nebula-runtime.json")
+
+
 def prepare() -> dict[str, Any]:
     git_source()
     previous = baseline()
@@ -565,6 +679,19 @@ def prepare() -> dict[str, Any]:
         directory / "build/simulation-playwright-receipt.md",
         staging / "build/simulation-playwright-receipt.md",
     )
+    compatibility = json.loads(
+        run(
+            POETRY,
+            "run",
+            "python",
+            "-c",
+            "import json; from nebula.v3.runtime_bundle import load_compatibility; "
+            "print(json.dumps(load_compatibility()))",
+            cwd=directory,
+            capture=True,
+        )
+    )
+    runtime_digest = write_runtime_manifest(staging, sha, **compatibility)
     receipt = {
         "commit": sha,
         "previous": previous,
@@ -579,6 +706,7 @@ def prepare() -> dict[str, Any]:
             staging / "build/simulation-test-selection.json"
         ),
         "status": "accepted_candidate",
+        "runtime_manifest_sha256": runtime_digest,
     }
     atomic_json(staging / "simulation-acceptance.json", receipt)
     os.replace(staging, release)
@@ -813,7 +941,7 @@ def wait_ready(commit: str) -> None:
     raise RuntimeError("Core did not serve its accepted build within 480 seconds")
 
 
-def promote() -> dict[str, Any]:
+def legacy_promote() -> dict[str, Any]:
     record = state()
     new = record.get("pending")
     if not isinstance(new, str):
@@ -836,6 +964,8 @@ def promote() -> dict[str, Any]:
         raise RuntimeError("initial same-build cutover has not been completed")
     if record.get("active") != previous:
         raise RuntimeError("deployer state does not match the running release")
+    require_legacy_protocol(record, expected_version=previous)
+    attempt = _LegacyAttempt(previous, new)
     command = run(
         "systemctl",
         "--user",
@@ -894,7 +1024,7 @@ def promote() -> dict[str, Any]:
         edge("start")
     except Exception:
         try:
-            rollback()
+            rollback(_legacy_attempt=attempt)
         except Exception as recovery:
             raise RuntimeError(
                 f"candidate failed; automatic rollback also failed: {recovery}"
@@ -914,8 +1044,15 @@ def promote() -> dict[str, Any]:
     }
 
 
-def rollback() -> dict[str, Any]:
+def offline_rollback(
+    *, _legacy_attempt: _LegacyAttempt | None = None
+) -> dict[str, Any]:
     record = state()
+    if record.get("deployment_mode") == "supervisor":
+        raise RuntimeError(
+            "Supervisor code rollback preserves live data; offline restoration requires a separate stopped disaster-recovery procedure"
+        )
+    require_legacy_protocol(record, attempt=_legacy_attempt)
     failed_commit = record.get("promoting") or record.get("active")
     previous = record.get("previous")
     backup = Path(str(record.get("rollback_backup", "")))
@@ -991,6 +1128,77 @@ def rollback() -> dict[str, Any]:
     }
 
 
+def deployment_post(path: str, payload: dict) -> dict:
+    client = api()
+    request = Request(
+        f"{client.origin}/api/v1/{path}",
+        data=json.dumps(payload, separators=(",", ":")).encode(),
+        headers={
+            "Authorization": f"Bearer {client.token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+def runtime_release(sha: str) -> tuple[Path, str]:
+    release = verified_release(sha)
+    receipt = json.loads((release / "simulation-acceptance.json").read_text())
+    digest = receipt.get("runtime_manifest_sha256")
+    if not isinstance(digest, str) or sha256(release / "nebula-runtime.json") != digest:
+        raise RuntimeError(
+            "The accepted release has no verified supervisor runtime manifest"
+        )
+    return release, digest
+
+
+def staged_deployer(record: dict) -> StagedDeployer:
+    return StagedDeployer(
+        record,
+        get=api().get,
+        post=deployment_post,
+        save=lambda value: atomic_json(STATE, value),
+        verify=runtime_release,
+    )
+
+
+def adopt_supervisor() -> dict:
+    status = api().get("deployment/status")
+    if status.get("protocol") != "nebula.runtime/v1" or not isinstance(
+        status.get("api_version"), str
+    ):
+        raise RuntimeError("A healthy supervisor API is required before adoption")
+    record = state()
+    record.update(deployment_mode="supervisor", active=status["api_version"])
+    atomic_json(STATE, record)
+    return {"status": "supervisor_adopted", "commit": status["api_version"]}
+
+
+def promote() -> dict[str, Any]:
+    record = state()
+    if record.get("deployment_mode") != "supervisor":
+        return legacy_promote()
+    pending = record.get("pending")
+    if not isinstance(pending, str):
+        return {
+            "status": "no_pending_candidate",
+            "deployment": api().get("deployment/status"),
+        }
+    return staged_deployer(record).promote(pending)
+
+
+def rollback(*, _legacy_attempt: _LegacyAttempt | None = None) -> dict[str, Any]:
+    record = state()
+    if record.get("deployment_mode") != "supervisor":
+        return offline_rollback(_legacy_attempt=_legacy_attempt)
+    previous = record.get("previous")
+    if not isinstance(previous, str):
+        raise RuntimeError("No retained code rollback target is recorded")
+    return staged_deployer(record).rollback(previous)
+
+
 def bootstrap() -> dict[str, Any]:
     if baseline() != INITIAL_COMMIT or not CURRENT.is_symlink():
         raise RuntimeError(
@@ -1027,7 +1235,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("prepare", "promote", "rollback", "bootstrap", "cycle", "status"),
+        choices=(
+            "prepare",
+            "promote",
+            "rollback",
+            "offline-rollback",
+            "adopt-supervisor",
+            "bootstrap",
+            "cycle",
+            "status",
+        ),
     )
     args = parser.parse_args()
     checked_host()
@@ -1036,7 +1253,7 @@ def main() -> int:
         result = (
             {"status": "state", **state()}
             if args.action == "status"
-            else globals()[args.action]()
+            else globals()[args.action.replace("-", "_")]()
         )
     print(json.dumps(result, sort_keys=True))
     return 0

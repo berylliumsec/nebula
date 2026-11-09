@@ -9,6 +9,8 @@ import reconnection from "./playwright.reconnection.config";
 import thinking from "./playwright.thinking.config";
 import hostLoad from "./playwright.host-load.config";
 import hostCpuBudget from "./playwright.host-cpu-budget.config";
+import memoryBudgets from "./playwright.memory-budgets.config";
+import runtimeContinuity from "./playwright.runtime-continuity.config";
 import universalAgents from "./playwright.universal-agents.config";
 import { defineConfig, devices } from "@playwright/test";
 import { assertPlaywrightInvocation } from "../scripts/test_scope_guard.mjs";
@@ -39,6 +41,8 @@ const fixtureConfigs = {
   "tests/thinking.spec.ts": thinking,
   "tests/host-load.spec.ts": hostLoad,
   "tests/host-cpu-budget.spec.ts": hostCpuBudget,
+  "tests/memory-budgets.spec.ts": memoryBudgets,
+  "tests/runtime-continuity.spec.ts": runtimeContinuity,
   "tests/universal-agents.spec.ts": universalAgents,
 };
 const selectedFiles = selectedArgs.filter(arg => /^tests\/.*\.spec\.tsx?$/.test(arg));

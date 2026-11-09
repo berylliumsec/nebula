@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Database, RefreshCw } from "lucide-react";
 import type { StorageDashboard } from "../api/types";
@@ -16,20 +16,53 @@ function bytes(value: number | null): string {
   return `${(value / 1024 ** order).toFixed(order ? 1 : 0)} ${["B", "KiB", "MiB", "GiB", "TiB"][order]}`;
 }
 
+function mergeStoragePage(previous: StorageDashboard, page: StorageDashboard): StorageDashboard {
+  const merge = <T extends {id: string},>(before: T[], after: T[]) => {
+    const items = new Map(before.map(item => [item.id, item]));
+    after.forEach(item => items.set(item.id, item));
+    return [...items.values()];
+  };
+  return {...page, sources: merge(previous.sources, page.sources), devices: merge(previous.devices, page.devices),
+    volumes: merge(previous.volumes, page.volumes), incidents: merge(previous.incidents, page.incidents),
+    actions: merge(previous.actions, page.actions), dispatches: merge(previous.dispatches, page.dispatches)};
+}
+
 export function StoragePage() {
   const { api, coreState, engagements } = useWorkspace();
   const [data, setData] = useState<StorageDashboard>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pageError, setPageError] = useState("");
+  const generation = useRef(0);
+  const expandedSnapshot = useRef(false);
   const refresh = async () => {
     if (!api) return;
-    setLoading(true); setError("");
-    try { setData(await api.storageDashboard()); }
+    const current = ++generation.current;
+    expandedSnapshot.current = false;
+    setLoading(true); setLoadingMore(false); setError(""); setPageError("");
+    try { const observed = await api.storageDashboard(); if (generation.current === current) setData(observed); }
     catch (caught) {
+      if (generation.current !== current) return;
       logCaughtDiagnostic("interface.storage.dashboard_load_failed", "The Storage dashboard could not be loaded.", caught, "storage-dashboard");
       setError(String(caught));
     }
-    finally { setLoading(false); }
+    finally { if (generation.current === current) setLoading(false); }
+  };
+  const loadMore = async () => {
+    if (!api || loading || loadingMore || data?.next_offset == null) return;
+    const current = generation.current;
+    expandedSnapshot.current = true;
+    setLoadingMore(true); setPageError("");
+    try {
+      const page = await api.storageDashboard(undefined, {offset: data.next_offset, limit: data.limit ?? 1000});
+      if (current === generation.current) setData(previous => previous ? mergeStoragePage(previous, page) : page);
+    } catch (caught) {
+      if (current === generation.current) {
+        logCaughtDiagnostic("interface.storage.dashboard_page_load_failed", "More Storage reports could not be loaded.", caught, "storage-dashboard-pagination");
+        setPageError(String(caught));
+      }
+    } finally { if (current === generation.current) setLoadingMore(false); }
   };
   const retryDispatch = async (dispatchId: string) => {
     if (!api) return;
@@ -39,10 +72,10 @@ export function StoragePage() {
       setError(String(caught));
     }
   };
-  useEffect(() => { void refresh(); }, [api, coreState]);
+  useEffect(() => { void refresh(); return () => { generation.current += 1; }; }, [api, coreState]);
   useEffect(() => {
     if (!api) return;
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 30000);
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible" && !expandedSnapshot.current) void refresh(); }, 30000);
     return () => window.clearInterval(timer);
   }, [api]);
   const devices = useMemo(() => data?.devices ?? [], [data]);
@@ -52,6 +85,10 @@ export function StoragePage() {
       actions={<><button className="button quiet" type="button" disabled={loading} onClick={() => void refresh()} aria-label="Refresh storage"><RefreshCw size={16} /> Refresh</button><Link className="button secondary" to="/settings#storage-integration-settings">Manage sources</Link></>} />
     {error && <p className="storage-error" role="alert">Storage could not refresh. Existing data may be old. <button className="button quiet" onClick={() => void refresh()}>Retry</button><span>{error}</span></p>}
     {!data && loading && <p role="status">Loading storage…</p>}
+    {data?.partial && <div className="storage-page-notice"><p role="status">Showing a partial storage snapshot. Load more saved reports or refresh to start again.</p>
+      {pageError && <p role="alert">More reports could not load. Existing reports remain here. {pageError}</p>}
+      <button className="button quiet" type="button" style={{minHeight: 44}} disabled={loading || loadingMore || data.next_offset == null} onClick={() => void loadMore()}>{loadingMore ? "Loading more reports…" : "Load more storage reports"}</button>
+    </div>}
     {data && !data.sources.length && <StandardEmptyState icon={<Database size={24} />} title="No storage sources" explanation="Add a source in Settings → Integrations → Storage. It starts disabled until you connect your sender." />}
     {data && data.sources.length > 0 && <>
       <div className="storage-summary" aria-label="Storage summary"><article className="panel"><strong>{data.sources.filter((item) => item.enabled).length}</strong><span>Enabled sources</span></article><article className="panel"><strong>{devices.length}</strong><span>Devices</span></article><article className="panel"><strong>{open.length}</strong><span>Open incidents</span></article><article className="panel"><strong>{data.volumes.filter((item) => item.stale).length}</strong><span>Stale volumes</span></article></div>
@@ -75,6 +112,7 @@ export function StoragePage() {
           {incident.callback_error && <p className="storage-error" role="alert">Source diagnostics unavailable: {incident.callback_error}</p>}
           {dispatches.filter((item) => item.status === "failed" || item.queue_status === "missing").map((item) => <p className="storage-error" key={item.id} role="alert">Chat dispatch failed: {item.error ?? item.queue_detail} <button className="button quiet" type="button" onClick={() => void retryDispatch(item.id)}>Retry</button></p>)}
           {dispatches.filter((item) => item.queue_status === "needs_review").map((item) => <p className="storage-error" key={item.id} role="alert">Assistant response needs review: {item.queue_detail ?? "The configured runtime could not finish."} Open the linked chat to inspect and retry.</p>)}
+          {dispatches.filter((item) => item.queue_status === "unavailable").map((item) => <p className="storage-error" key={item.id} role="alert">Saved queue status is unavailable: {item.queue_detail ?? "Refresh to check its saved state."}</p>)}
           {api && <StorageActions api={api} actions={data.actions.filter((item) => item.incident_id === incident.id)} onRefresh={refresh} />}
         </article>;
       }) : <p>No incidents yet. Warning, critical, and unavailable reports will appear here.</p>}</section>

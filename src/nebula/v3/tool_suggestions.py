@@ -24,6 +24,7 @@ an action.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -47,6 +48,7 @@ from .domain import (
 from .redaction import redact_text
 from .tool_catalog import CATALOG_TOOL_NAMES, loaded_tool_names, summary
 from .tools import ToolSpec
+from .provider_tool_manifest import spec_digest
 
 SETTINGS_ID = "typesafe"
 ENV_KEY = "TYPESAFE_API_KEY"
@@ -171,12 +173,19 @@ def suggestions_enabled(scope: ScopePolicy) -> bool:
     return scope.tool_suggestions and not scope.local_only
 
 
-def request_key(state: Mapping[str, Any], questions: Mapping[str, Any]) -> str:
+def request_key(
+    state: Mapping[str, Any],
+    questions: Mapping[str, Any],
+    *,
+    definition_digests: Mapping[str, str] | None = None,
+) -> str:
     """Identify a ranking request by the exact payload that would be sent."""
 
     return hashlib.sha256(
         json.dumps(
-            [JEV_MODEL, state, questions],
+            [JEV_MODEL, state, questions, definition_digests]
+            if definition_digests is not None
+            else [JEV_MODEL, state, questions],
             sort_keys=True,
             ensure_ascii=False,
             separators=(",", ":"),
@@ -517,6 +526,8 @@ async def suggest_tools(
     """
 
     names = sorted(deferred)
+    if not names:
+        return ToolSuggestionReceipt(status="no_tool_needed", deferred=[])
     if client is None:
         return ToolSuggestionReceipt(
             status="unavailable",
@@ -538,7 +549,13 @@ async def suggest_tools(
             with_skills=bool(sent_skills),
         )
         if cache is not None:
-            key = request_key(state, questions)
+            key = request_key(
+                state,
+                questions,
+                definition_digests={
+                    name: spec_digest(deferred[name]) for name in names
+                },
+            )
             hit = cache.get(key)
             if hit is not None:
                 # This turn spent no tokens upstream, so it reports none.
@@ -603,7 +620,13 @@ async def key_source(store: Any, credentials: Any) -> tuple[KeySource | None, bo
 
     settings = await load_settings(store)
     if settings is not None and settings.secret_ref:
-        status = credentials.status(settings.secret_ref)
+        from .runtime_credential_access import credential_available_async
+
+        if settings.secret_ref.startswith("session:"):
+            return "session", await credential_available_async(
+                credentials, settings.secret_ref, purpose="typesafe"
+            )
+        status = await asyncio.to_thread(credentials.status, settings.secret_ref)
         return status.persistence, status.available
     if os.environ.get(ENV_KEY, "").strip():
         return "environment", True
@@ -614,11 +637,14 @@ async def resolve_jev_client(store: Any, credentials: Any) -> JevClient | None:
     """A saved key wins over the environment; an unusable saved key yields None."""
 
     from .credentials import CredentialError
+    from .runtime_credential_access import resolve_credential_async
 
     settings = await load_settings(store)
     if settings is not None and settings.secret_ref:
         try:
-            secret = credentials.resolve(settings.secret_ref)
+            secret = await resolve_credential_async(
+                credentials, settings.secret_ref, purpose="typesafe"
+            )
         except CredentialError:
             # diagnostic-expected: a lost session/vault key surfaces as "not working"
             return None

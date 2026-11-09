@@ -779,7 +779,7 @@ describe("ApiClient", () => {
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", token: "test-token", fetch: fetchMock });
 
     const recovered = await client.recoverContainerTerminals("project/one");
-    const currentCapacity = await client.containerTerminalCapacity();
+    const currentCapacity = await client.containerTerminalCapacity("project/one");
     await client.closeContainerTerminal("terminal-1");
 
     expect(recovered.sessions[0]).toMatchObject({
@@ -789,7 +789,7 @@ describe("ApiClient", () => {
     expect(currentCapacity).toEqual({ activeSessions: 1, availableSessions: 31, maxActiveSessions: 32 });
     expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method ?? "GET"])).toEqual([
       ["http://127.0.0.1:8765/api/v1/engagements/project%2Fone/container-terminals/recover", "POST"],
-      ["http://127.0.0.1:8765/api/v1/container-terminal/capacity", "GET"],
+      ["http://127.0.0.1:8765/api/v1/container-terminal/capacity?engagement_id=project%2Fone", "GET"],
       ["http://127.0.0.1:8765/api/v1/container-terminals/terminal-1", "DELETE"],
     ]);
   });
@@ -1008,7 +1008,7 @@ describe("ApiClient", () => {
     const selected = await client.selectSetupRuntime(`fixed:${"a".repeat(32)}`);
     const prepared = await client.prepareSetupImage("scratch-project");
     await client.retrySetupImage("scratch-project");
-    await client.cancelSetupImage("00000000-0000-4000-8000-000000000001");
+    await client.cancelSetupImage("00000000-0000-4000-8000-000000000001", "scratch-project");
 
     expect(selected.operation).toBe("runner_selection");
     expect(prepared.setup.terminal.imagePreparation).toMatchObject({
@@ -1023,7 +1023,7 @@ describe("ApiClient", () => {
       ["/api/v1/setup/runtime/select", { candidate_id: `fixed:${"a".repeat(32)}` }],
       ["/api/v1/setup/image/prepare", { project_id: "scratch-project" }],
       ["/api/v1/setup/image/retry", { project_id: "scratch-project" }],
-      ["/api/v1/setup/image/cancel", { operation_id: "00000000-0000-4000-8000-000000000001" }],
+      ["/api/v1/setup/image/cancel", { project_id: "scratch-project", operation_id: "00000000-0000-4000-8000-000000000001" }],
     ]);
   });
 

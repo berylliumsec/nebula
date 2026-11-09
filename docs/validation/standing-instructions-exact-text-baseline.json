@@ -1,0 +1,14 @@
+{
+  "synthetic_only": true,
+  "input": "  SYNTHETIC_EXACT_INSTRUCTION\nTrailing line.\n",
+  "project": {
+    "content": "SYNTHETIC_EXACT_INSTRUCTION\nTrailing line.",
+    "sha256": "5db257159cca3112798bbfdc3548beafcb2f4cc4a906e2fbbe16e2c334c464db",
+    "received_sha256": "d7de2d4874a0f9dc8c47c510ccc93fc785b2ccb6b7391fff57cef80b7b9bfea5"
+  },
+  "skill": {
+    "instructions": "SYNTHETIC_EXACT_INSTRUCTION\nTrailing line.",
+    "sha256": "5db257159cca3112798bbfdc3548beafcb2f4cc4a906e2fbbe16e2c334c464db",
+    "received_sha256": "d7de2d4874a0f9dc8c47c510ccc93fc785b2ccb6b7391fff57cef80b7b9bfea5"
+  }
+}

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .async_utils import MaybeAsync
 
-from .async_utils import async_done_callback, call_async
+from .async_utils import async_done_callback, call_async, finish_cleanup
 
 from .async_utils import resolve_workspace
 
@@ -45,6 +45,7 @@ from .harness_quota import HarnessQuotaSnapshot, claude_quota_snapshot
 from .settings_assistant_api import SettingsAssistantApi
 
 import asyncio
+import time
 import inspect
 import json
 import os
@@ -111,6 +112,13 @@ from .chat_subagents import (
     subagent_specs,
 )
 from .chat_agent_messages import AgentMessageService
+from .harness_instructions import (
+    grok_channel_barrier,
+    grok_channel_is_confirmed,
+    installed_channel_matches,
+    instruction_snapshot,
+    snapshot_text,
+)
 from .work import WorkCheckIn, WorkCreate, WorkGetRequest, WorkListRequest, WorkService
 from .automation_runtime import AutomationRuntimeUnavailable
 from .butler_memory import BUTLER_MEMORY_INSTRUCTION
@@ -1127,6 +1135,12 @@ def _harness_developer_instructions(
         + DIRECT_REQUEST_WORKFLOW
         + " "
         + BROWSER_MODEL_WORKFLOW
+        + (
+            "\n\nCurrent standing instructions (authoritative over older conversation history):"
+            + snapshot_text(session.metadata["standing_instructions"])
+            if "standing_instructions" in session.metadata
+            else ""
+        )
     )
 
 
@@ -1191,6 +1205,10 @@ class HarnessVendorSessionNotFoundError(HarnessConfigurationError):
     The vendor no longer has it, or the runtime cannot load sessions at all.
     Raised only when the vendor said so unambiguously.
     """
+
+
+class HarnessInstructionContextChanged(HarnessConfigurationError):
+    """A retained native context cannot replace its installed instruction head."""
 
 
 class HarnessUnavailableError(HarnessError):
@@ -1708,6 +1726,7 @@ class AdapterOpenRequest:
 class HarnessConnection(ABC):
     external_session_id: str | None
     adapter_version: str
+    _nebula_instruction_channel: tuple[dict[str, str], str] | None = None
 
     @property
     def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
@@ -6969,9 +6988,8 @@ class GrokAcpConnection(HarnessConnection):
         self.external_session_id = external_session_id
         self.permission_handler = permission_handler
         self.developer_instructions = developer_instructions
-        # ACP keeps the session's conversation, so the instructions travel with
-        # the first prompt this connection completes rather than every prompt.
-        # A new connection sends them again: its catalog may have changed.
+        # Compatibility path for unmanaged ACP callers. Core-managed standing
+        # snapshots require a verified durable channel before omitting this.
         self._instructions_delivered = False
         self.active = False
         # ACP's answer to session/prompt is the turn boundary, so a stopped
@@ -7375,8 +7393,6 @@ class GrokAcpConnection(HarnessConnection):
                 "cancelled",
                 "canceled",
             }:
-                # Grok drops a refused prompt from the session, and a stopped
-                # one may not have been read; either sends them again.
                 self._instructions_delivered = True
             if stop_reason == "refusal":
                 # ACP drops the refused prompt and everything after it from the
@@ -7933,7 +7949,9 @@ class GrokAcpAdapter(HarnessAdapter):
                 ["--disallowed-tools", ",".join(self._DISALLOWED_HOST_TOOLS)]
             )
         command.append("agent")
-        if core_planned:
+        if core_planned or (
+            session is not None and "standing_instructions" in session.metadata
+        ):
             command.append("--no-leader")
         if session is not None:
             command.extend(["--model", session.model])
@@ -8223,6 +8241,13 @@ class GrokAcpAdapter(HarnessAdapter):
             ) from exc
 
     async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
+        managed_instructions = "standing_instructions" in request.session.metadata
+        developer_instructions = _harness_developer_instructions(
+            request.session,
+            _session_native_capabilities(request.session, request.profile),
+            vendor="Grok",
+            gateway_tools=request.gateway_tools,
+        )
         rpc = await self._connect(request.profile, request.workspace, request.session)
         try:
             initialize = await self._initialize(rpc)
@@ -8254,6 +8279,28 @@ class GrokAcpAdapter(HarnessAdapter):
                         }
                     )
             session_cost_usd: float | None = None
+            instruction_home: Path | None = None
+            instruction_barrier: tuple[int, int] | None = None
+            if managed_instructions:
+                isolated = request.session.metadata.get(
+                    "control_assistant"
+                ) is True or _gateway_only_core_planned_session(
+                    request.session, request.profile.kind
+                )
+                instruction_home = (
+                    request.workspace.parent / f"{request.workspace.name}.settings-home"
+                    if isolated
+                    else _harness_home(request.profile)
+                )
+                try:
+                    instruction_barrier = await finish_cleanup(
+                        asyncio.to_thread(grok_channel_barrier, instruction_home)
+                    )
+                except OSError as error:
+                    raise HarnessConfigurationError(
+                        "Grok could not establish fresh standing-instruction readback. "
+                        "No message was sent. Check the account's sessions storage, then retry."
+                    ) from error
             if request.session.external_session_id:
                 capabilities = initialize.get("agentCapabilities")
                 if not (
@@ -8285,7 +8332,18 @@ class GrokAcpAdapter(HarnessAdapter):
             else:
                 result = await rpc.request(
                     "session/new",
-                    {"cwd": str(request.workspace), "mcpServers": mcp_servers},
+                    {
+                        "cwd": str(request.workspace),
+                        "mcpServers": mcp_servers,
+                        # Grok retains this system head on load and compaction.
+                        # Appending it to session/prompt would retain another
+                        # user-message copy on each reconnect.
+                        **(
+                            {"_meta": {"rules": developer_instructions}}
+                            if managed_instructions
+                            else {}
+                        ),
+                    },
                 )
                 if not isinstance(result, dict) or not isinstance(
                     result.get("sessionId"), str
@@ -8296,21 +8354,54 @@ class GrokAcpAdapter(HarnessAdapter):
                 external_session_id = result["sessionId"]
                 # A new session has spent nothing yet, so per-turn cost is exact.
                 session_cost_usd = 0.0
+            if managed_instructions:
+                if instruction_home is None or instruction_barrier is None:
+                    raise HarnessConfigurationError(
+                        "Grok instruction freshness is unavailable."
+                    )
+                if not await asyncio.to_thread(
+                    grok_channel_is_confirmed,
+                    instruction_home,
+                    external_session_id,
+                    developer_instructions,
+                    not_before_ns=instruction_barrier[0],
+                    expected_device=instruction_barrier[1],
+                ):
+                    if request.session.external_session_id:
+                        raise HarnessInstructionContextChanged(
+                            "Grok did not retain the exact standing instruction channel."
+                        )
+                    raise HarnessConfigurationError(
+                        "Grok did not confirm durable standing instructions. No message was sent. "
+                        "Update the Grok runtime and check access to its session data, then retry."
+                    )
             return GrokAcpConnection(
                 rpc,
                 external_session_id=external_session_id,
                 permission_handler=request.permission_handler,
                 session_cost_usd=session_cost_usd,
-                developer_instructions=_harness_developer_instructions(
-                    request.session,
-                    _session_native_capabilities(request.session, request.profile),
-                    vendor="Grok",
-                    gateway_tools=request.gateway_tools,
-                ),
+                developer_instructions=""
+                if managed_instructions
+                else developer_instructions,
             )
-        except (Exception, asyncio.CancelledError):
-            await rpc.close()
-            raise
+        except BaseException as error:
+            # diagnostic-expected: joined probe cleanup may combine cancellation
+            # and failure in a BaseExceptionGroup; this RPC remains ours to close.
+            try:
+                await finish_cleanup(rpc.close())
+            except BaseException as close_error:
+                # diagnostic-expected: preserve both failures for propagation.
+                error = BaseExceptionGroup(
+                    "Grok open and RPC cleanup failed", [error, close_error]
+                )
+            if (
+                isinstance(error, BaseExceptionGroup)
+                and error.subgroup(asyncio.CancelledError) is not None
+            ):
+                # Existing callers own gateway cleanup and queued-turn settlement
+                # for cancellation. Retain the complete failure group as cause.
+                raise asyncio.CancelledError() from error
+            raise error
 
 
 class ClaudeAgentSdkAdapter(HarnessAdapter):
@@ -8817,6 +8908,12 @@ class HarnessRuntimeService:
         self.workspace_resolver = workspace_resolver
         self.artifact_store = artifact_store or ArtifactStore(
             Path(tempfile.mkdtemp(prefix="nebula-harness-artifacts-"))
+        )
+        from .memory_budget import MemoryBudgetService
+        from .memory_runtime import MemoryComputeController
+
+        self.memory_compute = MemoryComputeController(
+            MemoryBudgetService(store.database), self.artifact_store.root
         )
         self.mcp_service = McpProbeService(
             store,
@@ -9501,161 +9598,14 @@ class HarnessRuntimeService:
         )
 
     async def test_turn(self, profile_id: str) -> HarnessHealth:
-        """Spend one bounded provider turn outside every durable project session."""
-        profile = await self.store.get(HarnessProfile, profile_id)
-        if not profile.enabled:
-            raise HarnessConfigurationError("Enable this harness before testing a turn")
-        model = profile.default_model or next(iter(profile.capabilities.models), None)
-        if not model:
-            raise HarnessConfigurationError(
-                "Check this harness to discover a model first"
-            )
-        state: Literal["verified", "failed", "unverified"] = "failed"
-        session_state: Literal["verified", "failed", "unverified"] = "failed"
-        reason: str | None = None
-        connection: HarnessConnection | None = None
-        try:
-            with tempfile.TemporaryDirectory(
-                prefix="nebula-harness-check-"
-            ) as workspace_name:
-                workspace = Path(workspace_name)
-                session = HarnessSession(
-                    id=str(uuid4()),
-                    engagement_id="diagnostic",
-                    harness_profile_id=profile.id,
-                    model=model,
-                    metadata={
-                        "native_capabilities": HarnessNativeCapabilities().model_dump()
-                    },
-                )
+        from .harness_diagnostics import run_harness_test_turn
 
-                async def deny_permission(
-                    _request: HarnessPermissionRequest,
-                ) -> PermissionTicket:
-                    raise HarnessConfigurationError("Diagnostic turns cannot use tools")
-
-                request = AdapterOpenRequest(
-                    profile=profile.model_copy(
-                        update={"native_capabilities": HarnessNativeCapabilities()}
-                    ),
-                    session=session,
-                    workspace=workspace,
-                    mcp_profiles=(),
-                    credential_store=self.credential_store,
-                    permission_handler=deny_permission,
-                )
-                adapter = self.adapter_factory(profile.kind)
-                connection = await adapter.open(request)
-                session_state = "verified"
-                completed = False
-                reply = ""
-                async with asyncio.timeout(90):
-                    async for event in connection.run_turn(
-                        "Reply with exactly OK. Do not use tools.", model=model
-                    ):
-                        if event.type == "error":
-                            raise HarnessTransportError(
-                                event.message or "Diagnostic turn failed"
-                            )
-                        if (
-                            event.type in {"tool_started", "tool_completed"}
-                            or event.item_kind == "tool"
-                        ):
-                            raise HarnessConfigurationError(
-                                "Diagnostic turn attempted a tool"
-                            )
-                        completed = completed or event.type == "completed"
-                        if event.type == "completed" and event.message:
-                            reply = event.message
-                        elif event.type == "message_delta" and event.delta:
-                            reply += event.delta
-                if not completed or not reply.strip():
-                    raise HarnessTransportError(
-                        "Diagnostic turn ended without a text answer"
-                    )
-                state = "verified"
-                if connection.external_session_id:
-                    resumed = session.model_copy(
-                        update={"external_session_id": connection.external_session_id}
-                    )
-                    await connection.close()
-                    connection = None
-                    resume_request = AdapterOpenRequest(
-                        profile=request.profile,
-                        session=resumed,
-                        workspace=workspace,
-                        mcp_profiles=(),
-                        credential_store=self.credential_store,
-                        permission_handler=deny_permission,
-                    )
-                    connection = await adapter.open(resume_request)
-                    if connection.external_session_id != resumed.external_session_id:
-                        raise HarnessTransportError(
-                            "Diagnostic session resumed a different id"
-                        )
-                await connection.close()
-                connection = None
-        except Exception as exc:
-            reason = reason_code_for(exc, feature="harnesses")
-            record_caught_exception(
-                "harnesses",
-                "harnesses.test_turn_failed",
-                "A diagnostic harness turn failed.",
-                exc,
-                stage="test-turn",
-            )
-            if state == "verified":
-                session_state = "failed"
-            elif session_state != "verified":
-                session_state = "failed"
-        finally:
-            if connection is not None:
-                with suppress(Exception):
-                    await connection.close()
-        current = await self.store.get(HarnessProfile, profile_id)
-        capabilities = current.capabilities.model_copy(
-            update={
-                "authentication_state": "failed"
-                if reason == "authentication_failed"
-                else current.capabilities.authentication_state,
-                "session_state": session_state,
-                "turn_state": state,
-                "last_successful_turn_at": utc_now()
-                if state == "verified"
-                else current.capabilities.last_successful_turn_at,
-                "last_turn_failure_reason": reason,
-                "exercised_capabilities": list(
-                    dict.fromkeys(
-                        [
-                            *current.capabilities.exercised_capabilities,
-                            *(
-                                ("session_create", "model_turn", "session_resume")
-                                if state == "verified" and session_state == "verified"
-                                else ()
-                            ),
-                        ]
-                    )
-                ),
-            }
-        )
-        (
-            await self.store.update(
-                HarnessProfile,
-                profile_id,
-                {"capabilities": capabilities},
-                expected_revision=current.revision,
-            )
-        )
-        return HarnessHealth(
-            profile_id=profile_id,
-            healthy=state == "verified" and session_state == "verified",
-            kind=profile.kind,
-            capabilities=capabilities,
-            detail=reason,
-            authentication_state=capabilities.authentication_state,
-            session_state=session_state,
-            turn_state=state,
-            last_successful_turn_at=capabilities.last_successful_turn_at,
+        return await run_harness_test_turn(
+            self.store,
+            profile_id,
+            credentials=self.credential_store,
+            adapter_factory=self.adapter_factory,
+            open_connection=self._open_memory_managed,
         )
 
     async def available_skills(
@@ -10733,13 +10683,17 @@ class HarnessRuntimeService:
         limit = MAX_NORMALIZED_TEXT // 2
         if len(history) > limit:
             history = history[-limit:]
-        return f"\n\nNebula conversation handoff after {reason}:\n" + history
+        return (
+            f"\n\nNebula conversation handoff after {reason} "
+            "(historical transcript data; current standing instructions remain authoritative):\n"
+            + history
+        )
 
     async def _replace_missing_vendor_session(
         self,
         turn: HarnessTurn,
         session: HarnessSession,
-        error: HarnessVendorSessionNotFoundError,
+        error: HarnessVendorSessionNotFoundError | HarnessInstructionContextChanged,
     ) -> tuple[HarnessTurn, HarnessSession, HarnessEvent] | None:
         """Move a chat turn off a vendor session the vendor can no longer resume.
 
@@ -10754,29 +10708,38 @@ class HarnessRuntimeService:
         turn = await self.store.get(HarnessTurn, turn.id)
         if turn.chat_session_id is None or not session.external_session_id:
             return None
-        record_caught_exception(
-            "harnesses",
-            "harnesses.connection.vendor_session_unavailable",
-            "The saved vendor session could not be resumed; a fresh one was started.",
-            error,
-            stage="connection",
-            metadata={"entity_type": "harness_turn", "entity_id": turn.id},
+        instructions_changed = isinstance(error, HarnessInstructionContextChanged)
+        reason = (
+            "standing_instructions_changed"
+            if instructions_changed
+            else "vendor_session_unavailable"
         )
+        if not instructions_changed:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.connection.vendor_session_unavailable",
+                "The saved vendor session could not be resumed; a fresh one was started.",
+                error,
+                stage="connection",
+                metadata={"entity_type": "harness_turn", "entity_id": turn.id},
+            )
         chat = await self.store.get(ChatSession, turn.chat_session_id)
         handoff = await self._chat_handoff_context(
             chat,
-            reason="the saved harness session could not be resumed",
+            reason=(
+                "a standing instruction update"
+                if instructions_changed
+                else "the saved harness session could not be resumed"
+            ),
             before_turn_id=turn.id,
         )
-        replacement = await self._fork_session(
-            session, reason="vendor_session_unavailable"
-        )
+        replacement = await self._fork_session(session, reason=reason)
         (
             await self._rebind_chat_session(
                 chat,
                 replacement,
                 previous_session_id=session.id,
-                reason="vendor_session_unavailable",
+                reason=reason,
             )
         )
         user_prompt = turn.metadata.get("user_prompt")
@@ -10794,7 +10757,7 @@ class HarnessRuntimeService:
                 "metadata": {
                     **turn.metadata,
                     "forked_from_session_id": session.id,
-                    "session_rollover_reason": "vendor_session_unavailable",
+                    "session_rollover_reason": reason,
                 },
             },
             expected_revision=turn.revision,
@@ -10810,10 +10773,16 @@ class HarnessRuntimeService:
                 harness_turn_id=turn.id,
                 model=replacement.model,
                 payload={
-                    "phase": "vendor_session_recreated",
-                    "detail": "The saved harness session could no longer be resumed, "
-                    "so Nebula started a new session and continued with this "
-                    "conversation's context.",
+                    "phase": "instructions_updated"
+                    if instructions_changed
+                    else "vendor_session_recreated",
+                    "detail": (
+                        "Standing instructions updated. Continuing with the saved conversation context."
+                        if instructions_changed
+                        else "The saved harness session could no longer be resumed, "
+                        "so Nebula started a new session and continued with this "
+                        "conversation's context."
+                    ),
                     "previous_session_id": session.id,
                 },
             ),
@@ -11053,7 +11022,11 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(
                 "Core skill instructions require permission to share project data and explicit operator confirmation for a remote harness"
             )
-        runtime_context = (runtime_context or "") + skill_instructions(core_skills)
+        # Standing authority belongs to the native instruction channel, never
+        # another retained user message. Recovery callers supply that authority.
+        standing_context = (runtime_context or "") if butler_recovery_case_id else ""
+        if butler_recovery_case_id:
+            runtime_context = ""
         project = await self.store.get(Engagement, engagement_id)
         scope = (
             (await self.store.get(ScopePolicy, project.scope_policy_id))
@@ -11652,9 +11625,8 @@ class HarnessRuntimeService:
             if control_assistant
             else (await decision_snapshot(self.store, chat.id, engagement_id))
         )
-        runtime_context = (runtime_context or "") + decision_instructions(
-            operator_decisions
-        )
+        standing_context += decision_instructions(operator_decisions)
+        runtime_context = runtime_context or ""
         from .chat_goals import ChatGoalService
 
         goals = ChatGoalService(self.store)
@@ -11671,6 +11643,7 @@ class HarnessRuntimeService:
         )
         if goal_id is not None and goal is None:
             raise HarnessStateError("goal must be running before a harness turn")
+        goal_skills = []
         if goal is not None:
             if goal.step_budget is not None and goal.current_step >= goal.step_budget:
                 raise HarnessStateError("goal step budget is exhausted")
@@ -11694,6 +11667,8 @@ class HarnessRuntimeService:
                 "objective": goal.objective,
                 "completion_criteria": goal.completion_criteria,
                 "plan": goal.plan,
+            }
+            goal_progress = {
                 "current_step": goal.current_step,
                 "remaining_steps": goal.step_budget - goal.current_step
                 if goal.step_budget is not None
@@ -11702,21 +11677,28 @@ class HarnessRuntimeService:
                 if goal.token_budget is not None
                 else None,
             }
-            runtime_context += (
+            standing_context += (
                 "\n\nCore-owned Nebula goal (separate from any native harness goal):\n"
                 + json.dumps(goal_context, ensure_ascii=False)
                 + "\nContinue concrete work until the criteria are met or the goal is paused, blocked, or completed in Core. "
                 "A status-only reply does not end this goal. If a real blocker prevents further work, call the goal.block Nebula tool with a specific reason and verify its saved result. Blocking a Work item or a native harness goal does not block this Core goal. Give the operator a concise evidence-backed handoff when finished."
-                + _goal_time_instruction(goal, utc_now())
-                + skill_instructions(
-                    SkillSnapshot.model_validate(snapshot)
-                    for snapshot in (
-                        await resolve_skill_snapshots(
-                            self.store, goal.skill_snapshots, session_id=goal.session_id
-                        )
-                    )
-                )
             )
+            runtime_context += (
+                "\n\nCurrent Core goal progress:\n"
+                + json.dumps(goal_progress, ensure_ascii=False)
+                + _goal_time_instruction(goal, utc_now())
+            )
+            goal_skills = [
+                SkillSnapshot.model_validate(snapshot)
+                for snapshot in await resolve_skill_snapshots(
+                    self.store, goal.skill_snapshots, session_id=goal.session_id
+                )
+            ]
+        # A goal's immutable skill snapshot remains authoritative on resume.
+        # Selecting that same skill must not add a second copy of its body.
+        active_skills = {item.path: item for item in core_skills}
+        active_skills.update({item.path: item for item in goal_skills})
+        standing_context += skill_instructions(active_skills.values())
         from .working_notes import read_working_notes, working_notes_block
 
         if core_data_allowed:
@@ -11752,9 +11734,26 @@ class HarnessRuntimeService:
             )
         if control_assistant and self.butler_memory is not None:
             assistant_scope += "\n\n" + BUTLER_MEMORY_INSTRUCTION
-            assistant_scope += await self.butler_memory.turn_context(
+            runtime_context += await self.butler_memory.turn_context(
                 engagement_id, clean_prompt
             )
+        standing_context += assistant_scope
+        if planning_enabled:
+            standing_context += (
+                "\n\nPlanning is requested for this turn. Make a concise plan before "
+                "substantial task work when useful, and share it through the "
+                "Core plan.submit tool. You may use your normal tools at any "
+                "time. Pass relevant steps to subagents when delegating. A "
+                "missing plan never blocks the task."
+            )
+        if (
+            len(clean_prompt + handoff_context + runtime_context + standing_context)
+            > 250_000
+        ):
+            raise HarnessConfigurationError(
+                "The current message and standing instructions exceed the harness input limit."
+            )
+        standing_instructions = instruction_snapshot(standing_context)
         chat_turn = ChatTurn(
             id=str(uuid4()),
             engagement_id=engagement_id,
@@ -11773,6 +11772,7 @@ class HarnessRuntimeService:
             ),
             max_artifact_queries=max_artifact_queries,
             request_snapshot={
+                "standing_instructions_sha256": standing_instructions["sha256"],
                 "operator_decisions": operator_decisions,
                 "runtime": "harness",
                 "hook_snapshots": [
@@ -11826,20 +11826,9 @@ class HarnessRuntimeService:
             origin=HarnessTurnOrigin.CHAT,
             chat_session_id=chat.id,
             chat_turn_id=chat_turn.id,
-            prompt=clean_prompt
-            + handoff_context
-            + (runtime_context or "")
-            + (
-                "\n\nPlanning is requested for this turn. Make a concise plan before "
-                "substantial task work when useful, and share it through the "
-                "Core plan.submit tool. You may use your normal tools at any "
-                "time. Pass relevant steps to subagents when delegating. A "
-                "missing plan never blocks the task."
-                if planning_enabled
-                else ""
-            )
-            + assistant_scope,
+            prompt=clean_prompt + handoff_context + runtime_context,
             metadata={
+                "standing_instructions": standing_instructions,
                 "butler_recovery_case_id": butler_recovery_case_id,
                 "user_prompt": clean_prompt,
                 "image_blocks": [
@@ -12065,6 +12054,37 @@ class HarnessRuntimeService:
                     [str(item) for item in agent_ids]
                 )
             )
+
+    async def _mark_instruction_channel(
+        self, session_id: str, connection: HarnessConnection
+    ) -> None:
+        """Record installed instructions once the actual native id is known.
+
+        Codex/ACP return it from open; Claude learns it from an SDK message.
+        Failed opens never record successful delivery.
+        """
+        pending = getattr(connection, "_nebula_instruction_channel", None)
+        if pending is None or not connection.external_session_id:
+            return
+        standing, digest = pending
+        latest = await self.store.get(HarnessSession, session_id)
+        await self.store.update(
+            HarnessSession,
+            session_id,
+            {
+                "external_session_id": connection.external_session_id,
+                "metadata": {
+                    **latest.metadata,
+                    "standing_instructions": standing,
+                    "instruction_channel": {
+                        "sha256": digest,
+                        "external_session_id": connection.external_session_id,
+                    },
+                },
+            },
+            expected_revision=latest.revision,
+        )
+        connection._nebula_instruction_channel = None
 
     async def _bind_session_provider_subagent(
         self, session: HarnessSession, setting: dict[str, Any] | None
@@ -13247,7 +13267,10 @@ class HarnessRuntimeService:
             try:
                 try:
                     connection = await self._connection(session, turn)
-                except HarnessVendorSessionNotFoundError as missing:
+                except (
+                    HarnessVendorSessionNotFoundError,
+                    HarnessInstructionContextChanged,
+                ) as missing:
                     replacement = await self._replace_missing_vendor_session(
                         turn, session, missing
                     )
@@ -13472,6 +13495,7 @@ class HarnessRuntimeService:
                 )
                 coalesced = _coalesce_activity_deltas(turn_events, undelivered)
                 async for event in coalesced:
+                    await self._mark_instruction_channel(session.id, connection)
                     event = event.model_copy(
                         update={
                             "origin": turn.origin,
@@ -18460,6 +18484,14 @@ class HarnessRuntimeService:
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
         session = await self.store.get(HarnessSession, session.id)
+        standing = turn.metadata.get("standing_instructions")
+        if standing is not None:
+            snapshot_text(standing)
+            session = session.model_copy(
+                update={
+                    "metadata": {**session.metadata, "standing_instructions": standing}
+                }
+            )
         browser_binding = session.metadata.get("browser_companion_session_id")
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
         subagent_binding = await self._subagent_binding(session)
@@ -18711,7 +18743,30 @@ class HarnessRuntimeService:
                 for tool in catalog["tools"]
                 if isinstance(tool, dict) and tool.get("name")
             )
-            connection = await self.adapter_factory(profile.kind).open(
+            channel_text = _harness_developer_instructions(
+                session,
+                _session_native_capabilities(session, profile),
+                vendor={
+                    HarnessKind.CODEX_APP_SERVER: "Codex",
+                    HarnessKind.GROK_ACP: "Grok",
+                    HarnessKind.CLAUDE_AGENT_SDK: "Claude",
+                }[profile.kind],
+                gateway_tools=gateway_tools,
+            )
+            if (
+                standing is not None
+                and session.external_session_id
+                and not installed_channel_matches(
+                    session.metadata.get("instruction_channel"),
+                    session.external_session_id,
+                    channel_text,
+                )
+            ):
+                raise HarnessInstructionContextChanged(
+                    "The current standing instructions require a fresh native context."
+                )
+            connection = await self._open_memory_managed(
+                self.adapter_factory(profile.kind),
                 AdapterOpenRequest(
                     profile=profile,
                     session=session,
@@ -18724,8 +18779,18 @@ class HarnessRuntimeService:
                     credential_store=self.credential_store,
                     permission_handler=permission_handler,
                     interaction_handler=interaction_handler,
-                )
+                ),
             )
+            if standing is not None:
+                connection._nebula_instruction_channel = (
+                    standing,
+                    instruction_snapshot(channel_text)["sha256"],
+                )
+                try:
+                    await self._mark_instruction_channel(session.id, connection)
+                except (Exception, asyncio.CancelledError):
+                    await connection.close()
+                    raise
         except (Exception, asyncio.CancelledError):
             self._gateways.pop(session.id, None)
             await gateway.close()
@@ -20235,6 +20300,18 @@ class HarnessRuntimeService:
         if isinstance(run_cost_usd, (int, float)):
             payload["run_cost_usd"] = run_cost_usd
         return payload
+
+    async def _open_memory_managed(self, adapter, request: AdapterOpenRequest):
+        opener = getattr(adapter, "open_memory_managed", None)
+        if opener is None:
+            await self.memory_compute.reject_unsupported(
+                "local",
+                project_id=request.session.engagement_id,
+                resource_kind="harness_worker",
+                resource_id=request.session.id,
+                detail="This native harness adapter has no protected memory-runner/v1 launch contract. Use a provider with memory-managed command tools, or connect a supported harness runner. It will not launch without verified limits.",
+            )
+        return await opener(request, self.memory_compute)
 
     async def _start_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:

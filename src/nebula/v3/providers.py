@@ -580,10 +580,32 @@ REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
 )
 
 
+class InstructionSectionProvenance(BaseModel):
+    """Bounded Core-only ownership proof; persisted, never a provider wire field."""
+
+    version: Literal[1] = 1
+    start: int = Field(ge=0, le=2**63 - 1)
+    end: int = Field(ge=0, le=2**63 - 1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instructions_length: int = Field(ge=0, le=2**63 - 1)
+    instructions_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def ordered_range(self) -> "InstructionSectionProvenance":
+        if not self.start <= self.end <= self.instructions_length:
+            raise ValueError("owned instruction range is outside its source")
+        return self
+
+
 class ModelRequest(BaseModel):
     messages: list[ModelMessage]
     model: str | None = None
     instructions: str | None = None
+    # Keep this out of metadata: Responses forwards metadata to the vendor.
+    # Explicit payload builders omit it; request snapshots preserve it.
+    core_tools_section: InstructionSectionProvenance | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     tools: list[ToolDefinition] = Field(default_factory=list)
     tool_results: list[ModelToolResult] = Field(default_factory=list)
     tool_choice: ToolChoice = ToolChoice.AUTO

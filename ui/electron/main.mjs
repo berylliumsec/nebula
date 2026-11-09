@@ -12,7 +12,7 @@ import { companionOperation } from "./companion.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const uiRoot = resolve(here, "..");
 const repoRoot = resolve(uiRoot, "..");
-const bootstrapProtocol = "nebula-sidecar-v1";
+const bootstrapProtocol = "nebula-desktop-runtime-v1";
 const environmentKeys = new Set([
   "HOME", "USERPROFILE", "PATH", "LANG", "LC_ALL", "TZ", "DISPLAY", "WAYLAND_DISPLAY",
   "XAUTHORITY", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "PYENV_ROOT", "PYENV_VERSION",
@@ -103,7 +103,8 @@ function boundedHandshake(child) {
       try {
         const value = JSON.parse(buffer.slice(0, newline));
         if (value.protocol !== bootstrapProtocol || value.host !== "127.0.0.1" ||
-            !Number.isInteger(value.port) || value.port < 1 || value.port > 65535) {
+            !Number.isInteger(value.port) || value.port < 1 || value.port > 65535 ||
+            typeof value.ipc_token !== "string" || value.ipc_token.length < 32) {
           throw new Error("Core returned an invalid desktop handshake.");
         }
         resolveHandshake(value);
@@ -122,33 +123,41 @@ async function startCore(bridge) {
   const executable = bundled
     ? join(dirname(process.execPath), process.platform === "win32" ? "nebula-core.exe" : "nebula-core")
     : devPython || "poetry";
-  const serveArgs = ["serve", "--host", "127.0.0.1", "--port", "0", "--handshake-stdout", "--data-dir", join(dataRoot(), "core"), "--static-dir", staticDir];
+  const serveArgs = ["desktop-connect", "--bootstrap-stdin", "--data-dir", process.env.NEBULA_V3_DATA_DIR || join(dataRoot(), "core"), "--static-dir", staticDir];
   const args = bundled
     ? serveArgs
     : devPython ? ["-m", "nebula.v3.cli", ...serveArgs] : ["-C", repoRoot, "run", "nebula-core", ...serveArgs];
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => environmentKeys.has(key)));
   if (!bundled) env.PYTHONPATH = join(repoRoot, "src");
   env.NEBULA_ONE_BROWSER_CUTOVER = "1";
-  env.NEBULA_VISIBLE_BROWSER_URL = bridge.url;
-  env.NEBULA_VISIBLE_BROWSER_TOKEN = bridge.token;
+  if (bundled) env.NEBULA_RUNTIME_BUNDLE = join(process.resourcesPath, "nebula-runtime");
   if (!bundled && !env.NEBULA_SECURITY_PROXY_ADDON) {
     env.NEBULA_SECURITY_PROXY_ADDON = join(repoRoot, "security-proxy", "addon.py");
   }
   const child = spawn(executable, args, { cwd: repoRoot, env, stdio: ["pipe", "pipe", "pipe"],
     detached: process.platform !== "win32", windowsHide: true });
-  const token = randomBytes(32).toString("base64url");
-  child.stdin.write(JSON.stringify({ protocol: bootstrapProtocol, ipc_token: token }) + "\n");
+  child.stdin.end(JSON.stringify({ protocol: bootstrapProtocol }) + "\n");
   child.stderr.on("data", (bytes) => process.stderr.write(bytes));
   const handshake = await boundedHandshake(child);
   const endpoint = `http://127.0.0.1:${handshake.port}/api/v1`;
+  const token = handshake.ipc_token;
   for (let attempt = 0; attempt < 600; attempt++) {
-    if (child.exitCode !== null) throw new Error("Core stopped before becoming ready.");
     try {
       const response = await fetch(`${endpoint}/health`, { headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(1500) });
       const health = await response.json();
-      if (response.ok && health.status === "ok" && health.database === "ok") {
-        return { child, endpoint, token };
+      if (response.ok && ["ok", "degraded", "starting"].includes(health.status) && health.database === "ok") {
+        const shutdown = () => new Promise((resolveStop, reject) => {
+          const command = ["runtime-stop", "--data-dir", process.env.NEBULA_V3_DATA_DIR || join(dataRoot(), "core")];
+          const stopArgs = bundled ? command : devPython ? ["-m", "nebula.v3.cli", ...command]
+            : ["-C", repoRoot, "run", "nebula-core", ...command];
+          const helper = spawn(executable, stopArgs, { cwd: repoRoot, env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+          let detail = "";
+          helper.stderr.on("data", (chunk) => { if (detail.length < 65536) detail += chunk; });
+          helper.once("error", reject);
+          helper.once("exit", (code) => code === 0 ? resolveStop() : reject(new Error(detail || "Core shutdown was not verified.")));
+        });
+        return { endpoint, token, shutdown };
       }
     } catch { /* Core is still starting. */ }
     await new Promise((done) => setTimeout(done, 100));
@@ -160,6 +169,30 @@ let window;
 let host;
 let bridge;
 let core;
+let browserRegistration;
+let bridgeHeartbeat;
+let browserRegistrationLost = false;
+
+async function refreshBrowserBridge() {
+  if (browserRegistrationLost) {
+    throw new Error("The desktop browser attachment changed. Reopen the desktop to attach again.");
+  }
+  const response = await fetch(`${core.endpoint}/desktop/browser-bridge`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${core.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint: bridge.url, token: bridge.token, device_id: await deviceId(),
+      ...(browserRegistration ? { registration_id: browserRegistration } : {}) }),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) {
+    if (response.status === 409) {
+      browserRegistrationLost = true;
+      clearInterval(bridgeHeartbeat);
+    }
+    throw new Error(`The desktop browser could not attach to Core (${response.status}).`);
+  }
+  browserRegistration = (await response.json()).registration_id;
+}
 
 function requireShell(event) {
   if (!window || event.sender !== window.webContents || window.isDestroyed()) {
@@ -183,17 +216,30 @@ app.whenReady().then(async () => {
   core = await startCore(bridge);
   coreConnection.endpoint = core.endpoint;
   coreConnection.token = core.token;
+  await refreshBrowserBridge().catch(() => {
+    process.stderr.write("The desktop browser is waiting for Core attachment.\n");
+  });
+  bridgeHeartbeat = setInterval(() => {
+    void refreshBrowserBridge().catch(() => {
+      process.stderr.write("The desktop browser is waiting to reconnect to Core.\n");
+    });
+  }, 60_000);
+  bridgeHeartbeat.unref();
 
   handle("nebula:core-connection", () => ({ ...coreConnection,
     protocol: bootstrapProtocol, source: "local" }));
   handle("nebula:device-id", () => deviceId());
+  handle("nebula:shutdown-core", () => core.shutdown());
   handle("nebula:set-zoom", (scale) => {
     if (typeof scale !== "number" || scale < 0.5 || scale > 2) throw new Error("Unsupported zoom.");
     window.webContents.setZoomFactor(scale);
     host.setLayout(null);
     return scale;
   });
-  handle("nebula:browser-open", (projectId) => host.open(projectId));
+  handle("nebula:browser-open", async (projectId) => {
+    await refreshBrowserBridge();
+    return host.open(projectId);
+  });
   handle("nebula:browser-new-tab", ({ projectId, url }) => host.newTab(projectId, url));
   handle("nebula:browser-select-tab", ({ projectId, tabId }) => host.selectTab(projectId, tabId));
   handle("nebula:browser-close-tab", ({ projectId, tabId }) => host.closeTab(projectId, tabId));
@@ -207,12 +253,16 @@ app.whenReady().then(async () => {
 }).catch((error) => { process.stderr.write(`Nebula Electron startup failed: ${error?.stack || error}\n`); app.quit(); });
 
 app.on("before-quit", () => {
+  clearInterval(bridgeHeartbeat);
+  if (browserRegistration && core) {
+    void deviceId().then((device) => fetch(`${core.endpoint}/desktop/browser-bridge`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${core.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ registration_id: browserRegistration, device_id: device }),
+      signal: AbortSignal.timeout(1500),
+    })).catch(() => {}); // A disconnected viewer's lease also expires in Core.
+  }
   host?.close();
   bridge?.server.close();
-  if (core?.child?.pid) {
-    try {
-      if (process.platform === "win32") core.child.kill();
-      else process.kill(-core.child.pid, "SIGTERM");
-    } catch { /* Core may already have stopped. */ }
-  }
+  // Core and its workers retain independent lifetimes when this viewer closes.
+
 });

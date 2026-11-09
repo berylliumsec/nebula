@@ -101,6 +101,15 @@ names the limit that set the window itself, which is what `binding_limit`
 reports whenever the ceiling does not bind. The Working context meter leads with
 the binding limit ("200,000-token working ceiling · 1,000,000 model window").
 
+Provider tool definitions and standing instructions have durable owners outside
+the compacted transcript. Loaded tool schemas are rebuilt from Core's exact
+session-manifest revision; a catalog directory or ranking suggestion is not a
+loaded definition. Native harnesses retain their existing tool-loading behavior.
+Current standing instructions survive independently of a lossy summary, through
+the adapter's verified durable instruction channel or a fresh context when an
+instruction version changes. Stateless providers still require the current
+instructions and native declarations on every request.
+
 The estimate compared with the trigger counts everything the request will
 carry: instructions and messages (the current message's reference block
 included), the conversation's working notes, and for

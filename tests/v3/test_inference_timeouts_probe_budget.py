@@ -23,7 +23,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-import nebula.v3.api as api_module
+import nebula.v3.provider_settings as provider_settings_module
 import nebula.v3.chat as chat_module
 from nebula.v3.agent_tooling import BrokeredToolSpecialist
 from nebula.v3.api import _verify_provider_capability
@@ -626,7 +626,7 @@ async def test_capability_probe_waits_long_enough_for_its_budget(tmp_path, monke
     profile = await store.create(_profile("vllm"))
     probe = _RecordingProbe()
     timed = _TimedAsyncio()
-    monkeypatch.setattr(api_module, "asyncio", timed)
+    monkeypatch.setattr(provider_settings_module, "asyncio", timed)
 
     (await _verify_provider_capability(store, profile, "m", lambda _: probe))
 

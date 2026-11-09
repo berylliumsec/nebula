@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import importlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,11 @@ if __package__ in {None, ""}:
 from scripts.generate_third_party_notices import generate_notices
 from scripts.build_product_knowledge import ensure as ensure_product_knowledge
 from scripts.nebula3_version import check_versions
-from scripts.package_audit import FORBIDDEN_MODULES, inspect_pyinstaller_binary
+from scripts.package_audit import (
+    FORBIDDEN_MODULES,
+    inspect_pyinstaller_binary,
+    inspect_pyinstaller_directory,
+)
 
 
 REQUIRED_RUNTIME_IMPORTS = (
@@ -72,6 +77,11 @@ def macos_codesign_arguments(
 
 
 def target_triple() -> str:
+    configured = os.getenv("NEBULA_BUILD_TARGET")
+    if configured:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", configured):
+            raise ValueError("NEBULA_BUILD_TARGET must be a target triple")
+        return configured
     output = subprocess.check_output(["rustc", "-vV"], text=True)
     for line in output.splitlines():
         if line.startswith("host: "):
@@ -235,9 +245,15 @@ def main() -> None:
         "sqlalchemy.dialects.postgresql.psycopg",
         "--hidden-import",
         "sqlalchemy.dialects.sqlite.aiosqlite",
-        "--collect-all",
+        # These packages load Python modules and a native greenlet extension.
+        # collect-all also copies their upstream test trees into installers.
+        "--hidden-import",
         "aiosqlite",
-        "--collect-all",
+        "--copy-metadata",
+        "aiosqlite",
+        "--hidden-import",
+        "greenlet",
+        "--copy-metadata",
         "greenlet",
         "--hidden-import",
         "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",
@@ -272,6 +288,8 @@ def main() -> None:
         "--add-data",
         f"{assistant_destinations}:nebula/v3",
         "--add-data",
+        f"{root / 'src/nebula/v3/runtime-compatibility.json'}:nebula/v3",
+        "--add-data",
         f"{kali_tool_inventory}:nebula/v3",
         "--add-data",
         f"{egress_helper}:nebula/v3",
@@ -299,18 +317,64 @@ def main() -> None:
     suffix = ".exe" if sys.platform == "win32" else ""
     source = root / "dist" / f"nebula-core{suffix}"
     audit = inspect_pyinstaller_binary(source)
+    # A onefile executable has an extraction parent and a separate Python PID.
+    # Keep it only as the compatibility connector. Retained supervisors/workers
+    # need onedir so Popen.pid is the actual process checked by the host.
+    runtime_arguments = arguments.copy()
+    runtime_arguments[runtime_arguments.index("--onefile")] = "--onedir"
+    runtime_arguments[runtime_arguments.index("--name") + 1] = "nebula-runtime"
+    runtime_arguments[-1:-1] = ["--contents-directory", "_internal"]
+    subprocess.run(runtime_arguments, cwd=root, check=True)
+    runtime_directory = root / "dist" / "nebula-runtime"
+    runtime_name = f"nebula-runtime{suffix}"
+    runtime_executable = runtime_directory / runtime_name
+    runtime_audit = inspect_pyinstaller_directory(runtime_directory, runtime_name)
     destination = (
         root / "ui" / "src-tauri" / "binaries" / f"nebula-core-{target}{suffix}"
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+    # The replaceable desktop carries a complete immutable runtime payload.
+    # Core copies it into the private retained store before any process starts.
+    from nebula.v3.runtime_bundle import build_frozen_bundle
+
+    runtime_bundle = root / "ui" / "src-tauri" / "resources" / "nebula-runtime"
+    if runtime_bundle.exists():
+        for child in runtime_bundle.iterdir():
+            if child.name == ".gitignore":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    resources = {
+        name: root / "ui" / "src-tauri" / "resources" / name
+        for name in ("playwright-browsers", "notebook-runtime")
+        if (root / "ui" / "src-tauri" / "resources" / name).is_dir()
+    }
+    proxy_resource = root / "build" / "nebula-core-stage" / "security-proxy"
+    proxy_resource.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(root / "security-proxy" / "addon.py", proxy_resource / "addon.py")
+    resources["security-proxy"] = proxy_resource
+    manifest, manifest_digest = build_frozen_bundle(
+        runtime_executable,
+        frontend,
+        runtime_bundle,
+        runtime_directory=runtime_directory,
+        resources=resources,
+    )
     print(
         json.dumps(
             {
                 "artifact": str(destination),
                 "audit": audit,
+                "runtime_audit": runtime_audit,
+                "runtime_artifact": str(runtime_directory),
                 "build": identity,
                 "third_party_distributions": notice_count,
+                "runtime_bundle": str(runtime_bundle),
+                "runtime_version": manifest.version,
+                "manifest_sha256": manifest_digest,
             },
             indent=2,
             sort_keys=True,
