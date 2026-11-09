@@ -42,6 +42,7 @@ from .providers import provider_from_profile
 from .runtime_delivery import HttpIntent, RuntimeDelivery
 from .runtime_host_delivery import HOST_EFFECT, HostEffectDelivery
 from .runtime_host_observations import HOST_OBSERVATION_ROUTES, HostObservations
+from .runtime_integration_effects import is_host_integration_write
 from .runtime_global_settings import is_global_settings_host_route
 from .runtime_vault import RuntimeVault
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -78,6 +79,7 @@ class _ReadIntent:
 def is_host_settings_route(method, path):
     return (
         (method, path) in HOST_OBSERVATION_ROUTES
+        or is_host_integration_write(method, path)
         or is_global_settings_host_route(method, path)
         or (
             (

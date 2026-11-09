@@ -40,6 +40,11 @@ Focused backend evidence:
   diagnostic settings/files/errors/direct events, synthetic image preparation and
   invalidation, canonical integration reads, retained first chat, and existing
   embedded diagnostics/terminal cache compatibility.
+- Integration write slice: 16 focused host ASGI cases passed on SQLite and
+  PostgreSQL. VPN import/delete validation, reference/use/revision blockers,
+  TypeSafe save/test/replace/delete, lost responses and encrypted replay, and
+  synthetic Web Search lifecycle/configuration all pass. Existing public
+  contracts are retained; no new VPN update endpoint is introduced.
 - Ruff passed; targeted mypy reported no issues in the 11 observation modules.
 - Actual retained API composition requires the independently validated shared
   database ownership change in commit `17ec988e`.
@@ -48,5 +53,9 @@ The image preparer, provider and runtime observations were synthetic. No provide
 network, real credential, container image build, live installation or deployment
 was used. Browser/device, production bundle, non-loopback LAN, installed desktop,
 and final Settings-assistant/product-index acceptance belong to the integrated
-candidate and are not established by this backend receipt. Integration write
-counterparts outside this slice still need their own stable-host effect coverage.
+candidate and are not established by this backend receipt. Session-only
+integration credentials still need exact-grant resolver delivery to their project
+consumers. Web Search initialization reports its unsupported memory-enforcement
+capability explicitly until a memory-managed persistent adapter is supplied;
+the legacy direct OCI initializer is not enabled by this write slice. Verified
+daemon image-build enforcement is a separate runner capability requirement.

@@ -17,6 +17,7 @@ from .host_pressure import (
     HostPressureUpdate,
 )
 from .runtime_host_automation import HostAutomationRuntime
+from .runtime_integration_effects import HOST_INTEGRATION_WRITES, HostIntegrationEffects
 from .web_search import SearchRuntime
 
 HOST_OBSERVATION_ROUTES = {
@@ -40,6 +41,7 @@ HOST_OBSERVATION_ROUTES = {
     ("GET", "/api/v1/integrations/typesafe"),
     ("GET", "/api/v1/integrations/web-search"),
 }
+HOST_OBSERVATION_ROUTES |= HOST_INTEGRATION_WRITES
 
 
 class HostObservations:
@@ -59,6 +61,7 @@ class HostObservations:
         )
         self.automation = HostAutomationRuntime(settings.store, self.host.data_root)
         self.search = SearchRuntime(store=settings.store, data_root=self.host.data_root)
+        self.integrations = HostIntegrationEffects(self)
         self.diagnostics = None
         self.allow_browser_diagnostics = False
 
@@ -97,6 +100,7 @@ class HostObservations:
             )
 
         dependencies = [Depends(auth)]
+        self.integrations.mount(app, auth)
         app.include_router(
             butler_instructions_router(self.host.data_root, self.settings.store),
             prefix="/api/v1",
@@ -249,6 +253,4 @@ class HostObservations:
 
         @app.get("/api/v1/integrations/web-search", dependencies=dependencies)
         async def search():
-            from .integration_settings import web_search_integration_status
-
-            return await web_search_integration_status(self.settings.store, self.search)
+            return await self.integrations.search_status()
