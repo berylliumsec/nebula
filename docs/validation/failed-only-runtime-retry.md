@@ -4,6 +4,33 @@ The user explicitly requires pushes to select only specific failed cases, with
 passing cases excluded. This record supersedes the earlier combined test union
 for retry selection; it does not erase that run or expand its passing receipts.
 
+## Current retry after `3c55e4b8`
+
+All five portable Python retries passed, as did frontend diagnostics and macOS
+UI compilation. Six tools-browser mobile profiles passed. The remaining CI
+failures are the native standing-instruction title in eight profiles, the tools
+title in desktop/compact, and the single packaged native case: **11 cases**.
+The next receipt excludes every passing case and the passing checks.
+
+The two tools failures were idle fine-pointer composer hit testing; normal hover
+restores the real interaction. Their exact two local retries passed once, with
+all assertions retained. Independent source review also confirmed that the native
+helper had moved full durable completion into an optimistic-row five-second
+wait. One shared sixty-second answer budget now covers persistence and matching-ID
+visibility, retaining the original checks; no passing native case was rerun.
+Privacy-safe diagnostics remain available because the actual CI backend cause
+is still unconfirmed.
+
+The packaged case reached the held chat through legacy delivery before its new
+Project had an execution owner; its required typed binding was therefore absent.
+The driver now observes that empty Project through an authenticated scoped read
+before its single held-chat POST. The failed case still needs genuine CI proof.
+
+Remaining host/global source repairs are now integrated; see the
+[source integration and verification limits](host-global-route-integration.md).
+Their new regression sources are excluded from execution under the user's
+restriction. The older sections below preserve the preceding retry history.
+
 ## Completed original CI
 
 Candidate: `eee508bc9c1c493cc019da95ca5feb398869ebfa`.
@@ -103,12 +130,12 @@ The exact-grant recovery reconciliation repair is integrated and has 30 distinct
 local passes across phases, including two surviving-worker restart proofs. Those
 passing cases are excluded from this retry.
 
-Further reviewed host/global route repairs remain preserved outside this retry:
+At the previous checkpoint, further host/global route repairs were preserved:
 host operator commit `1094d45b`, its frontend routing commit `0758945d`, the
 unfinished host Library worktree, and `codex/global-resource-catalog`. Setup,
-folder, Library/artifact and resource-discovery ownership still require their
-remaining integration and acceptance work before the entire architecture may be
-called complete. These slices are not silently treated as merged or verified.
+folder, Library/artifact and resource-discovery ownership now have integrated
+source repairs. Their additional runtime acceptance remains unverified under the
+current test restriction; source integration is not complete acceptance evidence.
 
 PR #960 remains unmerged until applicable checks and review gates permit merge.
 Existing installations, live providers and deployments are untouched.

@@ -6,16 +6,20 @@ an integration checkpoint, not a release acceptance receipt.
 ## Current failed-only retry
 
 Reload [the failed-only retry record](failed-only-runtime-retry.md) before
-continuing. The combined changes are now visible in PR #960 at `eee508bc`.
-That CI run completed with 964 Python passes/five failures/one skip and 32 browser
-passes/16 failures. The user's latest instruction excludes every passing case
-from subsequent push selections. The reviewed retry is five exact portable
-Python nodes, one packaged native case, 16 exact browser title/profile pairs and
-the two failed pre-test checks. The full feature union below is historical, not
-the next execution plan. Local failure fixes and remaining original-CI unknowns
-are recorded separately. Additional host/global route slices remain preserved
-outside this retry and still require integration before complete-architecture
-acceptance; do not forget or misreport them after compaction.
+continuing. PR #960 contains the combined implementation. Its original
+`eee508bc` run completed with 964 Python passes/five failures/one skip and 32
+browser passes/16 failures. At `3c55e4b8`, all five portable retries and both
+pre-test checks passed; six tools mobile profiles also passed. The user's latest
+instruction excludes every passing case from subsequent pushes. The current
+receipt therefore selects only ten exact browser title/profile pairs and one
+packaged native case, with portable Python, frontend, Rust and checks empty.
+
+Remaining host/global route source repairs are integrated in `3aee2561`; see
+[their verification limits](host-global-route-integration.md). Their new
+regression cases are unrun under the user's instruction. Product guidance is
+rebuilt and verified at 419 passages. The full feature union and build-specific
+checkpoints below are historical, not the next execution plan. Do not rerun
+prior passes or present source integration as full architecture acceptance.
 
 ## Current combined PR checkpoint
 

@@ -1,33 +1,25 @@
 {
-  "change_digest": "3af14c28112e15a3940caa939eb0188a2dcc6d547d330f4cc086dfce29e3e69e",
-  "reviewed_by": "Codex integration coordinator; independent audit_failed_only_retry reviewed original failure logs, exact selectors, runtime provisioning, packaged job split and sanitized logging",
-  "reason": "Retry only the five specific failed portable Python nodeids and sixteen specific failed browser title/profile pairs from eee508bc CI runs42666867652/42666867639, plus the one packaged native journey whose sole native-journey execution failed. Frontend diagnostic audit and macOS production UI build failed before any tests; checks-only flags rerun those checks without frontend or Rust tests. No passing case is selected. The packaged case is routed exclusively to its artifact job, not repeated as a portable skipped case.",
-  "exclusions": "The964 passing Python cases,32 passing browser cases,previously passing frontend/contracts/Rust selections and successful migration gate are excluded from this retry. No fullsuite or featureunion run, additional journeys, liveprovider, existinginstallation, deployment or release. The packaged job must rebuild its two independently retained fixture packages to execute only its one failed native journey; no other packaged tests are selected. Original native inner trace was in an unavailable downloaded artifact, so sanitized per-case output is now emitted in CI logs for diagnosis. Passing local retries do not prove original CI causes where error payloads were absent.",
+  "change_digest": "1b965ac53ee154ad23cc69ad9d5e80c5a603f2c3a2585aa2cbf1964eb2c76fcb",
+  "reviewed_by": "Codex integration coordinator; fresh audit_final_failed_selection independently validated exact 3c55e4b8 failures, anchored selectors, runtime provisioning, single-case packaged routing, omission statuses and gates",
+  "reason": "Retry only the remaining failures from 3c55e4b8 CI runs 42674828758/42674828799: eight exact native-standing-instruction browser title/profile pairs, the two tools-browser desktop/compact pairs, and one packaged native continuity case. The five portable Python failures, six mobile tools profiles and both failed pre-test checks passed that retry and are excluded. Remaining reviewed host/global source repairs are integrated, with static verification and explicit runtime gaps; the user forbids adding other tests to this push.",
+  "exclusions": "No previously passing test or check is selected: exclude the prior 964 Python/32 browser passes, the subsequent five portable Python/six mobile tools passes, frontend audit, macOS build, frontend unit tests, Rust tests and migration tests. Newly committed host/global regression sources and additional operator journeys remain unrun under the explicit failed-case-only restriction. No feature-union or full-suite run, live providers, existing installation, deployment or release. The single packaged case runs exclusively in its artifact job, which must rebuild the two independently retained fixture packages. Browser jobs provision only their selected inert real-Core journeys. Source review and static checks do not establish missing runtime acceptance.",
   "python_versions": [
     "3.12"
   ],
-  "python_node": true,
+  "python_node": false,
   "python_browser": false,
-  "checks": [
-    "frontend-audit",
-    "desktop-ui-build"
-  ],
+  "checks": [],
   "expected_tests": {
-    "python": 6,
+    "python": 1,
     "frontend": 0,
     "native": 0,
-    "playwright": 16
+    "playwright": 10
   },
   "expected_python_jobs": {
-    "portable": 5,
+    "portable": 0,
     "packaged_native": 1
   },
   "python": [
-    "tests/v3/test_api_worker_composition.py::test_actual_api_factory_keeps_receipts_and_global_writes_atomic[sqlite]",
-    "tests/v3/test_api_worker_composition.py::test_actual_api_factory_keeps_receipts_and_global_writes_atomic[postgresql]",
-    "tests/v3/test_standing_instruction_continuity.py::test_edit_or_remove_replaces_old_native_instruction_authority[True]",
-    "tests/v3/test_shutdown_readmission.py::test_actual_core_shutdown_reopen_readmits_existing_project_and_preserves_pauses[sqlite]",
-    "tests/v3/test_shutdown_readmission.py::test_actual_core_shutdown_reopen_readmits_existing_project_and_preserves_pauses[postgresql]",
     "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"
   ],
   "frontend": [],
@@ -41,13 +33,7 @@
     "runtime-standing-instructions/model-webkit-320",
     "runtime-standing-instructions/model-webkit-390",
     "runtime-standing-instructions/model-webkit-430",
-    "runtime-tools-context/model-chromium-320",
-    "runtime-tools-context/model-chromium-390",
-    "runtime-tools-context/model-chromium-430",
     "runtime-tools-context/model-compact",
-    "runtime-tools-context/model-desktop",
-    "runtime-tools-context/model-webkit-320",
-    "runtime-tools-context/model-webkit-390",
-    "runtime-tools-context/model-webkit-430"
+    "runtime-tools-context/model-desktop"
   ]
 }
