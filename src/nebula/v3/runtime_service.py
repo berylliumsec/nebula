@@ -80,6 +80,14 @@ async def initialize_database(database: Database, data_root: Path) -> None:
         )
 
 
+def runtime_pool_settings(location: str | Path) -> PoolSettings | None:
+    """Require fleet budgets only for PostgreSQL, as Database itself does."""
+    from sqlalchemy.engine import make_url
+
+    dialect = make_url(Database._normalize_sync_url(location)).get_backend_name()
+    return PoolSettings.from_environment() if dialect == "postgresql" else None
+
+
 def configure_retained_resources(bundle: Path) -> None:
     """Each process uses resources from its own retained generation."""
     for name, directory in (
@@ -121,9 +129,10 @@ async def serve_runtime(
     configure_retained_resources(bundle)
     configure_diagnostics(data_root, level_override=diagnostics_level)
     install_exception_hooks()
-    settings = PoolSettings.from_environment()
+    location = os.getenv("NEBULA_V3_DATABASE_URL") or data_root / "nebula.db"
+    settings = runtime_pool_settings(location)
     database = Database(
-        os.getenv("NEBULA_V3_DATABASE_URL") or data_root / "nebula.db",
+        location,
         bootstrap=False,
         pool_settings=settings,
     )

@@ -146,6 +146,58 @@ async def test_api_replacement_replays_saved_response_without_reexecution(bounda
     assert beyond.status_code == 201 and beyond.content == b""
 
 
+async def test_live_memory_apply_uses_control_while_original_work_is_running(boundary):
+    _, client = boundary.api()
+    work_entered, release_work = asyncio.Event(), asyncio.Event()
+    handled = []
+
+    async def application(scope, _receive, send):
+        handled.append(scope["path"])
+        if scope["path"] == "/api/v1/synthetic":
+            work_entered.set()
+            await release_work.wait()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b'{"observed":true}'})
+
+    accepted = await client.post(
+        "/api/v1/synthetic", headers={**_AUTH, "Idempotency-Key": "allocator"}, json={}
+    )
+    assert accepted.status_code == 202
+    runner = DurableHttpRunner(boundary.delivery, application, operator_token=_TOKEN)
+    work = asyncio.create_task(runner.run_one(boundary.lease, lane="work"))
+    try:
+        await asyncio.wait_for(work_entered.wait(), timeout=3)
+        accepted = await client.post(
+            "/api/v1/memory-budgets/jobs/original-job/apply",
+            headers={**_AUTH, "Idempotency-Key": "apply"},
+            json={"acknowledged": True},
+        )
+        assert accepted.status_code == 202
+        command = accepted.json()["receipt"]["command_id"]
+        async with boundary.host.database.session() as session:
+            row = await session.get(RuntimeCommandRow, command)
+            assert row.lane == "control"
+        assert await runner.run_one(boundary.lease, lane="control")
+        response = await client.get(
+            f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+        )
+        assert response.status_code == 200 and response.json() == {"observed": True}
+        assert not work.done()
+        assert handled == [
+            "/api/v1/synthetic",
+            "/api/v1/memory-budgets/jobs/original-job/apply",
+        ]
+    finally:
+        release_work.set()
+        await work
+
+
 async def test_authentication_csrf_and_key_checks_precede_acceptance(boundary):
     _, client = boundary.api()
     assert (await client.post("/api/v1/synthetic", json={})).status_code == 401

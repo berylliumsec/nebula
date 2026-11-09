@@ -7,7 +7,11 @@ import pytest
 
 from nebula.v3.database import Database
 from nebula.v3.runtime_launcher import runtime_root, write_private
-from nebula.v3.runtime_service import OFFLINE_ADOPTION, initialize_database
+from nebula.v3.runtime_service import (
+    OFFLINE_ADOPTION,
+    initialize_database,
+    runtime_pool_settings,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -15,6 +19,35 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def test_sqlite_startup_does_not_require_postgresql_fleet_settings(
+    tmp_path, monkeypatch
+):
+    for key in ("ADMIN_RESERVE", "OTHER_CONNECTIONS", "PEAK_PROCESSES", "POOL_SIZE"):
+        monkeypatch.delenv("NEBULA_V3_DB_" + key, raising=False)
+    assert runtime_pool_settings(tmp_path / "fresh.sqlite3") is None
+    assert runtime_pool_settings("sqlite+aiosqlite:///:memory:") is None
+    with pytest.raises(ValueError, match="ADMIN_RESERVE"):
+        runtime_pool_settings("postgresql://synthetic@localhost/test")
+
+
+def test_postgresql_startup_propagates_declared_fleet_settings(monkeypatch):
+    for key, value in {
+        "ADMIN_RESERVE": "8",
+        "OTHER_CONNECTIONS": "12",
+        "PEAK_PROCESSES": "8",
+        "POOL_SIZE": "3",
+    }.items():
+        monkeypatch.setenv("NEBULA_V3_DB_" + key, value)
+    settings = runtime_pool_settings("postgresql+psycopg://synthetic@localhost/test")
+    assert settings is not None
+    assert (
+        settings.admin_reserve,
+        settings.other_connections,
+        settings.peak_processes,
+        settings.requested_size,
+    ) == (8, 12, 8, 3)
 
 
 async def test_fresh_start_bootstraps_once_and_reopen_does_not_migrate(

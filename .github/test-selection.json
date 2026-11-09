@@ -1,24 +1,17 @@
 {
-  "change_digest": "f082a41b6fd87dd3d57142dcdbf0c4564a02ef33b866e034297977cd16967d4e",
+  "change_digest": "ba3d083795e43e896269ea9169185d97d0f356aed8cc06a85fae0adbd25ff96b",
   "reviewed_by": "Codex",
-  "reason": "Twenty distinct focused cases passed: thirteen global SQL/identity-isolation cases across SQLite and PostgreSQL plus seven established CRUD compatibility contracts after mechanical extraction. Actor/key response receipts, atomic global edits, strict project isolation, shutdown fencing, consent/revision/workspace constraints pass. API-demand wiring and automatic admission are implemented; actual composed process acceptance is the next integration gate, not claimed by these tests. Integration checkpoint adds separately tested worker slices; their receipts and outstanding gates are in docs/validation/runtime-implementation-checkpoint.md. Final integrated selection is pending; this branch push does not trigger main-only CI.",
-  "exclusions": "No full suite, UI, existing installation, network providers or deployment. Other concurrently integrated tracks have separate focused receipts; final union remains pending.",
+  "reason": "Seven collected checks for independently validated startup and live-control faults: clean SQLite skips PG budget requirements, PG retains strict declared budgets, fresh/reopen/offline initialization stays guarded, and memory apply uses an independent control consumer while allocation work remains running on each SQL backend. Physical allocator and frozen acceptance follow separately. All seven cases passed in3.45s; focused code checks passed. Physical allocator and frozen revalidation remain pending.",
+  "exclusions": "No full suite, live providers, existing installation or deployment. Isolated SQL/ASGI checks only; physical and packaged continuation are owned by acceptance and packaging agents.",
   "expected_tests": {
-    "python": 20,
+    "python": 7,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_global_api.py",
-    "tests/v3/test_api_worker.py::test_api_role_import_does_not_import_the_execution_factory_or_chat_runtime",
-    "tests/v3/test_generic_crud_exposure.py::test_every_entity_kind_is_classified_exactly_once",
-    "tests/v3/test_generic_crud_exposure.py::test_generic_routes_follow_the_classification",
-    "tests/v3/test_api.py::test_project_creation_records_explicit_host_consent_without_persisting_request_field",
-    "tests/v3/test_api.py::test_project_create_request_id_replays_exact_core_result",
-    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
-    "tests/v3/test_api.py::test_generic_engagement_updates_cannot_relink_or_clear_workspace",
-    "tests/v3/test_api.py::test_harness_delete_preserves_profile_when_session_references_it"
+    "tests/v3/test_runtime_service.py",
+    "tests/v3/test_api_worker.py::test_live_memory_apply_uses_control_while_original_work_is_running"
   ],
   "frontend": [],
   "native": [],

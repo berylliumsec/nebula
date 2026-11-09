@@ -9,6 +9,7 @@ _CONTROL = re.compile(
     r"^/api/v1/(?:approvals/[^/]+/decision|chat/turns/[^/]+/cancel|"
     r"auth/devices/[^/]+|harness-interactions/[^/]+/decision|"
     r"harness-turns/[^/]+/steer|runs/[^/]+/steer|"
+    r"memory-budgets/jobs/[^/]+/apply|"
     r"browser-companion/[^/]+/actions/[^/]+|"
     r"browser-actions/[^/]+/decision|browser-intercepts/[^/]+/decision|"
     r"chat/sessions/[^/]+/subagents(?:/[^/]+)?/stop|"
