@@ -247,8 +247,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setCoreDiagnosticsHealth(nextHealth);
     // Successful reachability restores saved state, never execution. A browser
     // online event alone is not proof that this Core is reachable again.
-    if (connectionLost.current) reconnect();
-  }, [reconnect]);
+    if (connectionLost.current || (health?.apiReady === false && nextHealth.apiReady !== false)) reconnect();
+  }, [reconnect, health?.apiReady]);
   useCoreConnectionMonitor(api,
     workspaceState === "ready" || workspaceState === "degraded" || (workspaceState === "failed" && connectionLost.current),
     observeHealth, loseConnection);
@@ -284,8 +284,16 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         } else {
           nextHealth = await nextApi.health(controller.signal);
           if (!active) return;
+          await nextApi.initializeContinuity();
+          if (!active) return;
           setCoreDiagnosticsHealth(nextHealth);
           setHealth(nextHealth);
+          if (nextHealth.apiReady === false) {
+            connectionLost.current = false;
+            setCoreError("Core needs a memory budget before the workspace can start.");
+            setWorkspaceState("degraded");
+            return;
+          }
           setWorkspaceState("bootstrapping");
 
           const [engagementResult, providerResult, harnessResult, catalogResult, operatorResult, setupResult, libraryResult] = await Promise.allSettled([

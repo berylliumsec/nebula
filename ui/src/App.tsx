@@ -5,6 +5,8 @@ import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRout
 import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
 import { isNebulaShell } from "./hooks/useCompactLayout";
+import { MemoryBudgetSettings } from "./components/MemoryBudgetSettings";
+import { RuntimeContinuityNotice } from "./components/RuntimeContinuityNotice";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
@@ -140,6 +142,16 @@ function AssistantShellHandoff() {
 }
 
 export function App() {
+  const { api, health, reconnect } = useWorkspace();
+  const location = useLocation();
+  if (health?.apiReady === false) return <main className="page" id="main-content">
+    <h1>Core recovery</h1>
+    <p>Core needs a memory budget before the workspace can start. Saved work remains available after recovery.</p>
+    <Link className="button primary" to="/settings#memory-budget-settings">Memory Settings</Link>
+    <button className="button quiet" type="button" onClick={reconnect}>Check workspace availability</button>
+    <RuntimeContinuityNotice api={api} />
+    {location.pathname === "/settings" && <MemoryBudgetSettings api={api} />}
+  </main>;
   if (isNebulaShell()) return <Routes><Route element={<AppShell />}>
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
       <Route path="workbench" element={route(<WorkbenchRoute />)} />

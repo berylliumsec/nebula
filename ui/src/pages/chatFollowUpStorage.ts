@@ -1,3 +1,5 @@
+import { chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
+
 export type ChatFollowUpStatus = "queued" | "sending" | "failed";
 
 export interface ChatFollowUp {
@@ -8,12 +10,15 @@ export interface ChatFollowUp {
   detail?: string;
 }
 
-const FOLLOW_UP_PREFIX = "nebula.assistant.follow-up.v1";
 const MAX_FOLLOW_UPS = 20;
 const MAX_FOLLOW_UP_LENGTH = 32_000;
 
-export function chatFollowUpStorageKey(engagementId: string, sessionId?: string): string {
-  return `${FOLLOW_UP_PREFIX}:${encodeURIComponent(engagementId)}:${encodeURIComponent(sessionId || "new")}`;
+export function chatFollowUpStorageKey(engagementId: string, sessionId?: string, scope?: string): string {
+  return `${chatDraftStorageKey(engagementId, sessionId, scope)}:follow-ups`;
+}
+
+export function bindsUnattachedFollowUps(previousKey: string, nextKey: string, unattachedKey: string): boolean {
+  return previousKey === unattachedKey && Boolean(nextKey) && nextKey !== unattachedKey;
 }
 
 function isFollowUp(value: unknown): value is ChatFollowUp {
@@ -31,12 +36,13 @@ function isFollowUp(value: unknown): value is ChatFollowUp {
  */
 export function readChatFollowUps(storage: Storage, key: string): ChatFollowUp[] {
   try {
-    const raw = storage.getItem(key);
+    const raw = readChatDraft(storage, key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(isFollowUp)
+      .filter(item => item.text.length <= MAX_FOLLOW_UP_LENGTH)
       .slice(0, MAX_FOLLOW_UPS)
       .map((item) => item.status === "sending"
         ? {
@@ -52,22 +58,23 @@ export function readChatFollowUps(storage: Storage, key: string): ChatFollowUp[]
   }
 }
 
-export function writeChatFollowUps(storage: Storage, key: string, items: ChatFollowUp[]): void {
+export function writeChatFollowUps(storage: Storage, key: string, items: ChatFollowUp[]): boolean {
   try {
     if (!items.length) {
-      storage.removeItem(key);
-      return;
+      clearChatDraft(storage, key);
+      return true;
     }
-    storage.setItem(key, JSON.stringify(items.slice(0, MAX_FOLLOW_UPS)));
+    return writeChatDraft(storage, key, JSON.stringify(items.slice(0, MAX_FOLLOW_UPS)));
   } catch {
     // diagnostic-expected: queue persistence is a recovery convenience and
     // must never prevent the active assistant from continuing.
+    return false;
   }
 }
 
 export function clearChatFollowUps(storage: Storage, key: string): void {
   try {
-    storage.removeItem(key);
+    clearChatDraft(storage, key);
   } catch {
     // diagnostic-expected: cleanup must not block conversation navigation.
   }

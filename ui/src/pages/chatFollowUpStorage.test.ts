@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatFollowUpStorageKey,
+  bindsUnattachedFollowUps,
   clearChatFollowUps,
   maxChatFollowUps,
   readChatFollowUps,
@@ -29,6 +30,12 @@ describe("assistant follow-up queue recovery", () => {
     clearChatFollowUps(storage, first);
     expect(readChatFollowUps(storage, first)).toEqual([]);
     expect(readChatFollowUps(storage, second)).toHaveLength(1);
+    const unattached = chatFollowUpStorageKey("project", undefined, "core:user");
+    const saved = chatFollowUpStorageKey("project", "saved", "core:user");
+    expect(bindsUnattachedFollowUps(unattached, saved, unattached)).toBe(true);
+    expect(bindsUnattachedFollowUps(chatFollowUpStorageKey("other-project", undefined, "core:user"), saved, unattached)).toBe(false);
+    expect(bindsUnattachedFollowUps(chatFollowUpStorageKey("project", undefined, "other-core:user"), saved, unattached)).toBe(false);
+    expect(bindsUnattachedFollowUps(chatFollowUpStorageKey("project", undefined, "core:other-user"), saved, unattached)).toBe(false);
   });
 
   it("requires review after a reload during send", () => {

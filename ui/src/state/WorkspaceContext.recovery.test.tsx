@@ -76,7 +76,8 @@ beforeEach(() => {
     "listApprovals", "listAssets", "listFindings", "listEvidence", "listObservations", "listKnowledgeSources", "listReports", "listLibraryItems", "listProviders",
   ].map((name) => [name, vi.fn().mockResolvedValue({ items: [] })]));
   Object.assign(fixture.methods, {
-    getToken: vi.fn(), health: vi.fn().mockResolvedValue({ status: "ok" }),
+    getToken: vi.fn(), initializeContinuity: vi.fn().mockResolvedValue({key: "core:operator", persistent: true}),
+    health: vi.fn().mockResolvedValue({ status: "ok" }),
     listEngagements: vi.fn().mockResolvedValue({ items: [{ id: "project", name: "Project", status: "active" }] }),
     listHarnesses: vi.fn().mockResolvedValue([]), listProviderCatalog: vi.fn().mockResolvedValue([]),
     listOperatorProfiles: vi.fn().mockResolvedValue([]),
@@ -86,6 +87,20 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("makes host-only recovery available without waiting for Core catalogs", async () => {
+    fixture.methods.health.mockResolvedValue({status: "degraded", apiReady: false, recoveryPath: "/settings#memory-budget-settings"});
+    await mount();
+    expect(state().workspace).toBe("degraded");
+    expect(fixture.methods.listEngagements).not.toHaveBeenCalled();
+    expect(fixture.methods.listProviders).not.toHaveBeenCalled();
+    expect(fixture.methods.listHarnesses).not.toHaveBeenCalled();
+    expect(fixture.methods.setupStatus).not.toHaveBeenCalled();
+    fixture.methods.health.mockResolvedValue({status: "ok", apiReady: true});
+    fireEvent.click(screen.getByText("Retry Core"));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+    expect(fixture.methods.listEngagements).toHaveBeenCalledOnce();
+  });
+
   it("refreshes the selected project folder from the exact Core record", async () => {
     fixture.methods.listEngagements.mockResolvedValue({items: [
       {id: "project", name: "Project", status: "active", workspacePath: "/srv/old"},
