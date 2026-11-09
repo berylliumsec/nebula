@@ -654,6 +654,40 @@ def desktop_observe(args, child, environment, operation, **values):
     return value
 
 
+class NativeChatView:
+    """Allow setup once; a reopened window must restore its initial view itself."""
+
+    def __init__(self, args, view):
+        self.args, self.view = args, dict(view)
+        self.setup_complete = False
+
+    def _capture(self, child, environment, operation, expected_text=None):
+        view = dict(self.view)
+        if expected_text is not None:
+            view["expected_text"] = expected_text
+        observed = desktop_observe(self.args, child, environment, operation, **view)
+        if (
+            observed.get("observed_session_id") != view["session_id"]
+            or observed.get("draft") != view["draft"]
+        ):
+            raise RuntimeError(
+                "native initial view did not restore the selected chat and exact draft"
+            )
+        return observed
+
+    def initial_setup(self, child, environment):
+        if self.setup_complete:
+            raise RuntimeError("initial native chat setup already completed")
+        observed = self._capture(child, environment, "select_and_write")
+        self.setup_complete = True
+        return observed
+
+    def observe(self, child, environment, *, expected_text=None):
+        if not self.setup_complete:
+            raise RuntimeError("initial native chat setup has not completed")
+        return self._capture(child, environment, "observe", expected_text)
+
+
 def run(args) -> dict:
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -793,10 +827,9 @@ def run(args) -> dict:
                 "draft": draft,
                 "expected_text": "Before desktop close.",
             }
+            native_chat = NativeChatView(args, view)
             observations.append(
-                desktop_observe(
-                    args, desktop, environments["baseline"], "select_and_write", **view
-                )
+                native_chat.initial_setup(desktop, environments["baseline"])
             )
 
             def assert_held(label):
@@ -828,6 +861,40 @@ def run(args) -> dict:
                 }
 
             held = [assert_held("baseline GUI draft")]
+            # Keep a newer saved chat available so restoring sessions[0] cannot
+            # masquerade as restoring the selected older conversation.
+            newer = mutate(
+                client,
+                "POST",
+                "/chat-sessions",
+                {
+                    "engagement_id": project["id"],
+                    "title": "Newer synthetic conversation",
+                    "backend": "provider",
+                    "provider_profile_id": provider["id"],
+                    "model": "continuity-model",
+                    "metadata": {"initial_title_state": "operator"},
+                },
+            )
+            recent = require(
+                client.get(
+                    "/chat-sessions",
+                    params={
+                        "engagement_id": project["id"],
+                        "recent_first": "true",
+                        "limit": 20,
+                    },
+                )
+            )
+            if (
+                not recent
+                or recent[0]["id"] != newer["id"]
+                or newer["id"] == session_id
+            ):
+                raise AssertionError(
+                    "fixture did not establish a selected non-newest chat"
+                )
+            observations.append(native_chat.observe(desktop, environments["baseline"]))
             close_desktop(desktop, "baseline")
             held.append(assert_held("baseline window close"))
             candidate_version = manifests["candidate"]["version"]
@@ -870,9 +937,7 @@ def run(args) -> dict:
                     "candidate reopen changed stable endpoint, principal or Core identity"
                 )
             observations.append(
-                desktop_observe(
-                    args, candidate_desktop, environments["candidate"], "select", **view
-                )
+                native_chat.observe(candidate_desktop, environments["candidate"])
             )
             held.append(assert_held("candidate promotion and GUI reopen"))
             # Global creation runs under the currently selected API code. A
@@ -906,9 +971,7 @@ def run(args) -> dict:
                     "baseline GUI reopen after rollback changed runtime identity"
                 )
             observations.append(
-                desktop_observe(
-                    args, rollback_desktop, environments["baseline"], "select", **view
-                )
+                native_chat.observe(rollback_desktop, environments["baseline"])
             )
             held.append(assert_held("code rollback and baseline GUI reopen"))
             if (
@@ -958,12 +1021,8 @@ def run(args) -> dict:
                     "the saved original reply was not complete exactly once"
                 )
             observations.append(
-                desktop_observe(
-                    args,
-                    rollback_desktop,
-                    environments["baseline"],
-                    "observe",
-                    **{**view, "expected_text": completed},
+                native_chat.observe(
+                    rollback_desktop, environments["baseline"], expected_text=completed
                 )
             )
             close_desktop(rollback_desktop, "baseline")
@@ -988,7 +1047,7 @@ def run(args) -> dict:
             receipt = {
                 "schema_version": 2,
                 "result": "passed",
-                "workflow": "real native window close/candidate promotion/reopen/code rollback/baseline GUI reopen/held-turn completion/verified shutdown",
+                "workflow": "real native window close/candidate promotion/automatic older-chat and draft restore/code rollback/baseline GUI restore/held-turn completion/verified shutdown",
                 "artifacts": {
                     name: digest(getattr(args, name))
                     for name in (
@@ -1024,6 +1083,7 @@ def run(args) -> dict:
                 "migration": migration,
                 "provider_executions": len(starts),
                 "session_id": session_id,
+                "newer_session_id": newer["id"],
                 "turn_id": turn_id,
                 "command_id": chat.command_id,
                 "held_observations": held,

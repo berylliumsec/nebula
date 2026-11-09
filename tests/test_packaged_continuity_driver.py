@@ -508,3 +508,36 @@ def test_actual_source_pin_and_staged_build_graph_generate_audited_inputs(tmp_pa
         artifacts.record_build(
             **arguments, source_commit=commit, output=tmp_path / "rejected.json"
         )
+
+
+def test_reopened_native_view_cannot_pass_by_reselecting_chat_or_rewriting_draft(
+    monkeypatch,
+):
+    calls = []
+    expected = {
+        "observed_session_id": "selected-older-chat",
+        "draft": "Exact unsent older-chat draft.",
+    }
+    current = {"observed_session_id": None, "draft": ""}
+
+    def native(_args, _child, _environment, operation, **_values):
+        calls.append(operation)
+        if operation in {"select", "select_and_write"}:
+            current.update(expected)  # Manual recovery would conceal the defect.
+        return dict(current)
+
+    monkeypatch.setattr(driver, "desktop_observe", native)
+    view = driver.NativeChatView(
+        None, {"session_id": "selected-older-chat", "draft": expected["draft"]}
+    )
+    view.initial_setup(None, {})
+    with pytest.raises(RuntimeError, match="already completed"):
+        view.initial_setup(None, {})
+    for _phase in ("candidate", "rollback"):
+        current.update(observed_session_id="newer-default-chat", draft="")
+        with pytest.raises(RuntimeError, match="initial view did not restore"):
+            view.observe(None, {})
+        assert current == {"observed_session_id": "newer-default-chat", "draft": ""}
+    current.update(expected)
+    assert view.observe(None, {}) == expected
+    assert calls == ["select_and_write", "observe", "observe", "observe"]

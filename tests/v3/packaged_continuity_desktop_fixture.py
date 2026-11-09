@@ -415,12 +415,14 @@ def run(request):
                     lambda: named(app, request["session_title"], pyatspi, contains=True)
                 )
             )
-        field = wait(lambda: composer(app, pyatspi))
         if request["operation"] == "select_and_write":
+            field = wait(lambda: composer(app, pyatspi))
             if not field.queryEditableText().setTextContents(request["draft"]):
                 raise RuntimeError("native composer rejected accessible text input")
 
         def confirmed():
+            # A wrong initial route can have no composer. Keep observing that
+            # document so failure evidence includes its URI and visible state.
             value = observe(app, pyatspi)
             same_session = any(
                 parse_qs(urlsplit(uri).query).get("session") == [request["session_id"]]
