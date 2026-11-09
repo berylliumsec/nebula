@@ -47,4 +47,9 @@ describe("ProviderHealthCard", () => {
     expect(screen.getByText("Configure a model to verify tool calling.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Reverify Local vLLM tool calling" })).toBeDisabled();
   });
+
+  it("shows when an OpenAI profile requests Daybreak Blue", () => {
+    render(<ProviderHealthCard provider={{ ...discoveredProvider, providerType: "openai", name: "OpenAI API", options: { openai_cyber_access_program: "daybreak_blue" } }} />);
+    expect(screen.getByText("Daybreak Blue requested")).toBeVisible();
+  });
 });

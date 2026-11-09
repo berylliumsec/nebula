@@ -139,6 +139,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [upstreamProviderIds, setUpstreamProviderIds] = useState<string[]>([]);
   const [openrouterZdr, setOpenrouterZdr] = useState(false);
+  const [openaiDaybreakBlue, setOpenaiDaybreakBlue] = useState(false);
   const [upstreamQuery, setUpstreamQuery] = useState("");
   const [upstreamDirectory, setUpstreamDirectory] = useState<UpstreamProviderOption[]>([]);
   const [upstreamDirectoryState, setUpstreamDirectoryState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
@@ -370,6 +371,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setSelectedModelIds([]);
     setUpstreamProviderIds([]);
     setOpenrouterZdr(false);
+    setOpenaiDaybreakBlue(false);
     setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSystemd("");
@@ -402,6 +404,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setSelectedModelIds([]);
     setUpstreamProviderIds([]);
     setOpenrouterZdr(false);
+    setOpenaiDaybreakBlue(false);
     setUpstreamQuery("");
     setCredentialEnv("");
     setCredentialSystemd("");
@@ -438,6 +441,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setSelectedModelIds(provider.modelAllowlist);
     setUpstreamProviderIds(stringList(provider.options?.openrouter_providers));
     setOpenrouterZdr(provider.options?.openrouter_zdr === true);
+    setOpenaiDaybreakBlue(provider.options?.openai_cyber_access_program === "daybreak_blue");
     setUpstreamQuery("");
     setCredentialEnv(provider.credentialEnv ?? "");
     setCredentialSystemd(provider.credentialRef?.startsWith("systemd:")
@@ -472,6 +476,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setSelectedModelIds([]);
     setUpstreamProviderIds([]);
     setOpenrouterZdr(false);
+    setOpenaiDaybreakBlue(false);
     setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSystemd("");
@@ -511,6 +516,10 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       else delete options.openrouter_providers;
       if (openrouterZdr) options.openrouter_zdr = true;
       else delete options.openrouter_zdr;
+    }
+    if (providerType === "openai") {
+      if (openaiDaybreakBlue) options.openai_cyber_access_program = "daybreak_blue";
+      else delete options.openai_cyber_access_program;
     }
     const parsedContextWindow = contextWindow ? Number(contextWindow) : undefined;
     const parsedMaxOutputTokens = maxOutputTokens ? Number(maxOutputTokens) : undefined;
@@ -977,6 +986,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
               {!managementSecret && !editingManagementRef && <p className="provider-dialog-note">Account credit checks remain unavailable until a management key is added.</p>}
             </>}
             {dialogProviderType === "openrouter" && <label className="provider-consent"><input type="checkbox" checked={openrouterZdr} onChange={(event) => setOpenrouterZdr(event.target.checked)} /><span><strong>Require zero data retention (ZDR)</strong><small>Route this profile only through endpoints that do not retain prompts or responses. Fewer models may be available.</small></span></label>}
+            {dialogProviderType === "openai" && <label className="provider-consent"><input type="checkbox" checked={openaiDaybreakBlue} onChange={(event) => setOpenaiDaybreakBlue(event.target.checked)} /><span><strong>Request Daybreak Blue</strong><small>Send Daybreak Blue with every OpenAI response request. Your OpenAI project and model must have access; otherwise OpenAI may reject the request.</small></span></label>}
             {dialogProviderType === "openrouter" && <UpstreamProviderPicker
               catalog={upstreamDirectory.length ? upstreamDirectory : upstreamCatalog(editingProvider?.metadata)}
               directoryState={upstreamDirectoryState}

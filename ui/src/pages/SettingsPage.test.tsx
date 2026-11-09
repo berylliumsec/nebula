@@ -72,6 +72,16 @@ const savedOpenrouter: ProviderHealth = {
   residency: [], options: { openrouter_zdr: true, openrouter_providers: ["relace"] }, metadata: {},
   modelCount: 1, privacy: "cloud", capabilities: [],
 };
+const savedOpenai: ProviderHealth = {
+  ...savedOpenrouter,
+  id: "openai-profile",
+  name: "OpenAI API",
+  providerType: "openai",
+  endpoint: "https://api.openai.com",
+  credentialEnv: undefined,
+  credentialRef: "vault:00000000000000000000000000000001",
+  options: { openai_cyber_access_program: "daybreak_blue" },
+};
 
 function NavigateButton({ to }: { to: string }) {
   const navigate = useNavigate();
@@ -281,6 +291,54 @@ describe("settings page dialogs", () => {
       providerType: "openrouter",
       options: expect.objectContaining({ openrouter_zdr: true, openrouter_providers: ["relace"] }),
     })));
+  });
+
+  it("saves an OpenAI API key and Daybreak Blue in its provider profile", async () => {
+    const createCredential = vi.fn().mockResolvedValue({ reference: "vault:00000000000000000000000000000001" });
+    workspace.api = {
+      createCredential,
+      deleteCredential: vi.fn(),
+      discoverLocalProviders: vi.fn().mockResolvedValue([]),
+    } as unknown as ApiClient;
+    workspace.addProvider.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderSettings("/settings#provider-settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    expect(within(dialog).getByRole("combobox", { name: "Provider type" })).toHaveValue("openai");
+    await user.type(within(dialog).getByLabelText("Credential", { exact: true }), "synthetic-openai-key");
+    await user.click(within(dialog).getByRole("checkbox", { name: /Request Daybreak Blue/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Add provider" }));
+
+    await waitFor(() => expect(createCredential).toHaveBeenCalledWith("synthetic-openai-key", "vault"));
+    expect(workspace.addProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerType: "openai",
+      credentialRef: "vault:00000000000000000000000000000001",
+      credentialEnv: undefined,
+      options: { openai_cyber_access_program: "daybreak_blue" },
+    }));
+    expect(screen.queryByText("synthetic-openai-key")).not.toBeInTheDocument();
+  });
+
+  it("restores and can clear Daybreak Blue on an OpenAI provider", async () => {
+    workspace.providerCatalog = [openai] as never[];
+    workspace.providers = [savedOpenai] as never[];
+    workspace.updateProvider.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderSettings("/settings#provider-settings");
+
+    await user.click(screen.getByRole("button", { name: "Edit OpenAI API" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit OpenAI API" });
+    const daybreak = within(dialog).getByRole("checkbox", { name: /Request Daybreak Blue/ });
+    expect(daybreak).toBeChecked();
+    await user.click(daybreak);
+    await user.click(within(dialog).getByRole("button", { name: "Save provider" }));
+
+    await waitFor(() => expect(workspace.updateProvider).toHaveBeenCalledWith(
+      savedOpenai.id,
+      expect.objectContaining({ options: {} }),
+    ));
   });
 
   it("stores the OpenRouter account management key as a separate credential reference", async () => {

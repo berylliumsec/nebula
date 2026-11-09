@@ -58,6 +58,7 @@ export function ProviderHealthCard({ provider, preview = false, busy = false, on
       </div>
       <div className="capability-list" aria-label={`${provider.name} capabilities`}>
         {provider.capabilities.map((capability) => <span key={capability}>{capability}</span>)}
+        {provider.providerType === "openai" && provider.options.openai_cyber_access_program === "daybreak_blue" && <span>Daybreak Blue requested</span>}
       </div>
       <p className="provider-message">
         {verification?.status === "verified"
