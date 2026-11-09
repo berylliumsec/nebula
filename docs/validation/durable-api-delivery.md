@@ -57,3 +57,17 @@ repository libraries and do not certify immutable packaged dependencies. The
 production LAN matrix and packaged desktop update/reopen remain required. Mobile
 WebKit downloads are policy-blocked in this environment. No deployment-continuity
 or complete architecture claim is made by these boundary checks.
+
+## Authenticated actor replay
+
+A further 35 selected cases passed in 31.20 seconds: eight new paired-principal
+cases across SQLite/PostgreSQL, 20 affected delivery cases and seven exact normal
+authentication/pairing/WebSocket regressions. Fresh independent diagnosis found
+that the internal transport bearer erased device identity before kernel execution.
+Server-only context now binds the already-authenticated durable actor, rechecks
+the live device, populates request identity and supports current-device lookup
+without retaining authentication credentials. Capability updates and both cookie
+deletions on self-revocation work through the real kernel routes. Bearer-only
+dependencies still reject device replay. Concurrent device contexts stay isolated;
+public actor headers do not create or change identity. Local evidence is
+`/tmp/nebula-principal-auth-*`. Execution-role construction is still pending.

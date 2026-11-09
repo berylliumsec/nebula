@@ -19,6 +19,7 @@ from pydantic import Field, model_validator
 from sqlalchemy import select
 
 from .async_utils import finish_cleanup
+from .authentication import runtime_principal
 from .database import RuntimeCommandRow, RuntimeDeliveryRow
 from .domain import NebulaModel, PairedDeviceSession, utc_now
 from .execution_scope import execution_context
@@ -392,7 +393,7 @@ class DurableHttpRunner:
             "root_path": "",
             "server": ("nebula-runtime", 80),
             "client": None,
-            "state": {"runtime_command_id": command_id, "runtime_actor": actor},
+            "state": {"runtime_command_id": command_id},
         }
         consumed, started, ended, status_code = False, False, False, 0
 
@@ -448,7 +449,8 @@ class DurableHttpRunner:
 
         attribution = memory_actor.set(actor)
         try:
-            await self.app(scope, receive, send)
+            with runtime_principal(actor):
+                await self.app(scope, receive, send)
         finally:
             memory_actor.reset(attribution)
         if not ended:

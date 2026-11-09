@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 import hashlib
 import hmac
@@ -12,9 +14,32 @@ from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .domain import PairedDeviceSession, utc_now
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
 
 bearer = HTTPBearer(auto_error=False)
+_runtime_principal: ContextVar[str | None] = ContextVar(
+    "nebula_runtime_principal", default=None
+)
+
+
+@contextmanager
+def runtime_principal(actor: str) -> Iterator[None]:
+    """Bind an already-authenticated durable actor, never a public header.
+
+    The execution adapter separately revalidates the durable device record and
+    uses this context only while invoking Core. No raw credential is retained.
+    """
+    if actor != "operator" and not (
+        actor.startswith("device:")
+        and 7 < len(actor) <= 200
+        and not any(character in actor for character in "\x00\r\n")
+    ):
+        raise ValueError("runtime principal must identify an authenticated Core actor")
+    token = _runtime_principal.set(actor)
+    try:
+        yield
+    finally:
+        _runtime_principal.reset(token)
 
 
 def secret_matches(candidate: str | None, expected: str | None) -> bool:
@@ -55,14 +80,22 @@ class CoreAuthentication:
     async def device_for_token(
         self, raw_token: str | None
     ) -> PairedDeviceSession | None:
-        if not raw_token:
-            return None
-        digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-        # Look the hash up in the database: scanning the oldest 1,000 sessions
-        # stopped recognising any device paired after that many pairings.
-        device = await self.store.find_entity(
-            PairedDeviceSession, "token_sha256", digest
-        )
+        if raw_token:
+            digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            # Look up the hash, never a bounded scan of older sessions.
+            device = await self.store.find_entity(
+                PairedDeviceSession, "token_sha256", digest
+            )
+        else:
+            actor = _runtime_principal.get()
+            if actor is None or not actor.startswith("device:"):
+                return None
+            try:
+                device = await self.store.get(
+                    PairedDeviceSession, actor.removeprefix("device:")
+                )
+            except NotFoundError:
+                return None
         if device is None:
             return None
         now = self.clock()
@@ -98,6 +131,7 @@ class CoreAuthentication:
             credentials is None
             or credentials.scheme.lower() != "bearer"
             or not self.secrets_equal(credentials.credentials, self.token)
+            or (_runtime_principal.get() or "").startswith("device:")
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -118,6 +152,16 @@ class CoreAuthentication:
             and credentials.scheme.lower() == "bearer"
             and self.secrets_equal(credentials.credentials, self.token)
         ):
+            actor = _runtime_principal.get()
+            if actor is not None and actor.startswith("device:"):
+                device = await self.device_for_token(None)
+                if device is None:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="the accepting device session expired or was revoked",
+                    )
+                request.state.auth_device_id = device.id
+                return actor
             return credentials.credentials
         device = await self.device_for_token(request.cookies.get("nebula_device"))
         if device is None:
