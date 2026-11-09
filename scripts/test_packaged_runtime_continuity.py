@@ -117,6 +117,16 @@ def require(response: httpx.Response, *codes):
     return response.json()
 
 
+def operation(client: httpx.Client, action: str, parameters: dict) -> dict:
+    value = require(client.post("/deployment/operations", json={
+        "operation_id": action + "-" + uuid4().hex,
+        "action": action, "parameters": parameters,
+    }))
+    if value["state"] != "succeeded":
+        raise RuntimeError(f"{action} was not confirmed: {value['state']}")
+    return value["result"]
+
+
 def wait_until(predicate, *, timeout=60):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -135,6 +145,8 @@ def run(args) -> dict:
                    if name in {"HOME", "PATH", "LANG", "LC_ALL", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR"}}
     environment["NEBULA_V3_DATA_DIR"] = str(data)
     environment["XDG_DATA_HOME"] = str(args.output / "desktop-profile")
+    environment["XDG_CONFIG_HOME"] = str(args.output / "desktop-config")
+    environment["XDG_CACHE_HOME"] = str(args.output / "desktop-cache")
     desktops = []
     clients = []
     log_handles = []
@@ -198,6 +210,13 @@ def run(args) -> dict:
             desktop.terminate()
             desktop.wait(timeout=15)
             require(client.get("/deployment/status"))
+            candidate_manifest = json.loads((args.candidate_bundle / "nebula-runtime.json").read_text())
+            operation(client, "stage", {"source": str(args.candidate_bundle),
+                      "manifest_sha256": digest(args.candidate_bundle / "nebula-runtime.json")})
+            prepared = operation(client, "prepare_api", {"version": candidate_manifest["version"]})
+            current_status = require(client.get("/deployment/status"))
+            operation(client, "promote_api", {"runtime_id": prepared["runtime_id"],
+                      "expected_revision": current_status["revision"]})
             candidate_desktop = open_desktop(args.candidate_desktop, "candidate-desktop")
             candidate = connect(args.candidate_core, data, environment)
             if first != candidate:
@@ -223,6 +242,9 @@ def run(args) -> dict:
             wait_until(lambda: require(client.get("/engagements/" + project["id"]))["name"] == "Committed under candidate")
             candidate_desktop.terminate()
             candidate_desktop.wait(timeout=15)
+            current_status = require(client.get("/deployment/status"))
+            operation(client, "rollback_code", {"version": original_status["api_version"],
+                      "expected_revision": current_status["revision"]})
             rollback = connect(args.baseline_core, data, environment)
             if rollback != first:
                 raise AssertionError("rollback changed the persistent endpoint")
@@ -231,8 +253,20 @@ def run(args) -> dict:
                 raise AssertionError("baseline launcher did not restore the compatible API")
             if require(client.get("/engagements/" + project["id"]))["name"] != "Committed under candidate":
                 raise AssertionError("code rollback lost candidate-era data")
-            subprocess.run([str(args.candidate_core), "runtime-stop", "--data-dir", str(data)],
-                           check=True, capture_output=True, text=True, timeout=60, env=environment)
+            result = subprocess.run([str(args.candidate_core), "runtime-stop", "--data-dir", str(data)],
+                                    check=True, capture_output=True, text=True, timeout=60, env=environment)
+            shutdown = json.loads(result.stdout.strip())
+            if shutdown.get("state") not in {"succeeded", "stopped"}:
+                raise AssertionError("explicit runtime shutdown was not confirmed")
+
+            def endpoint_closed():
+                try:
+                    client.get("/health", timeout=1)
+                    return False
+                except httpx.TransportError:
+                    return True
+
+            wait_until(endpoint_closed, timeout=30)
             stopped = True
             return {"schema_version": 1, "result": "passed", "workflow": "desktop close/update/reopen/code rollback/explicit shutdown",
                     "artifacts": {name: digest(getattr(args, name)) for name in ("baseline_core", "candidate_core", "baseline_desktop", "candidate_desktop")},
@@ -255,6 +289,8 @@ def run(args) -> dict:
         # This private tree contains ephemeral credentials; retain only the
         # sanitized receipt and desktop diagnostics after exact runtime stop.
         if stopped:
+            for directory, _children, _files in os.walk(data):
+                Path(directory).chmod(0o700)
             shutil.rmtree(data)
 
 
@@ -262,6 +298,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("baseline-core", "candidate-core", "baseline-desktop", "candidate-desktop"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--baseline-bundle", type=Path, required=True)
+    parser.add_argument("--candidate-bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     for name in ("baseline_core", "candidate_core", "baseline_desktop", "candidate_desktop"):
@@ -269,6 +307,16 @@ def main():
         if selected.is_symlink() or not selected.is_file() or not os.access(selected, os.X_OK):
             parser.error(name + " must name an existing executable artifact")
         setattr(args, name, selected.resolve())
+    for prefix in ("baseline", "candidate"):
+        bundle = getattr(args, prefix + "_bundle").resolve()
+        manifest = json.loads((bundle / "nebula-runtime.json").read_text())
+        relative = Path(manifest["core_executable"])
+        if relative.is_absolute() or ".." in relative.parts:
+            parser.error("bundle Core path must stay inside its artifact")
+        expected = manifest["files"][relative.as_posix()]
+        if digest(bundle / relative) != expected or digest(getattr(args, prefix + "_core")) != expected:
+            parser.error(prefix + " Core does not match its runtime manifest")
+        setattr(args, prefix + "_bundle", bundle)
     if digest(args.baseline_core) == digest(args.candidate_core):
         parser.error("baseline and candidate must be distinct built artifacts")
     receipt = run(args)

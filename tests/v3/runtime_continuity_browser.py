@@ -75,7 +75,7 @@ async def serve(root: Path):
             selected = root / ("installation-" + secrets.token_hex(8))
             selected.mkdir()
             fixture = ContinuityFixture(selected / "data", selected / "core.db", bundles,
-                                        host=host, port=port)
+                                        host=host, port=port, listen_host="0.0.0.0")
             await fixture.initialize(cold=body.get("cold", False), pairing=True)
             await fixture.store.create(ChatSession(
                 id="continuity-chat", engagement_id="continuity-project",
@@ -107,9 +107,9 @@ async def serve(root: Path):
         return await fixture.control(operation, **body)
 
     auth_file.parent.mkdir(parents=True, exist_ok=True)
-    auth_file.write_text(json.dumps({"token": token, "control_origin": f"http://{host}:{port + 1}"}))
+    auth_file.write_text(json.dumps({"token": token, "control_origin": f"http://127.0.0.1:{port + 1}"}))
     auth_file.chmod(0o600)
-    await uvicorn.Server(uvicorn.Config(app, host=host, port=port + 1, log_level="warning")).serve()
+    await uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port + 1, log_level="warning")).serve()
 
 
 def main():

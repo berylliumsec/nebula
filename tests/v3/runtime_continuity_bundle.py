@@ -97,13 +97,17 @@ def build_bundle(
         "sys.path[:0]=[str(root/'source'),str(root/'dependencies'),str(root)]\n"
         "from acceptance_worker import main\nmain()\n"
     )
-    executable = directory / "nebula-core"
+    executable = directory / "bin" / "nebula-core"
+    executable.parent.mkdir()
     executable.write_text(
-        '#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+        '#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\n'
         'export LD_LIBRARY_PATH="$root/python/lib"\n'
         'exec "$root/python/bin/python3" -I -S "$root/entry.py" "$@"\n'
     )
     executable.chmod(0o755)
+    launcher = directory / "nebula-core"
+    launcher.write_text('#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$root/bin/nebula-core" "$@"\n')
+    launcher.chmod(0o755)
     files = {
         str(path.relative_to(directory)): sha256(path)
         for path in sorted(directory.rglob("*")) if path.is_file()
@@ -114,7 +118,7 @@ def build_bundle(
     manifest = ReleaseManifest(
         version=version, schema_family=5, schema_min=5, schema_max=5,
         additive_migrations=True, migration_head="0041_handoff_admission",
-        core_executable="nebula-core", ui_directory="ui", files=files,
+        core_executable="bin/nebula-core", ui_directory="ui", files=files,
         features=["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"],
     )
     (directory / MANIFEST_NAME).write_text(manifest.model_dump_json())
@@ -125,6 +129,13 @@ def build_bundle(
 
 def retained_bundle(bundle: AcceptanceBundle, retained: ReleaseStore) -> AcceptanceBundle:
     _, path = retained.install(bundle.path, expected_manifest_sha256=bundle.manifest_sha256)
+    # Distribution discovery uses this companion digest, which cannot include
+    # itself in the hashed manifest. Populate it from the already-verified input.
+    path.chmod(0o755)
+    companion = path / "nebula-runtime.sha256"
+    companion.write_text(bundle.manifest_sha256 + "\n")
+    companion.chmod(0o444)
+    path.chmod(0o555)
     return AcceptanceBundle(
         bundle.version, path, bundle.manifest_sha256, bundle.source_sha256, bundle.index_sha256
     )

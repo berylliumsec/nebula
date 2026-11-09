@@ -16,6 +16,7 @@ import httpx
 from sqlalchemy import select
 
 from nebula.v3.database import Database, RuntimeProcessRow
+from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import Engagement, ProviderProfile, RunnerProfile
 from nebula.v3.memory_budget import MemoryBudgetService
 from nebula.v3.memory_policy import GIB, MemoryAdministratorLimits, MemoryBudgetUpdate
@@ -25,9 +26,12 @@ from tests.v3.runtime_continuity_bundle import AcceptanceBundle
 
 
 class ContinuityFixture:
-    def __init__(self, root: Path, database, bundles: list[AcceptanceBundle], *, host="127.0.0.1", port=None):
+    def __init__(self, root: Path, database, bundles: list[AcceptanceBundle], *, host="127.0.0.1", port=None, listen_host=None):
         self.root, self.bundles, self.host = root, bundles, host
-        self.database = Database(database)
+        self.listen_host = listen_host or host
+        self.pool_settings = PoolSettings(8, 12, 8, 3)
+        self.database = Database(database, pool_settings=self.pool_settings)
+        self.database_ready = False
         self.store = NebulaStore(self.database)
         self.token = "synthetic-continuity-" + uuid4().hex
         self.administrator = MemoryAdministratorLimits(
@@ -50,6 +54,8 @@ class ContinuityFixture:
 
     async def initialize(self, *, cold=False, pairing=False, memory=False):
         self.root.mkdir(parents=True)
+        await self.database.initialize()
+        self.database_ready = True
         await self.store.create(Engagement(id="continuity-project", name="Synthetic continuity"))
         await self.store.create(Engagement(id="pinned-project", name="Synthetic pinned work"))
         await self.store.create(ProviderProfile(
@@ -75,8 +81,9 @@ class ContinuityFixture:
         ), actor_id="fixture")
         config = {
             "root": str(self.root), "database": self.database.url,
-            "token": self.token, "host": self.host, "port": self.port,
+            "token": self.token, "host": self.listen_host, "port": self.port,
             "administrator": self.administrator.model_dump(mode="json"),
+            "pool_settings": asdict(self.pool_settings),
             "allow_insecure_device_pairing": pairing,
             "bundles": [{**asdict(bundle), "path": str(bundle.path)} for bundle in self.bundles],
         }
@@ -165,7 +172,7 @@ class ContinuityFixture:
 
     async def close(self):
         self.release("hold-provider")
-        for file in self.root.glob("hold-phase-*"):
+        for file in self.root.glob("hold-*"):
             file.unlink()
         if self.process is not None and self.process.poll() is None:
             signal_process(self.process.pid, self.birth, signal.SIGTERM)
@@ -176,8 +183,10 @@ class ContinuityFixture:
                 await asyncio.to_thread(self.process.wait, timeout=5)
         if hasattr(self, "output"):
             self.output.close()
-        async with self.database.session() as session:
-            rows = list(await session.scalars(select(RuntimeProcessRow)))
+        rows = []
+        if self.database_ready:
+            async with self.database.session() as session:
+                rows = list(await session.scalars(select(RuntimeProcessRow)))
         # Only exact process births registered in this fixture's database can be
         # signalled. Deliberately retained children must also be cleaned up.
         for row in rows:

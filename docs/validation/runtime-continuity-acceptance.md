@@ -69,3 +69,39 @@ pending. The managed browser cache has no WebKit runtime; previous official
 downloads were rejected with HTTP 403 `Domain forbidden`. No bypass is used.
 Physical devices and packaged desktop continuity have not been exercised. These
 missing gates prevent an unqualified product-completion claim.
+
+## Integrated source findings
+
+The UI built successfully from a detached Git worktree at `af44af34`, including
+the 601/601 workflow registry check. `web-build.json` records that exact commit
+and `dirty: false`. An earlier archive omitted registry test inputs and Git
+metadata; these were build-fixture errors, not product failures.
+
+The initial integrated source selection found three independently validated
+fixture faults: an unhandled expected memory-admission refusal closed a test
+HTTP connection, the allocator directory inherited mode 0700 under the private
+umask, and parent/worker PostgreSQL pools did not share explicit settings. The
+fixtures now handle only the expected refusal, explicitly make the synthetic
+allocator directory traversable by its non-root workload and use one bounded
+pool configuration. The restoration journey now follows its accepted command
+receipt rather than requiring a ChatTurn before admission.
+
+On assembled source `78e9577a`, five selected cases finished in 220.45 seconds:
+three passed (cold reserve recovery, prepared restoration holding queued work,
+and PostgreSQL API replacement/rollback), while two exposed remaining gates.
+The physical allocator ran successfully, but its live-apply command remained
+queued and returned an accepted receipt. The actual clean runtime-service
+launcher failed before its listener because it requested PostgreSQL pool
+environment variables for SQLite. These failures remain visible; neither is
+recorded as a passing workflow. Raw results and the source/test selection are
+`/tmp/nebula-acceptance-rerun-78-tests.txt` and
+`/tmp/nebula-acceptance-rerun-78-selection.json`. Per-case databases and logs are
+retained in `/tmp/nebula-acceptance-rerun-78e9577a`.
+
+The first actual LAN browser case reached a proxy `Domain forbidden` page before
+pairing, so it supplies no product UI acceptance evidence. Its trace and page
+snapshot are preserved at `/tmp/nebula-acceptance-lan-first-failure`. Private
+fixture control now uses loopback while the product page keeps its LAN origin;
+a scoped browser-network arrangement and joined fixture cleanup are still under
+review. The positively identified leftover fixture supervisor was stopped and
+its exit verified; no operator process was contacted.

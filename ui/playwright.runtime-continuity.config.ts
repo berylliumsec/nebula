@@ -24,7 +24,7 @@ export default defineConfig({
   }})),
   webServer: {
     command: `${quote(python)} ../tests/v3/runtime_continuity_browser.py`,
-    url: `http://${host}:${port + 1}/health`,
+    url: `http://127.0.0.1:${port + 1}/health`,
     timeout: 240_000,
     reuseExistingServer: false,
   },

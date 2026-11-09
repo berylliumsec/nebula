@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from uuid import uuid4
 
 import pytest
 
@@ -146,8 +147,10 @@ async def test_zero_api_recovery_serves_verified_ui_and_admits_after_reserve_rea
     observed = await continuity.control("inspect")
     assert observed["processes"] == []
     refused = await continuity.client.post("/__acceptance/control", json={"operation": "api", "version": "acceptance-v1"})
-    assert refused.status_code >= 400
+    assert refused.status_code == 409 and "Core reserve needs at least" in refused.text
+    assert (await continuity.control("inspect"))["processes"] == []
     current = (await continuity.client.get("/api/v1/memory-budgets")).json()
+    assert current["policy"]["reserve_bytes"] == 2 * GIB
     restored = await continuity.client.put("/api/v1/memory-budgets", json={
         "expected_revision": current["revision"], "policy": {**current["policy"], "reserve_bytes": 4 * GIB},
     })
@@ -184,6 +187,9 @@ async def test_live_apply_after_api_replacement_reaches_original_physical_alloca
                 response = await fixture.client.get("/api/v1/memory-budgets/jobs/" + identity)
                 if response.status_code == 200:
                     job = response.json()
+                    if job["state"] == "finished":
+                        ended = await task
+                        raise AssertionError(f"allocator ended before live application: {ended.text}")
                     if job["state"] == "running" and (job["evidence"].get("current_bytes") or 0) >= 4 * MIB:
                         break
                 await asyncio.sleep(.05)
@@ -225,12 +231,14 @@ async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(con
                    if name in {"HOME", "PATH", "LANG", "LC_ALL", "TZ"}}
 
     async def invoke(bundle, command):
+        selected_environment = {**environment, "NEBULA_RUNTIME_BUNDLE": str(bundle.path)}
         result = await asyncio.to_thread(subprocess.run,
             [str(bundle.path / "nebula-core"), command, "--data-dir", str(data)],
-            check=True, capture_output=True, text=True, timeout=120, env=environment)
-        return json.loads(result.stdout.strip().splitlines()[-1])
+            check=True, capture_output=True, text=True, timeout=120, env=selected_environment)
+        return json.loads(result.stdout)
 
     connection = None
+    stopped = False
     try:
         connection = await invoke(bundles[0], "desktop-connect")
         assert connection["protocol"] == "nebula-desktop-runtime-v1"
@@ -241,21 +249,189 @@ async def test_actual_runtime_service_connector_updates_rolls_back_and_stops(con
             initial = (await client.get("/api/v1/deployment/status")).json()
             assert initial["api_version"] == "acceptance-v1"
             assert (await client.get("/api/v1/health")).status_code == 200
+
+            async def delivered(response):
+                async with asyncio.timeout(90):
+                    while response.status_code == 202:
+                        document = response.json()
+                        saved_id = document.get("command_id") or document["receipt"]["command_id"]
+                        response = await client.get(f"/api/v1/runtime/requests/{saved_id}/response")
+                        if response.status_code == 202:
+                            await asyncio.sleep(.05)
+                assert response.status_code in {200, 201}, response.text
+                return response
+
+            project = (await delivered(await client.post("/api/v1/engagements", json={
+                "name": "Actual runtime-service project", "metadata": {},
+            }, headers={"Idempotency-Key": "service-create-project"}))).json()
+            listed = await client.get("/api/v1/engagements")
+            assert listed.status_code == 200 and any(item["id"] == project["id"] for item in listed.json())
+            provider = (await delivered(await client.post("/api/v1/providers", json={
+                "name": "Inert runtime-service provider", "provider_type": "vllm", "is_local": True,
+                "enabled": True, "model_allowlist": ["model-a"],
+                "metadata": {"default_model": "model-a", "options": {"context_window": 32768}},
+            }, headers={"Idempotency-Key": "service-create-provider"}))).json()
+            chat = await delivered(await client.post("/api/v1/chat/completions", json={
+                "provider_id": provider["id"], "engagement_id": project["id"], "model": "model-a",
+                "include_knowledge": False, "stream": True,
+                "messages": [{"role": "user", "content": "One actual runtime-service turn"}],
+            }, headers={"Idempotency-Key": "service-first-chat"}))
+            assert '"delta":"First "' in chat.text and "event: done" in chat.text
+            starts = [json.loads(line) for line in (data / "acceptance-events.jsonl").read_text().splitlines()]
+            assert len([item for item in starts if item["event"] == "provider-start"]) == 1
+            async def operation(action, parameters):
+                response = await client.post("/api/v1/deployment/operations", json={
+                    "operation_id": action + "-" + uuid4().hex,
+                    "action": action, "parameters": parameters,
+                })
+                assert response.status_code == 200, response.text
+                value = response.json()
+                assert value["state"] == "succeeded", value
+                return value["result"]
+
+            await operation("stage", {"source": str(bundles[1].path), "manifest_sha256": bundles[1].manifest_sha256})
+            prepared = await operation("prepare_api", {"version": "acceptance-v2"})
+            revision = (await client.get("/api/v1/deployment/status")).json()["revision"]
+            await operation("promote_api", {"runtime_id": prepared["runtime_id"], "expected_revision": revision})
             candidate = await invoke(bundles[1], "desktop-connect")
             assert candidate == connection
             assert (await client.get("/api/v1/runtime/identity")).json() == identity
             assert (await client.get("/api/v1/deployment/status")).json()["api_version"] == "acceptance-v2"
+            current = (await client.get("/api/v1/engagements/" + project["id"])).json()
+            await delivered(await client.patch("/api/v1/engagements/" + project["id"], json={
+                "expected_revision": current["revision"], "changes": {"name": "Saved under service candidate"},
+            }, headers={"Idempotency-Key": "service-candidate-edit"}))
+            revision = (await client.get("/api/v1/deployment/status")).json()["revision"]
+            await operation("rollback_code", {"version": "acceptance-v1", "expected_revision": revision})
             rollback = await invoke(bundles[0], "desktop-connect")
             assert rollback == connection
             assert (await client.get("/api/v1/deployment/status")).json()["api_version"] == "acceptance-v1"
-            await invoke(bundles[1], "runtime-stop")
+            assert (await client.get("/api/v1/engagements/" + project["id"])).json()["name"] == "Saved under service candidate"
+            shutdown = await invoke(bundles[1], "runtime-stop")
+            assert shutdown["state"] in {"succeeded", "stopped"}, shutdown
             async with asyncio.timeout(15):
                 while True:
                     try:
                         await client.get("/api/v1/health", timeout=1)
                     except httpx.TransportError:
+                        stopped = True
                         break
                     await asyncio.sleep(.05)
     finally:
-        if connection is not None:
+        if connection is not None and not stopped:
             await invoke(bundles[-1], "runtime-stop")
+        if stopped:
+            remove_owned_tree(data)
+
+
+async def test_prepared_restoration_holds_queued_provider_until_host_activation(continuity):
+    source = (continuity.bundles[0].path / "source/nebula/v3/execution_worker.py").read_text()
+    if '"execution.activate/v1"' not in source:
+        pytest.skip("selected source predates explicit restoration activation")
+    await continuity.ready()
+    continuity.hold("hold-provider")
+    await continuity.capture("original-active-turn")
+    continuity.hold("hold-activation")
+    target = await continuity.control("handoff", version="acceptance-v2", project_id="continuity-project")
+    await continuity.wait_project("finishing")
+    queued = await continuity.client.post("/api/v1/chat/completions", json={
+        "provider_id": "continuity-provider", "engagement_id": "continuity-project",
+        "model": "model-a", "include_knowledge": False, "stream": True,
+        "messages": [{"role": "user", "content": "accepted-during-restoration"}],
+    }, headers={"Idempotency-Key": "accepted-during-restoration"})
+    assert queued.status_code == 202, queued.text
+    command_id = queued.json()["receipt"]["command_id"]
+    continuity.release("hold-provider")
+    async with asyncio.timeout(90):
+        while True:
+            observed = await continuity.control("inspect")
+            if any(item["event"] == "activation-wait" for item in observed["events"]):
+                break
+            await asyncio.sleep(.05)
+    status = await continuity.control("execution-status", runtime_id=target["runtime_id"])
+    assert status["state"] == "prepared" and status["activation_started"] is True
+    assert len([item for item in observed["events"] if item["event"] == "provider-start"]) == 1
+    from nebula.v3.database import RuntimeCommandRow
+    async with continuity.database.session() as session:
+        command = await session.get(RuntimeCommandRow, command_id)
+        assert command.state == "queued"
+    continuity.release("hold-activation")
+    await continuity.wait_project("verified")
+    async with asyncio.timeout(30):
+        while True:
+            response = await continuity.client.get(f"/api/v1/runtime/requests/{command_id}/response")
+            if response.status_code == 200 and "event: done" in response.text:
+                break
+            await asyncio.sleep(.05)
+    observed = await continuity.control("inspect")
+    starts = [item for item in observed["events"] if item["event"] == "provider-start"]
+    assert [item["version"] for item in starts] == ["acceptance-v1", "acceptance-v2"]
+
+
+async def test_expired_real_owner_keeps_unconfirmed_effect_held_without_replay(continuity):
+    from sqlalchemy import select
+    from nebula.v3.database import ProjectOwnershipRow, RuntimeCommandRow
+    from nebula.v3.runtime_coordination import LeaseLost, ProjectLease, RuntimeCoordination
+    from nebula.v3.process_identity import signal_process
+    import signal
+    import time
+
+    source_text = (continuity.bundles[0].path / "source/nebula/v3/deployments.py").read_text()
+    if "async def begin_recovery(" not in source_text:
+        pytest.skip("selected source predates explicit expired-owner recovery")
+    source, _api = await continuity.ready()
+    continuity.hold("hold-effect")
+    task = asyncio.create_task(continuity.client.post(
+        "/api/v1/engagements/continuity-project/acceptance-effect",
+        json={}, headers={"Idempotency-Key": "unconfirmed-synthetic-effect"},
+    ))
+    try:
+        async with asyncio.timeout(30):
+            while True:
+                observed = await continuity.control("inspect")
+                if any(item["event"] == "effect-entered" for item in observed["events"]):
+                    break
+                await asyncio.sleep(.05)
+        async with continuity.database.session() as session:
+            old = await session.get(ProjectOwnershipRow, "continuity-project")
+            old_lease = ProjectLease(old.project_id, old.runtime_id, old.fencing_token)
+        assert signal_process(source["pid"], source["process_birth"], signal.SIGKILL)
+        async with asyncio.timeout(40):
+            while True:
+                async with continuity.database.session() as session:
+                    owner = await session.get(ProjectOwnershipRow, "continuity-project")
+                    expired = owner.lease_expires_at_ms <= int(time.time() * 1000)
+                if expired:
+                    break
+                await asyncio.sleep(.1)
+        prepared = await continuity.client.post("/api/v1/deployment/operations", json={
+            "operation_id": "prepare-expired-recovery", "action": "prepare_execution",
+            "parameters": {"version": "acceptance-v2"},
+        })
+        assert prepared.status_code == 200, prepared.text
+        result = prepared.json()
+        assert result["state"] == "succeeded", result
+        target = result["result"]
+        payload = {"operation_id": "recover-unconfirmed-effect", "action": "recover_project", "parameters": {
+            "project_id": "continuity-project", "target_runtime_id": target["runtime_id"],
+            "expected_owner": {"project_id": old_lease.project_id, "runtime_id": old_lease.runtime_id,
+                               "fencing_token": old_lease.fencing_token}, "expected_handoff_revision": None,
+        }}
+        recovered = await continuity.client.post("/api/v1/deployment/operations", json=payload)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["state"] == "uncertain"
+        repeated = await continuity.client.post("/api/v1/deployment/operations", json=payload)
+        assert repeated.json() == recovered.json()
+        async with continuity.database.session() as session:
+            command = await session.scalar(select(RuntimeCommandRow).where(RuntimeCommandRow.idempotency_key == "unconfirmed-synthetic-effect"))
+            assert command.state == "uncertain" and command.runtime_id == source["runtime_id"]
+        with pytest.raises(LeaseLost):
+            async with RuntimeCoordination(continuity.database).fenced(old_lease):
+                pass
+        observed = await continuity.control("inspect")
+        assert len([item for item in observed["events"] if item["event"] == "effect-entered"]) == 1
+    finally:
+        continuity.release("hold-effect")
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

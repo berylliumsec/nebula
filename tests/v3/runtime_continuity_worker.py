@@ -75,6 +75,14 @@ async def project(context, lease):
         chat.provider_scheduler.host_load = None
         from acceptance_allocator import attach_allocator
         attach_allocator(app, root, lease.project_id)
+
+        @app.post("/api/v1/engagements/{selected_project}/acceptance-effect")
+        async def held_effect(selected_project: str):
+            if selected_project != lease.project_id:
+                raise HTTPException(404)
+            record(root, "effect-entered", version=version, project_id=lease.project_id)
+            await wait_barrier(root, "hold-effect")
+            return {"effect": "synthetic-finished"}
         record(root, "project-constructed", version=version, project_id=lease.project_id,
                fencing_token=lease.fencing_token, source=kernel.__file__)
         return app
@@ -82,6 +90,13 @@ async def project(context, lease):
     kernel.create_execution_kernel = configured
     try:
         async with project_application(context, lease) as app:
+            activate = getattr(app.state, "runtime_activate", None)
+            if activate is not None:
+                async def deferred_activation():
+                    record(root, "activation-wait", version=version, project_id=lease.project_id)
+                    await wait_barrier(root, "hold-activation")
+                    return await activate()
+                app.state.runtime_activate = deferred_activation
             agent = getattr(app.state, "runtime_handoff", None)
             if agent is not None:
                 original_tick = agent.tick
@@ -118,19 +133,20 @@ async def serve(config):
     from nebula.v3.deployment_protocol import ReleaseManifest
     from nebula.v3.deployments import DeploymentCoordinator
     from nebula.v3.memory_budget import MemoryBudgetService
-    from nebula.v3.memory_policy import MemoryAdministratorLimits
+    from nebula.v3.memory_policy import MemoryAdministratorLimits, MemoryBudgetError
     from nebula.v3.runtime_memory import RuntimeMemoryAdmission
     from nebula.v3.runtime_processes import RuntimeProcessHost
     from nebula.v3.supervisor import RuntimeSupervisor
     from sqlalchemy import select
 
     root = Path(config["root"])
-    database = Database(config["database"], pool_settings=PoolSettings(8, 12, 3, 5))
+    settings = PoolSettings(**config["pool_settings"])
+    database = Database(config["database"], pool_settings=settings)
     coordinator = DeploymentCoordinator(database)
     budgets = MemoryBudgetService(
         database, administrator=lambda: MemoryAdministratorLimits.model_validate(config["administrator"])
     )
-    host = RuntimeProcessHost(coordinator, root, operator_token=config["token"])
+    host = RuntimeProcessHost(coordinator, root, operator_token=config["token"], pool_settings=settings)
     options = {"worker_admission": RuntimeMemoryAdmission(budgets)}
     if config.get("allow_insecure_device_pairing"):
         options["allow_insecure_device_pairing"] = True
@@ -173,7 +189,10 @@ async def serve(config):
         body = await request.json()
         operation = body["operation"]
         if operation == "api":
-            identity = await supervisor.prepare_api(body["version"])
+            try:
+                identity = await supervisor.prepare_api(body["version"])
+            except MemoryBudgetError as error:
+                raise HTTPException(409, str(error)) from error
             await supervisor.promote_api(identity.runtime_id, expected_revision=(await coordinator.status()).revision)
             return identity.model_dump(mode="json")
         if operation == "execution":
@@ -190,6 +209,12 @@ async def serve(config):
         if operation == "recovery-release":
             await supervisor.select_recovery_release(body["version"])
             return {"selected": body["version"]}
+        if operation == "execution-status":
+            client = await host.rpc(body["runtime_id"])
+            try:
+                return await client.call("execution.status/v1", {})
+            finally:
+                await client.close()
         if operation == "inspect":
             async with database.session() as session:
                 processes = list(await session.scalars(select(RuntimeProcessRow)))

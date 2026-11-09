@@ -45,6 +45,7 @@ class AcceptanceRunner(ContainerSandboxRunner):
 def prepare_allocator(root: Path, *, runtime: str, image: str, socket: str) -> None:
     workspace = root / "allocator-workspace"
     workspace.mkdir(mode=0o755)
+    workspace.chmod(0o755)
     source = root / "allocator.c"
     source.write_text(SOURCE)
     subprocess.run(["gcc", "-O0", "-static", str(source), "-o", str(workspace / "allocator")],
@@ -94,4 +95,5 @@ def attach_allocator(app, root: Path, project_id: str):
             resource_id=identity, profile_id="continuity-allocator",
             requested=MemoryLimits(max_bytes=32 * MIB),
         )
-        return {"job_id": identity, "exit_code": result.exit_code, "outcome": result.memory_outcome}
+        return {"job_id": identity, "exit_code": result.exit_code, "outcome": result.memory_outcome,
+                "stdout": result.stdout[-4096:], "stderr": result.stderr[-4096:]}
