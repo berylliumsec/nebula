@@ -99,6 +99,50 @@ test("accepted provider work survives a lost response, API replacement and reloa
   await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "First last"})).toHaveText("First last", {timeout: 60_000});
   await expect(composer).toHaveValue("Unsent draft remains on this device.");
   await expect(page).toHaveURL(new RegExp(`session=${fixture.session_id}`));
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  const read = async (path: string) => {
+    const response = await request.get(fixture.origin + path, {headers});
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  await expect.poll(() => read(`/api/v1/chat/sessions/${fixture.session_id}/pending-turn`), {timeout: 30_000}).toBeNull();
+  const original = await read(`/api/v1/chat-sessions/${fixture.session_id}`);
+  // This public operation saves a visible empty conversation and an unstarted
+  // draft goal. It sends no provider work; generic session creation is read-only.
+  let created = await request.post(`${fixture.origin}/api/v1/chat/goal-conversations`, {
+    headers: {...headers, "Idempotency-Key": "newer-empty-reopen-distractor"},
+    data: {engagement_id: "continuity-project", backend: "provider", provider_id: "continuity-provider", model: "model-a",
+      objective: "Newer empty continuity conversation", completion_criteria: ["Keep this synthetic goal as an unstarted draft."]},
+  });
+  if (created.status() === 202) {
+    const accepted = await created.json();
+    const command = accepted.command_id ?? accepted.receipt.command_id;
+    await expect.poll(async () => {
+      created = await request.get(`${fixture.origin}/api/v1/runtime/requests/${command}/response`, {headers});
+      return created.status();
+    }, {timeout: 30_000}).not.toBe(202);
+  }
+  expect(created.ok(), await created.text()).toBe(true);
+  const saved = await created.json();
+  expect(saved.session.id).not.toBe(fixture.session_id);
+  expect(saved.goal.session_id).toBe(saved.session.id);
+  expect(saved.goal.status).toBe("draft");
+  const newer = await read(`/api/v1/chat-sessions/${saved.session.id}`);
+  expect(newer.engagement_id).toBe(original.engagement_id);
+  expect(Date.parse(newer.created_at)).toBeGreaterThan(Date.parse(original.created_at));
+  expect(Date.parse(newer.updated_at)).toBeGreaterThan(Date.parse(original.updated_at));
+  expect(await read(`/api/v1/chat/sessions/${newer.id}/messages?include_replaced=true`)).toEqual([]);
+  const recent = await read("/api/v1/chat-sessions?engagement_id=continuity-project&recent_first=true&limit=20");
+  expect(recent[0].id).toBe(newer.id);
+  expect(recent.findIndex((item: {id: string}) => item.id === fixture.session_id)).toBeGreaterThan(0);
+  await expect(composer).toHaveValue("Unsent draft remains on this device.");
+  // Open a fresh application document without a selection hint. Only the
+  // product may restore the remembered older chat and its device-local draft.
+  await page.goto("/");
+  await expect(page).toHaveURL(new RegExp(`/projects/continuity-project/workbench\\?view=chat&session=${fixture.session_id}`));
+  await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "First last"})).toHaveText("First last", {timeout: 60_000});
+  await expect(composer).toHaveValue("Unsent draft remains on this device.");
+  const reopenedUrl = page.url();
   expect(submissions).toBe(1);
   expect((await control.control("inspect")).events.filter((item: {event: string}) => item.event === "provider-start")).toHaveLength(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -109,6 +153,23 @@ test("accepted provider work survives a lost response, API replacement and reloa
   })).toBe(true);
   expect((await new AxeBuilder({page}).include(".chat-message.assistant").analyze()).violations).toEqual([]);
   await page.screenshot({path: info.outputPath("retained-chat.png"), fullPage: true});
+  // An intentional explicit link remains authoritative over remembered state.
+  await page.goto(`/projects/continuity-project/workbench?view=chat&session=${newer.id}`);
+  await expect(composer).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`session=${newer.id}`));
+  await expect(page.getByText("Loading conversation…", {exact: true})).toBeHidden();
+  await expect(composer).toHaveValue("");
+  await expect(page.locator(".chat-message.assistant")).toHaveCount(0);
+  expect((await read(`/api/v1/chat/sessions/${newer.id}/goal`)).status).toBe("draft");
+  expect(submissions).toBe(1);
+  const observed = await control.control("inspect");
+  const starts = observed.events.filter((item: {event: string}) => item.event === "provider-start");
+  expect(starts).toHaveLength(1);
+  const evidence = info.outputPath("navigation-reopen.json");
+  await writeFile(evidence, JSON.stringify({creation: "authenticated public empty conversation with an unstarted draft goal",
+    original, newer, goal: saved.goal, recentIds: recent.map((item: {id: string}) => item.id), reopenedEntry: "/", reopenedUrl,
+    explicitUrl: page.url(), submissions, providerStarts: starts}, null, 2));
+  await info.attach("automatic-selected-chat-reopen", {path: evidence, contentType: "application/json"});
 });
 
 test("a paired device repairs the Core reserve from production Settings before any API worker exists", async ({page, request}, info) => {
@@ -336,7 +397,7 @@ test("loaded provider tools survive compaction, reload, execution replacement an
   expect(forkId).toBeTruthy();
   await expect(page.locator(".chat-action-status").filter({hasText: "Branched conversation"})).toBeVisible();
   await expect(page.locator(".chat-message.assistant").filter({hasText: "TOOLS_CONTEXT_PADDING"})).toHaveCount(0);
-  expect((await read(`/api/v1/chat/sessions/${forkId}`)).parent_session_id).toBe(fixture.session_id);
+  expect((await read(`/api/v1/chat-sessions/${forkId}`)).parent_session_id).toBe(fixture.session_id);
   expect(checkDefinition(await manifest(forkId)).definition_digest).toBe(definition.definition_digest);
   await send("[TOOLS_CONTEXT:USE] from the historical fork", "TOOLS_CONTEXT_USED ABC", forkId);
   expect(submissions).toBe(sent);
@@ -460,7 +521,7 @@ test("native standing instructions survive lossy compaction, reconnect and API r
   checkHead(beta, 0, 1);
   expect(beta.active_native_session_id).not.toBe(initialNativeId);
   expect(beta.system_head_sha256).not.toBe(first.system_head_sha256);
-  expect((await read(`/api/v1/chat/sessions/${fixture.session_id}`)).id).toBe(fixture.session_id);
+  expect((await read(`/api/v1/chat-sessions/${fixture.session_id}`)).id).toBe(fixture.session_id);
   const prompts = beta.native.requests.filter((item: {managed: boolean; method: string}) => item.managed && item.method === "session/prompt");
   expect(prompts).toHaveLength(sent);
   expect(beta.native.requests.some((item: {managed: boolean; method: string}) => item.managed && item.method === "session/load")).toBe(true);
