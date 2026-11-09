@@ -112,6 +112,13 @@ class MemoryReconciler:
             or same_process(owner.process_id, owner.process_birth)
         ):
             return False
+        if job.state == "reserved" and groups is None and job.evidence is None:
+            # No external create can precede the committed STARTING transition.
+            # Recheck the exact owner and revision inside the release transaction.
+            await self.service.release_prelaunch(
+                job.id, job.revision, owner=owner, owner_dead=True
+            )
+            return True
         # Before group creation is acknowledged the daemon may still accept an
         # in-flight create request. Absence alone cannot free that reservation.
         if groups is None:

@@ -3,7 +3,8 @@
 Only the host service exposes these operations to authenticated controllers.
 Reservations span every execution generation. A missing worker is not proof
 that its descendants died: capacity stays charged until the runner observes an
-empty, correctly identified group.
+empty, correctly identified group. A durably never-launched reservation instead
+requires exact cancellation authority or positive death of its recorded owner.
 """
 
 from __future__ import annotations
@@ -459,7 +460,11 @@ class MemoryBudgetService:
             return _job(job)
 
     async def reserve(
-        self, job_id: str, capabilities: MemoryRunnerCapabilities
+        self,
+        job_id: str,
+        capabilities: MemoryRunnerCapabilities,
+        *,
+        owner: MemoryLaunchOwner | None = None,
     ) -> MemoryJob:
         async with self._write() as session:
             policy_row = await self._policy(session)
@@ -521,6 +526,9 @@ class MemoryBudgetService:
                     None,
                     snapshot.reservation_bytes,
                 )
+                # A committed charge must identify the controller before its
+                # next await. RESERVED is also the durable no-launch boundary.
+                job.launch_owner = owner.model_dump(mode="json") if owner else None
             job.revision += 1
             job.updated_at = utc_now()
             await session.flush()
@@ -606,10 +614,97 @@ class MemoryBudgetService:
                 raise MemoryBudgetConflict(
                     "job already has a launch owner or no reservation"
                 )
+            if job.launch_owner is not None:
+                reserved_owner = MemoryLaunchOwner.model_validate(job.launch_owner)
+                if (
+                    owner is None
+                    or owner.model_copy(update={"runner_identity": None})
+                    != reserved_owner.model_copy(update={"runner_identity": None})
+                    or (
+                        reserved_owner.runner_identity is not None
+                        and owner.runner_identity != reserved_owner.runner_identity
+                    )
+                ):
+                    raise MemoryBudgetConflict(
+                        "reservation belongs to another launch owner"
+                    )
             job.state = "starting"
             job.launch_owner = owner.model_dump(mode="json") if owner else None
             job.revision += 1
             job.updated_at = utc_now()
+            await session.flush()
+            return _job(job)
+
+    async def release_prelaunch(
+        self,
+        job_id: str,
+        revision: int,
+        *,
+        owner: MemoryLaunchOwner,
+        owner_dead: bool = False,
+    ) -> MemoryJob:
+        """Release a never-launched reservation without inventing group cleanup."""
+        from .process_identity import process_origin, same_process
+
+        async with self._write() as session:
+            await self._policy(session)
+            job = await self._get(session, job_id, revision)
+            if (
+                job.state != "reserved"
+                or job.launch_groups is not None
+                or job.evidence is not None
+                or job.launch_owner is None
+                or MemoryLaunchOwner.model_validate(job.launch_owner) != owner
+            ):
+                raise MemoryBudgetConflict(
+                    "reservation crossed launch or changed owner"
+                )
+            origin = process_origin()
+            if (
+                owner.process_origin != origin
+                or (
+                    owner_dead
+                    and (
+                        origin is None
+                        or same_process(owner.process_id, owner.process_birth)
+                    )
+                )
+                or (
+                    not owner_dead
+                    and (
+                        owner.process_id != os.getpid()
+                        or not same_process(owner.process_id, owner.process_birth)
+                    )
+                )
+            ):
+                raise MemoryBudgetConflict(
+                    "prelaunch owner death or cancellation authority is unverified"
+                )
+            job.state, job.reserved_bytes, job.pending_limits = "finished", 0, None
+            job.outcome = "worker_lost" if owner_dead else "cancelled"
+            job.application_state = "not_started"
+            job.detail = (
+                "Launch owner died before crossing the launch boundary; no runner groups were created or cleaned. Explicit retry required."
+                if owner_dead
+                else "Controller cancelled before crossing the launch boundary; no runner groups were created or cleaned."
+            )
+            job.revision += 1
+            job.updated_at = utc_now()
+            self._audit(
+                session,
+                "system",
+                job.id,
+                "job.prelaunch_released",
+                None,
+                None,
+                {
+                    "released": True,
+                    "never_launched": True,
+                    "owner_dead": owner_dead,
+                    "groups_cleaned": False,
+                    "owner": owner.model_dump(mode="json"),
+                },
+            )
             await session.flush()
             return _job(job)
 

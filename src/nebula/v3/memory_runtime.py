@@ -208,6 +208,7 @@ class MemoryComputeController:
         guard: MemoryLaunchGuard | None = None
         claimed = False
         monitor = None
+        reservation_owner = None
 
         async def sample_usage():
             while True:
@@ -298,28 +299,32 @@ class MemoryComputeController:
             await self.service.groups_created(job_id, current.revision, groups)
 
         try:
+            birth = process_birth(os.getpid())
+            if birth is None:
+                raise MemoryEnforcementUnavailable(
+                    "the launch owner's process identity is unavailable"
+                )
+            reservation_owner = MemoryLaunchOwner(
+                process_id=os.getpid(),
+                process_birth=birth,
+                runner_fingerprint=runner_fingerprint(runner),
+                process_origin=process_origin(),
+            )
             while job.state in {"queued", "blocked"}:
-                job = await self.service.reserve(job_id, capability)
+                job = await self.service.reserve(
+                    job_id, capability, owner=reservation_owner
+                )
                 if job.state == "queued":
                     await asyncio.sleep(0.2)
             if job.state != "reserved":
                 raise MemoryBudgetConflict(
                     "job already has an execution owner or a terminal result; explicit retries need a new job identity"
                 )
-            birth = process_birth(os.getpid())
-            if birth is None:
-                raise MemoryEnforcementUnavailable(
-                    "the launch owner's process identity is unavailable"
-                )
             job = await self.service.claim_start(
                 job_id,
                 job.revision,
-                owner=MemoryLaunchOwner(
-                    process_id=os.getpid(),
-                    process_birth=birth,
-                    runner_fingerprint=runner_fingerprint(runner),
-                    process_origin=process_origin(),
-                    runner_identity=await runner_identity(runner),
+                owner=reservation_owner.model_copy(
+                    update={"runner_identity": await runner_identity(runner)}
                 ),
             )
             claimed = True
@@ -362,14 +367,13 @@ class MemoryComputeController:
                     await self.service.cancel_not_started(
                         job_id, current.revision, actor_id="system"
                     )
-                elif current.state == "reserved":
-                    # CAS prevents release if another controller claimed launch.
-                    await self.service.unstarted_cleanup(
+                elif current.state == "reserved" and reservation_owner is not None:
+                    # Exact owner/revision checks prevent a losing controller
+                    # from releasing another owner's pending reservation.
+                    await self.service.release_prelaunch(
                         job_id,
                         current.revision,
-                        group_id=group,
-                        detail="Controller stopped before any workload launch.",
-                        verified_empty=True,
+                        owner=reservation_owner,
                     )
                 elif claimed and current.state in {"starting", "running", "updating"}:
                     if guard is None:
