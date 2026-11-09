@@ -3,6 +3,20 @@
 The parallel implementation is on `codex/execution-lifecycle-isolation`. This is
 an integration checkpoint, not a release acceptance receipt.
 
+## Current failed-only retry
+
+Reload [the failed-only retry record](failed-only-runtime-retry.md) before
+continuing. The combined changes are now visible in PR #960 at `eee508bc`.
+That CI run completed with 964 Python passes/five failures/one skip and 32 browser
+passes/16 failures. The user's latest instruction excludes every passing case
+from subsequent push selections. The reviewed retry is five exact portable
+Python nodes, one packaged native case, 16 exact browser title/profile pairs and
+the two failed pre-test checks. The full feature union below is historical, not
+the next execution plan. Local failure fixes and remaining original-CI unknowns
+are recorded separately. Additional host/global route slices remain preserved
+outside this retry and still require integration before complete-architecture
+acceptance; do not forget or misreport them after compaction.
+
 ## Current combined PR checkpoint
 
 All completed implementation tracks are combined on the integration branch,
