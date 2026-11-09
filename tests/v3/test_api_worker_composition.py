@@ -43,7 +43,14 @@ async def test_actual_api_factory_keeps_receipts_and_global_writes_atomic(
         database=database,
         coordinator=DeploymentCoordinator(database),
         manifest=SimpleNamespace(ui_directory="ui"),
+        # run_worker supplies this authenticated peer metadata before selecting
+        # the API factory. These global SQL routes never contact the host socket.
+        secret=b"c" * 32,
         bootstrap=SimpleNamespace(
+            identity=SimpleNamespace(
+                runtime_id="composition-api",
+                endpoint="unix://" + str(tmp_path / "runtime" / "api.sock"),
+            ),
             operator_token=SecretStr("composition-test-token"),
             credential_directory=str(tmp_path / "credentials"),
             data_root=str(tmp_path),
