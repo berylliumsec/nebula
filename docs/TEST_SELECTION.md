@@ -93,6 +93,12 @@ likewise need explicit user approval; ordinary CI only accepts individual files.
 
 ## Focused Core fixture journeys
 
+`area:side-chat-close` selects eight production-LAN profiles for closing a side
+chat on an execution-fenced Core. The inert fixture uses normal browser pairing
+and verifies refresh, durable deletion, duplicate close, main-chat protection,
+and preserved parent history without provider or harness traffic. Pair this
+journey with the activity and isolation guards in `tests/v3/test_execution_scope.py`.
+
 The following areas are catalogued in `ui/playwright-impact.json`. Each has one
 case in each of the eight permanent `model-*` projects (desktop 1440/1024 and
 Chromium/WebKit mobile 320/390/430). Select only journeys affected by the change.

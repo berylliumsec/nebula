@@ -6666,6 +6666,59 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
   ]);
 });
 
+test("assistant upgrade fenced side chat closes durably without deleting parent", async ({page}, testInfo) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore({
+    bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    fixtureScript: path.resolve(import.meta.dirname, "../../tests/v3/side_chat_close_fixture.py"),
+  });
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const anonymous = await playwrightRequest.newContext();
+    try {
+      expect((await anonymous.get(`${core.origin}/api/v1/chat/sessions/parent/side-chats`)).status()).toBe(401);
+    } finally { await anonymous.dispose(); }
+    const listed = await api.get("chat/sessions/parent/side-chats");
+    expect(listed.ok(), await listed.text()).toBe(true);
+    const [branch] = await listed.json() as Array<{id: string}>;
+    expect(branch.id).toBeTruthy();
+    const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    let pairing: {secret: string; confirmation_code: string};
+    try {
+      const response = await pairingApi.post("auth/pairings", {data: {name: "Fenced side chat browser"}});
+      expect(response.ok(), await response.text()).toBe(true);
+      pairing = await response.json();
+    } finally { await pairingApi.dispose(); }
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Fenced side chat browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=parent&sideChat=${branch.id}`);
+    const side = page.getByRole("region", {name: "Side chat"});
+    await expect(side).toBeVisible();
+    await page.reload();
+    await expect(side).toBeVisible();
+    await side.getByRole("button", {name: "Close side chat"}).click();
+    await expect(side).toHaveCount(0);
+    await expect(page).not.toHaveURL(/sideChat=/);
+    expect((await api.get(`chat-sessions/${branch.id}`)).status()).toBe(404);
+    expect((await api.get("chat/sessions/parent/side-chats")).ok()).toBe(true);
+    expect(await (await api.get("chat/sessions/parent/side-chats")).json()).toEqual([]);
+    expect((await api.delete(`chat/temporary-sessions/${branch.id}`)).status()).toBe(204);
+    expect((await api.delete("chat/temporary-sessions/parent")).status()).toBe(409);
+    await page.reload();
+    await expect(side).toHaveCount(0);
+    await expect(page.locator(".chat-message.operator")).toContainText("Preserve this parent history");
+    const messages = await (await api.get("chat/sessions/parent/messages")).json() as Array<{content: string}>;
+    expect(messages.map(item => item.content)).toEqual(["Preserve this parent history"]);
+    const build = await (await api.get(`${core.origin}/web-build.json`)).json();
+    await testInfo.attach("fenced-side-chat-close", {body: JSON.stringify({origin: core.origin, build, project: testInfo.project.name, viewport: page.viewportSize(), parentId: "parent", sideId: branch.id}), contentType: "application/json"});
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade side chat inherits Core history and replies independently after reload", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;

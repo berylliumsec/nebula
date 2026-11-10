@@ -1,15 +1,22 @@
 {
-  "change_digest": "163137615c9ff25e057751df3086b1562c238e2fe22a066739b09a522571ed6e",
-  "reviewed_by": "Copilot; independently validated final-layout bootstrap selection and canonical bundle integrity",
-  "reason": "Five CI-only portable cases reproduce a source release wrapper with no runnable bundle, verify bootstrap through the configured copied canonical directory, and reject missing manifest/digest pairs, a mismatched digest and symlinked assets. Counts are estimated from one two-case parameterization and three individual cases. No additional local tests at operator request.",
-  "exclusions": "Deployment artifact transport only; Core runtime, API behavior, UI, native client and browser security are unchanged. The production Core is already running the identical complete canonical payload with authenticated readiness and recovered project routes verified. No full suites, browser reruns, native builds or local tests are selected.",
+  "change_digest": "e23285cbb0a31f8b928885ac0a7221f5b98a929de5972f64cd46d1fc2abe6f02",
+  "reviewed_by": "Copilot; independent causal validation confirmed the execution SQL guard rejects the deletion EXISTS probes",
+  "reason": "Mapped activity probes restore side-chat deletion without weakening execution fencing. Collected 75 Python cases cover SQL isolation, idle/provider/harness/recovery deletion guards, the worker discard route, parent preservation, duplicate closes and main-chat protection. Eight collected production-LAN browser profiles exercise normal pairing, refresh, UI close, durable removal and preserved parent history using the execution-fenced inert Core fixture. Local results: 44 Python passed, 31 PostgreSQL cases skipped without a configured server; all eight browser profiles passed and the production UI built.",
+  "exclusions": "No product UI, provider, harness, native client or isolation-policy changes. No full suites, live-provider requests or physical-device claims. Unrelated popup-creation tests have a pre-existing async helper/route failure; select only the four relevant passing side-chat cases from that file. PostgreSQL coverage runs in CI with its configured service. Frontend component and native unit layers are unchanged; real-Core browser coverage targets the exact close workflow.",
   "python_versions": ["3.12"],
   "python_node": false,
   "python_browser": false,
-  "checks": [],
-  "expected_tests": {"python": 5, "frontend": 0, "native": 0, "playwright": 0},
-  "python": ["tests/test_simulation_runtime_bundle.py"],
+  "checks": ["desktop-ui-build"],
+  "expected_tests": {"python": 75, "frontend": 0, "native": 0, "playwright": 8},
+  "python": [
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_guarded_delete.py",
+    "tests/v3/test_temporary_chat.py::test_side_chat_is_hidden_and_discarded_without_touching_parent",
+    "tests/v3/test_temporary_chat.py::test_discarding_running_side_reply_cancels_only_side_turn",
+    "tests/v3/test_temporary_chat.py::test_multiple_side_chats_for_one_parent_survive_selective_close",
+    "tests/v3/test_temporary_chat.py::test_cannot_discard_main_or_copy_another_project"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": ["area:side-chat-close"]
 }
