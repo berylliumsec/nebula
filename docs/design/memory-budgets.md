@@ -7,6 +7,13 @@ it never proves that a job has a lifetime limit.
 
 ## Execution boundaries
 
+Temporary operator exception (2026-11-10): Host and SSH chat commands may use
+their legacy unprotected execution path only for project IDs listed in the
+Core process environment variable `NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS`.
+This is an explicit, reversible exception for Apple Bug Bounty while a protected
+runner is built. It provides no memory limit or descendant-cleanup guarantee;
+leave the variable unset everywhere else and remove it when the runner ships.
+
 | Boundary | Previous control | Current memory boundary |
 | --- | --- | --- |
 | `sandbox.py`, `runtime_platform.py` command and parser containers | Per-request OCI memory flag and runtime certification | Shared SQL reservation, frozen policy, explicit swap, protected guard/readback, full container tree |

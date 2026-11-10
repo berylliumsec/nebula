@@ -7,8 +7,15 @@ import pytest
 
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.automation_runtime import AutomationRuntimeManager
-from nebula.v3.domain import AutomationProjectPolicy, Engagement, SshEnvironment
+from nebula.v3.domain import (
+    AutomationProjectPolicy,
+    Engagement,
+    SshEnvironment,
+    ToolCallOrigin,
+)
 from nebula.v3.environments import build_ssh_tool_plugins
+from nebula.v3 import environments
+from nebula.v3.temporary_command_override import unmanaged_commands_allowed
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.memory_budget import MemoryBudgetService
 from nebula.v3.memory_policy import (
@@ -128,6 +135,60 @@ async def test_host_command_session_does_not_fall_back_to_core_shell(memory, tmp
     await held(controller, "host_command_session")
 
 
+async def test_temporary_override_is_exact_project_only(memory, tmp_path, monkeypatch):
+    store, controller = memory
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", "project")
+    assert unmanaged_commands_allowed("project")
+    assert not unmanaged_commands_allowed("other")
+    await store.create(
+        AutomationProjectPolicy(
+            id=str(uuid5(NAMESPACE_URL, "nebula:automation-policy:project")),
+            engagement_id="project",
+            execution_mode="host",
+            host_access_acknowledged=True,
+        )
+    )
+    manager = AutomationRuntimeManager(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path,
+        workspace_resolver=lambda _: tmp_path,
+        runtime_image="registry.invalid/nebula-automation@sha256:" + "a" * 64,
+    )
+    manager.memory_compute = controller
+    session = await manager._get_or_create_session(
+        engagement_id="project", owner_kind="chat", owner_id="chat"
+    )
+    assert session.entity.execution_mode == "host"
+    assert await controller.service.list_jobs() == []
+    await manager.close_session(session.entity.id)
+
+
+async def test_temporary_override_runs_ssh_for_exact_project(memory, monkeypatch):
+    _store, controller = memory
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", "project")
+
+    async def synthetic_remote(*_args, **_kwargs):
+        return 0, b"ready\n", b"", False
+
+    monkeypatch.setattr(environments, "run_remote_command", synthetic_remote)
+    plugin = build_ssh_tool_plugins(
+        (SshEnvironment(alias="synthetic-host", enabled=True),),
+        memory_compute=controller,
+    )[0]
+    result = await plugin.execute(
+        SimpleNamespace(
+            engagement_id="project",
+            id="call",
+            origin=ToolCallOrigin.CHAT,
+            arguments={"command": "true"},
+        ),
+        None,
+    )
+    assert result.exit_code == 0 and result.stdout == "ready\n"
+    assert await controller.service.list_jobs() == []
+
+
 async def test_host_notebook_kernel_does_not_spawn_before_enforcement(memory, tmp_path):
     store, controller = memory
     notebook = NotebookService(
@@ -159,6 +220,7 @@ async def test_raw_ssh_command_is_held_without_a_remote_memory_agent(memory):
             SimpleNamespace(
                 engagement_id="project",
                 id="call",
+                origin=ToolCallOrigin.CHAT,
                 arguments={"command": "synthetic-work"},
             ),
             None,

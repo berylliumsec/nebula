@@ -2232,10 +2232,13 @@ def test_historical_raw_tool_output_fails_closed_to_a_receipt():
 
 
 async def test_host_mode_requires_consent_and_reads_external_folder_without_docker(
-    tmp_path,
+    tmp_path, monkeypatch,
 ):
     async def scenario():
         manager, store, _, engagement, containers = await runtime(tmp_path)
+        monkeypatch.setenv(
+            "NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id
+        )
         policy = await manager.project_policy(engagement.id)
         update = dict(
             approval_policy=AutomationApprovalPolicy.NEVER,
@@ -2259,7 +2262,7 @@ async def test_host_mode_requires_consent_and_reads_external_folder_without_dock
         (backup / "marker.txt").write_text("HOST_BACKUP_MARKER")
         result = await manager.run_command(
             engagement_id=engagement.id,
-            owner_kind="api",
+            owner_kind="chat",
             owner_id="host-test",
             request=RunCommandRequest(command="cat marker.txt", cwd=str(backup)),
         )
@@ -2276,7 +2279,7 @@ async def test_host_mode_requires_consent_and_reads_external_folder_without_dock
             )
         )
         retained = await manager.session(
-            engagement_id=engagement.id, owner_kind="api", owner_id="host-test"
+            engagement_id=engagement.id, owner_kind="chat", owner_id="host-test"
         )
         assert retained.execution_mode == "host"
         await manager.close_session(result.session_id)
