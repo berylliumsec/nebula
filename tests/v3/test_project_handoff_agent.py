@@ -4,16 +4,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import insert, select
 
 from nebula.v3.database import (
     ProjectHandoffRow,
     RuntimeResourceRow,
     ProviderTurnQueueRow,
+    EntityRow,
 )
 from nebula.v3.deployments import checkpoint_digest
 from nebula.v3.deployment_protocol import ResourceSnapshot
-from nebula.v3.domain import Engagement, Observation, ChatTurn
+from nebula.v3.domain import Engagement, Observation, ChatTurn, utc_now
 from nebula.v3.runtime_coordination import CoordinationConflict
 from nebula.v3.runtime_project_handoff import ProjectHandoffAgent, restored_checkpoint
 from tests.v3.test_project_handoff_admission import project as project
@@ -164,7 +165,9 @@ async def test_missing_participant_contract_pins_a_usable_old_project(project, a
     assert await agent.tick() == "transferable"
 
 
-async def test_bounded_checkpoint_reports_an_explicit_pin(project, agent, monkeypatch):
+async def test_checkpoint_streams_past_batch_boundary_without_pinning(
+    project, agent, monkeypatch
+):
     await project.durable.create(
         Observation(
             engagement_id="one",
@@ -173,11 +176,47 @@ async def test_bounded_checkpoint_reports_an_explicit_pin(project, agent, monkey
             body="No external effect",
         )
     )
-    monkeypatch.setattr("nebula.v3.runtime_project_handoff.MAX_CHECKPOINT_ROWS", 1)
+    monkeypatch.setattr("nebula.v3.runtime_project_handoff.CHECKPOINT_BATCH_ROWS", 1)
+    assert await agent.tick() == "transferable"
+    assert (await row(project)).admission_held
+
+
+async def test_active_record_after_many_completed_records_still_pins(project, agent):
+    now = utc_now()
+    async with project.coordinator.database.session() as session:
+        await session.execute(
+            insert(EntityRow),
+            [
+                {
+                    "id": f"historic-{index:08d}",
+                    "kind": "tool_calls",
+                    "engagement_id": "one",
+                    "revision": 1,
+                    "payload": {"status": "complete"},
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for index in range(10_001)
+            ],
+        )
+        await session.execute(
+            insert(EntityRow),
+            [
+                {
+                    "id": "zz-active",
+                    "kind": "tool_calls",
+                    "engagement_id": "one",
+                    "revision": 1,
+                    "payload": {"status": "running"},
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ],
+        )
     assert await agent.tick() == "finishing"
     handoff = await row(project)
     assert not handoff.admission_held and any(
-        "bounded handoff checkpoint" in text for text in handoff.blockers
+        "zz-active" in text for text in handoff.blockers
     )
 
 

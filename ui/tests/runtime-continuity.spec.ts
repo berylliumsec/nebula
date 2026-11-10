@@ -63,6 +63,45 @@ async function pair(page: Page, request: APIRequestContext, fixture: {token: str
   await expect(page.getByLabel("Device name")).toBeHidden({timeout: 30_000});
 }
 
+test("dead project runtime recovers automatically without restarting Core or duplicating the user request", async ({page, request}) => {
+  const control = await controller(request);
+  const fixture = await control.reset();
+  await pair(page, request, fixture);
+  const before = await control.control("inspect");
+  await control.control("hold", {name: "hold-provider"});
+  await page.goto(`/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`);
+  const composer = page.locator(".chat-composer textarea");
+  await expect(composer).toBeVisible();
+  await composer.fill("Recover this synthetic response safely.");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect.poll(async () => (await control.control("inspect")).events.filter((item: {event: string}) => item.event === "provider-start").length).toBe(1);
+  await page.goto("/projects");
+  await expect.poll(() => control.control("pending-commands"), {timeout: 30_000}).toEqual([]);
+  await control.control("automatic-recovery");
+  const old = await control.control("crash-execution");
+  await control.control("release", {name: "hold-provider"});
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  await expect.poll(async () => {
+    const response = await request.get(`${fixture.origin}/api/v1/deployment/status`, {headers});
+    expect(response.ok()).toBe(true);
+    const status = await response.json();
+    const project = status.projects.find((item: {project_id: string}) => item.project_id === "continuity-project");
+    if (!project?.runtime_id || project.runtime_id === old.runtime_id || project.phase !== "verified") return false;
+    const execution = await control.control("execution-status", {runtime_id: project.runtime_id});
+    return execution.state === "ready" && execution.lease?.fencing_token === old.fencing_token + 1;
+  }, {timeout: 90_000}).toBe(true);
+  await page.goto(`/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`);
+  await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "First last"})).toBeVisible({timeout: 60_000});
+  await expect(page.locator(".chat-message.operator")).toHaveCount(1);
+  await page.reload();
+  await expect(page.locator(".chat-message.operator")).toHaveCount(1);
+  await expect(composer).toBeVisible();
+  const after = await control.control("inspect");
+  expect(after.supervisor_pid).toBe(before.supervisor_pid);
+  const api = before.processes.find((item: {role: string; state: string}) => item.role === "api" && item.state === "ready");
+  expect(after.processes.find((item: {id: string}) => item.id === api.id)?.alive).toBe(true);
+});
+
 test("accepted provider work survives a lost response, API replacement and reload without another submission", async ({page, request}, info) => {
   const control = await controller(request);
   const fixture = await control.reset();

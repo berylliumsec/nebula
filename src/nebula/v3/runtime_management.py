@@ -56,6 +56,10 @@ class RecoveryParameters(HandoffParameters):
     expected_handoff_revision: Revision | None = None
 
 
+class ReconcileParameters(NebulaModel):
+    expected_owner: OwnerParameters
+
+
 class ShutdownParameters(NebulaModel):
     expected_revision: Revision
 
@@ -70,6 +74,7 @@ _PARAMETERS: dict[str, type[NebulaModel]] = {
     "prepare_execution": VersionParameters,
     "handoff": HandoffParameters,
     "recover_project": RecoveryParameters,
+    "reconcile_project": ReconcileParameters,
     "rollback_code": VersionRevisionParameters,
     "retire": RuntimeParameters,
     "shutdown": ShutdownParameters,
@@ -88,6 +93,7 @@ class DeploymentOperationRequest(NebulaModel):
         "prepare_execution",
         "handoff",
         "recover_project",
+        "reconcile_project",
         "rollback_code",
         "retire",
         "shutdown",
@@ -214,6 +220,10 @@ class RuntimeManagement:
                 "runtime_id": lease.runtime_id,
                 "fencing_token": lease.fencing_token,
             }
+        elif action == "reconcile_project":
+            return await root.reconcile_dead_project(
+                expected_owner=ProjectLease(**values["expected_owner"])
+            )
         elif action == "rollback_code":
             await root.rollback_code(**values)
         elif action == "retire":

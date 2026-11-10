@@ -364,14 +364,55 @@ async def serve(config):
         return await original_advance(row)
 
     supervisor._advance_project_handoff = advance
+    automatic = None
     app = supervisor.app.app
 
     @app.post("/__acceptance/control")
     async def control(request: Request):
+        nonlocal automatic
         if request.headers.get("authorization") != "Bearer " + config["token"]:
             raise HTTPException(401)
         body = await request.json()
         operation = body["operation"]
+        if operation == "automatic-recovery":
+            from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
+
+            if automatic is None:
+                automatic = RuntimeAutoAdmission(
+                    supervisor, default_version=config["bundles"][0]["version"]
+                )
+                await automatic.start()
+            return {"started": True}
+        if operation == "pending-commands":
+            from nebula.v3.database import RuntimeCommandRow
+
+            async with database.session() as session:
+                return list(
+                    await session.scalars(
+                        select(RuntimeCommandRow.id).where(
+                            RuntimeCommandRow.project_id == "continuity-project",
+                            RuntimeCommandRow.state.in_(
+                                ("queued", "running", "uncertain")
+                            ),
+                        )
+                    )
+                )
+        if operation == "crash-execution":
+            import signal
+            from nebula.v3.database import ProjectOwnershipRow
+            from nebula.v3.process_identity import signal_process
+
+            async with database.session() as session:
+                owner = await session.get(ProjectOwnershipRow, "continuity-project")
+                process = await session.get(RuntimeProcessRow, owner.runtime_id)
+                identity = {
+                    "runtime_id": owner.runtime_id,
+                    "fencing_token": owner.fencing_token,
+                }
+            if not signal_process(process.pid, process.process_birth, signal.SIGKILL):
+                raise HTTPException(409, "Synthetic execution process already exited")
+            await asyncio.to_thread(host.children[owner.runtime_id].wait, timeout=5)
+            return identity
         if operation == "initialize-scenario":
             scenario_file = root / "acceptance-scenario.json"
             if not scenario_file.is_file():
@@ -588,6 +629,8 @@ async def serve(config):
             )
         ).serve()
     finally:
+        if automatic is not None:
+            await automatic.close()
         await supervisor.close()
         await database.dispose()
 
