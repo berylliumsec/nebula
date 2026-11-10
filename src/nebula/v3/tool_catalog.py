@@ -5,9 +5,10 @@ deferred by default: the provider sees a compact directory and three fixed
 catalog tools instead of every schema. The model can choose from that directory,
 load the schemas it needs, and invoke a loaded tool through ``tool_catalog.call``.
 
-The provider tools array stays byte-identical for the whole session, making its
-prefix eligible for provider caching; loaded schemas travel as ordinary tool
-results appended to the end of the conversation. The chat loop
+Native declarations stay stable within an admitted turn. Loaded schemas live in
+Core's canonical managed tools section, not repeated tool results. On-demand
+context mode forgets those loaded schemas at the next new turn; always-loaded
+mode retains them across turns. The chat loop
 unwraps ``tool_catalog.call`` into the real tool before execution, so argument
 validation, risk classes, approvals and budgets are the real tool's own.
 
@@ -115,7 +116,7 @@ def deferrable_specs(
     """Sourced tools, minus pinned ones and those of sources sent in full.
 
     ``always_loaded`` names single tools the project pins; ``always_loaded_sources``
-    names whole sources (``mcp:<id>``) the operator selected for the chat.
+    names whole sources (``mcp:<id>``) selected for full-schema loading.
     """
 
     pinned = set(always_loaded)

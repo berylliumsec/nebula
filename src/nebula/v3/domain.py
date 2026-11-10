@@ -901,6 +901,7 @@ class AssistantDefaults(NebulaModel):
     harness_service_tier: str | None = Field(default=None, max_length=100)
     harness_mode: str | None = Field(default=None, max_length=100)
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    mcp_context_mode: Literal["on_demand", "always_loaded"] = "on_demand"
     hook_ids: list[str] = Field(default_factory=list, max_length=64)
     allow_subagents: bool = False
     subagent_provider_id: str | None = Field(default=None, max_length=200)

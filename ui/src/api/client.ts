@@ -500,6 +500,7 @@ interface WireAssistantDefaults {
   harness_service_tier: string | null;
   harness_mode: string | null;
   mcp_server_ids: string[];
+  mcp_context_mode?: AssistantDefaults["mcpContextMode"];
   hook_ids: string[];
   allow_subagents: boolean;
   subagent_provider_id: string | null;
@@ -2318,6 +2319,7 @@ function mapAssistantDefaults(value: WireAssistantDefaults): AssistantDefaults {
     harnessServiceTier: value.harness_service_tier,
     harnessMode: value.harness_mode,
     mcpServerIds: value.mcp_server_ids,
+    mcpContextMode: value.mcp_context_mode ?? "on_demand",
     hookIds: value.hook_ids,
     allowSubagents: value.allow_subagents,
     subagentProviderId: value.subagent_provider_id,
@@ -2339,6 +2341,7 @@ const assistantDefaultWireKeys: Record<keyof AssistantDefaults, keyof WireAssist
   harnessServiceTier: "harness_service_tier",
   harnessMode: "harness_mode",
   mcpServerIds: "mcp_server_ids",
+  mcpContextMode: "mcp_context_mode",
   hookIds: "hook_ids",
   allowSubagents: "allow_subagents",
   subagentProviderId: "subagent_provider_id",
@@ -3585,6 +3588,8 @@ export function chatRequestBody(
     harness_profile_id: body.harnessProfileId,
     harness_session_id: body.harnessSessionId,
     mcp_server_ids: body.mcpServerIds ?? [],
+    ...(body.backend !== "harness" && body.mcpContextMode
+      ? { mcp_context_mode: body.mcpContextMode } : {}),
     // Omit optional newer fields when unused so a desktop app stays compatible
     // with a slightly older remote Core, whose request models forbid extras.
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
@@ -3731,6 +3736,8 @@ function mapChatAssistantConfig(value: JsonObject): ChatAssistantConfig | undefi
     harnessMode: typeof value.harness_mode === "string" ? value.harness_mode : undefined,
     harnessCyberAccessProgram: value.harness_cyber_access_program as ChatAssistantConfig["harnessCyberAccessProgram"],
     mcpServerIds: Array.isArray(value.mcp_server_ids) ? value.mcp_server_ids.map(String) : [],
+    excludedMcpServerIds: Array.isArray(value.excluded_mcp_server_ids) ? value.excluded_mcp_server_ids.map(String) : [],
+    mcpContextMode: value.mcp_context_mode === "on_demand" ? "on_demand" : "always_loaded",
     hookIds: Array.isArray(value.hook_ids) ? value.hook_ids.map(String) : [],
     includeKnowledge: value.include_knowledge !== false,
     allowCloudKnowledge: value.allow_cloud_knowledge === true,
@@ -9998,6 +10005,7 @@ export class ApiClient {
         method: "PATCH",
         body: JSON.stringify({
           mcp_server_ids: body.mcpServerIds,
+          ...(body.mcpContextMode ? { mcp_context_mode: body.mcpContextMode } : {}),
           hook_ids: body.hookIds,
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
           ...(body.useModelReasoningDefault ? { reasoning_effort: null } : {}),
@@ -10390,6 +10398,7 @@ export class ApiClient {
     toolsEnabled: boolean;
     planningEnabled?: boolean;
     mcpServerIds: string[];
+    mcpContextMode?: "on_demand" | "always_loaded";
     hookIds: string[];
     /** The composer's other choices, saved on the new conversation. */
     reasoningEffort?: ReasoningEffort;
@@ -10424,6 +10433,8 @@ export class ApiClient {
           tools_enabled: body.toolsEnabled,
           planning_enabled: body.planningEnabled ?? false,
           mcp_server_ids: body.mcpServerIds,
+          ...(body.backend !== "harness" && body.mcpContextMode
+            ? { mcp_context_mode: body.mcpContextMode } : {}),
           hook_ids: body.hookIds,
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
           ...(body.harnessReasoningEffort ? { harness_reasoning_effort: body.harnessReasoningEffort } : {}),

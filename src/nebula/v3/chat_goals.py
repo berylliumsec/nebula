@@ -101,6 +101,8 @@ class GoalConversationCreate(GoalCreate):
     tools_enabled: bool = False
     planning_enabled: bool = False
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    excluded_mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    mcp_context_mode: Literal["on_demand", "always_loaded"] = "always_loaded"
     hook_ids: list[str] = Field(default_factory=list, max_length=32)
     # The rest of the composer's choices, saved as a send or the assistant
     # settings PATCH would save them: the goal's first turn is one Core
@@ -143,6 +145,10 @@ class GoalConversationCreate(GoalCreate):
             raise ValueError("harness goals require only harness_profile_id")
         if len(self.mcp_server_ids) != len(set(self.mcp_server_ids)):
             raise ValueError("MCP server selection contains duplicates")
+        if len(self.excluded_mcp_server_ids) != len(set(self.excluded_mcp_server_ids)):
+            raise ValueError("excluded MCP server selection contains duplicates")
+        if set(self.mcp_server_ids) & set(self.excluded_mcp_server_ids):
+            raise ValueError("an MCP server cannot be selected and excluded")
         if len(self.hook_ids) != len(set(self.hook_ids)):
             raise ValueError("hook selection contains duplicates")
         return self
@@ -504,6 +510,8 @@ class ChatGoalService:
                 "tools_enabled": body.tools_enabled,
                 "planning_enabled": body.planning_enabled,
                 "mcp_server_ids": body.mcp_server_ids,
+                "excluded_mcp_server_ids": body.excluded_mcp_server_ids,
+                "mcp_context_mode": body.mcp_context_mode,
                 "hook_ids": body.hook_ids,
                 "reasoning_effort": body.reasoning_effort,
                 "allow_subagents": body.allow_subagents,
@@ -754,6 +762,8 @@ class ChatGoalService:
             tools_enabled=bool(selected.get("tools_enabled")),
             planning_enabled=True,
             mcp_server_ids=mcp_ids,
+            excluded_mcp_server_ids=selected.get("excluded_mcp_server_ids") or [],
+            mcp_context_mode=selected.get("mcp_context_mode", "always_loaded"),
             reasoning_effort=selected.get("reasoning_effort"),
             allow_subagents=bool(selected.get("allow_subagents")),
             subagent_reasoning_effort=selected.get("subagent_reasoning_effort"),

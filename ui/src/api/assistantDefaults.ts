@@ -12,6 +12,7 @@ export function emptyAssistantDefaults(): AssistantDefaults {
     harnessServiceTier: null,
     harnessMode: null,
     mcpServerIds: [],
+    mcpContextMode: "on_demand",
     hookIds: [],
     allowSubagents: false,
     subagentProviderId: null,

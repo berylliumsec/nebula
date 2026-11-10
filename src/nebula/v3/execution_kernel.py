@@ -998,6 +998,8 @@ class ChatSessionUpdateRequest(NebulaModel):
         None
     )
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
+    excluded_mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
+    mcp_context_mode: Literal["on_demand", "always_loaded"] | None = None
     hook_ids: list[str] | None = Field(default=None, max_length=32)
     reasoning_effort: ReasoningEffort | None = None
     subagent_reasoning_effort: ReasoningEffort | None = None
@@ -1017,6 +1019,8 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.pinned is None
             and "flag_color" not in self.model_fields_set
             and self.mcp_server_ids is None
+            and self.excluded_mcp_server_ids is None
+            and self.mcp_context_mode is None
             and self.hook_ids is None
             and "reasoning_effort" not in self.model_fields_set
             and "subagent_reasoning_effort" not in self.model_fields_set
@@ -1032,6 +1036,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             )
         for name, values in (
             ("MCP server", self.mcp_server_ids),
+            ("excluded MCP server", self.excluded_mcp_server_ids),
             ("hook", self.hook_ids),
         ):
             if values is not None and len(values) != len(set(values)):
@@ -12478,7 +12483,13 @@ def create_execution_kernel(
         if (await chat_service().pending_turn(session_id)) is not None and (
             request.title is not None
             or request.archived is not None
-            or request.mcp_server_ids is not None
+            or (
+                current.backend != ChatBackend.PROVIDER
+                and (
+                    request.mcp_server_ids is not None
+                    or request.excluded_mcp_server_ids is not None
+                )
+            )
             or request.hook_ids is not None
         ):
             raise ConflictError(
@@ -12486,6 +12497,8 @@ def create_execution_kernel(
             )
         changes: dict[str, Any] = {}
         metadata = dict(current.metadata)
+        if request.mcp_context_mode is not None:
+            metadata["mcp_context_mode"] = request.mcp_context_mode
         if request.title is not None:
             changes["title"] = request.title
             metadata["initial_title_state"] = "operator"
@@ -12511,6 +12524,23 @@ def create_execution_kernel(
                         f"MCP server {profile.name!r} is disabled and cannot be selected"
                     )
             metadata["mcp_server_ids"] = request.mcp_server_ids
+        if current.backend == ChatBackend.PROVIDER and (
+            request.mcp_server_ids is not None
+            or request.excluded_mcp_server_ids is not None
+        ):
+            included = set(metadata.get("mcp_server_ids") or [])
+            excluded = set(
+                request.excluded_mcp_server_ids
+                if request.excluded_mcp_server_ids is not None
+                else metadata.get("excluded_mcp_server_ids") or []
+            )
+            if included & set(request.excluded_mcp_server_ids or []):
+                raise ConflictError("an MCP server cannot be selected and excluded")
+            if request.mcp_server_ids is not None:
+                excluded.update(
+                    set(current.metadata.get("mcp_server_ids") or []) - included
+                )
+            metadata["excluded_mcp_server_ids"] = sorted(excluded - included)
         if request.hook_ids is not None:
             metadata["hook_ids"] = request.hook_ids
         if "reasoning_effort" in request.model_fields_set:
@@ -12612,6 +12642,10 @@ def create_execution_kernel(
                 if field in request.model_fields_set:
                     synced[config_field] = getattr(request, field)
             metadata["assistant_config"] = synced
+            if "excluded_mcp_server_ids" in metadata:
+                synced["excluded_mcp_server_ids"] = metadata["excluded_mcp_server_ids"]
+            if "mcp_context_mode" in metadata:
+                synced["mcp_context_mode"] = metadata["mcp_context_mode"]
         changes["metadata"] = metadata
         updated = await store.update(
             ChatSession,

@@ -5507,7 +5507,7 @@
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::getChatSession",
-      "count": 10
+      "count": 13
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::getChatTaskPlans",
@@ -5691,11 +5691,11 @@
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::updateChatAssistantConfig",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::updateChatSessionAssistantSettings",
-      "count": 4
+      "count": 3
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::updateEngagementAssistantDefaults",

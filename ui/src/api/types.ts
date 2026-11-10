@@ -180,6 +180,7 @@ export interface AssistantDefaults {
   harnessServiceTier: string | null;
   harnessMode: string | null;
   mcpServerIds: string[];
+  mcpContextMode?: "on_demand" | "always_loaded";
   hookIds: string[];
   allowSubagents: boolean;
   subagentProviderId: string | null;
@@ -1956,6 +1957,7 @@ export interface ChatCompletionRequest {
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
   mcpServerIds?: Identifier[];
+  mcpContextMode?: "on_demand" | "always_loaded";
   /** Omitted: every enabled SSH environment; [] limits commands to Core. */
   sshEnvironmentIds?: Identifier[];
   hookIds?: Identifier[];
@@ -2510,6 +2512,8 @@ export interface ChatAssistantConfig {
   harnessMode?: string;
   harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
   mcpServerIds: Identifier[];
+  excludedMcpServerIds?: Identifier[];
+  mcpContextMode?: "on_demand" | "always_loaded";
   hookIds: Identifier[];
   includeKnowledge: boolean;
   allowCloudKnowledge: boolean;
@@ -2938,6 +2942,7 @@ export interface ChatSessionAssistantSettingsRequest {
   // Omitted selections are left as they are; the effort alone can change
   // while a response runs.
   mcpServerIds?: Identifier[];
+  mcpContextMode?: "on_demand" | "always_loaded";
   hookIds?: Identifier[];
   reasoningEffort?: ReasoningEffort;
   useModelReasoningDefault?: boolean;
