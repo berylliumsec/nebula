@@ -27,6 +27,7 @@ CLIENT_FILES = (
     "terminal/workflows.py",
     "terminal/snapshot.py",
     "terminal/notes.py",
+    "terminal/board.py",
     "terminal/attachments.py",
 )
 

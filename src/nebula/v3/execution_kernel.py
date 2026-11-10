@@ -8095,8 +8095,12 @@ def create_execution_kernel(
         tags=["work"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_work(engagement_id: str) -> list[WorkItem]:
-        return await work_service.list(engagement_id)
+    async def list_work(
+        engagement_id: str,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=500),
+    ) -> list[WorkItem]:
+        return await work_service.list(engagement_id, offset=offset, limit=limit)
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/setting",

@@ -444,7 +444,7 @@ class TuiUI(TerminalUI):
                 lambda: (
                     self._mouse_scrolling
                     if self._mode == "main"
-                    else self._mode not in {"snapshot", "notes"}
+                    else self._mode not in {"snapshot", "notes", "board"}
                 )
             ),
             style=Style.from_dict(
@@ -897,6 +897,11 @@ class TuiUI(TerminalUI):
             )
         if self._mode == "snapshot":
             return _edge(" Project Snapshot    R Refresh    Esc Close", width - 1)
+        if self._mode == "board":
+            return _edge(
+                " Board  R Refresh  Esc Chat  / Search  Tab Details  ↑↓ Select",
+                width - 1,
+            )
         if self._mode == "notes":
             return _edge(
                 " Project Notes    ↑↓ Select    Tab Edit    ^N New    ^S Save    ^R Refresh    D Delete    Esc Chat",

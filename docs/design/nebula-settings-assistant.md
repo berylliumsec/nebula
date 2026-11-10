@@ -1,5 +1,20 @@
 # Nebula assistant contract
 
+The paired terminal Assistant exposes `/board` in slash completion and F4 Commands
+after a project is selected, even before a conversation exists. It reads the same
+Core Work records as the web project's Work board, including when agent Work
+posting is disabled. Tasks are grouped by all six statuses. Up/Down selects,
+Enter or Tab reads the description and latest 200 check-ins, `/` searches titles
+and descriptions, R refreshes (Ctrl-R in Search), and Escape returns to the
+unchanged conversation and unsent draft. Failed reads explain retry in place;
+refresh retains selection when the item still exists and matches. Reopening or
+reconnecting reads Core again. There is no polling or terminal board mutation;
+Butler should direct creation, editing and status changes to the web Work
+destination or existing authorized Work tools, not claim that viewing a check-in
+verifies its results. Plain terminal `/board` prints status-grouped tasks.
+Settings > Paired devices remains the destination for pairing/revoking this
+client; no new Settings action or browser handoff is needed for board reads.
+
 Terminal transcript scrolling is a local viewer action, not a Core setting.
 Butler can explain wheel/trackpad scrolling and Page Up/Page Down directly from
 the composer. Ctrl-Home selects the first loaded line; Ctrl-End returns to the
