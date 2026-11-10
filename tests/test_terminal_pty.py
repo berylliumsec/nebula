@@ -36,11 +36,11 @@ def terminal(code, *, ready=b"You:", columns=80, rows=24):
     screen_stream = pyte.Stream(screen)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
-    def read_until(marker, timeout=8, *, rendered=False):
+    def read_until(marker, timeout=8, *, rendered=False, absent=()):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             current = "\n".join(screen.display) if rendered else bytes(output)
-            if marker in current:
+            if marker in current and all(item not in current for item in absent):
                 return bytes(output)
             ready, _, _ = select.select([master], [], [], 0.05)
             if ready:
@@ -52,7 +52,8 @@ def terminal(code, *, ready=b"You:", columns=80, rows=24):
                     break
                 output.extend(chunk)
                 screen_stream.feed(decoder.decode(chunk))
-        assert marker in ("\n".join(screen.display) if rendered else bytes(output)), (
+        current = "\n".join(screen.display) if rendered else bytes(output)
+        assert marker in current and all(item not in current for item in absent), (
             output.decode(errors="replace")
         )
         return bytes(output)
@@ -196,14 +197,16 @@ asyncio.run(main())
         assert "LIVE TAIL" not in display
         os.write(master, b"\x1b[1;5F")  # Ctrl-End resumes following output.
         read("LIVE TAIL", rendered=True)
-        os.write(master, b"\x1b[5~\x1b[6~")
+        os.write(master, b"\x1b[5~")
+        read("History", rendered=True, absent=("LIVE TAIL",))
+        os.write(master, b"\x1b[6~")
         read("LIVE TAIL", rendered=True)
         os.write(master, b"\x1b[24~")  # F12 allows native terminal selection.
         read("F12 Scroll", rendered=True)
         os.write(master, b"\x1b[24~")
         read("F12 Copy", rendered=True)
         os.write(master, b"\x1b[<64;45;8M" * 6)
-        read("History line 095", rendered=True)
+        read("History line 095", rendered=True, absent=("LIVE TAIL",))
         os.write(master, b"\x1b[<65;45;8M" * 6)
         read("LIVE TAIL", rendered=True)
         os.write(master, b"\t!")
