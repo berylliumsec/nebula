@@ -6,6 +6,9 @@ import asyncio
 
 import httpx
 import pytest
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.layout.containers import ScrollOffsets, WindowRenderInfo
+from prompt_toolkit.layout.controls import UIContent
 from prompt_toolkit.utils import get_cwidth
 
 from nebula.terminal.shell import Shell
@@ -13,6 +16,72 @@ from nebula.terminal.state import View
 from nebula.terminal.transport import AsyncApi, ClientError, Settings
 from nebula.terminal.tui import TuiUI
 from nebula.terminal.ui import CancelledInput, InterruptedPrompt, TerminalUI
+
+
+def test_tui_preserves_reading_position_during_output_and_resumes_at_end() -> None:
+    ui = TuiUI()
+    ui.show_history(
+        [{"role": "assistant", "content": "Earlier answer\n\n" * 100, "metadata": {}}]
+    )
+    buffer = ui.transcript.buffer
+    assert buffer.cursor_position == len(buffer.text)
+    line_count = buffer.document.line_count
+    ui.transcript.window.render_info = WindowRenderInfo(
+        window=ui.transcript.window,
+        ui_content=UIContent(
+            line_count=line_count,
+            cursor_position=Point(
+                buffer.document.cursor_position_col, buffer.document.cursor_position_row
+            ),
+        ),
+        horizontal_scroll=0,
+        vertical_scroll=0,
+        window_width=80,
+        window_height=line_count,
+        configured_scroll_offsets=ScrollOffsets(),
+        visible_line_to_row_col={index: (index, 0) for index in range(line_count)},
+        rowcol_to_yx={},
+        x_offset=0,
+        y_offset=0,
+        wrap_lines=True,
+    )
+    buffer.cursor_position = 0  # Home can precede the next terminal redraw.
+    ui._render()
+    assert buffer.cursor_position == 0
+    ui.transcript.window.render_info = None
+    buffer.cursor_position = 25
+    ui.transcript.window.vertical_scroll = 3
+    ui.delta("New output")
+    ui._render()
+    assert buffer.cursor_position == 25
+    assert ui.transcript.window.vertical_scroll == 3
+    ui._render()
+    assert buffer.cursor_position == 25
+
+    buffer.cursor_position = len(buffer.text)
+    ui.delta(" More output")
+    ui._render()
+    assert buffer.cursor_position == len(buffer.text)
+    buffer.cursor_position = 25
+    ui.open_view({"id": "other", "name": "Other"}, {"id": "chat", "title": "Chat"})
+    ui.show_history(
+        [{"role": "assistant", "content": "New conversation", "metadata": {}}]
+    )
+    assert buffer.cursor_position == len(buffer.text)
+
+
+def test_tui_mouse_scrolling_has_a_native_copy_mode_without_changing_menus() -> None:
+    ui = TuiUI()
+    assert ui.app.mouse_support()
+    binding = ui.app.key_bindings.get_bindings_for_keys(("f12",))[-1]
+    binding.handler(None)
+    assert not ui.app.mouse_support()
+    assert "F12 Scroll" in ui._footer_text()
+    ui._mode = "picker"
+    assert ui.app.mouse_support()
+    ui._mode = "main"
+    binding.handler(None)
+    assert ui.app.mouse_support()
 
 
 def test_tui_ctrl_c_clears_draft_before_interrupting_and_resets_on_typing(

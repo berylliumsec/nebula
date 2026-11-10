@@ -15,6 +15,7 @@ import time
 from contextlib import contextmanager
 
 import pyte
+import pytest
 
 
 @contextmanager
@@ -138,6 +139,80 @@ async def main():
     print('VALUE:'+json.dumps(value),flush=True)
 asyncio.run(main())
 """
+
+
+@pytest.mark.parametrize("columns,rows", [(120, 30), (52, 18)])
+def test_full_screen_scrolls_from_composer_and_keeps_position_during_output(
+    columns, rows
+):
+    code = """
+import asyncio,json
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_view({'id':'project','name':'Project'},{'id':'chat','title':'Scroll chat'})
+    ui.show_history([{'role':'assistant','content':'\\n\\n'.join(f'History line {i:03}' for i in range(100)),'metadata':{}}])
+    async def update():
+        while ui.composer.text != 'draft!':
+            await asyncio.sleep(0.01)
+        ui.delta('\\n\\nLIVE TAIL')
+        ui._render()
+        ui.activity('Update received')
+        while ui.composer.text != 'draft!!':
+            await asyncio.sleep(0.01)
+        ui.delta('\\n\\nFOLLOWED TAIL')
+        ui._render()
+    task=asyncio.create_task(update())
+    value=await ui.ask('You',main=True)
+    await task
+    await ui.close()
+    print('VALUE:'+json.dumps(value),flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=columns, rows=rows) as (
+        process,
+        master,
+        output,
+        read,
+    ):
+        read("History line 099", rendered=True)
+        os.write(master, b"draft")
+        read("> draft", rendered=True)
+        # SGR wheel events over the transcript must work with composer focus.
+        os.write(master, b"\x1b[<64;45;8M" * 12)
+        read(
+            "History line 085" if columns >= 110 else "History line 090", rendered=True
+        )
+        assert "History line 099" not in "\n".join(read.screen.display)
+        os.write(master, b"\x1b[5~")  # Page Up targets the transcript directly.
+        read("PgUp", rendered=True)
+        os.write(master, b"\x1b[1;5H")  # Ctrl-Home.
+        read("History line 000", rendered=True)
+        os.write(master, b"\t!")  # Return to the draft and trigger streamed output.
+        read("Update received", rendered=True)
+        display = "\n".join(read.screen.display)
+        assert "History line 000" in display
+        assert "LIVE TAIL" not in display
+        os.write(master, b"\x1b[1;5F")  # Ctrl-End resumes following output.
+        read("LIVE TAIL", rendered=True)
+        os.write(master, b"\x1b[5~\x1b[6~")
+        read("LIVE TAIL", rendered=True)
+        os.write(master, b"\x1b[24~")  # F12 allows native terminal selection.
+        read("F12 Scroll", rendered=True)
+        os.write(master, b"\x1b[24~")
+        read("F12 Copy", rendered=True)
+        os.write(master, b"\x1b[<64;45;8M" * 6)
+        read("History line 095", rendered=True)
+        os.write(master, b"\x1b[<65;45;8M" * 6)
+        read("LIVE TAIL", rendered=True)
+        os.write(master, b"\t!")
+        read("FOLLOWED TAIL", rendered=True)
+        os.write(master, b"\r")
+        read(b'VALUE:"draft!!"')
+        process.wait(timeout=3)
+        assert process.returncode == 0
+        assert b"\x1b[?1000h" in output  # Real mouse reporting was enabled.
 
 
 def test_full_screen_progress_paste_and_narrow_resize():

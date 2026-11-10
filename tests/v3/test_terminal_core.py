@@ -206,7 +206,7 @@ class Adapter(HarnessAdapter):
 class TerminalProcess:
     def __init__(self, config, env, *args, tty=False, columns=80, rows=24):
         command = [
-            sys.executable,
+            env.get("NEBULA_TEST_TERMINAL_CLIENT_PYTHON", sys.executable),
             "-u",
             "-m",
             "nebula.chat_cli",
@@ -215,6 +215,8 @@ class TerminalProcess:
             *args,
         ]
         self.master = None
+        if env.get("NEBULA_TEST_TERMINAL_CLIENT_PYTHON"):
+            env = {**env, "PYTHONPATH": ""}
         self.screen = pyte.Screen(columns, rows) if tty else None
         self.screen_stream = pyte.Stream(self.screen) if self.screen else None
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace") if tty else None
