@@ -24,7 +24,7 @@ from .memory_budget import _HELD
 from .runtime_coordination import CoordinationConflict
 
 CHECKPOINT_FORMAT = "nebula.project-checkpoint/v1"
-CHECKPOINT_BATCH_ROWS = 1_000
+CHECKPOINT_BATCH_ROWS = 10_000
 _PREFIX = "handoff-inventory:"
 
 # These handles have no implemented restoration adapter. Their presence is a
