@@ -63,5 +63,9 @@ same execution version and transfer ownership through checkpoint restoration and
 verification. Lost operation responses do not authorize another process launch.
 The host retains recovery receipts across restarts, applies diagnostic backoff,
 and holds projects after three recoveries in ten minutes rather than crash-looping.
+Checkpoint hashing has no total-record ceiling: entity, provider admission and
+tool-manifest references stream in batches of 1,000 from one SQL statement
+snapshot. The compact v1 digest remains unchanged, including optional manifest
+inventories. Large projects do not require loading all records into Core memory.
 Host/API health can remain healthy while a project is recovering or needs review;
 read deployment status and saved recovery evidence before claiming success.

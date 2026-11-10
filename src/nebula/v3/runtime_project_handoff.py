@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from itertools import groupby
 import json
 
-from sqlalchemy import or_, select
+from sqlalchemy import Integer, String, literal, or_, select, union_all
 
 from .database import (
     EntityRow,
@@ -23,7 +24,7 @@ from .memory_budget import _HELD
 from .runtime_coordination import CoordinationConflict
 
 CHECKPOINT_FORMAT = "nebula.project-checkpoint/v1"
-MAX_CHECKPOINT_ROWS = 10_000
+CHECKPOINT_BATCH_ROWS = 1_000
 _PREFIX = "handoff-inventory:"
 
 # These handles have no implemented restoration adapter. Their presence is a
@@ -64,61 +65,77 @@ _LIVE_SQL = {
 
 
 async def project_sql_checkpoint(session, project_id):
-    """Bounded revision proof; payloads and credentials never enter a receipt."""
-    rows = list(
-        await session.execute(
-            select(EntityRow.id, EntityRow.kind, EntityRow.revision)
-            .where(
-                or_(
-                    EntityRow.engagement_id == project_id,
-                    (EntityRow.kind == "engagements") & (EntityRow.id == project_id),
-                )
-            )
-            .order_by(EntityRow.id)
-            .limit(MAX_CHECKPOINT_ROWS + 1)
+    """Stream one statement snapshot; retain the exact v1 reference-only digest."""
+    entities = select(
+        literal(0).label("inventory"),
+        EntityRow.id.label("identity"),
+        EntityRow.kind.label("value"),
+        EntityRow.revision.label("revision"),
+        literal(None, type_=String).label("lease_owner"),
+    ).where(
+        or_(
+            EntityRow.engagement_id == project_id,
+            (EntityRow.kind == "engagements") & (EntityRow.id == project_id),
         )
     )
-    queues = list(
-        await session.execute(
-            select(
-                ProviderTurnQueueRow.turn_id,
-                ProviderTurnQueueRow.state,
-                ProviderTurnQueueRow.lease_owner,
-            )
-            .join(EntityRow, EntityRow.id == ProviderTurnQueueRow.turn_id)
-            .where(EntityRow.engagement_id == project_id)
-            .order_by(ProviderTurnQueueRow.turn_id)
-            .limit(MAX_CHECKPOINT_ROWS + 1)
+    queues = (
+        select(
+            literal(1).label("inventory"),
+            ProviderTurnQueueRow.turn_id.label("identity"),
+            ProviderTurnQueueRow.state.label("value"),
+            literal(None, type_=Integer).label("revision"),
+            ProviderTurnQueueRow.lease_owner.label("lease_owner"),
         )
+        .join(EntityRow, EntityRow.id == ProviderTurnQueueRow.turn_id)
+        .where(EntityRow.engagement_id == project_id)
     )
-    manifests = list(
-        await session.execute(
-            select(
-                ProviderToolManifestRow.session_id,
-                ProviderToolManifestRow.revision,
-                ProviderToolManifestRow.digest,
-            )
-            .where(ProviderToolManifestRow.project_id == project_id)
-            .order_by(
-                ProviderToolManifestRow.session_id, ProviderToolManifestRow.revision
-            )
-            .limit(MAX_CHECKPOINT_ROWS + 1)
-        )
+    manifests = select(
+        literal(2).label("inventory"),
+        ProviderToolManifestRow.session_id.label("identity"),
+        ProviderToolManifestRow.digest.label("value"),
+        ProviderToolManifestRow.revision.label("revision"),
+        literal(None, type_=String).label("lease_owner"),
+    ).where(ProviderToolManifestRow.project_id == project_id)
+    statement = union_all(entities, queues, manifests).order_by(
+        "inventory", "identity", "revision"
     )
-    if max(len(rows), len(queues), len(manifests)) > MAX_CHECKPOINT_ROWS:
-        raise CoordinationConflict(
-            "This project exceeds the bounded handoff checkpoint; retain its current runtime until a paged adapter is available"
-        )
-    parts = [list(map(list, rows)), list(map(list, queues))]
-    if manifests:
-        parts.append(list(map(list, manifests)))
-    raw = json.dumps(parts, separators=(",", ":")).encode()
+    counts = [0, 0, 0]
+    inventory = 0
+    digest = hashlib.sha256()
+    digest.update(b"[[")
+    result = await session.stream(
+        statement, execution_options={"yield_per": CHECKPOINT_BATCH_ROWS}
+    )
+    try:
+        async for batch in result.partitions(CHECKPOINT_BATCH_ROWS):
+            for kind, group in groupby(batch, key=lambda row: row.inventory):
+                while inventory < kind:
+                    digest.update(b"],[")
+                    inventory += 1
+                if kind == 0:
+                    values = [[row.identity, row.value, row.revision] for row in group]
+                elif kind == 1:
+                    values = [
+                        [row.identity, row.value, row.lease_owner] for row in group
+                    ]
+                else:
+                    values = [[row.identity, row.revision, row.value] for row in group]
+                if counts[kind]:
+                    digest.update(b",")
+                digest.update(json.dumps(values, separators=(",", ":"))[1:-1].encode())
+                counts[kind] += len(values)
+    finally:
+        await result.close()
+    while inventory < 1:
+        digest.update(b"],[")
+        inventory += 1
+    digest.update(b"]]")
     return {
         "format": CHECKPOINT_FORMAT,
         "project_id": project_id,
-        "entity_count": len(rows),
-        "queue_count": len(queues),
-        "sql_sha256": hashlib.sha256(raw).hexdigest(),
+        "entity_count": counts[0],
+        "queue_count": counts[1],
+        "sql_sha256": digest.hexdigest(),
     }
 
 
@@ -281,11 +298,27 @@ class ProjectHandoffAgent:
                 )
                 .where(
                     EntityRow.engagement_id == self.lease.project_id,
-                    EntityRow.kind.in_((*_LIVE_SQL, "chat_turns", "chat_goals")),
+                    or_(
+                        (
+                            EntityRow.kind.in_(("chat_turns", "chat_goals"))
+                            & EntityRow.payload["execution_claim_id"]
+                            .as_string()
+                            .is_not(None)
+                        ),
+                        *(
+                            (EntityRow.kind == kind)
+                            & EntityRow.payload["status"].as_string().in_(states)
+                            for kind, states in _LIVE_SQL.items()
+                        ),
+                    ),
                 )
-                .limit(MAX_CHECKPOINT_ROWS + 1)
+                .limit(101)
             )
             claims = rows.all()
+            if len(claims) > 100:
+                raise CoordinationConflict(
+                    "More than 100 active project records need reconciliation; retain their runtime for review"
+                )
             is_active = getattr(
                 self.chat, "has_active_provider_turn", lambda _identity: False
             )
