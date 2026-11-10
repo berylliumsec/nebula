@@ -18,7 +18,6 @@ import httpx
 import pytest
 
 from nebula.v3 import chat as chat_module
-from nebula.v3 import context as context_module
 from nebula.v3.context import estimate_model_request, resolve_context_limits
 from nebula.v3.domain import ChatTurn, ChatTurnStatus, ProviderProfile
 from nebula.v3.providers import (
@@ -564,18 +563,9 @@ async def _large_window_turn(tmp_path, provider, broker, **options):
     return store, service, prepared
 
 
-async def test_a_large_window_clears_tool_results_at_the_working_ceiling(
-    tmp_path, monkeypatch
+async def test_a_large_window_keeps_tool_results_below_its_model_relative_target(
+    tmp_path,
 ):
-    """Stream X: context rot applies to tool results too.
-
-    A 1M-token model would carry a tool turn to 75% of its window before
-    clearing anything. The working ceiling (held small here so the turn stays
-    short) sizes the target, and a crossing clears down from it; the hard
-    capacity is still the model's.
-    """
-
-    monkeypatch.setattr(context_module, "WORKING_CONTEXT_CEILING", 12_000)
     broker = ScanBroker()
     provider = LongTurnProvider(calls=20)
     store, service, prepared = await _large_window_turn(tmp_path, provider, broker)
@@ -591,17 +581,17 @@ async def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     limits = resolve_context_limits(
         prepared.provider_profile, model="model-a", required_parameters={"tools"}
     )
-    assert (limits.binding_limit, limits.target_input_tokens) == ("ceiling", 12_000)
-    assert limits.input_capacity > 900_000
-    # Results were cleared to stay near the ceiling, far below the window.
-    assert any(_cleared(r) for req in routing for r in req.tool_results)
-    assert max(estimate_model_request(req) for req in routing) < 2 * 12_000
+    assert (limits.binding_limit, limits.target_input_tokens) == ("model", 580_800)
+    assert limits.input_capacity == 968_000
+    assert not any(_cleared(r) for req in routing for r in req.tool_results)
+    assert (
+        max(estimate_model_request(req) for req in routing) < limits.target_input_tokens
+    )
 
 
-async def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
-    tmp_path, monkeypatch
+async def test_configuring_the_full_model_window_keeps_the_same_tool_result_policy(
+    tmp_path,
 ):
-    monkeypatch.setattr(context_module, "WORKING_CONTEXT_CEILING", 12_000)
     broker = ScanBroker()
     provider = LongTurnProvider(calls=20)
     store, service, prepared = await _large_window_turn(
@@ -616,9 +606,7 @@ async def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
         for request in _turn_requests(provider)
         if request.tool_choice == ToolChoice.AUTO
     ]
-    # The operator opted into the whole window: no result is cleared (the
-    # checkpoint still folds the oldest steps, as on any window), and requests
-    # grow past the ceiling.
+    # Configuring the full model window no longer changes a separate ceiling.
     assert not any(_cleared(r) for req in routing for r in req.tool_results)
     assert max(estimate_model_request(req) for req in routing) > 2 * 12_000
 

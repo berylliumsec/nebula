@@ -73,6 +73,27 @@ function renderSettings(route: string) {
   return render(<MemoryRouter initialEntries={[route]}><DialogProvider><SettingsPage /></DialogProvider></MemoryRouter>);
 }
 
+describe("model-relative provider context", () => {
+  it("explains compaction where the model context window is configured", async () => {
+    workspace.api = undefined;
+    workspace.engagement = undefined;
+    workspace.setupStatus = undefined;
+    workspace.providers = [] as never[];
+    workspace.providerCatalog = [{
+      flavor: "openai", adapter: "openai", displayName: "OpenAI", local: false,
+      defaultBaseUrl: "https://api.openai.com/v1", supportTier: "native",
+    }] as never[];
+    const user = userEvent.setup();
+    renderSettings("/settings#provider-settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    expect(within(dialog).getByLabelText("Context window (tokens)")).toHaveAccessibleDescription(
+      "Leave blank to use the model's published window. Conversations compact at 60% of available input capacity after reserving reply tokens. A value here caps the window.",
+    );
+  });
+});
+
 describe("explicit local Core shutdown", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -208,4 +229,3 @@ describe("selected Project image preparation", () => {
     expect(api.setupStatus).toHaveBeenCalledWith(expect.any(AbortSignal), "project-a");
   });
 });
-
