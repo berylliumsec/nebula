@@ -112,7 +112,8 @@ class RuntimeChatJournal:
                 )
             )
 
-    async def close(self, turn_id, segment, *, failed=False):
+    @staticmethod
+    def end_events(turn_id, segment, *, failed=False):
         frames = []
         if failed:
             frames.append(
@@ -129,6 +130,10 @@ class RuntimeChatJournal:
         frames.append(
             (SEGMENT_END, {"type": SEGMENT_END, "turn_id": turn_id, "segment": segment})
         )
+        return frames
+
+    async def close(self, turn_id, segment, *, failed=False):
+        frames = self.end_events(turn_id, segment, failed=failed)
         lease = current_execution_lease()
 
         async def release(session, frames):

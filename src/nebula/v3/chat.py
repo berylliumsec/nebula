@@ -3884,6 +3884,7 @@ class ChatService:
         hook_executions: Iterable[NativeHookExecution],
         *,
         cause: str,
+        transaction: StoreTransaction | None = None,
     ) -> ChatTurn:
         """Park a turn Core can no longer drive so the operator can resume it.
 
@@ -3892,6 +3893,7 @@ class ChatService:
         state, with unknown tool and hook outcomes flagged for reconciliation.
         """
 
+        write = transaction.update if transaction is not None else self.store.update
         # Only an invocation whose result never reached provider history is
         # uncertain. A projected step already holds the result committed
         # before the interruption, and a Core read of recorded output or
@@ -3933,7 +3935,7 @@ class ChatService:
             if execution.chat_turn_id == turn.id and execution.status == "running":
                 try:
                     (
-                        await self.store.update(
+                        await write(
                             NativeHookExecution,
                             execution.id,
                             {
@@ -3948,8 +3950,23 @@ class ChatService:
                     # The hook may have committed its result after the scan.
                     # Keep the old unknown ID; read repair uses its new state.
                     pass
+        requires_review = cause == "Project runtime stopped" and bool(
+            unknown or unknown_hooks
+        )
+        goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
+        preserve_hold = (
+            cause == "Project runtime stopped"
+            and goal is not None
+            and goal.status != ChatGoalStatus.RUNNING
+        )
         detail = (
-            f"{cause} while an effect outcome was unknown. Core will carry the "
+            f"{cause} while an effect outcome was unknown. Review and reconcile "
+            "the interrupted response before resuming; no effect has been retried."
+            if requires_review
+            else f"{cause} before this response completed. The existing goal hold "
+            "is preserved; review the interrupted response before resuming."
+            if preserve_hold
+            else f"{cause} while an effect outcome was unknown. Core will carry the "
             "uncertainty forward and resume automatically without replaying the effect."
             if unknown or unknown_hooks
             else (
@@ -3967,7 +3984,11 @@ class ChatService:
             "recovery": {
                 "required": True,
                 "cause": (
-                    "core_shutdown" if cause == "Core stopped" else "core_restart"
+                    "runtime_loss"
+                    if requires_review or preserve_hold
+                    else "core_shutdown"
+                    if cause == "Core stopped"
+                    else "core_restart"
                 ),
                 "unknown_tool_call_ids": unknown,
                 "rerunnable_tool_call_ids": rerunnable,
@@ -3976,7 +3997,7 @@ class ChatService:
                 "interrupted_at": utc_now().isoformat(),
             },
         }
-        interrupted = await self.store.update(
+        interrupted = await write(
             ChatTurn,
             turn.id,
             {
@@ -3989,12 +4010,11 @@ class ChatService:
             },
             expected_revision=turn.revision,
         )
-        if turn.goal_id:
-            goal = await self.store.get(ChatGoal, turn.goal_id)
+        if goal is not None:
             if goal.status == ChatGoalStatus.RUNNING:
                 paused_at = utc_now()
                 (
-                    await self.store.update(
+                    await write(
                         ChatGoal,
                         goal.id,
                         {
@@ -4009,6 +4029,20 @@ class ChatService:
                         },
                         expected_revision=goal.revision,
                     )
+                )
+            elif (
+                turn.execution_claim_id is not None
+                and goal.execution_claim_id == turn.execution_claim_id
+            ):
+                await write(
+                    ChatGoal,
+                    goal.id,
+                    {
+                        "execution_owner_id": None,
+                        "execution_claim_id": None,
+                        "execution_claimed_at": None,
+                    },
+                    expected_revision=goal.revision,
                 )
         return interrupted
 

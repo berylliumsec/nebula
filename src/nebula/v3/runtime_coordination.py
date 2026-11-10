@@ -578,6 +578,23 @@ class RuntimeCoordination:
         | None = None,
     ) -> list[StreamFrame]:
         """Persist one batch before publication, using existing event retention."""
+        async with self.fenced(lease) as session:
+            return await self._append_stream_batch(
+                session, lease, turn_id, batch_key=batch_key, events=events, apply=apply
+            )
+
+    async def _append_stream_batch(
+        self,
+        session: AsyncSession,
+        lease: ProjectLease,
+        turn_id: str,
+        *,
+        batch_key: str,
+        events: Sequence[tuple[str, dict[str, Any]]],
+        apply: Callable[[AsyncSession, list[StreamFrame]], Awaitable[None]]
+        | None = None,
+    ) -> list[StreamFrame]:
+        """Caller holds live fencing or the verified dead-owner recovery lock."""
         _identifier(batch_key, "batch_key")
         if not 1 <= len(events) <= MAX_STREAM_BATCH:
             raise ValueError(
@@ -593,84 +610,78 @@ class RuntimeCoordination:
             f"chat-stream/{hashlib.sha256(batch_key.encode()).hexdigest()}/{i}"
             for i in range(len(events))
         ]
-        async with self.fenced(lease) as session:
-            owner = await session.scalar(
-                select(EntityRow.id).where(
-                    EntityRow.id == turn_id,
-                    EntityRow.engagement_id == lease.project_id,
-                    EntityRow.kind.in_(("chat_turns", "harness_turns")),
-                )
+        owner = await session.scalar(
+            select(EntityRow.id).where(
+                EntityRow.id == turn_id,
+                EntityRow.engagement_id == lease.project_id,
+                EntityRow.kind.in_(("chat_turns", "harness_turns")),
             )
-            if owner is None:
-                raise CoordinationConflict(
-                    "stream turn does not belong to this project"
-                )
-            if self.database.engine.dialect.name == "postgresql":
-                # Share the existing run-event writer's lock/sequence namespace.
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
-                    {"run_id": turn_id},
-                )
-            existing = list(
-                await session.scalars(
-                    select(RunEventRow)
-                    .where(
-                        RunEventRow.run_id == turn_id,
-                        RunEventRow.idempotency_key.in_(keys),
-                    )
-                    .order_by(RunEventRow.sequence)
-                )
-            )
-            stored = [
-                {"data": payload, "batch_size": len(events), "epoch": STREAM_EPOCH}
-                for _, payload in events
-            ]
-            if existing:
-                if len(existing) != len(events) or any(
-                    row.event_type != _STREAM_PREFIX + kind or row.payload != data
-                    for row, (kind, _), data in zip(existing, events, stored)
-                ):
-                    raise CoordinationConflict(
-                        "stream batch key already contains different events"
-                    )
-                return [self._frame(row) for row in existing]
-            sequence = int(
-                await session.scalar(
-                    select(func.max(RunEventRow.sequence)).where(
-                        RunEventRow.run_id == turn_id
-                    )
-                )
-                or 0
-            )
-            rows = [
-                RunEventRow(
-                    id=str(uuid4()),
-                    run_id=turn_id,
-                    sequence=sequence + index + 1,
-                    event_type=_STREAM_PREFIX + kind,
-                    payload=data,
-                    idempotency_key=key,
-                    actor_id=lease.runtime_id,
-                    occurred_at=utc_now(),
-                )
-                for index, ((kind, _), data, key) in enumerate(
-                    zip(events, stored, keys)
-                )
-            ]
+        )
+        if owner is None:
+            raise CoordinationConflict("stream turn does not belong to this project")
+        if self.database.engine.dialect.name == "postgresql":
             await session.execute(
-                insert(RunEventRow),
-                [
-                    {
-                        column.name: getattr(row, column.name)
-                        for column in RunEventRow.__table__.columns
-                    }
-                    for row in rows
-                ],
+                text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
+                {"run_id": turn_id},
             )
-            frames = [self._frame(row) for row in rows]
-            if apply is not None:
-                await apply(session, frames)
-            return frames
+        existing = list(
+            await session.scalars(
+                select(RunEventRow)
+                .where(
+                    RunEventRow.run_id == turn_id,
+                    RunEventRow.idempotency_key.in_(keys),
+                )
+                .order_by(RunEventRow.sequence)
+            )
+        )
+        stored = [
+            {"data": payload, "batch_size": len(events), "epoch": STREAM_EPOCH}
+            for _, payload in events
+        ]
+        if existing:
+            if len(existing) != len(events) or any(
+                row.event_type != _STREAM_PREFIX + kind or row.payload != data
+                for row, (kind, _), data in zip(existing, events, stored)
+            ):
+                raise CoordinationConflict(
+                    "stream batch key already contains different events"
+                )
+            return [self._frame(row) for row in existing]
+        sequence = int(
+            await session.scalar(
+                select(func.max(RunEventRow.sequence)).where(
+                    RunEventRow.run_id == turn_id
+                )
+            )
+            or 0
+        )
+        rows = [
+            RunEventRow(
+                id=str(uuid4()),
+                run_id=turn_id,
+                sequence=sequence + index + 1,
+                event_type=_STREAM_PREFIX + kind,
+                payload=data,
+                idempotency_key=key,
+                actor_id=lease.runtime_id,
+                occurred_at=utc_now(),
+            )
+            for index, ((kind, _), data, key) in enumerate(zip(events, stored, keys))
+        ]
+        await session.execute(
+            insert(RunEventRow),
+            [
+                {
+                    column.name: getattr(row, column.name)
+                    for column in RunEventRow.__table__.columns
+                }
+                for row in rows
+            ],
+        )
+        frames = [self._frame(row) for row in rows]
+        if apply is not None:
+            await apply(session, frames)
+        return frames
 
     @staticmethod
     def _frame(row: RunEventRow) -> StreamFrame:

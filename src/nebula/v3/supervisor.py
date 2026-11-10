@@ -726,6 +726,17 @@ class RuntimeSupervisor:
             finally:
                 await client.close()
 
+    async def reconcile_dead_project(self, *, expected_owner: ProjectLease):
+        from .runtime_orphan_recovery import reconcile_dead_project
+
+        async with self._operations:
+            self._active()
+            return await reconcile_dead_project(
+                self.coordinator,
+                expected_owner,
+                launch_origin=self.host.launch_origin,
+            )
+
     async def recover_project(
         self,
         project_id: str,

@@ -3,20 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from .database import (
     DeploymentHostRow,
+    DeploymentOperationRow,
     DeploymentReceiptRow,
     MemoryBudgetPolicyRow,
+    ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeCommandRow,
     RuntimeProcessRow,
+    RuntimeRecoveryRow,
 )
 from .diagnostics import record_caught_exception
 from .domain import Engagement
+from .runtime_coordination import CoordinationConflict
 from .setup import bootstrap_scratch_project
+
+_RECOVERY_ACTOR = "runtime-auto-recovery"
+_RECOVERY_WINDOW_MS = 10 * 60_000
+_RECOVERY_LIMIT = 3
+_RECOVERY_RETRY_MS = 30_000
 
 
 class RuntimeAutoAdmission:
@@ -26,6 +37,8 @@ class RuntimeAutoAdmission:
         self.task = None
         self._pending: dict[str, str] = {}
         self._blocked: dict[str, tuple[int, int | None]] = {}
+        self._recovery_blocked: dict[str, tuple[str, int, int]] = {}
+        self._recovery_cursor: str | None = None
         self._serial = asyncio.Lock()
 
     async def start(self):
@@ -131,6 +144,7 @@ class RuntimeAutoAdmission:
                         stage="admission",
                     )
                 return
+            await self._recover_expired()
             for demand in demands:
                 if self._blocked.get(demand.project_id) == signature:
                     continue
@@ -180,3 +194,189 @@ class RuntimeAutoAdmission:
                         error,
                         stage="admission",
                     )
+
+    @staticmethod
+    def _recovery_operation_id(owner: dict, stage: str) -> str:
+        digest = hashlib.sha256(
+            json.dumps([owner, stage], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return "auto-recovery:" + digest
+
+    async def _has_unassigned_execution(self) -> bool:
+        async with self.supervisor.coordinator.database.session() as session:
+            return (
+                await session.scalar(
+                    select(RuntimeProcessRow.runtime_id)
+                    .where(
+                        RuntimeProcessRow.role == "execution",
+                        RuntimeProcessRow.state.in_(("reserved", "starting", "ready")),
+                        ~RuntimeProcessRow.runtime_id.in_(
+                            select(ProjectOwnershipRow.runtime_id).where(
+                                ProjectOwnershipRow.runtime_id.is_not(None)
+                            )
+                        ),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    async def _recovery_operation(self, owner: dict, action: str, parameters: dict):
+        management = self.supervisor.management
+        operation_id = self._recovery_operation_id(owner, action)
+        ledger = management.ledger()
+        async with self.supervisor.coordinator.database.session() as session:
+            prior = await session.get(DeploymentOperationRow, operation_id)
+        if prior is not None:
+            # Saved parameters and results are authoritative, including an
+            # unknown spawn outcome after a host restart.
+            receipt = await ledger.status(operation_id, actor_id=_RECOVERY_ACTOR)
+        else:
+            if action == "prepare_execution" and await self._has_unassigned_execution():
+                raise CoordinationConflict(
+                    "An unassigned execution process needs explicit reconciliation before automatic recovery"
+                )
+
+            async def dispatch(name, values):
+                return await management.dispatch(
+                    name, values, operation_id, _RECOVERY_ACTOR
+                )
+
+            receipt = await ledger.execute(
+                operation_id=operation_id,
+                actor_id=_RECOVERY_ACTOR,
+                action=action,
+                parameters=parameters,
+                dispatch=dispatch,
+            )
+        if receipt["state"] != "succeeded":
+            raise CoordinationConflict(
+                f"Automatic recovery operation {operation_id} is {receipt['state']}; "
+                "read its saved deployment result before reconciliation"
+            )
+        return receipt["result"]
+
+    async def _recover_expired(self):
+        supervisor = self.supervisor
+        async with supervisor.coordinator.database.session() as session:
+            host = await session.get(DeploymentHostRow, "host")
+            if host is None or host.shutdown_requested:
+                return
+            now = await supervisor.coordinator.coordination._clock_ms(session)
+            query = select(ProjectOwnershipRow).where(
+                ProjectOwnershipRow.runtime_id.is_not(None),
+                ProjectOwnershipRow.lease_expires_at_ms <= now,
+            )
+            if self._recovery_cursor is not None:
+                query = query.where(
+                    ProjectOwnershipRow.project_id > self._recovery_cursor
+                )
+            owners = list(
+                await session.scalars(
+                    query.order_by(ProjectOwnershipRow.project_id).limit(16)
+                )
+            )
+        # This cursor only schedules bounded scans; operation receipts remain
+        # the authority across controller or host restarts.
+        self._recovery_cursor = owners[-1].project_id if owners else None
+        if not owners:
+            return
+        # Older embedders without a process host cannot prove OS absence.
+        if (
+            getattr(supervisor, "host", None) is None
+            or getattr(supervisor, "management", None) is None
+        ):
+            return
+        observed = {
+            worker.runtime_id: worker
+            for worker in await supervisor.host.rediscover()
+            if worker.process_state == "gone" and worker.identity is not None
+        }
+        for owner in owners:
+            worker = observed.get(owner.runtime_id)
+            if worker is None:
+                continue
+            blocked = self._recovery_blocked.get(owner.project_id)
+            if blocked and blocked[:2] == (owner.runtime_id, owner.fencing_token):
+                if blocked[2] > now:
+                    continue
+            try:
+                project = await supervisor.store.get(Engagement, owner.project_id)
+                if project.status == "archived":
+                    continue
+                expected_owner = {
+                    "project_id": owner.project_id,
+                    "runtime_id": owner.runtime_id,
+                    "fencing_token": owner.fencing_token,
+                }
+                async with supervisor.coordinator.database.session() as session:
+                    existing = await session.scalar(
+                        select(RuntimeRecoveryRow.operation_id)
+                        .where(
+                            RuntimeRecoveryRow.project_id == owner.project_id,
+                            RuntimeRecoveryRow.source_runtime_id == owner.runtime_id,
+                            RuntimeRecoveryRow.source_fencing_token
+                            == owner.fencing_token,
+                            RuntimeRecoveryRow.phase.in_(
+                                ("held", "prepared", "verified")
+                            ),
+                        )
+                        .limit(1)
+                    )
+                    attempts = await session.scalar(
+                        select(func.count())
+                        .select_from(RuntimeRecoveryRow)
+                        .where(
+                            RuntimeRecoveryRow.project_id == owner.project_id,
+                            RuntimeRecoveryRow.created_at_ms
+                            >= now - _RECOVERY_WINDOW_MS,
+                        )
+                    )
+                if existing is not None:
+                    continue
+                if attempts >= _RECOVERY_LIMIT:
+                    raise CoordinationConflict(
+                        "Automatic recovery is held after three recoveries in ten minutes; inspect this project's runtime failures"
+                    )
+                await self._recovery_operation(
+                    expected_owner,
+                    "reconcile_project",
+                    {"expected_owner": expected_owner},
+                )
+                prepared = await self._recovery_operation(
+                    expected_owner,
+                    "prepare_execution",
+                    {"version": worker.identity.version},
+                )
+                target_runtime_id = prepared.get("runtime_id")
+                if not isinstance(target_runtime_id, str) or not target_runtime_id:
+                    raise CoordinationConflict(
+                        "The saved recovery preparation has no confirmed runtime identity"
+                    )
+                async with supervisor.coordinator.database.session() as session:
+                    handoff = await session.get(ProjectHandoffRow, owner.project_id)
+                    revision = handoff.revision if handoff else None
+                await self._recovery_operation(
+                    expected_owner,
+                    "recover_project",
+                    {
+                        "project_id": owner.project_id,
+                        "target_runtime_id": target_runtime_id,
+                        "expected_owner": expected_owner,
+                        "expected_handoff_revision": revision,
+                    },
+                )
+                self._recovery_blocked.pop(owner.project_id, None)
+            except Exception as error:
+                self._recovery_blocked[owner.project_id] = (
+                    owner.runtime_id,
+                    owner.fencing_token,
+                    now + _RECOVERY_RETRY_MS,
+                )
+                record_caught_exception(
+                    "runtime",
+                    "runtime.project_recovery.waiting",
+                    "This project remains held until its expired runtime can be safely recovered.",
+                    error,
+                    stage="recovery",
+                )
