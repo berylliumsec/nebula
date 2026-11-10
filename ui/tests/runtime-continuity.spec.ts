@@ -86,7 +86,9 @@ test("dead project runtime recovers automatically without restarting Core or dup
     expect(response.ok()).toBe(true);
     const status = await response.json();
     const project = status.projects.find((item: {project_id: string}) => item.project_id === "continuity-project");
-    return project?.runtime_id !== old.runtime_id && project?.phase === "verified";
+    if (!project?.runtime_id || project.runtime_id === old.runtime_id || project.phase !== "verified") return false;
+    const execution = await control.control("execution-status", {runtime_id: project.runtime_id});
+    return execution.state === "ready" && execution.lease?.fencing_token === old.fencing_token + 1;
   }, {timeout: 90_000}).toBe(true);
   await page.goto(`/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`);
   await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "First last"})).toBeVisible({timeout: 60_000});
