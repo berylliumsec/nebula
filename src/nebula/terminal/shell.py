@@ -144,6 +144,7 @@ class Shell:
                 "goal",
                 "chats",
                 "snapshot",
+                "board",
                 "butler",
                 "status",
             ]
@@ -152,6 +153,7 @@ class Shell:
                 "new",
                 "chats",
                 "snapshot",
+                "board",
                 "butler",
                 "history",
                 "status",
@@ -1287,6 +1289,10 @@ class Shell:
             from .notes import show_project_notes
 
             await show_project_notes(self)
+        elif name == "board":
+            from .board import show_project_board
+
+            await show_project_board(self)
         elif name == "chats":
             await self.select_chat(" ".join(args) or None)
         elif name == "new":

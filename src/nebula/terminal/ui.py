@@ -67,6 +67,7 @@ COMMANDS = {
     "core": "Switch paired Core",
     "projects": "Browse or create a project",
     "snapshot": "Read this project's Core-owned summary",
+    "board": "Browse this project's Work board and check-ins (read-only)",
     "notes": "Browse and edit this project's saved Notes",
     "chats": "Browse saved conversations",
     "new": "Start a new conversation",

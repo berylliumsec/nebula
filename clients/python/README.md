@@ -22,6 +22,11 @@ commands. Enter sends; Esc followed by Enter adds a line. Ctrl-C stops a
 supported selected turn; Ctrl-D or `/quit` leaves work running on Core.
 Set `NEBULA_CHAT_PLAIN=1` for the scrolling prompt and numbered menus.
 
+Open `/board` (also in F4 Commands) to read the selected project's Work board.
+Up/Down selects a task; Tab focuses its description and recent check-ins.
+Use `/` to search, R to refresh, and Escape to return to the same chat and draft.
+The board is read-only and does not poll; plain mode prints tasks grouped by status.
+
 The Assistant shell requires Core terminal protocol 1. The legacy
 `nebula-chat chat --project "Project"` Butler command also works with older Cores.
 The client stores only pairing credentials and selected identifiers locally.

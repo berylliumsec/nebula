@@ -84,6 +84,18 @@ data only on open or refresh. The plain terminal prints the same summary when
 `/snapshot` runs. `/status` remains the selected conversation's turn state, and
 `/results` remains published results rather than this dashboard summary.
 
+Open `/board` or choose it from F4 Commands to view the selected project's Work
+board without leaving chat. Tasks are grouped into Backlog, Ready, In Progress,
+Blocked, Review and Done. Up/Down selects a task; Enter or Tab focuses its
+scrollable description and latest 200 check-ins, including blockers and next
+steps. Tab cycles through details, Search and the task list; `/` focuses Search.
+Search matches titles and descriptions. R (or Ctrl-R while searching) refreshes
+from Core and retains the selected task when it still matches. Escape returns
+to the same chat and unsent draft; running chat work continues. This is a
+read-only, on-demand view, not a live activity feed. Create, edit and move
+tasks in the web Work page. The plain terminal prints tasks grouped by status
+when `/board` runs; run it again to refresh.
+
 Open `/notes` to browse the selected project's saved Notes without leaving the
 chat. The full-screen panel loads notes on open and refresh only. Up/Down selects
 a note, Tab moves between the list, title and Markdown body, and Ctrl-N starts a
@@ -108,6 +120,7 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | `/chat` | Rename, pin, flag, archive, restore, branch, rewind/edit, retry in a branch, export visible text, or explicitly delete |
 | `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
 | `/notes` | Browse, create, edit, refresh and delete the selected project's saved Notes in the full-screen TUI |
+| `/board` | Read the project's Work board, search tasks, inspect descriptions/check-ins and refresh without changing chat |
 | `/model`, `/settings`, `/mcp` | Select Core models and supported next-turn controls; `/mcp` selects this conversation's probed MCP servers |
 | `/skills`, `$name` | Toggle several skills for the next turn in one picker; `$name message` selects one skill for that message |
 | `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete a Core goal, including budgets and retained skills |
