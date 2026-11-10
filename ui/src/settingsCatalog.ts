@@ -153,11 +153,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.mcp",
     label: "MCP servers",
-    description: "Manage trusted local and HTTPS MCP integrations",
+    description: "Manage MCP integrations. Assistant settings → MCP tool context loads schemas on demand for each new turn, or explicitly always loads selected schemas. Uncheck to exclude next turn; recheck to restore",
     category: "Automation",
     scope: "Security",
     target: "mcp-settings",
-    keywords: ["mcp", "server", "tool", "integration", "stdio", "streamable http"],
+    keywords: ["mcp", "server", "tool", "integration", "stdio", "streamable http", "exclude server", "next turn", "not sent", "tool schemas", "on demand", "MCP tool context", "load schemas on demand", "always loaded", "always load selected schemas", "mcp_context_mode"],
   },
   {
     id: "settings.ssh-environments",

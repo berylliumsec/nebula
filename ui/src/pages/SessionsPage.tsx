@@ -128,6 +128,7 @@ import { isElectronRuntime } from "../api/runtime";
 import { ElectronBrowser } from "../components/ElectronBrowser";
 import { SecurityDashboard } from "../components/SecurityDashboard";
 import { emptyAssistantDefaults, preferredAssistantRuntime } from "../api/assistantDefaults";
+import { isAssistantSelectionRevisionConflict, rebaseAssistantSelections } from "./rebaseAssistantSelections";
 import {
   prepareProviderCredential,
   runWithProviderCredentialRecovery,
@@ -1224,6 +1225,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     renameError, setRenameError, renamingBusy, setRenamingBusy, archivingSessionId, setArchivingSessionId,
     archivedGroupOpen, setArchivedGroupOpen, sideChatLookup, setSideChatLookup} = workbench;
   const refreshProjectCatalog = useCallback(() => setProjectCatalogKey(key => key + 1), [setProjectCatalogKey]);
+  const [mcpContextMode, setMcpContextMode] = useState<"on_demand" | "always_loaded">("on_demand");
   const confirm = useConfirmation();
   const { openSetting } = useChrome();
   const shellOnly = isNebulaShell() && !embeddedSideChat;
@@ -1452,6 +1454,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
   const [sessionId, setSessionId] = useState("");
+  const activeSessionIdRef = useRef(sessionId);
+  activeSessionIdRef.current = sessionId;
   // A deep link can render the composer before its Core session is selected.
   // Keep it unavailable until the URL and active draft owner agree.
   const requestedSessionPending = Boolean(requestedSessionId && requestedSessionId !== sessionId);
@@ -2154,6 +2158,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setSubagentLimit(next?.maxActiveSubagents ?? activeChatSession.subagentLimit);
     setSubagentReasoningEffort(next?.subagentReasoningEffort ?? activeChatSession.subagentReasoningEffort);
     setSelectedMcpIds(next?.mcpServerIds ?? activeChatSession.mcpServerIds);
+    setMcpContextMode(next?.mcpContextMode ?? "always_loaded");
     setSelectedHookIds(next?.hookIds ?? activeChatSession.hookIds);
     if ((next?.backend ?? activeChatSession.backend) === "provider") {
       setReasoningEffort(next?.reasoningEffort ?? activeChatSession.reasoningEffort ?? "");
@@ -2230,6 +2235,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setModel(runtime.model);
     setHarnessSessionId("");
     setSelectedMcpIds(saved.mcpServerIds);
+    setMcpContextMode(saved.mcpContextMode ?? "on_demand");
     setSelectedHookIds(saved.hookIds);
     setReasoningEffort(saved.reasoningEffort ?? "");
     setHarnessReasoningEffort(saved.harnessReasoningEffort ?? "");
@@ -3052,6 +3058,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       toolsEnabled: runtimeKind === "harness" ? true : canUseTools,
       planningEnabled,
       mcpServerIds: selectedMcpIds,
+      mcpContextMode: runtimeKind === "provider" ? mcpContextMode : undefined,
       hookIds: selectedHookIds,
       // The goal's first turn is one Core starts, and it reads these from
       // the conversation; without them the new chat unchecks Subagents.
@@ -3644,35 +3651,87 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const saveProviderAssistantSelections = async (
     nextMcpServerIds: string[],
     nextHookIds: string[],
+    excludedMcpServerIds?: string[],
+    nextMcpContextMode?: "on_demand" | "always_loaded",
   ) => {
+    const editingSessionId = sessionId;
+    const editingProjectId = engagement?.id;
+    const selectionGeneration = sessionSelectionGenerationRef.current;
+    const selectionIsCurrent = () => activeSessionIdRef.current === editingSessionId
+      && activeEngagementIdRef.current === editingProjectId
+      && sessionSelectionGenerationRef.current === selectionGeneration;
+    if (!selectionIsCurrent() || assistantSettingsBusy) return;
     setSelectedMcpIds(nextMcpServerIds);
     setSelectedHookIds(nextHookIds);
     setAssistantSettingsError(undefined);
     if (!api || !sessionId) {
-      void rememberAssistantDefaults({ mcpServerIds: nextMcpServerIds, hookIds: nextHookIds });
+      setMcpContextMode(nextMcpContextMode ?? mcpContextMode);
+      void rememberAssistantDefaults({ mcpServerIds: nextMcpServerIds, hookIds: nextHookIds, mcpContextMode: nextMcpContextMode ?? mcpContextMode });
       return;
     }
-    const current = sessions.find((item) => item.id === sessionId);
-    if (!current || assistantSettingsBusy) return;
+    const current = sessions.find((item) => item.id === editingSessionId);
+    if (!current) return;
+    const before = {
+      mcpServerIds: selectedMcpIds, hookIds: selectedHookIds,
+      excludedMcpServerIds: current.assistantConfig?.excludedMcpServerIds,
+      mcpContextMode,
+    };
+    let observed = current;
+    let fetched = false;
+    const showObserved = () => {
+      setSelectedMcpIds(observed.assistantConfig?.mcpServerIds ?? observed.mcpServerIds);
+      setSelectedHookIds(observed.assistantConfig?.hookIds ?? observed.hookIds);
+      setMcpContextMode(observed.assistantConfig?.mcpContextMode ?? "always_loaded");
+    };
     setAssistantSettingsStatus("Saving assistant settings…");
     setAssistantSettingsBusy(true);
     try {
-      const updated = await api.updateChatSessionAssistantSettings(sessionId, {
-        mcpServerIds: nextMcpServerIds,
-        hookIds: nextHookIds,
-        expectedRevision: current.revision,
-      });
+      for (let attempt = 0; ; attempt += 1) {
+        const fresh = await api.getChatSession(editingSessionId);
+        observed = fresh;
+        fetched = true;
+        if (!selectionIsCurrent()) return;
+        const settings = rebaseAssistantSelections(before, {
+          mcpServerIds: nextMcpServerIds, hookIds: nextHookIds,
+          excludedMcpServerIds, mcpContextMode: nextMcpContextMode,
+        }, fresh.assistantConfig ?? {
+          mcpServerIds: fresh.mcpServerIds, hookIds: fresh.hookIds,
+          mcpContextMode: "always_loaded",
+        });
+        if (Object.keys(settings).length) {
+          try {
+            await api.updateChatAssistantConfig(editingSessionId, fresh.revision, settings);
+          } catch (error) {
+            if (attempt >= 2 || !selectionIsCurrent() || !isAssistantSelectionRevisionConflict(error)) throw error;
+            void logCaughtDiagnostic("interface.sessions.assistant_settings_revision_retry", "Assistant settings revision changed; rereading Core before a bounded retry.", error, "assistant_settings");
+            continue;
+          }
+        }
+        break;
+      }
+      const updated = await api.getChatSession(editingSessionId);
+      observed = updated;
+      if (!selectionIsCurrent()) return;
       setSessions((items) => items.map((item) => item.id === updated.id ? updated : item));
-      setSelectedMcpIds(updated.mcpServerIds);
-      setSelectedHookIds(updated.hookIds);
-      await rememberAssistantDefaults({ mcpServerIds: updated.mcpServerIds, hookIds: updated.hookIds });
-      setAssistantSettingsStatus("Assistant settings saved.");
+      showObserved();
+      const observedMode = updated.assistantConfig?.mcpContextMode ?? "always_loaded";
+      await rememberAssistantDefaults({ mcpServerIds: updated.mcpServerIds, hookIds: updated.hookIds, mcpContextMode: observedMode });
+      if (selectionIsCurrent()) setAssistantSettingsStatus("Assistant settings saved.");
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions.assistant_settings_save_failed", "Assistant settings could not be saved.", error, "assistant_settings");
-      setSelectedMcpIds(current.mcpServerIds);
-      setSelectedHookIds(current.hookIds);
-      setAssistantSettingsStatus("");
-      setAssistantSettingsError(error instanceof Error ? error.message : "Could not save assistant settings.");
+      if (fetched && selectionIsCurrent()) {
+        try {
+          observed = await api.getChatSession(editingSessionId);
+        } catch (refreshError) {
+          void logCaughtDiagnostic("interface.sessions.assistant_settings_refresh_failed", "Assistant settings could not be refreshed after a failed save.", refreshError, "assistant_settings");
+        }
+      }
+      if (selectionIsCurrent()) {
+        setSessions((items) => items.map((item) => item.id === observed.id ? observed : item));
+        showObserved();
+        setAssistantSettingsStatus("");
+        setAssistantSettingsError(error instanceof Error ? error.message : "Could not save assistant settings.");
+      }
     } finally {
       setAssistantSettingsBusy(false);
     }
@@ -4234,6 +4293,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setHarnessSessionId(summary.harnessSessionId ?? "");
       setModel(next?.backend === summary.backend ? next.model : summary.model ?? "");
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
+      setMcpContextMode(next?.mcpContextMode ?? "always_loaded");
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
       setPlanningEnabled(next?.planningEnabled ?? summary.planningEnabled === true);
@@ -5066,6 +5126,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setHarnessSessionId(summary.harnessSessionId ?? "");
       setModel(next?.backend === summary.backend ? next.model : summary.model ?? "");
       setSelectedMcpIds(next?.mcpServerIds ?? summary.mcpServerIds);
+      setMcpContextMode(next?.mcpContextMode ?? "always_loaded");
       setSelectedHookIds(next?.hookIds ?? summary.hookIds);
       if (next) setHarnessMode(next.harnessMode ?? "");
       setPlanningEnabled(next?.planningEnabled ?? summary.planningEnabled === true);
@@ -5702,6 +5763,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       harnessProfileId: harnessRuntime?.id,
       harnessSessionId: !initialSessionId && harnessSessionId ? harnessSessionId : undefined,
       mcpServerIds: embeddedSideChat ? [] : selectedMcpIds,
+      mcpContextMode: runtimeKind === "provider" ? nextSettings?.mcpContextMode ?? mcpContextMode : undefined,
       sshEnvironmentIds: embeddedSideChat ? [] : runtimeKind === "provider" ? environmentIdsForTarget(environmentTarget) : undefined,
       hookIds: embeddedSideChat ? [] : selectedHookIds,
       engagementId: engagement.id,
@@ -6913,7 +6975,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 />}
 
                 {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.isSideChat && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>{runtimeKind === "provider" && !modelVerified ? "Available when this model is verified for tools. Text chat still works." : runtimeKind === "harness" && selectedHarness?.capabilities?.mcp === false ? "This harness does not advertise messaging tools. Text chat still works." : "Coordinate with main agents in this project. Messages appear in both conversations."}</small></span></label>}
-                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
+                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} excludedIds={activeChatSession?.assistantConfig?.excludedMcpServerIds} contextMode={mcpContextMode} onContextModeChange={(mode) => void saveProviderAssistantSelections(selectedMcpIds, selectedHookIds, undefined, mode)} disabled={assistantSettingsBusy} onExclude={(id) => void saveProviderAssistantSelections(selectedMcpIds, selectedHookIds, [...(activeChatSession?.assistantConfig?.excludedMcpServerIds ?? []), id])} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 <AssistantSetupLinks items={[
                   { entry: settingCatalogEntry(runtimeKind === "provider" ? "settings.providers" : "settings.harnesses"), icon: runtimeKind === "provider" ? Settings2 : Bot, label: runtimeKind === "provider" ? "Model providers" : "Assistant harnesses", detail: runtimeKind === "provider" ? `${enabledProviders.length} enabled` : `${harnesses.filter((item) => item.enabled).length} enabled` },

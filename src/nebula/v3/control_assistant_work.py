@@ -158,6 +158,17 @@ CHAT_SETTINGS_FIELDS: dict[str, Any] = {
         "maxItems": 64,
         "description": "Select enabled MCP servers by ID from chat_settings.available.mcp_servers. Their tools are attached on the next message. Preserve existing IDs when adding a server.",
     },
+    "excluded_mcp_server_ids": {
+        "type": "array",
+        "items": {"type": "string"},
+        "maxItems": 64,
+        "description": "Provider conversations: exclude every tool from these servers next turn, including directory, discovery and ranking. Read saved settings first. Rechecking mcp_server_ids clears that exclusion; untouched servers remain on demand.",
+    },
+    "mcp_context_mode": {
+        "type": "string",
+        "enum": ["on_demand", "always_loaded"],
+        "description": "Provider next-turn MCP tool context. on_demand sends a brief directory and loads full schemas only on tool_catalog.load in this turn; the next new turn drops loaded schemas. always_loaded explicitly sends selected servers' full schemas. Existing chats without a value retain always_loaded. Read fresh settings; never change an active turn's snapshot. Project-pinned tools remain loaded and excluded servers remain absent.",
+    },
     "hook_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
     "include_knowledge": {"type": "boolean"},
     "allow_cloud_knowledge": {"type": "boolean"},
@@ -609,6 +620,7 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
             "maxItems": 64,
         },
+        "mcp_context_mode": CHAT_SETTINGS_FIELDS["mcp_context_mode"],
         "reasoning_effort": {
             "type": "string",
             "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
@@ -1904,6 +1916,7 @@ class ControlAssistantWork:
                 in {
                     "planning_enabled",
                     "mcp_server_ids",
+                    "mcp_context_mode",
                     "reasoning_effort",
                     "allow_subagents",
                     "allow_agent_messaging",
@@ -3018,6 +3031,7 @@ class ControlAssistantWork:
                 tools_enabled=tools_enabled,
                 planning_enabled=chosen.get("planning_enabled", False),
                 mcp_server_ids=chosen.get("mcp_server_ids", []),
+                mcp_context_mode=chosen.get("mcp_context_mode", "always_loaded"),
                 hook_ids=chosen.get("hook_ids", []),
                 include_knowledge=chosen.get("include_knowledge", True),
                 allow_cloud_knowledge=chosen.get("allow_cloud_knowledge", False),
@@ -3180,6 +3194,7 @@ class ControlAssistantWork:
             tools_enabled=bool(next_settings["tools_enabled"]),
             planning_enabled=bool(next_settings["planning_enabled"]),
             mcp_server_ids=next_settings["mcp_server_ids"],
+            mcp_context_mode=next_settings["mcp_context_mode"],
             hook_ids=next_settings["hook_ids"]
             if next_backend == ChatBackend.PROVIDER
             else [],

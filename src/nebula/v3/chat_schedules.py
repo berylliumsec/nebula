@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -30,6 +30,8 @@ class ScheduledTurnSettings(NamedTuple):
 
     tools_enabled: bool
     mcp_server_ids: list[str]
+    excluded_mcp_server_ids: list[str]
+    mcp_context_mode: Literal["on_demand", "always_loaded"]
     ssh_environment_ids: list[str] | None
     hook_ids: list[str]
     reasoning_effort: ReasoningEffort | None
@@ -217,6 +219,12 @@ class ChatScheduleService:
         return ScheduledTurnSettings(
             tools_enabled=tools_enabled,
             mcp_server_ids=mcp_server_ids,
+            excluded_mcp_server_ids=list(chosen("excluded_mcp_server_ids") or []),
+            mcp_context_mode=(
+                "on_demand"
+                if chosen("mcp_context_mode") == "on_demand"
+                else "always_loaded"
+            ),
             ssh_environment_ids=ssh_environment_ids,
             hook_ids=[
                 item for item in saved.get("hook_ids") or [] if isinstance(item, str)

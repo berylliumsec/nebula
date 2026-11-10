@@ -21,6 +21,121 @@ interface RealCore {
   token: string;
 }
 
+test("assistant upgrade MCP context choices exclude schemas and persist on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({
+    bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    token: "mcp-context-fixture-administration-token",
+    fixtureScript: path.resolve(import.meta.dirname, "../../tests/v3/mcp_context_fixture.py"),
+  });
+  let releaseHeld: () => void = () => { throw new Error("Held fixture is not initialized"); };
+  const heldProvider = new Promise<void>(resolve => { releaseHeld = resolve; });
+  let providerHeld = false;
+  const model = await startLocalModelStub({streamDelayMs: 0, beforeResponse: async body => {
+    if (JSON.stringify(body.messages).includes("Hold MCP context acceptance")) {
+      providerHeld = true;
+      await heldProvider;
+    }
+  }});
+  let heldTurn: Promise<Array<Record<string, unknown>>> | undefined;
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0].id;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Context fixture", provider_type: "vllm", endpoint: `${model.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verification = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verification.ok(), await verification.text()).toBe(true);
+    const serverResponse = await api.post("mcp-servers", {data: {
+      name: "context-tools", transport: "stdio", command: "/usr/bin/python3",
+      arguments: [path.resolve(import.meta.dirname, "../../tests/v3/fixtures/fake_mcp_server.py")],
+      trusted_stdio: true, cwd_policy: "fixed", cwd: core.dataDir, enabled: false,
+    }});
+    expect(serverResponse.ok(), await serverResponse.text()).toBe(true);
+    const server = await serverResponse.json() as {id: string};
+    const probe = await api.post(`mcp-servers/${server.id}/probe`, {data: {engagement_id: projectId}});
+    expect(probe.ok(), await probe.text()).toBe(true);
+    const discovered = await (await api.get(`mcp-servers/${server.id}`)).json() as {revision: number};
+    const enabled = await api.patch(`mcp-servers/${server.id}`, {data: {changes: {enabled: true}, expected_revision: discovered.revision}});
+    expect(enabled.ok(), await enabled.text()).toBe(true);
+    let sessionId: string | undefined;
+    const turn = async (prompt = "Explain the synthetic context choice without running tools.") => {
+      const start = model.requests.length;
+      const response = await api.post("chat/completions", {data: {
+        backend: "provider", provider_id: provider.id, model: "security-model",
+        engagement_id: projectId, session_id: sessionId, tools_enabled: true,
+        mcp_server_ids: [server.id], mcp_context_mode: "always_loaded",
+        include_knowledge: false, stream: false,
+        messages: [{role: "user", content: prompt}],
+      }});
+      expect(response.ok(), await response.text()).toBe(true);
+      sessionId = (await response.json() as {session_id: string}).session_id;
+      return model.requests.slice(start);
+    };
+    const hasNativeSchema = (requests: Array<Record<string, unknown>>) => requests.some(body =>
+      (body.tools as Array<{function?: {name?: string}}> | undefined)?.some(tool => tool.function?.name?.includes("read_file")));
+    expect(hasNativeSchema(await turn())).toBe(true);
+    const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    try {
+      const response = await pairingApi.post("auth/pairings", {data: {name: "MCP context acceptance"}});
+      expect(response.ok(), await response.text()).toBe(true);
+      const pairing = await response.json() as {secret: string; confirmation_code: string};
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("MCP context acceptance");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    } finally { await pairingApi.dispose(); }
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sessionId}&assistantSettings=open`);
+    const settings = page.getByRole("dialog", {name: "Assistant settings", exact: true});
+    const mode = settings.getByRole("combobox", {name: "MCP tool context"});
+    await expect(mode).toHaveValue("always_loaded");
+    const savedMode = async () => (await (await api.get(`chat-sessions/${sessionId}/assistant-config`)).json() as {settings: {mcp_context_mode: string}}).settings.mcp_context_mode;
+    heldTurn = turn("Hold MCP context acceptance without executing tools.");
+    await expect.poll(() => providerHeld).toBe(true);
+    await mode.selectOption("on_demand");
+    await expect.poll(savedMode).toBe("on_demand");
+    releaseHeld();
+    expect(hasNativeSchema(await heldTurn)).toBe(true);
+    const brief = await turn();
+    expect(hasNativeSchema(brief)).toBe(false);
+    expect(JSON.stringify(brief)).toContain("read_file");
+    const choice = settings.getByRole("checkbox", {name: /context-tools/});
+    await choice.uncheck();
+    await expect.poll(async () => (await (await api.get(`chat-sessions/${sessionId}/assistant-config`)).json() as {settings: {excluded_mcp_server_ids: string[]}}).settings.excluded_mcp_server_ids).toContain(server.id);
+    expect(JSON.stringify(await turn())).not.toContain("read_file");
+    await page.reload();
+    await clickAssistantSettings(page);
+    await expect(choice).not.toBeChecked();
+    await expect(mode).toHaveValue("on_demand");
+    await choice.check();
+    await expect.poll(async () => (await (await api.get(`chat-sessions/${sessionId}/assistant-config`)).json() as {settings: {excluded_mcp_server_ids: string[]}}).settings.excluded_mcp_server_ids).not.toContain(server.id);
+    const restored = await turn();
+    expect(hasNativeSchema(restored)).toBe(false);
+    expect(JSON.stringify(restored)).toContain("read_file");
+    await mode.selectOption("always_loaded");
+    await expect.poll(savedMode).toBe("always_loaded");
+    expect(hasNativeSchema(await turn())).toBe(true);
+    expect((await new AxeBuilder({page}).include(".chat-mcp-choices").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    const build = await (await api.get(new URL("/web-build.json", core.origin).href)).json() as {commit: string; builtAt: string};
+    const evidence = {origin: core.origin, build: {commit: build.commit, builtAt: build.builtAt}, profile: testInfo.project.name, viewport: page.viewportSize(), provider: "inert local fixture"};
+    console.info("MCP_CONTEXT_EVIDENCE", JSON.stringify(evidence));
+    await testInfo.attach("mcp-context-lan", {body: JSON.stringify(evidence), contentType: "application/json"});
+    await page.screenshot({path: testInfo.outputPath("mcp-context.png"), fullPage: true});
+  }, [
+    {name: "held provider request", dispose: async () => {releaseHeld(); if (heldTurn) await heldTurn;}},
+    {name: "API", dispose: () => api.dispose()},
+    {name: "inert provider", dispose: () => stopLocalModelStub(model)},
+    {name: "Core", dispose: () => stopRealCore(core)},
+  ]);
+});
+
 test("assistant upgrade owned cleanup preserves primary errors and reports every secondary failure", async () => {
   for (const primary of [Object.freeze(new Error("body failed")), undefined, null, "body failed"]) {
     const order: string[] = [];

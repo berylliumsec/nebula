@@ -37,6 +37,17 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_help_discovers_next_turn_mcp_context_choices(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "excluded_mcp_server_ids mcp_context_mode next turn MCP tool schemas"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "excluded_mcp_server_ids" in text
+    assert "mcp_context_mode" in text
+    assert "next turn" in text
+
+
 def test_product_help_explains_safe_project_runtime_recovery(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

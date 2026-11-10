@@ -41,6 +41,8 @@ class ChatAssistantConfigPatch(NebulaModel):
         Literal["automatic", "standard", "daybreakBlue", "daybreakRed"] | None
     ) = None
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
+    excluded_mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
+    mcp_context_mode: Literal["on_demand", "always_loaded"] | None = None
     hook_ids: list[str] | None = Field(default=None, max_length=32)
     include_knowledge: bool | None = None
     allow_cloud_knowledge: bool | None = None
@@ -58,7 +60,12 @@ class ChatAssistantConfigPatch(NebulaModel):
     def changes_something(self) -> "ChatAssistantConfigPatch":
         if not self.model_fields_set:
             raise ValueError("choose at least one Assistant setting to change")
-        for field in ("mcp_server_ids", "hook_ids"):
+        if (
+            "mcp_context_mode" in self.model_fields_set
+            and self.mcp_context_mode is None
+        ):
+            raise ValueError("choose on_demand or always_loaded for MCP tool context")
+        for field in ("mcp_server_ids", "excluded_mcp_server_ids", "hook_ids"):
             values = getattr(self, field)
             if values is not None and len(values) != len(set(values)):
                 raise ValueError(f"{field} contains duplicates")
@@ -92,6 +99,8 @@ async def chat_assistant_config(
         "harness_cyber_access_program": runtime_options.get("cyber_access_program")
         or "automatic",
         "mcp_server_ids": list(metadata.get("mcp_server_ids") or []),
+        "excluded_mcp_server_ids": list(metadata.get("excluded_mcp_server_ids") or []),
+        "mcp_context_mode": metadata.get("mcp_context_mode", "always_loaded"),
         "hook_ids": list(metadata.get("hook_ids") or []),
         "include_knowledge": metadata.get("include_knowledge", True),
         "allow_cloud_knowledge": metadata.get("allow_cloud_knowledge", False),
@@ -280,6 +289,14 @@ async def update_chat_assistant_config(
     current = await chat_assistant_config(store, session)
     changes = patch.model_dump(exclude_unset=True, mode="json")
     selected = {**current, **changes}
+    if selected["backend"] == "provider":
+        included = set(selected["mcp_server_ids"] or [])
+        excluded = set(selected["excluded_mcp_server_ids"] or [])
+        if "mcp_server_ids" in changes:
+            excluded.update(set(current["mcp_server_ids"]) - included)
+        if included & set(changes.get("excluded_mcp_server_ids") or []):
+            raise ValueError("an MCP server cannot be selected and excluded")
+        selected["excluded_mcp_server_ids"] = sorted(excluded - included)
     if changes.get("subagent_provider_id") and changes.get(
         "subagent_harness_profile_id"
     ):
@@ -297,6 +314,8 @@ async def update_chat_assistant_config(
     metadata = {**session.metadata, "assistant_config": selected}
     for key in (
         "mcp_server_ids",
+        "excluded_mcp_server_ids",
+        "mcp_context_mode",
         "hook_ids",
         "reasoning_effort",
         "allow_agent_messaging",

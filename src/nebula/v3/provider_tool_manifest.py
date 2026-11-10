@@ -128,6 +128,7 @@ def reconcile(
     deferred: Iterable[str],
     introduce: Iterable[str] = (),
     reason: str = "preload",
+    forget_deferred_schemas: bool = False,
 ) -> ToolManifest:
     """A full, eligible selection replaces active state; identical state is a no-op.
 
@@ -136,9 +137,18 @@ def reconcile(
     remain immutable. A re-enabled deferred tool must be loaded again.
     """
 
-    before = {item.name: item for item in previous.definitions}
-    declared = {item.name: item for item in native}
     deferred_names, introduced = set(deferred), set(introduce)
+    # Only fresh on-demand turns opt in. Resume and request-loop reconciliation
+    # retain exactly the loaded definitions of their current turn.
+    before = {
+        item.name: (
+            item.model_copy(update={"schema_present": False})
+            if forget_deferred_schemas and item.name in deferred_names
+            else item
+        )
+        for item in previous.definitions
+    }
+    declared = {item.name: item for item in native}
     definitions: list[ToolKnowledge] = []
     for name in sorted(specs):
         spec = specs[name]

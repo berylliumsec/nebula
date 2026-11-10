@@ -148,12 +148,42 @@ the file wins over the Tool approval chosen for the import.
 
 ## How the assistant uses MCP tools
 
-In a provider chat, the servers ticked under MCP servers in Assistant settings
-are always sent: every usable tool they offer is in the function list of every
-request. Every other enabled, probed server with at least one usable tool is
-available on demand. Unloaded tools contribute a schema-free directory; a
-successful load or preload adds their complete definitions to the conversation's
-durable tools context. A
+In a provider chat, **Assistant settings → MCP tool context** chooses how
+selected servers reach the model. New UI conversations default to **Load schemas
+on demand** (`mcp_context_mode: on_demand`): eligible servers send only a short,
+schema-free directory until the assistant explicitly uses `tool_catalog.load`.
+Ranking supplies hints, never preloaded schemas. Loaded definitions remain exact
+through this turn's routing, compaction, reconnect and resume; the next **new
+turn** drops their schema presence and loads again only when needed. Historical
+messages and immutable manifest revisions are not deleted.
+
+**Always load selected schemas** (`always_loaded`) explicitly sends every usable
+tool of checked servers as native declarations. Existing conversations missing
+the field retain this legacy mode. Changing modes applies to the next turn,
+never a running or resumed turn. Project **Always loaded tools** pins remain
+protected in either mode.
+
+Unchecking a previously checked server saves an explicit
+`excluded_mcp_server_ids` choice for this conversation's **next turn**. Every tool
+from that server is removed from full schemas, the schema-free directory,
+discovery, ranking and loading until the server is checked again. This reduces
+assembled tool context even if a tool was loaded earlier. Untouched, never-selected
+servers remain available on demand; use the server's Exclude action to exclude an
+on-demand server without selecting it first. Excluded servers show “Not sent next
+turn”; check the existing server checkbox to restore them.
+
+Core saves the choice, including across refresh, forks and automatic goal
+continuations. An in-flight turn (including resume) keeps its frozen snapshot;
+changing next-turn settings does not modify its tools. Transcript history and
+immutable manifest revisions remain intact. Older conversations and snapshots
+without exclusions default to the previous behavior. This is a provider-chat
+context selection, not a permission change or native harness tool control.
+
+Other enabled, probed servers with at least one usable tool are available on
+demand. Unloaded tools contribute a schema-free directory; a
+successful load adds their complete definitions to the turn's durable tools
+context. Legacy `always_loaded` mode also permits ranking preloads for unselected
+sources and carries loaded definitions across turns. A
 server that is disabled, has not been probed, or has no usable tool left is not
 offered and does not fail the turn. The on-demand servers join only a turn that
 already uses tools, such as a command-runtime chat or one with a ticked server,
@@ -186,10 +216,10 @@ explicitly loaded definitions in immutable session-manifest revisions and restor
 the referenced context on resume. Each assembled request contains one canonical
 complete definition per loaded tool, outside summarizable transcript history.
 Compaction, reconnect and Core restart therefore preserve exact schemas. A later
-turn reconciles changed definitions or availability. Disabling or revoking a
+turn reconciles changed definitions or availability, and `on_demand` first clears
+schema presence for deferred tools without resetting revision history. Disabling or revoking a
 source removes active definitions and execution permission while preserving
-historical calls. Unchecking a chat source can retain known schemas when it is
-still eligible on demand. A provider may cache the repeated prefix, but persistence
+historical calls. Excluded sources remain absent in either mode. A provider may cache the repeated prefix, but persistence
 alone does not establish cache savings.
 
 Search runs on the Nebula host with the same local embedding model used for
@@ -198,14 +228,17 @@ keyword matching. Nothing about the tools or the request leaves the machine for
 search. Until the model has been downloaded and loaded, search uses keyword
 matching only. Before each turn, the same search ranks the tools against the
 operator's latest message: only current definitions absent from the conversation
-are candidates. A strong match loads its complete schema into durable context,
-and weaker matches are named as hints. A directory entry or hint never establishes
+are candidates. In `always_loaded` mode a strong match loads its complete schema
+into durable context; in `on_demand` mode all matches are hints only.
+A directory entry or hint never establishes
 that a schema was loaded. Native harness tool-loading behavior is unchanged.
 
 Loading on demand is on for every project. Set `on_demand_tools` to `false` on
 a project's scope (`PUT /api/v1/engagements/{id}/scope`) to turn it off: only
 the ticked servers are then offered, and all their tools go out with every
-request. A tool listed in the scope's `always_loaded_tools` is sent with every
+request in legacy `always_loaded` mode. A conversation explicitly choosing
+`on_demand` still gets its catalog gateway and defers selected schemas even when
+that project flag is off. A tool listed in the scope's `always_loaded_tools` is sent with every
 request whenever its server is offered, ticked or on demand. A project that opts into Jev suggestions from
 TypeSafe uses Jev's picks instead of the local ranking, and falls back to the
 local ranking when Jev is unavailable. Jev is sent the redacted operator
@@ -214,13 +247,15 @@ server names and descriptions, and tool names and descriptions — never tool
 output.
 
 Jev ranks two things in one call: the on-demand servers and their individual
-tools. Ticked servers are already loaded, so Jev is not asked about them. Deferred
+tools. In `always_loaded` mode ticked servers are already loaded, so Jev is not
+asked about them; in `on_demand` they are ranked too. Deferred
 tools whose current complete definition is already present are also excluded.
 It is never asked whether the turn needs a tool at all; every question
 carries a "none of these" option instead. A server's rank weights the tools
 that come from it — the top-ranked server's tools keep their full score and
 the bottom-ranked server's tools keep half — and at most three tools survive:
-up to two have their schema preloaded, and the rest are named as hints
+up to two have their schema preloaded in `always_loaded` mode, while `on_demand`
+converts every pick into a schema-free hint
 alongside the servers most likely to hold what the request needs. A tool whose
 question rated "none of these" higher is never preloaded, only hinted.
 

@@ -646,14 +646,39 @@ startup, Core mirrors the bundled passages and their precomputed vectors into
 the local Chroma product-help collection. The source digest and passage count
 determine whether the mirror needs replacement; product help remains searchable
 from the bundled index if Chroma is unavailable.
-For MCP cost questions, the assistant points to Assistant settings for checked
-servers and Project policy for Always loaded tools. Provider chats keep complete
-loaded schemas in a durable Core tools context through compaction, reconnect and
-restart. Each assembled request has one canonical definition per loaded tool;
+For MCP cost questions, the assistant points to **Assistant settings → MCP tool
+context** and Project policy for Always loaded tools. New UI provider chats
+explicitly choose `mcp_context_mode: on_demand`: selected and eligible on-demand
+sources send a brief directory; only `tool_catalog.load` introduces full schemas
+for this turn. Ranking supplies hints only, never automatic preloads. A fresh
+turn clears deferred schema presence, not historical messages or manifest
+revisions. Routing, compaction, reconnect and resume within the current turn keep
+the exact manifest. The accessible mode selector also offers **Always load
+selected schemas** (`always_loaded`), the explicit opt-in to selected native
+schemas and legacy carried/preloaded catalog schemas. Existing saved chats
+missing this field retain `always_loaded`. A saved mode change applies next turn
+and never mutates an active request snapshot. Project-pinned tools stay loaded;
+mandatory Core tools and native harness behavior are unchanged. Conversation
+on-demand mode retains its catalog gateway even when project deferral is off.
+`set_chat_settings` discovers and saves `mcp_context_mode` beside MCP selections;
+read current settings, preserve unrelated values, then read Core's observed
+saved value before saying it is saved. Defaults, forks, retries, goals and
+schedules carry the saved choice. Each assembled request has one canonical definition per loaded tool;
 stateless providers still receive their required native declarations on every
 request. A directory entry or ranking suggestion is not a loaded schema.
-Unchecking a chat source can leave its already loaded definitions known while the
-source remains eligible on demand. Disabling or revoking the source removes its
+Unchecking a provider chat's MCP server excludes every tool from that source on
+the next turn: no complete schemas, directory entries, discovery, ranking or load
+reinsertion. The conversation Assistant settings show “Excluded · Not sent next
+turn”; their server-level Exclude action also handles on-demand sources. Rechecking
+restores the server. `set_chat_settings` discovers and saves
+`excluded_mcp_server_ids` alongside `mcp_server_ids`; read current settings first,
+preserve unrelated choices, and read Core's saved result before claiming success.
+Core derives exclusions from deselected IDs, distinguishes them from untouched
+on-demand sources, and preserves them across refresh, forks and automatic goals.
+Current in-flight/resumed turns retain their frozen snapshot and historical
+manifest revisions and transcripts remain unchanged. Missing exclusions in old
+snapshots default empty; native harness behavior and permissions are unchanged.
+Disabling or revoking the source removes its
 active definitions and execution permission; historical calls remain. Jev is
 optional, respects the existing project privacy opt-in, and ranks only eligible
 definitions absent at their current complete digest. Native harness tool loading

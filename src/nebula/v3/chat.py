@@ -671,6 +671,8 @@ class ChatCompletionRequest(NebulaModel):
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    excluded_mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    mcp_context_mode: Literal["on_demand", "always_loaded"] = "always_loaded"
     # None: every enabled SSH environment when command tools are on; a list
     # narrows the turn to those hosts (empty means Core only).
     ssh_environment_ids: list[str] | None = Field(default=None, max_length=64)
@@ -5164,6 +5166,8 @@ class ChatService:
                     include_knowledge=False,
                     tools_enabled=settings.tools_enabled,
                     mcp_server_ids=settings.mcp_server_ids,
+                    excluded_mcp_server_ids=settings.excluded_mcp_server_ids,
+                    mcp_context_mode=settings.mcp_context_mode,
                     ssh_environment_ids=settings.ssh_environment_ids,
                     hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
@@ -5547,6 +5551,8 @@ class ChatService:
                         else latest.tools_enabled
                     ),
                     mcp_server_ids=settings.mcp_server_ids,
+                    excluded_mcp_server_ids=settings.excluded_mcp_server_ids,
+                    mcp_context_mode=settings.mcp_context_mode,
                     ssh_environment_ids=(
                         (
                             list(source.ssh_environment_ids)
@@ -5647,6 +5653,8 @@ class ChatService:
                     include_knowledge=False,
                     tools_enabled=settings.tools_enabled,
                     mcp_server_ids=settings.mcp_server_ids,
+                    excluded_mcp_server_ids=settings.excluded_mcp_server_ids,
+                    mcp_context_mode=settings.mcp_context_mode,
                     ssh_environment_ids=settings.ssh_environment_ids,
                     hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
@@ -5885,6 +5893,30 @@ class ChatService:
             )
         else:
             new_messages = durable_incoming
+        # A saved choice is authoritative for a new turn, including automatic
+        # continuations and clients carrying an older positive selection.
+        excluded_mcp_ids = set(
+            session.metadata.get(
+                "excluded_mcp_server_ids", request.excluded_mcp_server_ids
+            )
+            if session is not None
+            else request.excluded_mcp_server_ids
+        )
+        request = request.model_copy(
+            update={
+                "mcp_context_mode": (
+                    session.metadata.get("mcp_context_mode", "always_loaded")
+                    if session is not None
+                    else request.mcp_context_mode
+                ),
+                "excluded_mcp_server_ids": sorted(excluded_mcp_ids),
+                "mcp_server_ids": [
+                    identifier
+                    for identifier in request.mcp_server_ids
+                    if identifier not in excluded_mcp_ids
+                ],
+            }
+        )
         if request.planning_enabled is None:
             request = request.model_copy(
                 update={
@@ -6428,12 +6460,15 @@ class ChatService:
                     )
                 if not allow_cloud_tool_results:
                     raise ChatToolResultConsentRequired(tool_families, profile.name)
-            # Selected servers go out in full on every request; every other
-            # usable server joins the on-demand catalog for the ranker. The
-            # catalog never turns tools on by itself, so a plain chat stays
-            # one.
+            # Selection grants access; the conversation's loading mode decides
+            # whether selected servers are native or directory-only.
             catalog_profiles = (
-                await self._mcp_catalog(engagement_id, mcp_profiles)
+                await self._mcp_catalog(
+                    engagement_id,
+                    mcp_profiles,
+                    excluded=excluded_mcp_ids,
+                    force_on_demand=request.mcp_context_mode == "on_demand",
+                )
                 if self.tool_platform is not None and request.allow_mcp_catalog
                 else ()
             )
@@ -6739,9 +6774,14 @@ class ChatService:
                             else ()
                         ),
                     ],
-                    always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
+                    always_loaded_sources=(
+                        [f"mcp:{item.id}" for item in mcp_profiles]
+                        if request.mcp_context_mode == "always_loaded"
+                        else []
+                    ),
                 )
-                if on_demand_enabled(tool_components.scope)
+                if request.mcp_context_mode == "on_demand"
+                or on_demand_enabled(tool_components.scope)
                 else {}
             )
             tool_index = self._tool_index() if deferred_specs else None
@@ -6759,6 +6799,7 @@ class ChatService:
                     if name not in deferred_specs
                 ),
                 deferred=deferred_specs,
+                forget_deferred_schemas=request.mcp_context_mode == "on_demand",
             )
             ranking_candidates = absent_candidates(deferred_specs, selection)
             if deferred_specs:
@@ -7106,12 +7147,28 @@ class ChatService:
                 # Ranking sees only absent current definitions. Discovery and
                 # execution retain the complete eligible deferred catalog.
                 catalog_receipt.deferred = sorted(deferred_specs)
+                if request.mcp_context_mode == "on_demand":
+                    catalog_receipt.suggested = list(
+                        dict.fromkeys(
+                            [
+                                *catalog_receipt.preloaded,
+                                *catalog_receipt.suggested,
+                            ]
+                        )
+                    )
+                    catalog_receipt.preloaded = []
+                    if tool_suggestions is not None:
+                        tool_suggestions = {
+                            **tool_suggestions,
+                            "preloaded": [],
+                            "suggested": catalog_receipt.suggested,
+                        }
                 # The model is told which server each pick comes from and what
                 # the operator says that server is for.
                 catalog_receipt.sources = picked_sources(
                     catalog_receipt,
                     deferred_specs,
-                    mcp_catalog_sources(catalog_profiles),
+                    mcp_catalog_sources((*mcp_profiles, *catalog_profiles)),
                     ranked=ranked_sources,
                 )
                 catalog = catalog_components(
@@ -7134,6 +7191,7 @@ class ChatService:
                 ),
                 deferred=deferred_specs,
                 introduce=(tool_catalog or {}).get("preloaded", []),
+                forget_deferred_schemas=request.mcp_context_mode == "on_demand",
             )
             model_request = apply_tools_context(
                 model_request, tool_manifest, receipt=tool_catalog
@@ -7189,6 +7247,8 @@ class ChatService:
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
                     "mcp_server_ids": [item.id for item in mcp_profiles],
+                    "excluded_mcp_server_ids": list(request.excluded_mcp_server_ids),
+                    "mcp_context_mode": request.mcp_context_mode,
                     "mcp_snapshot": [
                         item.model_dump(mode="json") for item in mcp_profiles
                     ],
@@ -12571,7 +12631,12 @@ class ChatService:
         return history
 
     async def _mcp_catalog(
-        self, engagement_id: str, selected: Sequence[McpServerProfile]
+        self,
+        engagement_id: str,
+        selected: Sequence[McpServerProfile],
+        *,
+        excluded: set[str] | None = None,
+        force_on_demand: bool = False,
     ) -> tuple[McpServerProfile, ...]:
         """Usable MCP servers the operator did not select, for on-demand use.
 
@@ -12587,11 +12652,11 @@ class ChatService:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
-        if not on_demand_enabled(scope):
+        if not force_on_demand and not on_demand_enabled(scope):
             return ()
         return await catalog_mcp_profiles(
             self.store,
-            exclude={item.id for item in selected},
+            exclude={item.id for item in selected} | (excluded or set()),
             bypass_permissions=scope.bypass_permissions,
             engagement_id=engagement_id,
         )
@@ -17608,6 +17673,10 @@ class ChatService:
         return {
             "tools_enabled": prepared.source_request.tools_enabled,
             "mcp_server_ids": list(prepared.source_request.mcp_server_ids),
+            "excluded_mcp_server_ids": list(
+                prepared.source_request.excluded_mcp_server_ids
+            ),
+            "mcp_context_mode": prepared.source_request.mcp_context_mode,
             "hook_ids": list(prepared.source_request.hook_ids),
             "provider_subagent": (
                 prepared.source_request.harness_provider_subagent()

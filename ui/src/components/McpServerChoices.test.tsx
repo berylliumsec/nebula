@@ -29,8 +29,8 @@ describe("MCP server choices", () => {
     render(<McpServerChoices api={api} projectId="project-1" servers={servers} selectedIds={["github"]} disabled={false} onChange={onChange} />);
 
     await waitFor(() => expect(getEngagementScope).toHaveBeenCalledWith("project-1"));
-    expect(screen.getByText("Checked servers are sent with every message. Nebula loads tools from the rest only when a message needs them.")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", {name: /^github\s*24 tools · Always sent$/})).toBeChecked();
+    expect(screen.getByText(/Unchecking excludes all their tools next turn/)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", {name: /^github\s*24 tools · Always loaded$/})).toBeChecked();
     expect(screen.getByRole("checkbox", {name: /^linear\s*11 tools · On demand$/})).not.toBeChecked();
 
     await user.click(screen.getByRole("checkbox", {name: /^linear/}));
@@ -45,7 +45,7 @@ describe("MCP server choices", () => {
 
     expect(await screen.findByText("On-demand tools are off for this project, so only checked servers are sent.")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", {name: /^linear\s*11 tools · Not sent$/})).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", {name: /^github\s*24 tools · Always sent$/})).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", {name: /^github\s*24 tools · Always loaded$/})).toBeInTheDocument();
   });
 
   it("keeps servers on demand when Jev is on, since Jev implies deferral", async () => {
@@ -76,5 +76,23 @@ describe("MCP server choices", () => {
     getEngagementScope.mockResolvedValue(scope({onDemandTools: true}));
     render(<McpServerChoices api={api} projectId="project-1" servers={[{...server("Notebook", 11), projectId: "project-1"}]} selectedIds={[]} disabled={false} onChange={vi.fn()} />);
     expect(await screen.findByRole("checkbox", {name: /Notebook\s*11 tools · Select to grant this assistant/})).not.toBeChecked();
+  });
+
+  it("shows excluded servers as not sent and restores through the existing checkbox", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<McpServerChoices servers={servers} selectedIds={[]} excludedIds={["github"]} disabled={false} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", {name: /github.*Excluded · Not sent next turn/});
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith(["github"]);
+  });
+
+  it("can exclude an untouched on-demand server without checking it first", async () => {
+    const user = userEvent.setup();
+    const onExclude = vi.fn();
+    render(<McpServerChoices servers={servers} selectedIds={[]} disabled={false} onChange={vi.fn()} onExclude={onExclude} />);
+    await user.click(screen.getByRole("button", {name: "Exclude linear next turn"}));
+    expect(onExclude).toHaveBeenCalledWith("linear");
   });
 });
