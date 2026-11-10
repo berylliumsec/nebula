@@ -1,5 +1,18 @@
 # Simulation Core deployer
 
+Built releases retain the complete canonical runtime bundle at
+`dist/nebula-runtime`, including its paired manifest and digest. Configure the
+foreground production unit with
+`Environment=NEBULA_RUNTIME_BUNDLE=/srv/apple-sim/nebula/current/dist/nebula-runtime`.
+The outer release's deployment manifest is not a standalone runtime bundle.
+Source placeholders under `ui/src-tauri/resources` are not deployable payloads.
+
+Use `KillMode=process` and `ExitType=main` when replacing the foreground
+supervisor so independently retained API and execution workers survive. A unit
+stop then detaches the supervisor; use authenticated Core lifecycle controls for
+full worker shutdown. Verify fresh work state and retained process identities at
+the cutover boundary.
+
 `nebula_deployer.py`, `nebula_staged_deployer.py`, and `nebula_deploy_gate.py` are the source for the
 `simulation` user's installed tools in `/home/simulation/.local/bin`. The
 `nebula-deploy.timer` runs `python3 -m nebula_deployer cycle` every 15 minutes.
