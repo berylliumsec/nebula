@@ -1,5 +1,5 @@
 {
-  "change_digest": "d53dec0627fdfd2a530f06a8a1479a0ba471938fcfc52c5d03fd9ce9244fff9c",
+  "change_digest": "492d32cb173a5fa745aacf6438de1a4515a7e82afcb103291e19ae3f63fdef4d",
   "reviewed_by": "Copilot",
   "reason": "Terminal transcript scrolling: wheel reporting, direct paging, reading-position retention, returning to live output, native copy, draft preservation and standalone Mac installation. Collected 22 TUI, 5 selected PTY, 3 packaging, 1 help-index/Chroma sync and 2 paired LAN-Core scroll/recall tests. The shared LAN fixture optionally launches an installed client; both consumers are selected.",
   "exclusions": "No browser, native desktop, provider, API or durable transcript behavior changes. Browser/mobile matrix and frontend build are inapplicable to this prompt_toolkit interface; settingsCatalog changes only terminal help keywords. Real-Core LAN acceptance is recorded separately. Omit unrelated PTY journeys, including the pre-existing wide-layout test that incorrectly expects an idle label for an unselected chat; its selected-chat-only behavior is independently covered in test_terminal_tui.py. No full suites.",

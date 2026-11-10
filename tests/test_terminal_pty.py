@@ -54,7 +54,7 @@ def terminal(code, *, ready=b"You:", columns=80, rows=24):
                 screen_stream.feed(decoder.decode(chunk))
         current = "\n".join(screen.display) if rendered else bytes(output)
         assert marker in current and all(item not in current for item in absent), (
-            output.decode(errors="replace")
+            "\n".join(screen.display) if rendered else output.decode(errors="replace")
         )
         return bytes(output)
 
@@ -154,6 +154,12 @@ async def main():
     await ui.start()
     ui.open_view({'id':'project','name':'Project'},{'id':'chat','title':'Scroll chat'})
     ui.show_history([{'role':'assistant','content':'\\n\\n'.join(f'History line {i:03}' for i in range(100)),'metadata':{}}])
+    wheel_steps=0
+    @ui.app.key_bindings.add('c-t')
+    def wheel_checkpoint(event):
+        nonlocal wheel_steps
+        wheel_steps+=1
+        ui.activity(f'Wheel checkpoint {wheel_steps}')
     async def update():
         while ui.composer.text != 'draft!':
             await asyncio.sleep(0.01)
@@ -205,9 +211,16 @@ asyncio.run(main())
         read("F12 Scroll", rendered=True)
         os.write(master, b"\x1b[24~")
         read("F12 Copy", rendered=True)
-        os.write(master, b"\x1b[<64;45;8M" * 6)
-        read("History line 095", rendered=True, absent=("LIVE TAIL",))
-        os.write(master, b"\x1b[<65;45;8M" * 6)
+        # A visible checkpoint makes each wheel event consume a fresh frame,
+        # rather than replaying a burst against prompt_toolkit's old render info.
+        wheel_steps = 0
+        for direction in (64, 65):
+            for _ in range(rows):
+                wheel_steps += 1
+                os.write(master, f"\x1b[<{direction};45;8M\x14".encode())
+                read(f"Wheel checkpoint {wheel_steps}", rendered=True)
+            if direction == 64:
+                assert "LIVE TAIL" not in "\n".join(read.screen.display)
         read("LIVE TAIL", rendered=True)
         os.write(master, b"\t!")
         read("FOLLOWED TAIL", rendered=True)
