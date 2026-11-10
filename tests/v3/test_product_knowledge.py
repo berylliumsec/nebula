@@ -37,6 +37,16 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_help_explains_safe_project_runtime_recovery(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "automatic project runtime recovery unknown tool effects"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "recovery" in text and "operator review" in text
+    assert "paused" in text and "never" in text
+
+
 def test_product_search_finds_enforced_memory_budgets_and_butler_actions(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("memory budgets swap reserve worker limits")

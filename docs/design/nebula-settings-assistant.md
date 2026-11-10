@@ -1,5 +1,14 @@
 # Nebula assistant contract
 
+Project runtime recovery is a Core lifecycle operation, not a memory-budget
+setting. An expired project process can leave chat delivery unavailable while
+the host API is healthy. Core automatically reconciles positively dead owners
+and uses durable recovery receipts; unknown tool effects require review, and
+pre-existing paused goals stay paused. Butler must not suggest raising budgets,
+clearing ownership, replaying an uncertain operation or restarting all of Core
+as a substitute for reading deployment status and the recorded recovery outcome.
+There is no new Settings destination or browser-side recovery mutation.
+
 Memory budgets include the observed resident-runtime reserve and minimum Core
 reserve. Butler reads these through the same API as Settings. It must not lower
 Core reserve below resident requirements or describe declared service capacity as

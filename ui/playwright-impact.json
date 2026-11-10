@@ -119,6 +119,11 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "runtime-auto-recovery": [
+      {"area":"runtime-auto-recovery","project":"model-desktop","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"dead project runtime recovers automatically without restarting Core or duplicating the user request$"},
+      {"area":"runtime-auto-recovery","project":"model-chromium-390","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"dead project runtime recovers automatically without restarting Core or duplicating the user request$"},
+      {"area":"runtime-auto-recovery","project":"model-webkit-390","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"dead project runtime recovers automatically without restarting Core or duplicating the user request$"}
+    ],
     "openai-daybreak": [
       {"area":"openai-daybreak","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade OpenAI API Daybreak Blue profile sends its saved key and program on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"openai-daybreak","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade OpenAI API Daybreak Blue profile sends its saved key and program on production LAN Core","runtime":"real-core","shard":"1/1"},

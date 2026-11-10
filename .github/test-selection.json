@@ -1,31 +1,41 @@
 {
-  "change_digest": "ac0fd21dc38e6fc74ef5c02dee849b0d7f936332a0d5e067780a62feb79e07fc",
-  "reviewed_by": "Codex; independently validated API-worker header admission and every sync/async terminal transport path",
-  "reason": "Two transport cases cover mutation methods, safe reads, explicit keys, streams, auth retention and no retries. TLS LAN TUI covers paired sends, MCP settings and goal changes under mutation-key admission. Package and product guidance sync remain selected. Includes formatter-only corrections to two baseline tests with verified identical AST; no behavioral test expansion.",
-  "exclusions": "Shared Python terminal HTTP transport only. Browser/frontend/native UI not changed; no broad suites.",
-  "python_versions": [
-    "3.12"
-  ],
+  "change_digest": "09c940ece3119a960bf17662bef3853458a7ac771342028825b224b12d90cf71",
+  "reviewed_by": "Copilot; independently validated dead-owner lease loss and the missing expired-owner recovery path",
+  "reason": "Focused dead-worker reconciliation and durable automatic recovery on SQLite and disposable PostgreSQL, real process identity and recovery restart contracts, shared journal compatibility, existing pause/continuation handling, product-help source-digest synchronization, and one committed production-LAN crash/recovery journey in desktop Chromium, mobile Chromium and mobile WebKit.",
+  "exclusions": "No frontend controls, layout, origin/auth policy or native client changed. Exact stale fixture cases failing identically on untouched main are excluded: restart recovery projected-result/idle-continuation fixtures, an unrestricted host-command fixture, producer SimpleNamespace fixtures missing source_request, and an API delivery fixture with a different transaction owner. These baseline failures are recorded in the session receipt; new focused tests cover the changed invariants. No live provider actions or broad suites. Native pidfd-safe system Python is required; the existing uv interpreter lacks pidfd APIs.",
+  "python_versions": ["3.12"],
   "python_node": false,
   "python_browser": false,
   "checks": [],
-  "expected_tests": {
-    "python": 5,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
-  "expected_python_jobs": {
-    "portable": 0,
-    "packaged_native": 0
-  },
+  "expected_tests": {"python": 137, "frontend": 0, "native": 0, "playwright": 3},
   "python": [
-    "tests/test_terminal_transport.py",
-    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
-    "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies",
-    "tests/v3/test_terminal_message_recall_knowledge.py::test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core"
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_runtime_reconciliation.py",
+    "tests/v3/test_runtime_recovery.py",
+    "tests/v3/test_recovery_reconciliation.py",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_recovery_of_an_old_snapshot_never_overwrites_a_projected_result",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_recovered_goal_turn_continues_the_goal",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_running_goal_waiting_for_a_subagent_is_left_running",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_idle_goal_reconciler_does_not_count_idle_time_as_active",
+    "tests/v3/test_runtime_chat_stream.py::test_committed_batch_replays_on_independent_connection_with_stable_cursors",
+    "tests/v3/test_runtime_chat_stream.py::test_cancellation_joins_publication_and_never_undoes_acknowledged_frames",
+    "tests/v3/test_runtime_chat_stream.py::test_handoff_keeps_one_epoch_and_never_hides_the_next_segment",
+    "tests/v3/test_runtime_chat_stream.py::test_end_marker_at_page_boundary_does_not_skip_a_resumed_segment",
+    "tests/v3/test_runtime_chat_stream.py::test_terminal_turn_commit_does_not_hide_its_later_final_frame",
+    "tests/v3/test_runtime_chat_stream.py::test_publication_without_exact_project_authority_is_rejected",
+    "tests/v3/test_runtime_chat_stream.py::test_cursor_after_the_committed_end_returns_without_waiting",
+    "tests/v3/test_runtime_chat_stream.py::test_cursor_ahead_of_the_journal_requires_reload",
+    "tests/v3/test_runtime_chat_stream.py::test_actual_chat_producer_persists_frames_before_viewers_and_settles_failure",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_safe_project_runtime_recovery",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "runtime-auto-recovery/model-desktop",
+    "runtime-auto-recovery/model-chromium-390",
+    "runtime-auto-recovery/model-webkit-390"
+  ]
 }
