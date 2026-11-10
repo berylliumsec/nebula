@@ -798,12 +798,10 @@ def test_the_reserve_covers_the_largest_catalog_picks_routing_can_send(tmp_path)
         assert tools + prefix + chat_module.estimate_tokens(added) <= reserve
 
 
-async def test_context_status_reports_the_working_ceiling_on_a_large_window(tmp_path):
-    """Stream X: a 1M-token model is sized by the 200,000-token working ceiling.
+async def test_context_status_reports_model_relative_target_on_a_large_window(tmp_path):
+    """The meter, compaction and preflight share the model-relative limits.
 
-    The meter, compaction and preflight all read the same limits, so the
-    status the Working context panel shows carries the ceiling as the target
-    and names it, while the window and hard capacity stay the model's.
+    A 1M-token model compacts at 60% of usable input, without a 200K ceiling.
     """
 
     profile = _profile(local=False)
@@ -820,10 +818,83 @@ async def test_context_status_reports_the_working_ceiling_on_a_large_window(tmp_
     status = await service.context_status(session.id)
 
     assert status.context_window == 1_000_000
-    assert status.target_input_tokens == 200_000
-    assert status.compacted_input_target == 160_000
-    assert status.input_capacity is not None and status.input_capacity > 900_000
-    assert (status.binding_limit, status.window_limit) == ("ceiling", "model")
+    assert status.input_capacity == 968_000
+    assert status.target_input_tokens == 580_800
+    assert status.compacted_input_target == 580_800
+    assert (status.binding_limit, status.window_limit) == ("model", "model")
+
+
+@pytest.mark.parametrize("window", [16_000, 400_000])
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+async def test_conversation_compacts_only_above_sixty_percent_of_model_input(
+    tmp_path, window, offset
+):
+    profile = _profile(local=True)
+    profile.metadata["options"] = {}
+    profile.metadata["model_descriptors"] = [
+        {"id": "model-a", "context_window": window, "max_output_tokens": 2_000}
+    ]
+    limits = resolve_context_limits(profile, model="model-a")
+    target = (window - 2_000) * 3 // 5
+    assert limits.target_input_tokens == target
+    instructions = "Preserve the operator's constraints."
+    current = chat_module.ChatRequestMessage(role=ChatRole.USER, content="Continue.")
+    roles = [
+        ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT for index in range(8)
+    ]
+    base = estimate_messages(
+        [
+            *[ModelMessage(role=role.value, content="z") for role in roles],
+            ModelMessage(role="user", content=current.content),
+        ],
+        instructions,
+    )
+    each, remainder = divmod(target + offset - base, len(roles))
+    history = [
+        "z" + " x." * (each + (index < remainder)) for index in range(len(roles))
+    ]
+    _, service, session, profile, provider = await _chat(
+        tmp_path,
+        lambda provider_id: ReportingProvider(provider_id),
+        history=history,
+        profile=profile,
+    )
+    stored = await service._session_messages(session)
+    messages = [
+        *[
+            chat_module.ChatRequestMessage(role=role, content=text)
+            for role, text in zip(roles, history, strict=True)
+        ],
+        current,
+    ]
+    assert (
+        estimate_messages(
+            [
+                ModelMessage(role=item.role.value, content=item.content)
+                for item in messages
+            ],
+            instructions,
+        )
+        == target + offset
+    )
+
+    sent, _, _, snapshot, _ = await service._model_context(
+        requested_output_tokens=None,
+        profile=profile,
+        provider=provider,
+        model="model-a",
+        messages=messages,
+        stored_messages=stored,
+        session=session,
+        instructions=instructions,
+    )
+
+    assert (snapshot is not None) == (offset > 0)
+    assert bool(_compactions(provider)) == (offset > 0)
+    assert sent[-1].content.startswith(current.content)
+    assert [
+        message.content for message in await service._session_messages(session)
+    ] == history
 
 
 pytestmark = pytest.mark.anyio

@@ -79,27 +79,24 @@ across routes eligible for the required parameters apply. The fallback window is
 8,192 tokens with a 2,048-token output allowance when reliable capacity is
 unknown. This is an estimate, not a promise from the provider.
 
-The default trigger is `floor(0.75 × working_input_capacity)`. Input capacity is
-the resolved context window minus reserved output, also capped by any separate
-input limit. The **working input capacity** is the same figure held to the
-**working ceiling**: `min(input_capacity, ceil(200,000 / 0.75))`, so the target
-is at most 200,000 tokens however large the window is. Models attend less
-reliably across very long contexts, tool results included, so a 1M-token model
-compacts and clears as a 266,667-token one would. Hard capacity checks keep the
-real window and input capacity. An operator who configures the profile's
-**Context window** above 200,000 tokens (Settings, advanced provider options)
-opts into a larger working context: the ceiling is lifted and that window sizes
-it as before. `compacted_input_target`, `floor(0.60 × working_input_capacity)`,
+The default trigger is `floor(0.60 × input_capacity)`. Input capacity is
+the selected model's resolved context window minus reserved output, also capped
+by any separate input limit. **Working input capacity** equals that resolved
+input capacity; there is no fixed 200,000-token ceiling. For example, a model
+with a 1,000,000-token window and 32,000 reserved output tokens has 968,000
+input tokens available and a 580,800-token compaction target. A configured
+**Context window** remains a cap on the model's window, not an opt-in to a
+different working-context policy. Hard capacity checks retain the full resolved
+input capacity. `compacted_input_target`, `floor(0.60 × input_capacity)`,
 is not a size the assembled request is reduced to: it only sizes the
 compactor's output allowance (see [The compactor](#the-compactor)). The
 effective values depend on model, route, output request, and profile.
 
 The context status reports which limit sizes the working context as
-`binding_limit`: `model`, `configured`, `route`, `fallback`, or `ceiling` when
-the working ceiling holds the target below a larger window. `window_limit`
-names the limit that set the window itself, which is what `binding_limit`
-reports whenever the ceiling does not bind. The Working context meter leads with
-the binding limit ("200,000-token working ceiling · 1,000,000 model window").
+`binding_limit`: `model`, `configured`, `route`, or `fallback`. `window_limit`
+names the limit that set the window itself. The Working context meter uses the
+same model-relative target as request preparation. The older `ceiling` binding
+value remains readable for compatibility with historical status data.
 
 Provider tool definitions and standing instructions have durable owners outside
 the compacted transcript. Loaded tool schemas are rebuilt from Core's exact
@@ -153,7 +150,7 @@ excerpts, which are known only when a turn is assembled. The last provider
 request has a separate recorded estimate, with the provider's
 `reported_input_tokens` and `reported_cached_input_tokens`.
 
-When the estimate exceeds the 75% target, `_model_context` does the steps
+When the estimate exceeds the 60% target, `_model_context` does the steps
 below. Before summarizing anew, it waits for a background compaction of the
 conversation that is already running (see
 [Background pre-compaction](#background-pre-compaction)).
@@ -419,8 +416,8 @@ tokens, lowered further only so that two memories still fit one roll-up request
 on a small window. On the 8,192-token fallback window that is 1,024 tokens
 (previously 184). Every request stays within the model's input capacity; the
 instructions, schema, and objective are reserved first from the working input
-capacity, and 60% of the remainder is the budget for one group of sources, so a
-model under the working ceiling compacts in ceiling-sized pieces. Long source sets are split into groups
+capacity, and 60% of the remainder is the budget for one group of sources.
+Segments scale with the model's resolved input capacity. Long source sets are split into groups
 greedily from the start. Each group becomes a memory; memories that fit the
 allowance together are unioned mechanically (no call, nothing lost), and only
 memories that must be compressed are rolled up by the model. A model roll-up
@@ -508,8 +505,7 @@ bounded transformations:
   failure and an `arguments_sha256` of the exact failed arguments. The
   receipts are bounded at 3% of the working input capacity, never below
   16 KiB or above 64 KiB (16 KiB up to about a 182,000-token capacity,
-  about 23 KiB for a model under the working ceiling, and 64 KiB from about
-  728,000 when a larger working context was configured), and never above 15%
+  and 64 KiB from about 728,000 input tokens), and never above 15%
   of the working capacity, down to 2 KiB: below about 36,000 tokens the
   16 KiB floor (about 5,400 tokens) was most of an 8K window, and a long
   turn's receipts outgrew the window by themselves (an 8K window's receipts

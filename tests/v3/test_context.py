@@ -25,7 +25,6 @@ from nebula.v3.context import (
     lexical_score,
     compactor_memory_schema,
     memory_text,
-    WORKING_CONTEXT_CEILING,
     resolve_context_limits,
     source_digest,
     unsupported_identifiers,
@@ -238,14 +237,14 @@ def test_context_limits_use_configured_values_and_safe_fallback():
     fallback = resolve_context_limits(_profile())
     assert fallback.context_window == 8_192
     assert fallback.max_output_tokens == 2_048
-    assert fallback.target_input_tokens == 4_608
+    assert fallback.target_input_tokens == 3_686
 
     configured = resolve_context_limits(
         _profile(context_window=16_000, max_output_tokens=1_000)
     )
     assert configured.context_window == 16_000
     assert configured.input_capacity == 15_000
-    assert configured.target_input_tokens == 11_250
+    assert configured.target_input_tokens == 9_000
 
     with pytest.raises(ValidationError, match="positive integer"):
         _profile(context_window=0)
@@ -274,7 +273,7 @@ def test_context_limits_follow_exact_model_and_treat_options_as_caps():
     assert exact.context_window == 100_000
     assert exact.max_output_tokens == 16_000
     assert exact.input_capacity == 84_000
-    assert exact.target_input_tokens == 63_000
+    assert exact.target_input_tokens == 50_400
     assert exact.compacted_input_target == 50_400
     assert exact.source == "model_catalog"
     assert exact.estimated is False
@@ -297,7 +296,7 @@ def test_context_limits_use_each_exact_model_instead_of_provider_maximum():
     small = resolve_context_limits(profile, model="small")
     assert small.context_window == 8_000
     assert small.max_output_tokens == 1_000
-    assert small.target_input_tokens == 5_250
+    assert small.target_input_tokens == 4_200
 
 
 @pytest.mark.parametrize(
@@ -330,7 +329,9 @@ def test_known_model_limits_fold_provider_spellings(model: str, window: int):
 @pytest.mark.parametrize(
     "model", ["gpt-6-sol", "openai/gpt-6-sol", "gpt-6-sol-2026-11-01"]
 )
-def test_gpt6_sol_published_limits_keep_working_ceiling(model, output):
+def test_gpt6_sol_compaction_uses_sixty_percent_of_published_input_capacity(
+    model, output
+):
     profile = _profile()
     profile.provider_type = "openai"
     profile.is_local = False
@@ -342,7 +343,9 @@ def test_gpt6_sol_published_limits_keep_working_ceiling(model, output):
     assert limits.context_window == 1_050_000
     assert limits.max_output_tokens == (output or 128_000)
     assert limits.input_capacity == 922_000
-    assert limits.target_input_tokens == 200_000
+    assert limits.working_input_capacity == 922_000
+    assert limits.target_input_tokens == 553_200
+    assert limits.binding_limit == "model"
     assert limits.source == "known_model"
 
 
@@ -804,9 +807,8 @@ def test_binding_limit_for_catalog_known_configured_and_fallback_windows():
     assert (known.source, known.binding_limit) == ("known_model", "configured")
     hosted.metadata["options"] = {}
     published = resolve_context_limits(hosted, model="claude-opus-5")
-    # Its 1M-token window is above the working ceiling, which now sizes it.
     assert (published.source, published.window_limit) == ("known_model", "model")
-    assert published.binding_limit == "ceiling"
+    assert published.binding_limit == "model"
 
     configured = resolve_context_limits(_profile(context_window=16_000))
     assert (configured.source, configured.binding_limit) == (
@@ -850,47 +852,46 @@ def _catalog(window: int, **options: int) -> ProviderProfile:
     return profile
 
 
-def test_working_ceiling_sizes_a_large_window_without_shrinking_it():
+def test_large_window_compaction_is_model_relative_without_a_fixed_ceiling():
     limits = resolve_context_limits(_catalog(1_000_000), model="model-a")
 
     # The window and the hard input capacity are the model's.
     assert limits.context_window == 1_000_000
     assert limits.input_capacity == 1_000_000 - limits.max_output_tokens
-    # The working context is sized as if the capacity were ceiling / 75%.
-    assert limits.working_input_capacity == 266_667
-    assert limits.target_input_tokens == WORKING_CONTEXT_CEILING == 200_000
-    assert limits.compacted_input_target == 160_000
-    assert (limits.binding_limit, limits.window_limit) == ("ceiling", "model")
+    assert limits.working_input_capacity == limits.input_capacity == 968_000
+    assert limits.target_input_tokens == 580_800
+    assert limits.compacted_input_target == 580_800
+    assert (limits.binding_limit, limits.window_limit) == ("model", "model")
 
 
-def test_working_ceiling_leaves_windows_below_it_unchanged():
-    # 262,144 tokens leave less than ceiling / 75% of input.
+def test_compaction_fraction_also_applies_to_small_and_configured_windows():
     below = resolve_context_limits(_catalog(262_144), model="model-a")
     assert below.working_input_capacity == below.input_capacity
-    assert below.target_input_tokens == math.floor(below.input_capacity * 0.75)
+    assert below.target_input_tokens == math.floor(below.input_capacity * 0.60)
     assert below.binding_limit == "model"
 
-    # A configured window at or under the ceiling is an ordinary cap.
     capped = resolve_context_limits(
         _catalog(1_000_000, context_window=16_000, max_output_tokens=2_000),
         model="model-a",
     )
-    assert (capped.target_input_tokens, capped.binding_limit) == (10_500, "configured")
-    at_ceiling = resolve_context_limits(
+    assert (capped.target_input_tokens, capped.binding_limit) == (8_400, "configured")
+    configured = resolve_context_limits(
         _catalog(1_000_000, context_window=200_000), model="model-a"
     )
-    assert at_ceiling.binding_limit == "configured"
-    assert at_ceiling.target_input_tokens < WORKING_CONTEXT_CEILING
+    assert configured.binding_limit == "configured"
+    assert configured.target_input_tokens == math.floor(
+        configured.input_capacity * 0.60
+    )
 
 
-def test_configured_window_above_the_ceiling_opts_into_a_larger_working_context():
+def test_configured_windows_remain_caps_on_model_relative_compaction():
     opted = resolve_context_limits(
         _catalog(1_000_000, context_window=500_000, max_output_tokens=20_000),
         model="model-a",
     )
     assert opted.context_window == 500_000
     assert opted.working_input_capacity == opted.input_capacity == 480_000
-    assert opted.target_input_tokens == 360_000
+    assert opted.target_input_tokens == 288_000
     assert opted.binding_limit == "configured"
 
     # Configuring the model's whole window keeps all of it.
@@ -898,24 +899,25 @@ def test_configured_window_above_the_ceiling_opts_into_a_larger_working_context(
         _catalog(1_000_000, context_window=1_000_000), model="model-a"
     )
     assert whole.working_input_capacity == whole.input_capacity
-    assert whole.target_input_tokens > WORKING_CONTEXT_CEILING
+    assert whole.target_input_tokens == 580_800
     assert whole.binding_limit == "model"
 
 
-def test_working_ceiling_applies_to_verified_routes_and_names_the_route_window():
+def test_model_relative_compaction_respects_verified_route_limits():
     limits = resolve_context_limits(
         _routed(1_000_000, 1_000_000), model="author/model-a"
     )
     assert limits.context_window == 1_000_000
-    assert limits.target_input_tokens == 200_000
-    assert (limits.binding_limit, limits.window_limit) == ("ceiling", "route")
+    assert limits.target_input_tokens == math.floor(limits.input_capacity * 0.60)
+    assert limits.target_input_tokens > 200_000
+    assert (limits.binding_limit, limits.window_limit) == ("route", "route")
 
     opted = resolve_context_limits(
         _routed(1_000_000, 1_000_000, context_window=400_000),
         model="author/model-a",
     )
     assert (opted.context_window, opted.binding_limit) == (400_000, "configured")
-    assert opted.target_input_tokens > 200_000
+    assert opted.target_input_tokens == math.floor(opted.input_capacity * 0.60)
 
 
 def test_compactor_sizes_segments_and_summaries_from_the_working_input(tmp_path):
@@ -923,19 +925,15 @@ def test_compactor_sizes_segments_and_summaries_from_the_working_input(tmp_path)
     compactor = ContextCompactor(store)
     provider = MemoryProvider("provider-a")
 
-    ceiling = compactor._compactor_plan(_catalog(1_000_000), provider, "model-a", None)
+    model = compactor._compactor_plan(_catalog(1_000_000), provider, "model-a", None)
     opted = compactor._compactor_plan(
         _catalog(1_000_000, context_window=1_000_000), provider, "model-a", None
     )
 
-    # Segments scale from the 266,667-token working input, not the 1M window;
-    # every request is still checked against the model's real capacity.
-    assert ceiling.segment_budget < math.floor(266_667 * 0.60)
-    assert ceiling.segment_budget * 3 < opted.segment_budget
-    assert ceiling.input_capacity == opted.input_capacity
-    # 5% of the 160,000-token compacted target.
-    assert ceiling.summary_output_tokens == 8_000
-    assert opted.summary_output_tokens > ceiling.summary_output_tokens
+    assert model.segment_budget < math.floor(968_000 * 0.60)
+    assert model.segment_budget == opted.segment_budget
+    assert model.input_capacity == opted.input_capacity == 968_000
+    assert model.summary_output_tokens == opted.summary_output_tokens == 29_040
 
 
 def test_token_estimation_and_security_identifier_retrieval_are_deterministic():

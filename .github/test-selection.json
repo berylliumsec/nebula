@@ -1,8 +1,8 @@
 {
-  "change_digest": "ac0fd21dc38e6fc74ef5c02dee849b0d7f936332a0d5e067780a62feb79e07fc",
-  "reviewed_by": "Codex; independently validated API-worker header admission and every sync/async terminal transport path",
-  "reason": "Two transport cases cover mutation methods, safe reads, explicit keys, streams, auth retention and no retries. TLS LAN TUI covers paired sends, MCP settings and goal changes under mutation-key admission. Package and product guidance sync remain selected. Includes formatter-only corrections to two baseline tests with verified identical AST; no behavioral test expansion.",
-  "exclusions": "Shared Python terminal HTTP transport only. Browser/frontend/native UI not changed; no broad suites.",
+  "change_digest": "62155a5ea3c69da640132304f1888363f477f5df8fc06decd8302ae21abea85b",
+  "reviewed_by": "Copilot; scoped to the requested 60-percent model-relative compaction policy and removal of the fixed working ceiling",
+  "reason": "Collected 30 exact Python cases for model-specific limits, output/input and route caps, context status, below/at/above 60-percent conversation boundaries, trigger accounting and in-turn policy. Collected 7 cases in the existing isolated Settings runtime component fixture, with the context-help check moved there. Runtime is synthetic local SQLite and inert providers; no live provider calls or simulation deployment.",
+  "exclusions": "No full suites, native harness changes, growth-aware scheduling, snapshot lookup changes, storage recovery fixes or production operations. Three extra Python checks fail identically on untouched main due to nested asyncio.run, and five general Settings checks fail there due to incomplete MemoryBudget API mocks; those unrelated baseline fixtures are not repaired or selected. No browser controls, layout, styling, authentication or origin behavior changes; only existing setting help text changes. Isolated authenticated LAN verification covers Core context status and request compaction.",
   "python_versions": [
     "3.12"
   ],
@@ -10,22 +10,31 @@
   "python_browser": false,
   "checks": [],
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 30,
+    "frontend": 7,
     "native": 0,
     "playwright": 0
   },
-  "expected_python_jobs": {
-    "portable": 0,
-    "packaged_native": 0
-  },
   "python": [
-    "tests/test_terminal_transport.py",
-    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
-    "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies",
-    "tests/v3/test_terminal_message_recall_knowledge.py::test_terminal_message_recall_guidance_is_searchable_and_syncs_to_core"
+    "tests/v3/test_context.py::test_context_limits_use_configured_values_and_safe_fallback",
+    "tests/v3/test_context.py::test_context_limits_follow_exact_model_and_treat_options_as_caps",
+    "tests/v3/test_context.py::test_context_limits_use_each_exact_model_instead_of_provider_maximum",
+    "tests/v3/test_context.py::test_gpt6_sol_compaction_uses_sixty_percent_of_published_input_capacity",
+    "tests/v3/test_context.py::test_binding_limit_for_catalog_known_configured_and_fallback_windows",
+    "tests/v3/test_context.py::test_binding_limit_for_unverified_openrouter_ceilings",
+    "tests/v3/test_context.py::test_large_window_compaction_is_model_relative_without_a_fixed_ceiling",
+    "tests/v3/test_context.py::test_compaction_fraction_also_applies_to_small_and_configured_windows",
+    "tests/v3/test_context.py::test_configured_windows_remain_caps_on_model_relative_compaction",
+    "tests/v3/test_context.py::test_model_relative_compaction_respects_verified_route_limits",
+    "tests/v3/test_context.py::test_compactor_sizes_segments_and_summaries_from_the_working_input",
+    "tests/v3/test_chat_context_assembly.py::test_context_status_reports_model_relative_target_on_a_large_window",
+    "tests/v3/test_chat_context_assembly.py::test_tool_definitions_and_routing_instructions_count_toward_the_trigger",
+    "tests/v3/test_chat_context_assembly.py::test_conversation_compacts_only_above_sixty_percent_of_model_input",
+    "tests/v3/test_in_turn_context_pruning.py::test_a_large_window_keeps_tool_results_below_its_model_relative_target",
+    "tests/v3/test_in_turn_context_pruning.py::test_configuring_the_full_model_window_keeps_the_same_tool_result_policy",
+    "tests/v3/test_in_turn_context_pruning.py::test_long_tool_turn_clears_old_results_instead_of_failing"
   ],
-  "frontend": [],
+  "frontend": ["ui/src/pages/SettingsPage.runtime.test.tsx"],
   "native": [],
   "playwright": []
 }
