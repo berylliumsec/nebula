@@ -59,7 +59,8 @@ resources, uncertain durable commands and unconfirmed approvals continue to hold
 admission until their own outcomes are reconciled.
 
 Durable, source-fence-specific deployment operations prepare a replacement of the
-same execution version and transfer ownership through checkpoint restoration and
+operator-selected execution target (or the source version when no target is
+selected) and transfer ownership through checkpoint restoration and
 verification. Lost operation responses do not authorize another process launch.
 The host retains recovery receipts across restarts, applies diagnostic backoff,
 and holds projects after three recoveries in ten minutes rather than crash-looping.

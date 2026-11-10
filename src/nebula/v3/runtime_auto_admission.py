@@ -262,6 +262,7 @@ class RuntimeAutoAdmission:
             host = await session.get(DeploymentHostRow, "host")
             if host is None or host.shutdown_requested:
                 return
+            target_version = host.target_version
             now = await supervisor.coordinator.coordination._clock_ms(session)
             query = select(ProjectOwnershipRow).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
@@ -346,7 +347,7 @@ class RuntimeAutoAdmission:
                 prepared = await self._recovery_operation(
                     expected_owner,
                     "prepare_execution",
-                    {"version": worker.identity.version},
+                    {"version": target_version or worker.identity.version},
                 )
                 target_runtime_id = prepared.get("runtime_id")
                 if not isinstance(target_runtime_id, str) or not target_runtime_id:

@@ -174,7 +174,7 @@ async def history(recovery, *, phase="blocked", count=1, same_owner=False):
             )
 
 
-async def test_expired_positive_dead_owner_initiates_exact_source_version(recovery):
+async def test_expired_positive_dead_owner_initiates_promoted_target_version(recovery):
     await recovery.automatic.reconcile()
     calls = recovery.management.calls
     assert [call[0] for call in calls] == [
@@ -183,7 +183,7 @@ async def test_expired_positive_dead_owner_initiates_exact_source_version(recove
         "recover_project",
     ]
     assert calls[0][1] == {"expected_owner": expected_owner(recovery)}
-    assert calls[1][1] == {"version": "v1"}
+    assert calls[1][1] == {"version": "v2"}
     assert calls[2][1] == {
         "project_id": "one",
         "target_runtime_id": "prepared-target",
@@ -198,6 +198,17 @@ async def test_expired_positive_dead_owner_initiates_exact_source_version(recove
         assert owner.runtime_id == "source"
         assert owner.fencing_token == recovery.lease.fencing_token
         assert owner.lease_expires_at_ms == recovery.clock[0] - 1
+
+
+async def test_recovery_keeps_source_version_without_a_promoted_target(recovery):
+    async with recovery.coordinator.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        host.target_version = None
+    await recovery.automatic.reconcile()
+    prepared = next(
+        call for call in recovery.management.calls if call[0] == "prepare_execution"
+    )
+    assert prepared[1] == {"version": "v1"}
 
 
 @pytest.mark.parametrize("state", ["alive", "unknown", "unspawned", "missing"])
