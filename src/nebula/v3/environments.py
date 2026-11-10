@@ -28,6 +28,7 @@ from .domain import (
     SshEnvironment,
     SshEnvironmentApproval,
     SshEnvironmentProbe,
+    ToolCallOrigin,
     utc_now,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -467,17 +468,25 @@ def build_ssh_tool_plugins(
 
         async def execute(self, invocation: Any, runner: Any) -> Any:
             del runner
-            if memory_compute is None:
+            from .temporary_command_override import unmanaged_commands_allowed
+
+            bypass = getattr(
+                invocation, "origin", None
+            ) == ToolCallOrigin.CHAT and unmanaged_commands_allowed(
+                invocation.engagement_id
+            )
+            if memory_compute is None and not bypass:
                 raise ValueError(
                     "SSH compute requires a memory-runner/v1 agent; no unrestricted SSH fallback is permitted"
                 )
-            await memory_compute.reject_unsupported(
-                "ssh",
-                project_id=invocation.engagement_id,
-                resource_kind="ssh_command",
-                resource_id=invocation.id,
-                detail="This SSH host has no authenticated memory-runner/v1 agent that verifies descendant cleanup. Connect a supported remote runner before running compute; raw SSH is unavailable for required budgets.",
-            )
+            if memory_compute is not None and not bypass:
+                await memory_compute.reject_unsupported(
+                    "ssh",
+                    project_id=invocation.engagement_id,
+                    resource_kind="ssh_command",
+                    resource_id=invocation.id,
+                    detail="This SSH host has no authenticated memory-runner/v1 agent that verifies descendant cleanup. Connect a supported remote runner before running compute; raw SSH is unavailable for required budgets.",
+                )
             arguments = invocation.arguments
             cwd = arguments.get("cwd") or self.environment.working_directory
             timeout = int(

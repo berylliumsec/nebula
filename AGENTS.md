@@ -1,5 +1,15 @@
 # Nebula agent guidance
 
+## Temporary operator override for command access
+
+On 2026-11-10 the operator explicitly authorized a temporary bypass of the
+`memory-runner/v1` admission hold for Host and SSH chat commands in the Apple Bug
+Bounty project while a protected runner is developed. Core may enable this only
+by setting `NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS` to that project's exact ID.
+The default remains held; do not extend the exception to other projects or to
+other compute paths. Record enablement and removal in the deployment receipt.
+This override is authorization, not evidence of memory containment or cleanup.
+
 Read and follow these repository rules before working in Nebula:
 
 - [Branch, validation, and PR workflow](.codex/rules/change-workflow.md) for every change.

@@ -2024,13 +2024,18 @@ class AutomationRuntimeManager:
             engagement = await self.store.get(Engagement, engagement_id)
             policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
-                await self.memory_compute.reject_unsupported(
-                    "local",
-                    project_id=engagement_id,
-                    resource_kind="host_command_session",
-                    resource_id=owner_id,
-                    detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
-                )
+                from .temporary_command_override import unmanaged_commands_allowed
+
+                if not (
+                    owner_kind == "chat" and unmanaged_commands_allowed(engagement_id)
+                ):
+                    await self.memory_compute.reject_unsupported(
+                        "local",
+                        project_id=engagement_id,
+                        resource_kind="host_command_session",
+                        resource_id=owner_id,
+                        detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
+                    )
                 if not policy.host_access_acknowledged:
                     raise AutomationPolicyDenied(
                         "Host access has not been acknowledged"

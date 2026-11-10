@@ -5,11 +5,14 @@ from tests.v3.async_test_support import (
 import asyncio
 import itertools
 import json
+import socket
 import shutil
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
+import httpx
+import uvicorn
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import ValidationError
 
@@ -2233,9 +2236,11 @@ def test_historical_raw_tool_output_fails_closed_to_a_receipt():
 
 async def test_host_mode_requires_consent_and_reads_external_folder_without_docker(
     tmp_path,
+    monkeypatch,
 ):
     async def scenario():
         manager, store, _, engagement, containers = await runtime(tmp_path)
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         policy = await manager.project_policy(engagement.id)
         update = dict(
             approval_policy=AutomationApprovalPolicy.NEVER,
@@ -2259,7 +2264,7 @@ async def test_host_mode_requires_consent_and_reads_external_folder_without_dock
         (backup / "marker.txt").write_text("HOST_BACKUP_MARKER")
         result = await manager.run_command(
             engagement_id=engagement.id,
-            owner_kind="api",
+            owner_kind="chat",
             owner_id="host-test",
             request=RunCommandRequest(command="cat marker.txt", cwd=str(backup)),
         )
@@ -2276,13 +2281,69 @@ async def test_host_mode_requires_consent_and_reads_external_folder_without_dock
             )
         )
         retained = await manager.session(
-            engagement_id=engagement.id, owner_kind="api", owner_id="host-test"
+            engagement_id=engagement.id, owner_kind="chat", owner_id="host-test"
         )
         assert retained.execution_mode == "host"
         await manager.close_session(result.session_id)
         assert policy.execution_mode == "docker"
 
     (await scenario())
+
+
+async def test_temporary_host_chat_command_on_disposable_lan_core(
+    tmp_path, monkeypatch
+):
+    manager, store, artifacts, engagement, _containers = await runtime(tmp_path)
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
+    await manager.update_project_policy(
+        engagement.id,
+        approval_policy=AutomationApprovalPolicy.NEVER,
+        network_enabled=True,
+        runner_profile_id=None,
+        max_timeout_ms=3000,
+        execution_mode="host",
+        host_access_acknowledged=True,
+    )
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="synthetic-lan-token",
+        automation_runtime=manager,
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+        route.connect(("192.0.2.1", 9))
+        address = route.getsockname()[0]
+    assert not address.startswith("127.")
+    listener = socket.socket()
+    listener.bind((address, 0))
+    listener.listen()
+    origin = f"http://{address}:{listener.getsockname()[1]}"
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    task = asyncio.create_task(server.serve(sockets=[listener]))
+    try:
+        async with asyncio.timeout(10):
+            while not server.started:
+                if task.done():
+                    await task
+                await asyncio.sleep(0.01)
+        path = (
+            f"/api/v1/engagements/{engagement.id}"
+            "/automation-sessions/chat/synthetic/commands"
+        )
+        async with httpx.AsyncClient(base_url=origin, trust_env=False) as client:
+            denied = await client.post(path, json={"command": "printf ready"})
+            assert denied.status_code == 401
+            result = await client.post(
+                path,
+                headers={"Authorization": "Bearer synthetic-lan-token"},
+                json={"command": "printf ready"},
+            )
+            assert result.status_code == 200, result.text
+            assert result.json()["stdout"] == "ready"
+        print(f"disposable LAN Core: {origin}, authenticated Host command succeeded")
+    finally:
+        server.should_exit = True
+        await task
 
 
 async def test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker(
