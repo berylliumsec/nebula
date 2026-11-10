@@ -2235,13 +2235,12 @@ def test_historical_raw_tool_output_fails_closed_to_a_receipt():
 
 
 async def test_host_mode_requires_consent_and_reads_external_folder_without_docker(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     async def scenario():
         manager, store, _, engagement, containers = await runtime(tmp_path)
-        monkeypatch.setenv(
-            "NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id
-        )
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         policy = await manager.project_policy(engagement.id)
         update = dict(
             approval_policy=AutomationApprovalPolicy.NEVER,
@@ -2295,9 +2294,7 @@ async def test_temporary_host_chat_command_on_disposable_lan_core(
     tmp_path, monkeypatch
 ):
     manager, store, artifacts, engagement, _containers = await runtime(tmp_path)
-    monkeypatch.setenv(
-        "NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id
-    )
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
     await manager.update_project_policy(
         engagement.id,
         approval_policy=AutomationApprovalPolicy.NEVER,

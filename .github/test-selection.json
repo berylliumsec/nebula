@@ -1,5 +1,5 @@
 {
-  "change_digest": "9946cb2950305dca5a892841811e6fe76f2ac1feb98368736d4db26c8b851c2a",
+  "change_digest": "2e782de72515e7ccad9c753825b2f64f89194b3a69c178c9408cb88e0d38adfe",
   "reviewed_by": "Codex",
   "reason": "Temporary exact-project operator override for Host and SSH command admission. Two cases verify scoped access, one existing case executes a real local Host command, two verify the default hold, and one uses a disposable authenticated LAN Core.",
   "exclusions": "No full suites, frontend, native, or Playwright tests: this is a server-side environment override with no UI change. The LAN journey uses synthetic data and SQLite; PostgreSQL duplicates this path. No live provider tests. Deployment tests are omitted at the operator's request.",

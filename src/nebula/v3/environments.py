@@ -470,9 +470,10 @@ def build_ssh_tool_plugins(
             del runner
             from .temporary_command_override import unmanaged_commands_allowed
 
-            bypass = (
-                getattr(invocation, "origin", None) == ToolCallOrigin.CHAT
-                and unmanaged_commands_allowed(invocation.engagement_id)
+            bypass = getattr(
+                invocation, "origin", None
+            ) == ToolCallOrigin.CHAT and unmanaged_commands_allowed(
+                invocation.engagement_id
             )
             if memory_compute is None and not bypass:
                 raise ValueError(
