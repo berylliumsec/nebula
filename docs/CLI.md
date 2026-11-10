@@ -33,8 +33,12 @@ opens the selected project's Snapshot. To see
 selectable slash commands in nebula-chat, type `/` at the start of the composer.
 The command list follows the current conversation. Keep typing to filter it,
 use Up/Down and Enter to run a selection,
-or Tab to insert it without running. When no command list is open, Tab focuses
-the transcript for scrolling. In the composer, Up recalls the most recent message
+or Tab to insert it without running. Scroll the transcript with the mouse wheel
+or trackpad, or press Page Up/Page Down from the composer to read earlier output.
+Ctrl-Home jumps to the first loaded line; Ctrl-End returns to the latest output
+and resumes automatic following. New output does not move you away from earlier
+messages while you are reading. Tab switches between the transcript and composer
+without losing your draft. In the composer, Up recalls the most recent message
 you sent in this conversation; keep pressing Up for older messages, or Down to
 return to your unsent draft. Up still moves within a multiline draft until its
 first line, and editing a recalled message starts a new draft. Recall uses the
@@ -54,9 +58,10 @@ The transcript gives You, Assistant, and status notes separate visual markers
 and keeps long messages at a readable line length. Exact repeated long user
 requests are summarized after their first appearance. F10 Source shows every
 original message and its Markdown text; F10 Render returns to the reading view.
-Drag across the chat screen to select text with the terminal's native copy
-shortcut. Menus keep mouse controls; Tab focuses the transcript for keyboard
-scrolling. F10 Source exposes the exact message text for copying.
+F12 Copy temporarily disables mouse reporting so you can drag across the chat
+screen and use the terminal's native copy shortcut. F12 Scroll restores wheel
+and trackpad scrolling; keyboard scrolling works in either mode. Menus keep mouse
+controls. F10 Source exposes the exact message text for copying.
 At narrow widths the rail hides, leaving the transcript and composer usable.
 If macOS Terminal has a split pane open, press Shift-Command-D to close it and
 give the Assistant the full window height.

@@ -1,5 +1,13 @@
 # Nebula assistant contract
 
+Terminal transcript scrolling is a local viewer action, not a Core setting.
+Butler can explain wheel/trackpad scrolling and Page Up/Page Down directly from
+the composer. Ctrl-Home selects the first loaded line; Ctrl-End returns to the
+latest output and resumes automatic following. Incoming output preserves an
+earlier reading position. Tab returns to the unsent draft. F12 Copy disables
+mouse reporting for native drag selection; F12 Scroll restores it. F10 Source
+exposes original Markdown. These controls do not mutate Core's saved messages.
+
 Project runtime recovery is a Core lifecycle operation, not a memory-budget
 setting. An expired project process can leave chat delivery unavailable while
 the host API is healthy. Core automatically reconciles positively dead owners

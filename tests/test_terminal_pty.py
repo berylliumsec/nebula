@@ -15,6 +15,7 @@ import time
 from contextlib import contextmanager
 
 import pyte
+import pytest
 
 
 @contextmanager
@@ -35,11 +36,11 @@ def terminal(code, *, ready=b"You:", columns=80, rows=24):
     screen_stream = pyte.Stream(screen)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
-    def read_until(marker, timeout=8, *, rendered=False):
+    def read_until(marker, timeout=8, *, rendered=False, absent=()):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             current = "\n".join(screen.display) if rendered else bytes(output)
-            if marker in current:
+            if marker in current and all(item not in current for item in absent):
                 return bytes(output)
             ready, _, _ = select.select([master], [], [], 0.05)
             if ready:
@@ -51,8 +52,9 @@ def terminal(code, *, ready=b"You:", columns=80, rows=24):
                     break
                 output.extend(chunk)
                 screen_stream.feed(decoder.decode(chunk))
-        assert marker in ("\n".join(screen.display) if rendered else bytes(output)), (
-            output.decode(errors="replace")
+        current = "\n".join(screen.display) if rendered else bytes(output)
+        assert marker in current and all(item not in current for item in absent), (
+            "\n".join(screen.display) if rendered else output.decode(errors="replace")
         )
         return bytes(output)
 
@@ -138,6 +140,95 @@ async def main():
     print('VALUE:'+json.dumps(value),flush=True)
 asyncio.run(main())
 """
+
+
+@pytest.mark.parametrize("columns,rows", [(120, 30), (52, 18)])
+def test_full_screen_scrolls_from_composer_and_keeps_position_during_output(
+    columns, rows
+):
+    code = """
+import asyncio,json
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_view({'id':'project','name':'Project'},{'id':'chat','title':'Scroll chat'})
+    ui.show_history([{'role':'assistant','content':'\\n\\n'.join(f'History line {i:03}' for i in range(100)),'metadata':{}}])
+    wheel_steps=0
+    @ui.app.key_bindings.add('c-t')
+    def wheel_checkpoint(event):
+        nonlocal wheel_steps
+        wheel_steps+=1
+        ui.activity(f'Wheel checkpoint {wheel_steps}')
+    async def update():
+        while ui.composer.text != 'draft!':
+            await asyncio.sleep(0.01)
+        ui.delta('\\n\\nLIVE TAIL')
+        ui._render()
+        ui.activity('Update received')
+        while ui.composer.text != 'draft!!':
+            await asyncio.sleep(0.01)
+        ui.delta('\\n\\nFOLLOWED TAIL')
+        ui._render()
+    task=asyncio.create_task(update())
+    value=await ui.ask('You',main=True)
+    await task
+    await ui.close()
+    print('VALUE:'+json.dumps(value),flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=columns, rows=rows) as (
+        process,
+        master,
+        output,
+        read,
+    ):
+        read("History line 099", rendered=True)
+        os.write(master, b"draft")
+        read("> draft", rendered=True)
+        # SGR wheel events over the transcript must work with composer focus.
+        os.write(master, b"\x1b[<64;45;8M" * 12)
+        read(
+            "History line 085" if columns >= 110 else "History line 090", rendered=True
+        )
+        assert "History line 099" not in "\n".join(read.screen.display)
+        os.write(master, b"\x1b[5~")  # Page Up targets the transcript directly.
+        read("PgUp", rendered=True)
+        os.write(master, b"\x1b[1;5H")  # Ctrl-Home.
+        read("History line 000", rendered=True)
+        os.write(master, b"\t!")  # Return to the draft and trigger streamed output.
+        read("Update received", rendered=True)
+        display = "\n".join(read.screen.display)
+        assert "History line 000" in display
+        assert "LIVE TAIL" not in display
+        os.write(master, b"\x1b[1;5F")  # Ctrl-End resumes following output.
+        read("LIVE TAIL", rendered=True)
+        os.write(master, b"\x1b[5~")
+        read("History", rendered=True, absent=("LIVE TAIL",))
+        os.write(master, b"\x1b[6~")
+        read("LIVE TAIL", rendered=True)
+        os.write(master, b"\x1b[24~")  # F12 allows native terminal selection.
+        read("F12 Scroll", rendered=True)
+        os.write(master, b"\x1b[24~")
+        read("F12 Copy", rendered=True)
+        # A visible checkpoint makes each wheel event consume a fresh frame,
+        # rather than replaying a burst against prompt_toolkit's old render info.
+        wheel_steps = 0
+        for direction in (64, 65):
+            for _ in range(rows):
+                wheel_steps += 1
+                os.write(master, f"\x1b[<{direction};45;8M\x14".encode())
+                read(f"Wheel checkpoint {wheel_steps}", rendered=True)
+            if direction == 64:
+                assert "LIVE TAIL" not in "\n".join(read.screen.display)
+        read("LIVE TAIL", rendered=True)
+        os.write(master, b"\t!")
+        read("FOLLOWED TAIL", rendered=True)
+        os.write(master, b"\r")
+        read(b'VALUE:"draft!!"')
+        process.wait(timeout=3)
+        assert process.returncode == 0
+        assert b"\x1b[?1000h" in output  # Real mouse reporting was enabled.
 
 
 def test_full_screen_progress_paste_and_narrow_resize():

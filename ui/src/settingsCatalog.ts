@@ -220,7 +220,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Identity & Security",
     scope: "Security",
     target: "device-pairing-settings",
-    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke", "CLI", "terminal", "nebula-chat", "nebula-client", "Assistant shell", "project snapshot", "/snapshot", "F11 snapshot", "project notes", "terminal notes", "/notes", "notes editor", "up arrow message recall", "composer history", "last sent message", "remote agent chats", "running conversation", "waiting conversation", "idle conversation", "turn status", "terminal loading", "animated spinner", "selection feedback", "reduced motion", "multi-select skills", "/skills", "/goal skills", "MCP server picker", "/mcp", "headless"],
+    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke", "CLI", "terminal", "nebula-chat", "nebula-client", "Assistant shell", "project snapshot", "/snapshot", "F11 snapshot", "project notes", "terminal notes", "/notes", "notes editor", "up arrow message recall", "composer history", "last sent message", "transcript scrolling", "mouse wheel", "trackpad", "Page Up", "Page Down", "Ctrl-End", "F12 Copy", "remote agent chats", "running conversation", "waiting conversation", "idle conversation", "turn status", "terminal loading", "animated spinner", "selection feedback", "reduced motion", "multi-select skills", "/skills", "/goal skills", "MCP server picker", "/mcp", "headless"],
   },
   {
     id: "settings.release",

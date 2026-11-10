@@ -20,11 +20,13 @@ from typing import Any
 import httpx
 from prompt_toolkit.application import Application
 from prompt_toolkit.completion import CompleteEvent, FuzzyWordCompleter, PathCompleter
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.bindings.scroll import scroll_page_down, scroll_page_up
 from prompt_toolkit.layout import (
     ConditionalContainer,
     Float,
@@ -201,6 +203,7 @@ class TuiUI(TerminalUI):
             "no",
         }
         self._source_view = False
+        self._mouse_scrolling = True
         self._render_width = 0
         self._mode = "main"
         self._picker: Picker | None = None
@@ -341,6 +344,33 @@ class TuiUI(TerminalUI):
                 self._source_view = not self._source_view
                 self._render()
 
+        main_view = Condition(lambda: self._mode == "main")
+
+        @keys.add("pageup", filter=main_view)
+        def transcript_page_up(event: Any) -> None:
+            self.app.layout.focus(self.transcript)
+            scroll_page_up(event)
+
+        @keys.add("pagedown", filter=main_view)
+        def transcript_page_down(event: Any) -> None:
+            self.app.layout.focus(self.transcript)
+            scroll_page_down(event)
+
+        @keys.add("c-home", filter=main_view)
+        def transcript_start(_event: Any) -> None:
+            self.app.layout.focus(self.transcript)
+            self.transcript.buffer.cursor_position = 0
+
+        @keys.add("c-end", filter=main_view)
+        def transcript_end(_event: Any) -> None:
+            self.app.layout.focus(self.transcript)
+            self.transcript.buffer.cursor_position = len(self.transcript.text)
+
+        @keys.add("f12", filter=main_view)
+        def toggle_copy(_event: Any) -> None:
+            self._mouse_scrolling = not self._mouse_scrolling
+            self._invalidate()
+
         modal_visible = Condition(lambda: self._modal_visible)
         wide = Condition(
             lambda: (
@@ -410,10 +440,12 @@ class TuiUI(TerminalUI):
             layout=Layout(root, focused_element=self.composer),
             key_bindings=keys,
             full_screen=True,
-            # Let the terminal select and copy chat text with a normal drag.
-            # Pickers retain mouse reporting for their own controls.
             mouse_support=Condition(
-                lambda: self._mode not in {"main", "snapshot", "notes"}
+                lambda: (
+                    self._mouse_scrolling
+                    if self._mode == "main"
+                    else self._mode not in {"snapshot", "notes"}
+                )
             ),
             style=Style.from_dict(
                 {}
@@ -696,8 +728,21 @@ class TuiUI(TerminalUI):
                 styles = styles[-1:]
                 value = value[-120_000:]
         self._transcript_line_styles = styles
-        self.transcript.text = value
-        self.transcript.buffer.cursor_position = len(value)
+        buffer = self.transcript.buffer
+        window = self.transcript.window
+        info = window.render_info
+        following = buffer.cursor_position == len(buffer.text) or (
+            info is not None
+            and info.content_height == buffer.document.line_count
+            and window.vertical_scroll == info.vertical_scroll
+            and info.ui_content.cursor_position
+            == Point(
+                buffer.document.cursor_position_col, buffer.document.cursor_position_row
+            )
+            and info.bottom_visible
+        )
+        cursor = len(value) if following else min(buffer.cursor_position, len(value))
+        buffer.set_document(Document(value, cursor), bypass_readonly=True)
         self._invalidate()
 
     def _prune_entries(self) -> None:
@@ -841,6 +886,15 @@ class TuiUI(TerminalUI):
         state = self.composer.buffer.complete_state
         if self._mode == "main" and state is not None and state.completions:
             return _edge(" ↑↓ Select  Tab Insert  Enter Run", width - 1)
+        if self._mode == "main" and (
+            self.app.layout.current_control == self.transcript.control
+            or not self._mouse_scrolling
+        ):
+            mouse_action = "Copy" if self._mouse_scrolling else "Scroll"
+            return _edge(
+                f" PgUp/PgDn Read  ^Home/End  Tab Write  F12 {mouse_action}",
+                width - 1,
+            )
         if self._mode == "snapshot":
             return _edge(" Project Snapshot    R Refresh    Esc Close", width - 1)
         if self._mode == "notes":
@@ -856,13 +910,13 @@ class TuiUI(TerminalUI):
             )
         source = "Render" if self._source_view else "Source"
         if width < 60:
-            hint = " F1 Help  F3 Chats  ↑ Recall  ^C Clear/Stop"
+            hint = " F1 Help  PgUp Read  F12 Copy  ^C Clear/Stop"
         elif width < 110:
-            hint = f" F1 Help  F2 Projects  F3 Chats  ↑ Recall  F11 Snapshot  ^C Clear/Stop  F10 {source}"
+            hint = f" F1 Help  F3 Chats  ↑ Recall  PgUp Read  F12 Copy  ^C Clear/Stop  F10 {source}"
         else:
             hint = (
-                " F1 Help    F2 Projects    F3 Chats    F8 Approvals"
-                f"    F10 {source}    F11 Snapshot    ↑ Recall    Tab Read    ^C Clear/Stop    ^D Quit"
+                " F1 Help  F2 Projects  F3 Chats  F8 Approvals"
+                f"  F10 {source}  F11 Snapshot  ↑ Recall  PgUp Read  F12 Copy  ^C Clear/Stop  ^D Quit"
             )
         return _edge(hint, width - 1)
 
@@ -1711,6 +1765,6 @@ class TuiUI(TerminalUI):
 
     def help(self) -> None:
         self.say(
-            "Keys: F2 projects · F3 chats · F4 commands · F5 activity · F6 follow · F8 approvals · F11 snapshot · Tab transcript · Ctrl-C clear draft, twice within 4s stop turn · Ctrl-D quit"
+            "Keys: F2 projects · F3 chats · F4 commands · F5 activity · F6 follow · F8 approvals · F11 snapshot · PgUp/PgDn transcript · Ctrl-Home/End first/latest · Tab write/read · F12 copy/scroll · Ctrl-C clear draft, twice within 4s stop turn · Ctrl-D quit"
         )
         super().help()

@@ -1,22 +1,21 @@
 {
-  "change_digest": "e23285cbb0a31f8b928885ac0a7221f5b98a929de5972f64cd46d1fc2abe6f02",
-  "reviewed_by": "Copilot; independent causal validation confirmed the execution SQL guard rejects the deletion EXISTS probes",
-  "reason": "Mapped activity probes restore side-chat deletion without weakening execution fencing. Collected 75 Python cases cover SQL isolation, idle/provider/harness/recovery deletion guards, the worker discard route, parent preservation, duplicate closes and main-chat protection. Eight collected production-LAN browser profiles exercise normal pairing, refresh, UI close, durable removal and preserved parent history using the execution-fenced inert Core fixture. Local and focused-CI Python results: 44 passed, 31 PostgreSQL cases skipped without a configured server; all eight local browser profiles passed and the production UI built.",
-  "exclusions": "No product UI, provider, harness, native client or isolation-policy changes. No full suites, live-provider requests or physical-device claims. Unrelated popup-creation tests have a pre-existing async helper/route failure; select only the four relevant passing side-chat cases from that file. PostgreSQL variants remain selected but skip when NEBULA_TEST_POSTGRES_URL is absent, including focused CI; this change claims SQLite validation only. Frontend component and native unit layers are unchanged; real-Core browser coverage targets the exact close workflow.",
-  "python_versions": ["3.12"],
-  "python_node": false,
-  "python_browser": false,
-  "checks": ["desktop-ui-build"],
-  "expected_tests": {"python": 75, "frontend": 0, "native": 0, "playwright": 8},
+  "change_digest": "492d32cb173a5fa745aacf6438de1a4515a7e82afcb103291e19ae3f63fdef4d",
+  "reviewed_by": "Copilot",
+  "reason": "Terminal transcript scrolling: wheel reporting, direct paging, reading-position retention, returning to live output, native copy, draft preservation and standalone Mac installation. Collected 22 TUI, 5 selected PTY, 3 packaging, 1 help-index/Chroma sync and 2 paired LAN-Core scroll/recall tests. The shared LAN fixture optionally launches an installed client; both consumers are selected.",
+  "exclusions": "No browser, native desktop, provider, API or durable transcript behavior changes. Browser/mobile matrix and frontend build are inapplicable to this prompt_toolkit interface; settingsCatalog changes only terminal help keywords. Real-Core LAN acceptance is recorded separately. Omit unrelated PTY journeys, including the pre-existing wide-layout test that incorrectly expects an idle label for an unselected chat; its selected-chat-only behavior is independently covered in test_terminal_tui.py. No full suites.",
+  "expected_tests": {"python": 33, "frontend": 0, "native": 0, "playwright": 0},
   "python": [
-    "tests/v3/test_execution_scope.py",
-    "tests/v3/test_guarded_delete.py",
-    "tests/v3/test_temporary_chat.py::test_side_chat_is_hidden_and_discarded_without_touching_parent",
-    "tests/v3/test_temporary_chat.py::test_discarding_running_side_reply_cancels_only_side_turn",
-    "tests/v3/test_temporary_chat.py::test_multiple_side_chats_for_one_parent_survive_selective_close",
-    "tests/v3/test_temporary_chat.py::test_cannot_discard_main_or_copy_another_project"
+    "tests/test_terminal_tui.py",
+    "tests/test_terminal_pty.py::test_full_screen_scrolls_from_composer_and_keeps_position_during_output",
+    "tests/test_terminal_pty.py::test_full_screen_progress_paste_and_narrow_resize",
+    "tests/test_terminal_pty.py::test_full_screen_renders_markdown_and_toggles_original_source",
+    "tests/test_terminal_pty.py::test_bracketed_multiline_paste_waits_for_explicit_send",
+    "tests/test_terminal_package.py",
+    "tests/v3/test_terminal_scroll_knowledge.py",
+    "tests/v3/test_terminal_scroll_core.py",
+    "tests/v3/test_terminal_message_recall_core.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": ["area:side-chat-close"]
+  "playwright": []
 }
