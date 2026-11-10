@@ -480,6 +480,24 @@ def write_runtime_manifest(directory: Path, version: str, **compatibility) -> st
     return sha256(directory / "nebula-runtime.json")
 
 
+def copy_canonical_runtime_bundle(directory: Path, staging: Path) -> None:
+    source = directory / "ui/src-tauri/resources/nebula-runtime"
+    manifest = source / "nebula-runtime.json"
+    checksum = source / "nebula-runtime.sha256"
+    if source.is_symlink() or not manifest.is_file() or not checksum.is_file():
+        raise RuntimeError(
+            "The built canonical runtime requires its manifest and digest"
+        )
+    if any(path.is_symlink() for path in source.rglob("*")):
+        raise RuntimeError("Canonical runtime assets cannot contain symlinks")
+    expected = checksum.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[a-f0-9]{64}", expected) or sha256(manifest) != expected:
+        raise RuntimeError("The canonical runtime manifest does not match its digest")
+    destination = staging / "dist/nebula-runtime"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+
+
 def prepare() -> dict[str, Any]:
     git_source()
     previous = baseline()
@@ -666,6 +684,7 @@ def prepare() -> dict[str, Any]:
         archive.unlink(missing_ok=True)
     (staging / "dist").mkdir(exist_ok=True)
     shutil.copy2(directory / "dist/nebula-core", staging / "dist/nebula-core")
+    copy_canonical_runtime_bundle(directory, staging)
     shutil.copytree(directory / "ui/dist", staging / "ui/dist", dirs_exist_ok=True)
     (staging / "build").mkdir(exist_ok=True)
     shutil.copytree(
