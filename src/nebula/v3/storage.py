@@ -2612,6 +2612,7 @@ class NebulaStore:
 
         Raises ``NotFoundError`` or ``ConflictError`` when the delete must be
         refused: a stale revision, a running subagent, or an active turn.
+        Activity probes use mapped columns so execution project scoping applies.
         """
 
         row = await session.scalar(
@@ -2672,7 +2673,10 @@ class NebulaStore:
                 EntityRow.payload["status"].as_string() == "interrupted",
             )
         )
-        if (await session.scalar(select(exists().where(active_turn)))) or any(
+        active_turn_id = await session.scalar(
+            select(EntityRow.id).where(active_turn).limit(1)
+        )
+        if active_turn_id is not None or any(
             _recovery_pending(payload) for payload in interrupted
         ):
             raise ConflictError(
@@ -2685,7 +2689,10 @@ class NebulaStore:
             .as_string()
             .in_(("queued", "running", "waiting_approval")),
         )
-        if await session.scalar(select(exists().where(active_harness_turn))):
+        active_harness_turn_id = await session.scalar(
+            select(EntityRow.id).where(active_harness_turn).limit(1)
+        )
+        if active_harness_turn_id is not None:
             raise ConflictError(
                 "conversation cannot be deleted while a harness turn is active"
             )

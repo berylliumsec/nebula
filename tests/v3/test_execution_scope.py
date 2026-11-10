@@ -3,6 +3,7 @@
 import time
 
 import pytest
+from fastapi import FastAPI
 from sqlalchemy import func, insert, literal, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -14,15 +15,29 @@ from nebula.v3.database import (
     SearchDocumentRow,
 )
 from nebula.v3.database_pool import PoolSettings
-from nebula.v3.domain import ChatTurn, Engagement, ProviderProfile
+from nebula.v3.domain import (
+    ChatMessage,
+    ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
+    Engagement,
+    HarnessTurn,
+    HarnessTurnOrigin,
+    HarnessTurnStatus,
+    ProviderProfile,
+)
 from nebula.v3.execution_scope import ExecutionSQLScope, execution_context
 from nebula.v3.runtime_coordination import (
     CoordinationConflict,
     LeaseLost,
     RuntimeCoordination,
 )
-from nebula.v3.storage import NebulaStore, NotFoundError
+from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
+from nebula.v3.chat import ChatService
+from nebula.v3.temporary_chat import temporary_chat_router
+from tests.v3.async_test_support import AsyncTestClient
 from tests.v3.test_runtime_coordination import location as location
+from unittest.mock import Mock
 
 pytestmark = pytest.mark.anyio
 
@@ -111,6 +126,120 @@ async def test_filtered_count_retains_mapped_project_scope(execution):
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("activity", ["idle", "provider", "harness", "recovery"])
+async def test_chat_deletion_retains_execution_scope_and_activity_guards(
+    execution, activity
+):
+    control, runtime, _, lease = execution
+    for project in ("mine", "other"):
+        await control.create(
+            ChatSession(
+                id=f"chat-{project}",
+                engagement_id=project,
+                title="Synthetic conversation",
+                model="inert",
+                provider_profile_id="provider",
+                metadata={"side_chat": True},
+            )
+        )
+    turn = await control.get(ChatTurn, "turn-mine")
+    if activity == "provider":
+        turn.status = ChatTurnStatus.ROUTING
+    elif activity == "recovery":
+        turn.status = ChatTurnStatus.INTERRUPTED
+        turn.request_snapshot["recovery"] = {"required": True}
+    else:
+        turn.status = ChatTurnStatus.COMPLETE
+    await control.update(
+        ChatTurn,
+        turn.id,
+        {"status": turn.status, "request_snapshot": turn.request_snapshot},
+    )
+    if activity == "harness":
+        await control.create(
+            HarnessTurn(
+                id="active-harness",
+                engagement_id="mine",
+                harness_session_id="vendor",
+                origin=HarnessTurnOrigin.CHAT,
+                chat_session_id="chat-mine",
+                chat_turn_id=turn.id,
+                prompt="Inert fixture",
+                status=HarnessTurnStatus.RUNNING,
+            )
+        )
+    with execution_context(lease):
+        with pytest.raises(NotFoundError):
+            await runtime.delete_chat_session("chat-other")
+        if activity == "idle":
+            await runtime.validate_chat_session_delete("chat-mine")
+            await runtime.delete_chat_session("chat-mine")
+            with pytest.raises(NotFoundError):
+                await control.get(ChatSession, "chat-mine")
+            with pytest.raises(NotFoundError):
+                await control.get(ChatTurn, turn.id)
+        else:
+            message = (
+                "harness turn is active"
+                if activity == "harness"
+                else "response is active"
+            )
+            for operation in (
+                runtime.validate_chat_session_delete,
+                runtime.delete_chat_session,
+            ):
+                with pytest.raises(ConflictError, match=message):
+                    await operation("chat-mine")
+            assert (await control.get(ChatSession, "chat-mine")).id == "chat-mine"
+            assert (await control.get(ChatTurn, turn.id)).status == turn.status
+    assert (await control.get(ChatSession, "chat-other")).id == "chat-other"
+    assert (await control.get(ChatTurn, "turn-other")).id == "turn-other"
+
+
+async def test_side_chat_discard_route_on_execution_worker_preserves_parent(execution):
+    control, runtime, _, lease = execution
+    await control.create(
+        ChatSession(
+            id="parent",
+            engagement_id="mine",
+            title="Parent",
+            model="inert",
+            provider_profile_id="provider",
+        )
+    )
+    await control.create(
+        ChatMessage(
+            id="parent-message",
+            engagement_id="mine",
+            session_id="parent",
+            sequence=1,
+            role="user",
+            content="Keep this history",
+        )
+    )
+    side = await ChatService(control).fork_session(
+        "parent", through_message_id="parent-message", side_chat=True
+    )
+    app = FastAPI()
+    app.include_router(
+        temporary_chat_router(runtime, lambda: ChatService(runtime), Mock())
+    )
+    client = AsyncTestClient(app)
+    with execution_context(lease):
+        response = await client.delete(f"/chat/temporary-sessions/{side.id}")
+        assert response.status_code == 204, response.text
+        assert (
+            await client.delete(f"/chat/temporary-sessions/{side.id}")
+        ).status_code == 204
+        assert (await client.get("/chat/sessions/parent/side-chats")).json() == []
+    with pytest.raises(NotFoundError):
+        await control.get(ChatSession, side.id)
+    assert (await control.get(ChatSession, "parent")).id == "parent"
+    assert (
+        await control.get(ChatMessage, "parent-message")
+    ).content == "Keep this history"
 
 
 async def test_first_raw_statement_loads_current_transaction_authority(execution):
