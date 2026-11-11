@@ -266,10 +266,10 @@ class AsyncApi:
         return response.json() if response.content else None
 
     async def page(
-        self, path: str, *, offset: int = 0, **params: Any
+        self, path: str, *, offset: int = 0, limit: int = 100, **params: Any
     ) -> list[dict[str, Any]]:
         return await self.request(
-            "GET", path, params={**params, "offset": offset, "limit": 100}
+            "GET", path, params={**params, "offset": offset, "limit": limit}
         )
 
     async def events(

@@ -1080,6 +1080,60 @@ def test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback(lan_core
     terminal.close()
 
 
+def test_paired_tui_finds_and_opens_child_project(lan_core):
+    data = lan_core
+    response = data["admin"].post(
+        "engagements",
+        json={
+            "name": "Parser Child",
+            "parent_engagement_id": data["project"].id,
+        },
+    )
+    assert response.is_success, response.text
+    child = response.json()
+    assert child["parent_engagement_id"] == data["project"].id
+
+    terminal = data["start"](
+        "shell", "--project", "Terminal Project", tty=True, columns=100, rows=30
+    )
+    try:
+        terminal.expect_screen("New conversation")
+        terminal.send("New conversation", expect="/help for commands")
+        terminal.send("/projects")
+        terminal.expect_screen("Search:", "Parser Child")
+        os.write(terminal.input_fd, b"Parser Child")
+        terminal.expect_screen("Search: Parser Child")
+        os.write(terminal.input_fd, b"\r")
+        terminal.expect_screen("Conversation", "Search:", "New conversation")
+        terminal.send("New conversation")
+        terminal.expect_screen(
+            "Parser Child — New conversation",
+            "Ready for a message",
+            absent=("Search:",),
+        )
+        assert (
+            data["admin"].get(f"engagements/{child['id']}").json()["name"]
+            == "Parser Child"
+        )
+    finally:
+        terminal.close(send_quit=False, send_eof=True)
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and authenticated TLS LAN Core",
+                "fixture": "paired client and synthetic parent and child projects",
+                "checks": [
+                    "F2 child discovery",
+                    "visible selected project",
+                    "Core readback",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
 def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core):
     data = lan_core
     second = data["store"].create(
