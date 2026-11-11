@@ -533,6 +533,87 @@ def test_navigation_rail_keeps_an_older_selected_chat(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_project_picker_finds_a_project_beyond_the_first_page(
+    tmp_path, monkeypatch
+) -> None:
+    core = "https://core.example:8765"
+    parent = {"id": "program", "name": "Synthetic Program", "metadata": {}}
+    target = {
+        "id": "parser",
+        "name": "synthetic_parser_project_investigation",
+        "parent_engagement_id": parent["id"],
+        "metadata": {},
+    }
+    projects = [
+        parent,
+        *(
+            {"id": f"older-{index}", "name": f"Older {index}", "metadata": {}}
+            for index in range(999)
+        ),
+        target,
+    ]
+    requested_pages: list[tuple[int, int]] = []
+
+    def handler(request):
+        if request.url.path.endswith("/engagements"):
+            offset = int(request.url.params["offset"])
+            limit = int(request.url.params["limit"])
+            requested_pages.append((offset, limit))
+            return httpx.Response(200, json=projects[offset : offset + limit])
+        if request.url.path.endswith("/chat-sessions"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(request.url)
+
+    async def run() -> None:
+        settings = Settings(
+            tmp_path / "chat.json",
+            {
+                "cores": {
+                    core: {
+                        "device_id": "device",
+                        "device_token": "synthetic-token",
+                        "csrf_token": "synthetic-csrf",
+                    }
+                }
+            },
+            core,
+        )
+        api = AsyncApi(settings, transport=httpx.MockTransport(handler))
+        ui = TuiUI()
+        shell = Shell(settings, ui=ui, api=api)
+
+        async def open_project(_selected=None, *, project=None) -> None:
+            assert project == target
+            shell.view = View(project, None)
+            ui.open_view(project, None)
+            await shell.refresh_navigation()
+
+        monkeypatch.setattr(shell, "select_chat", open_project)
+        choosing = asyncio.create_task(shell.select_project())
+        for _ in range(20):
+            if ui._picker is not None:
+                break
+            await asyncio.sleep(0)
+        assert ui._picker is not None
+        assert ui._picker.more is None
+        assert target in ui._picker.items
+        ui._modal_input.text = target["name"]
+        assert [row["id"] for row in ui._matching_items()] == [target["id"]]
+        ui._menu_select()
+        await choosing
+        assert (0, 1000) in requested_pages
+        assert (1000, 1000) in requested_pages
+        assert ui._projects[0]["id"] == target["id"]
+        assert ui._project == target["id"]
+        assert any(
+            line.startswith(" › ") and "synthetic_parser" in line
+            for line in ui._sidebar_text().splitlines()
+        )
+        await api.close()
+
+    asyncio.run(run())
+
+
 def test_selected_chat_poll_handles_304_failure_and_project_switch(
     tmp_path,
 ) -> None:

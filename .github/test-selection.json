@@ -1,20 +1,18 @@
 {
-  "change_digest": "2e782de72515e7ccad9c753825b2f64f89194b3a69c178c9408cb88e0d38adfe",
+  "change_digest": "5e87a9844c18a23865ae65c5c13f447d3487667a86e973b1e19d71d3fe7c58b9",
   "reviewed_by": "Codex",
-  "reason": "Temporary exact-project operator override for Host and SSH command admission. Two cases verify scoped access, one existing case executes a real local Host command, two verify the default hold, and one uses a disposable authenticated LAN Core.",
-  "exclusions": "No full suites, frontend, native, or Playwright tests: this is a server-side environment override with no UI change. The LAN journey uses synthetic data and SQLite; PostgreSQL duplicates this path. No live provider tests. Deployment tests are omitted at the operator's request.",
+  "reason": "Terminal project discovery loads the complete active project catalog before the F2 search picker opens. The selected TUI test reproduces a project beyond the first API page and verifies search, selection, and sidebar identity. Shell and transport tests cover shared collection paging and request parameter behavior. One paired LAN Core test covers the visible project switch through the authenticated API. A production client wheel and source archive were built and checked separately.",
+  "exclusions": "No full suites. No browser/frontend, native, or Playwright changes: this change affects only the separate Python terminal client. Browser viewport and mobile checks do not exercise the TUI. The packaging unit test targets an unchanged allowlist and its local 90-second build timeout; the same wheel and source archive build succeeded directly on this host after that limit. No live provider calls or operator Core deployment are part of this test selection.",
   "python_versions": ["3.11"],
   "python_browser": false,
   "python_node": false,
   "checks": [],
-  "expected_tests": {"python": 6, "frontend": 0, "native": 0, "playwright": 0},
+  "expected_tests": {"python": 80, "frontend": 0, "native": 0, "playwright": 0},
   "python": [
-    "tests/v3/test_memory_paths.py::test_host_command_session_does_not_fall_back_to_core_shell",
-    "tests/v3/test_memory_paths.py::test_temporary_override_is_exact_project_only",
-    "tests/v3/test_memory_paths.py::test_temporary_override_runs_ssh_for_exact_project",
-    "tests/v3/test_memory_paths.py::test_raw_ssh_command_is_held_without_a_remote_memory_agent",
-    "tests/v3/test_automation_runtime.py::test_host_mode_requires_consent_and_reads_external_folder_without_docker",
-    "tests/v3/test_automation_runtime.py::test_temporary_host_chat_command_on_disposable_lan_core"
+    "tests/test_terminal_tui.py",
+    "tests/test_terminal_shell.py",
+    "tests/test_terminal_transport.py",
+    "tests/v3/test_terminal_core.py::test_paired_tui_finds_and_opens_child_project"
   ],
   "frontend": [],
   "native": [],

@@ -246,6 +246,8 @@ class Shell:
         field: str = "name",
         predicate: Any = None,
         label: Any = None,
+        complete_catalog: bool = False,
+        page_size: int = 100,
     ) -> dict[str, Any]:
         offset = 0
         complete = False
@@ -253,9 +255,11 @@ class Shell:
         async def more() -> list[dict[str, Any]]:
             nonlocal offset, complete
             while True:
-                batch = await self.api.page(path, offset=offset, **(params or {}))
+                batch = await self.api.page(
+                    path, offset=offset, limit=page_size, **(params or {})
+                )
                 offset += len(batch)
-                complete = len(batch) < 100
+                complete = len(batch) < page_size
                 matches = named(
                     [item for item in batch if predicate is None or predicate(item)],
                     field,
@@ -268,6 +272,9 @@ class Shell:
         if isinstance(self.ui, TuiUI):
             self.ui.begin_loading(f"Loading {title.lower()}s from Core…")
         items = await more()
+        if complete_catalog and not selected:
+            while not complete:
+                items.extend(await more())
         if selected:
             candidates = [
                 item
@@ -312,6 +319,8 @@ class Shell:
             selected=selected,
             extras=[{"id": "__create", "name": "Create project"}],
             predicate=lambda row: not (row.get("metadata") or {}).get("archived_at"),
+            complete_catalog=True,
+            page_size=1000,
         )
         if item["id"] == "__create":
             name = (await self.ui.ask("Project name")).strip()
