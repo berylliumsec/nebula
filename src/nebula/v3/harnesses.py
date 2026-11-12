@@ -2598,6 +2598,7 @@ class CodexAppServerConnection(HarnessConnection):
         interaction_handler: InteractionHandler = _decline_unsupported_interaction,
         approval_policy: Literal["untrusted", "never"] = "untrusted",
         trusted_mcp_servers: frozenset[str] = frozenset(),
+        reasoning_effort: str | None = None,
         cyber_access_program: str | None = None,
     ) -> None:
         self.rpc = rpc
@@ -2606,6 +2607,7 @@ class CodexAppServerConnection(HarnessConnection):
         self.interaction_handler = interaction_handler
         self.approval_policy = approval_policy
         self.trusted_mcp_servers = trusted_mcp_servers
+        self.reasoning_effort = reasoning_effort
         self.cyber_access_program = cyber_access_program
         self.active_turn_id: str | None = None
         self.last_turn_id: str | None = None
@@ -2737,6 +2739,8 @@ class CodexAppServerConnection(HarnessConnection):
             "approvalPolicy": self.approval_policy,
             "summary": "detailed",
         }
+        if self.reasoning_effort is not None:
+            turn_params["effort"] = self.reasoning_effort
         if self.cyber_access_program is not None:
             turn_params["cyberAccessProgram"] = self.cyber_access_program
         if mode and mode != "default":
@@ -2745,7 +2749,14 @@ class CodexAppServerConnection(HarnessConnection):
             # The advertised default mode uses Codex's own thread default.
             turn_params["collaborationMode"] = {
                 "mode": mode,
-                "settings": {"model": model},
+                "settings": {
+                    "model": model,
+                    **(
+                        {"reasoning_effort": self.reasoning_effort}
+                        if self.reasoning_effort is not None
+                        else {}
+                    ),
+                },
             }
         result = await self.rpc.request(
             "turn/start",
@@ -4660,11 +4671,6 @@ class CodexAppServerAdapter(HarnessAdapter):
             daybreak_enabled = cyber_access_program in {"daybreakBlue", "daybreakRed"}
             thread_runtime_options = {
                 **(
-                    {"reasoningEffort": reasoning_effort}
-                    if isinstance(reasoning_effort, str) and reasoning_effort
-                    else {}
-                ),
-                **(
                     {"serviceTier": service_tier}
                     if isinstance(service_tier, str) and service_tier
                     else {}
@@ -4748,6 +4754,11 @@ class CodexAppServerAdapter(HarnessAdapter):
                 interaction_handler=request.interaction_handler,
                 approval_policy=approval_policy,
                 trusted_mcp_servers=frozenset(request.gateway_config),
+                reasoning_effort=(
+                    reasoning_effort
+                    if isinstance(reasoning_effort, str) and reasoning_effort
+                    else None
+                ),
                 cyber_access_program=cyber_access_program,
             )
         except (Exception, asyncio.CancelledError) as caught_error:
