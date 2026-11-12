@@ -1,5 +1,5 @@
 {
-  "change_digest": "10ebcb6fbdb117fa10b3643aed576e7b9256d4f8d82f3030a37cd324766e7856",
+  "change_digest": "9038ee4a18a49854349b89ac7b320edfa947e008daaf456e2afdecc2ff2af870",
   "reviewed_by": "Codex",
   "reason": "The exact changed paths are harness goal-turn completion and next-turn rebinding after a harness session closes. Run one Python regression for each state transition and its durable chat/goal readback.",
   "exclusions": "No UI, browser-origin, native, or frontend code changed. Existing child-project navigation and Host browser coverage passed on PR #982; repeating those journeys would not test these backend transitions. Deployment runs no local tests or backups.",

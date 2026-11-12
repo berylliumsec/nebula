@@ -11494,9 +11494,7 @@ class HarnessRuntimeService:
                 engagement_id, pending_provider_subagent
             )
         forked_from_session_id = settings_previous_session_id
-        session_rollover_reason = (
-            settings_rollover_reason if settings_handoff else None
-        )
+        session_rollover_reason = settings_rollover_reason if settings_handoff else None
         handoff_context = settings_handoff
         if chat.metadata.get("harness_context_handoff_pending") is True:
             handoff_context = await self._chat_handoff_context(chat)
