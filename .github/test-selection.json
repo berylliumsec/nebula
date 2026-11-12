@@ -1,20 +1,22 @@
 {
-  "change_digest": "7261671e6f0d19183000142c7ab1fe889246974aad68ea6834a57bb6f0858bb0",
+  "change_digest": "7b7be058a095e0da34afa2266130c518739c5fc2e75736e8f760bccbf5e88750",
   "reviewed_by": "Codex",
-  "reason": "A slow harness goal resume can overlap the idle reconciler before it saves its turn claim. The new exact regression exercises the authenticated goal action on a disposable LAN Core and holds preparation after closed-session rebind through two reconciliation passes; the existing competing-dispatch test checks that only one turn is claimed.",
-  "exclusions": "No UI, native, provider adapter, or browser-origin code changed. These two exact Python cases cover the backend dispatch handoff and concurrent claim. Deployment runs no local tests or backups.",
+  "reason": "Codex app-server accepts reasoning effort on turn/start, not thread/start or thread/resume. The protocol cases verify new, resumed, and plan-mode turns; the saved-goal case verifies Core's selected effort survives goal resume and continuation; the disposable authenticated LAN case verifies the goal-resume entry point still dispatches one turn.",
+  "exclusions": "No UI, native, browser-origin, or frontend code changed. Four exact Python cases cover the adapter boundary, saved goal configuration, and authenticated LAN goal resume. Deployment runs no local tests or backups.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 2,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_chat_goals.py::test_inflight_harness_resume_survives_idle_reconciliation",
-    "tests/v3/test_harness_chat_goals.py::test_competing_dispatches_claim_only_one_harness_goal_turn"
+    "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
+    "tests/v3/test_harness_leftovers.py::test_codex_daybreak_and_effort_on_start_and_resume",
+    "tests/v3/test_harness_chat_goals.py::test_saved_harness_effort_applies_to_goal_resume_and_continuation",
+    "tests/v3/test_harness_chat_goals.py::test_inflight_harness_resume_survives_idle_reconciliation"
   ],
   "frontend": [],
   "native": [],
