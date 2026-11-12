@@ -8966,8 +8966,11 @@ class HarnessRuntimeService:
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._scheduled_mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._chat_turn_tasks: dict[str, asyncio.Task[None]] = {}
+        # An explicit goal resume can spend longer than a recovery tick
+        # preparing its harness session before it saves the next turn claim.
+        self._dispatching_goal_sessions: set[str] = set()
         # Require two identical idle observations before recovering a running
-        # goal, so a turn still being prepared can take its durable claim.
+        # goal after any in-flight dispatch has finished.
         self._idle_goal_observations: dict[str, tuple[int, str | None, int | None]] = {}
         # Followers of a turn wait on its signal instead of polling the ledger;
         # an entry lives only while some follower holds it.
@@ -12588,6 +12591,8 @@ class HarnessRuntimeService:
         observed: dict[str, tuple[int, str | None, int | None]] = {}
         acted: list[str] = []
         for goal, latest in candidates:
+            if goal.session_id in self._dispatching_goal_sessions:
+                continue
             key = (
                 goal.revision,
                 latest.id if latest is not None else None,
@@ -12625,7 +12630,10 @@ class HarnessRuntimeService:
         async for goal in self.store.iter_readable_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
         ):
-            if goal.execution_claim_id is not None:
+            if (
+                goal.execution_claim_id is not None
+                or goal.session_id in self._dispatching_goal_sessions
+            ):
                 continue
             try:
                 session = await self.store.get(ChatSession, goal.session_id)
@@ -12682,6 +12690,26 @@ class HarnessRuntimeService:
         automatic_capacity_retry_of: str | None = None,
     ) -> str | None:
         """Start one harness turn for an idle Core-owned goal."""
+        if session_id in self._dispatching_goal_sessions:
+            return None
+        self._dispatching_goal_sessions.add(session_id)
+        try:
+            return await self._dispatch_running_goal(
+                session_id,
+                instruction,
+                automatic_capacity_retry_of=automatic_capacity_retry_of,
+            )
+        finally:
+            self._dispatching_goal_sessions.discard(session_id)
+
+    async def _dispatch_running_goal(
+        self,
+        session_id: str,
+        instruction: str,
+        *,
+        automatic_capacity_retry_of: str | None = None,
+    ) -> str | None:
+        """Prepare and claim a goal turn while recovery defers this session."""
         from .chat_assistant_config import chat_assistant_config
         from .chat_goals import ChatGoalService
 
