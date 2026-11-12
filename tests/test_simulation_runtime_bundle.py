@@ -1,6 +1,7 @@
 """Published releases include the runnable bundle, not just wrapper metadata."""
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -25,6 +26,24 @@ def built_bundle(tmp_path):
     digest = bundle(source)
     (source / "nebula-runtime.sha256").write_text(digest + "\n")
     return candidate, source, digest
+
+
+def test_release_manifest_selects_complete_onedir_worker(tmp_path):
+    release = tmp_path / "release"
+    runtime = release / "dist/nebula-runtime/bin"
+    runtime.mkdir(parents=True)
+    (runtime / "nebula-core").write_bytes(b"onedir worker")
+    (runtime / "_internal").mkdir()
+    (runtime / "_internal/base_library.zip").write_bytes(b"dependency")
+    (release / "dist/nebula-core").write_bytes(b"onefile connector")
+    (release / "ui/dist").mkdir(parents=True)
+    (release / "ui/dist/index.html").write_text("ready")
+
+    deployer.write_runtime_manifest(release, "candidate")
+    manifest = json.loads((release / "nebula-runtime.json").read_text())
+    assert manifest["core_executable"] == "dist/nebula-runtime/bin/nebula-core"
+    assert "dist/nebula-runtime/bin/_internal/base_library.zip" in manifest["files"]
+    assert "dist/nebula-core" not in manifest["files"]
 
 
 def test_published_bundle_bootstraps_from_the_configured_release_path(
