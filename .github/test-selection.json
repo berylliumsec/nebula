@@ -1,20 +1,22 @@
 {
-  "change_digest": "5e87a9844c18a23865ae65c5c13f447d3487667a86e973b1e19d71d3fe7c58b9",
-  "reviewed_by": "Codex",
-  "reason": "Terminal project discovery loads the complete active project catalog before the F2 search picker opens. The selected TUI test reproduces a project beyond the first API page and verifies search, selection, and sidebar identity. Shell and transport tests cover shared collection paging and request parameter behavior. One paired LAN Core test covers the visible project switch through the authenticated API. A production client wheel and source archive were built and checked separately.",
-  "exclusions": "No full suites. No browser/frontend, native, or Playwright changes: this change affects only the separate Python terminal client. Browser viewport and mobile checks do not exercise the TUI. The packaging unit test targets an unchanged allowlist and its local 90-second build timeout; the same wheel and source archive build succeeded directly on this host after that limit. No live provider calls or operator Core deployment are part of this test selection.",
-  "python_versions": ["3.11"],
-  "python_browser": false,
-  "python_node": false,
-  "checks": [],
-  "expected_tests": {"python": 80, "frontend": 0, "native": 0, "playwright": 0},
+  "change_digest": "9ed9d77c82d4b0ea00de372956a72c609f019fca612cc4c543b9c8caac812ee4",
+  "reviewed_by": "Codex authentication journey coverage review",
+  "reason": "Two real-Core authentication recovery cases across eight permanent browser profiles: missing and invalid bearer credentials, explicit alerts, rejected collection/direct reads without protected content, correction of the launch token, pairing recovery and reload persistence. Three selector tests verify catalog wiring. Core data and normal authentication are real; no model or command execution is required.",
+  "exclusions": "No full suites. No product code changes, so no component, Core unit or native suites. Existing TUI selection belonged to the already merged baseline and is not relevant to this browser-only change. Unrelated local ui/.env.example edits are excluded from this task digest. Physical devices, installed desktop shells, token expiry and revocation are outside these two journeys.",
+  "expected_tests": {
+    "python": 3,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 16
+  },
   "python": [
-    "tests/test_terminal_tui.py",
-    "tests/test_terminal_shell.py",
-    "tests/test_terminal_transport.py",
-    "tests/v3/test_terminal_core.py::test_paired_tui_finds_and_opens_child_project"
+    "tests/test_playwright_impact.py::test_authentication_recovery_selection_is_bounded_to_real_core_cases",
+    "tests/test_playwright_impact.py::test_full_manifest_covers_every_permanent_playwright_project",
+    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:authentication-recovery"
+  ]
 }
