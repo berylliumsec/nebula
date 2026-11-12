@@ -16,6 +16,14 @@ chat ID, history and frozen old session. Never change tools mid-turn or automati
 replay a failed command. Explicit Host consent, approvals, timeouts, containment for
 workspace-only reads and external MCP locations remain unchanged.
 
+An unrestricted Docker session may have a bounded scope snapshot even after the
+operator enables Allow all for its project. On a later Host rollover, require the
+current project scope to explicitly allow unrestricted access, then create a new
+Host harness session with that current scope. Rebind the same conversation and
+handoff its history; keep the former session and its bounded scope unchanged.
+Record the old and new scope revisions on the new session. A project that remains
+bounded still refuses unrestricted Host rollover.
+
 Verification: warm and restarted runtime rollover, retained history/frozen snapshot,
 actual Host access to a disposable external folder, Docker path isolation and host
 approval/timeout checks. Use focused real-Core browser continuation coverage, with a

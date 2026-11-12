@@ -1,13 +1,13 @@
 {
-  "change_digest": "304f064f165dbeca75fe60617d5f88046d48f8eb8e5f9b94d1277205594daa3f",
+  "change_digest": "71c95e79a1e4973f9312c44d461067063f55ef7331062c4e27d6263523f30e68",
   "reviewed_by": "Codex",
-  "reason": "The changed journeys are child-project chat discovery from the parent, chat-origin harness Host commands, gateway Core tool attachment, and valid staged deployment operation IDs. Select one exact Python regression per backend boundary, the two child-list component cases, and one child-chat production-LAN journey in the eight required desktop and mobile profiles.",
-  "exclusions": "Three exact Python cases, one two-case frontend file, and one Playwright journey in eight profiles. Existing sidebar ordering, other harness capabilities, Docker execution, native desktop, and unrelated project workflows are unchanged. No local tests or backups during deployment.",
+  "reason": "The changed journeys are child-project chat discovery from the parent, chat-origin harness Host commands, bounded Docker chat reauthorization into Host, gateway Core tool attachment, and valid staged deployment operation IDs. Select one exact Python regression per backend boundary, the two child-list component cases, and one child-chat production-LAN journey in the eight required desktop and mobile profiles.",
+  "exclusions": "Four exact Python cases, one two-case frontend file, and one Playwright journey in eight profiles. Existing sidebar ordering, unrelated harness capabilities, Docker execution, native desktop, and unrelated project workflows are unchanged. No local tests or backups during deployment.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 3,
+    "python": 4,
     "frontend": 2,
     "native": 0,
     "playwright": 8
@@ -15,6 +15,7 @@
   "python": [
     "tests/v3/test_automation_runtime.py::test_temporary_host_override_accepts_chat_origin_harness_only",
     "tests/v3/test_harnesses.py::test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog",
+    "tests/v3/test_harnesses.py::test_bounded_docker_goal_chat_reauthorizes_in_new_host_session",
     "tests/test_staged_deployer.py::test_promotion_moves_project_without_touching_continuing_data"
   ],
   "frontend": ["ui/src/pages/ChildProjectConversations.test.tsx"],

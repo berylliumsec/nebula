@@ -73,6 +73,7 @@ test("parent project shows child conversations and opens their owned chat", asyn
   await page.goto(`/projects/${parent}/workbench?view=chat`);
   const sidebar = page.getByRole("complementary", {name: "Conversations", exact: true});
   const showSidebar = async () => {
+    await expect(page.locator(".session-layout")).toBeVisible();
     if (!await sidebar.isVisible()) {
       const open = page.getByRole("button", {name: "Open conversations", exact: true});
       await (await open.isVisible() ? open : page.getByRole("button", {name: "Show conversations", exact: true})).click();
