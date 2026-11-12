@@ -200,10 +200,6 @@ async def test_harness_goal_continues_and_pauses_at_step_limit_without_self_comp
     async def scenario() -> None:
         store, _engagement, _profile, _mcp, adapter, runtime = await _runtime(tmp_path)
 
-        async def inert_open(request, _memory):
-            return await adapter.open(request)
-
-        adapter.open_memory_managed = inert_open
         goals = ChatGoalService(store, runtime)
         created = await _new_goal(goals)
         started = await goals.write(

@@ -715,9 +715,10 @@ change in the same chat. Unknown or unverified native instruction delivery fails
 visibly before a message is sent; it is not reported as delivered.
 
 Stateless provider requests continue carrying the current instructions on every
-request. Native harness processes still require their advertised protected memory
-runner; an unavailable runner or unverified installed vendor channel is a concrete
-capability limitation. Do not claim an installed vendor passed merely from an
+request. Native harnesses use a managed opener when available and otherwise use
+the vendor adapter's bounded lifecycle without a Nebula memory-runner limit. An
+unverified installed vendor channel remains a concrete capability limitation.
+Do not claim an installed vendor passed merely from an
 inert protocol fixture. A code rollback leaves projects needing these context
 capabilities on a compatible execution worker, while compatible API/UI updates
 and other projects may proceed.

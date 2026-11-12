@@ -1,19 +1,29 @@
 {
-  "change_digest": "10f1f91d66fec1705ad43d6e1bc9b6015a0f96c5dcd62d33277ad8c8911b0c34",
+  "change_digest": "b5259d9ae430f3aef64f020b0e2813d730e3ef6b4a3a55588cce6a2d4b75e3d0",
   "reviewed_by": "Codex",
-  "reason": "Simulation release must select the onedir executable and include all runtime dependencies in its immutable manifest.",
-  "exclusions": "No UI, frontend, native, or browser journey changed. This focused packaging regression checks the release manifest; live promotion is verified separately.",
+  "reason": "Restore native vendor harness turns after the obsolete protected memory-runner requirement blocked Codex before any model turn. Cover the production Codex adapter shape, optional managed opener, goal continuation, standing instructions, host diagnostics, account reads, and updated product knowledge.",
+  "exclusions": "No UI component, browser layout, frontend, or native desktop code changed. These 17 inert-adapter Python cases cover the changed backend boundaries; a disposable Core and live Butler turn verify the operator journey separately. No full suite is selected.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 1,
+    "python": 17,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_runtime_bundle.py::test_release_manifest_selects_complete_onedir_worker"
+    "tests/v3/test_memory_paths.py::test_native_codex_harness_uses_its_adapter_without_a_memory_runner",
+    "tests/v3/test_memory_paths.py::test_native_harness_prefers_memory_managed_adapter_when_available",
+    "tests/v3/test_harness_chat_goals.py::test_harness_goal_continues_and_pauses_at_step_limit_without_self_completing",
+    "tests/v3/test_standing_instruction_continuity.py::test_native_developer_and_system_payloads_keep_exact_standing_text",
+    "tests/v3/test_runtime_host_usage.py::test_host_diagnostic_turn_replays_one_protected_turn_without_project_session",
+    "tests/v3/test_runtime_host_usage.py::test_host_diagnostic_uses_native_adapter_without_memory_runner",
+    "tests/v3/test_runtime_host_usage.py::test_host_diagnostic_native_adapter_failure_cleans_up_without_memory_job",
+    "tests/v3/test_runtime_host_operator.py::test_host_quota_refresh_and_usage_share_protected_reader_and_replay",
+    "tests/v3/test_runtime_host_operator.py::test_native_account_reader_runs_without_memory_runner_for_both_entry_points",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [],
   "native": [],

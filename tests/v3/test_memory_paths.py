@@ -10,6 +10,7 @@ from nebula.v3.automation_runtime import AutomationRuntimeManager
 from nebula.v3.domain import (
     AutomationProjectPolicy,
     Engagement,
+    HarnessKind,
     SshEnvironment,
     ToolCallOrigin,
 )
@@ -228,21 +229,46 @@ async def test_raw_ssh_command_is_held_without_a_remote_memory_agent(memory):
     await held(controller, "ssh_command")
 
 
-async def test_native_harness_cannot_use_its_unmanaged_open_method(memory):
+async def test_native_codex_harness_uses_its_adapter_without_a_memory_runner(
+    memory, monkeypatch
+):
+    _store, controller = memory
+    service = object.__new__(HarnessRuntimeService)
+    service.memory_compute = controller
+    adapter = HarnessRuntimeService._default_adapter(HarnessKind.CODEX_APP_SERVER)
+    calls = []
+
+    async def inert_open(self, request):
+        calls.append(request.session.id)
+        return "inert connection"
+
+    monkeypatch.setattr(type(adapter), "open", inert_open)
+
+    request = SimpleNamespace(
+        session=SimpleNamespace(engagement_id="project", id="session")
+    )
+    assert await service._open_memory_managed(adapter, request) == "inert connection"
+    assert calls == ["session"]
+    assert await controller.service.list_jobs() == []
+
+
+async def test_native_harness_prefers_memory_managed_adapter_when_available(memory):
     _store, controller = memory
     service = object.__new__(HarnessRuntimeService)
     service.memory_compute = controller
 
     class Native:
         async def open(self, _request):
-            raise AssertionError("unmanaged harness opened")
+            raise AssertionError("managed adapter opened without its runner")
+
+        async def open_memory_managed(self, request, memory_controller):
+            assert memory_controller is controller
+            return request.session.id
 
     request = SimpleNamespace(
         session=SimpleNamespace(engagement_id="project", id="session")
     )
-    with pytest.raises(MemoryEnforcementUnavailable, match="native harness"):
-        await service._open_memory_managed(Native(), request)
-    await held(controller, "harness_worker")
+    assert await service._open_memory_managed(Native(), request) == "session"
 
 
 async def test_pdf_compute_has_no_unrestricted_thread_or_affinity_only_fallback(memory):

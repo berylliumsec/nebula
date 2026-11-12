@@ -280,32 +280,31 @@ async def test_host_quota_refresh_and_usage_share_protected_reader_and_replay(se
         )
 
 
-async def test_unprotected_native_account_reader_is_held_for_both_entry_points(
+async def test_native_account_reader_runs_without_memory_runner_for_both_entry_points(
     settings,
 ):
     await harness(settings)
+    calls = []
 
-    async def unguarded(*_args):
-        pytest.fail("An unsupported native account process was started")
+    async def native(profile, _credentials):
+        calls.append(profile.id)
+        return limits()
 
     settings.host.harness_factory = lambda _kind: SimpleNamespace(
-        read_account_usage=unguarded
+        read_account_usage=native
     )
     refreshed = await settings.mutate(
-        "harnesses/operator-account/quota/refresh", key="held"
+        "harnesses/operator-account/quota/refresh", key="native-account"
     )
-    assert refreshed.status_code == 200 and refreshed.json()["state"] == "unavailable"
-    assert "protected memory-runner/v1" in refreshed.json()["detail"]
+    assert refreshed.status_code == 200 and refreshed.json()["state"] != "unavailable"
     usage = await settings.client.get("/api/v1/runtime-usage?refresh=true")
     assert usage.status_code == 200
-    assert usage.json()["items"][0]["vendor"]["state"] == "unavailable"
+    assert usage.json()["items"][0]["vendor"]["state"] != "unavailable"
+    assert calls == ["operator-account", "operator-account"]
     async with settings.managed.database.session() as session:
         jobs = list(await session.scalars(select(MemoryJobRow)))
         account_jobs = [job for job in jobs if job.resource_kind == "harness_account"]
-        assert len(account_jobs) == 2
-        assert all(
-            job.project_id is None and job.state == "blocked" for job in account_jobs
-        )
+        assert account_jobs == []
 
 
 async def test_existing_codex_endpoint_refreshes_without_a_native_launch(

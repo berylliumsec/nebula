@@ -206,15 +206,12 @@ async def run_harness_test_turn(
 
 
 async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessHealth:
-    """Use the existing host controller and protected adapter contract only."""
+    """Run a bounded diagnostic with the adapter's available open contract."""
     from .harnesses import HarnessRuntimeService
-    from .memory_policy import MemoryEnforcementUnavailable
 
     controller: MemoryComputeController | None = getattr(
         settings.observations, "memory_compute", None
     )
-    if controller is None:
-        raise MemoryEnforcementUnavailable("Host memory enforcement is not initialized")
 
     class BoundedConnection:
         def __init__(self, connection: Any):
@@ -228,15 +225,12 @@ async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessH
 
     async def open_connection(adapter: Any, request: Any) -> Any:
         opener = getattr(adapter, "open_memory_managed", None)
-        if not callable(opener):
-            await controller.reject_unsupported(
-                "local",
-                project_id=None,
-                resource_kind="harness_worker",
-                resource_id=request.session.id,
-                detail="This native harness adapter has no protected memory-runner/v1 launch contract. Use a provider with memory-managed command tools, or connect a supported harness runner. It will not launch without verified limits.",
-            )
-        connection = await asyncio.wait_for(opener(request, controller), timeout=15)
+        opening = (
+            opener(request, controller)
+            if callable(opener) and controller is not None
+            else adapter.open(request)
+        )
+        connection = await asyncio.wait_for(opening, timeout=15)
         return BoundedConnection(connection)
 
     # Includes bounded open, canonical 90-second fixed turn, resume and cleanup;
