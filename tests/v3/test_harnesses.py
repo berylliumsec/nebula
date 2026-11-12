@@ -5536,19 +5536,21 @@ async def test_bounded_docker_goal_chat_reauthorizes_in_new_host_session(tmp_pat
     original = await store.get(HarnessSession, first.harness_session_id)
     assert original.metadata["execution_mode"] == "docker"
     assert original.metadata["scope_snapshot"]["bypass_permissions"] is False
+    subagent = {
+        "harness_profile_id": profile.id,
+        "model": original.model,
+        "reasoning_effort": "low",
+    }
+    chat = await store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {**chat.metadata, "provider_subagent": subagent}},
+        expected_revision=chat.revision,
+    )
     original = await store.update(
         HarnessSession,
         original.id,
-        {
-            "metadata": {
-                **original.metadata,
-                "provider_subagent": {
-                    "harness_profile_id": profile.id,
-                    "model": original.model,
-                    "reasoning_effort": "low",
-                },
-            }
-        },
+        {"metadata": {**original.metadata, "provider_subagent": subagent}},
         expected_revision=original.revision,
     )
 
@@ -5597,7 +5599,7 @@ async def test_bounded_docker_goal_chat_reauthorizes_in_new_host_session(tmp_pat
         "from_revision": original.metadata["scope_snapshot"]["revision"],
         "to_revision": scope.revision,
     }
-    assert replacement.metadata["provider_subagent"]["reasoning_effort"] == "low"
+    assert updated.metadata["provider_subagent"] == subagent
     assert (await store.get(HarnessSession, original.id)).metadata["scope_snapshot"][
         "bypass_permissions"
     ] is False
