@@ -441,9 +441,13 @@ def browser_args(entry: dict[str, Any]) -> list[str]:
 
 
 def write_runtime_manifest(directory: Path, version: str, **compatibility) -> str:
+    runtime = directory / "dist/nebula-runtime"
+    executable = runtime / "bin/nebula-core"
+    if not executable.is_file() or executable.is_symlink():
+        raise RuntimeError("The retained onedir Core executable is missing")
     files = {}
     for path in [
-        directory / "dist/nebula-core",
+        *sorted(runtime.rglob("*")),
         *sorted((directory / "ui/dist").rglob("*")),
     ]:
         if path.is_symlink():
@@ -454,7 +458,7 @@ def write_runtime_manifest(directory: Path, version: str, **compatibility) -> st
         "format": "nebula.runtime-bundle/v1",
         "version": version,
         "supervisor_protocol": "nebula.runtime/v1",
-        "core_executable": "dist/nebula-core",
+        "core_executable": "dist/nebula-runtime/bin/nebula-core",
         "ui_directory": "ui/dist",
         "files": files,
     }

@@ -1,8 +1,8 @@
 {
-  "change_digest": "10d227456383fe5de00d4f82cd6d279f31e8199522e5829b49c2b7bd3af59cb8",
+  "change_digest": "10f1f91d66fec1705ad43d6e1bc9b6015a0f96c5dcd62d33277ad8c8911b0c34",
   "reviewed_by": "Codex",
-  "reason": "Provider-to-Codex runtime selection must create and bind a harness session atomically. One focused regression covers the saved goal identity, Codex effort, Daybreak Blue, and child route.",
-  "exclusions": "No full suites, frontend, native, or Playwright tests: this change repairs a Core runtime binding, with no UI code change. The operator requested CI-only testing and no local tests. Production-LAN browser and local gates are omitted at the operator's request.",
+  "reason": "Simulation release must select the onedir executable and include all runtime dependencies in its immutable manifest.",
+  "exclusions": "No UI, frontend, native, or browser journey changed. This focused packaging regression checks the release manifest; live promotion is verified separately.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
@@ -13,7 +13,7 @@
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_async_runtime_switching.py::test_provider_goal_switch_creates_codex_session_with_selected_options"
+    "tests/test_simulation_runtime_bundle.py::test_release_manifest_selects_complete_onedir_worker"
   ],
   "frontend": [],
   "native": [],
