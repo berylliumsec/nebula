@@ -233,10 +233,16 @@ async def test_codex_daybreak_and_effort_on_start_and_resume(tmp_path):
         assert "reasoningEffort" not in next(
             params for method, params in rpc.calls if method == "thread/start"
         )
-        [event async for event in connection.run_turn("Inspect patch", model="gpt-cyber")]
-        assert next(params for method, params in rpc.calls if method == "turn/start")[
-            "effort"
-        ] == "medium"
+        [
+            event
+            async for event in connection.run_turn("Inspect patch", model="gpt-cyber")
+        ]
+        assert (
+            next(params for method, params in rpc.calls if method == "turn/start")[
+                "effort"
+            ]
+            == "medium"
+        )
         rpc.calls.clear()
         resumed = await adapter._open(
             AdapterOpenRequest(

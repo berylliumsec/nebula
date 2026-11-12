@@ -1,5 +1,5 @@
 {
-  "change_digest": "08dd1b0b36d9821915cf1dd27ec24bca987f92ddda7aacf9dfbfdc247177dd78",
+  "change_digest": "660b0b23f173ac59873a60fde7ca726fca011e9b42d47ddebd965c38121487fd",
   "reviewed_by": "Codex",
   "reason": "Codex app-server accepts reasoning effort on turn/start, not thread/start or thread/resume. The protocol cases verify new, resumed, and plan-mode turns; the saved-goal case verifies Core's selected effort survives goal resume and continuation; the disposable authenticated LAN case verifies the goal-resume entry point still dispatches one turn.",
   "exclusions": "No UI, native, browser-origin, or frontend code changed. Four exact Python cases cover the adapter boundary, saved goal configuration, and authenticated LAN goal resume. Deployment runs no local tests or backups.",
