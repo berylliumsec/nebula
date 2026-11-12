@@ -20,9 +20,10 @@ test("running conversations stay first through refresh and activity changes", as
   const sidebar = page.getByRole("complementary", {name: "Conversations", exact: true});
   const showSidebar = async () => {
     await expect(page.locator(".session-layout")).toBeVisible();
-    if (!await sidebar.isVisible()) await page.getByRole("button", {
-      name: (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations", exact: true,
-    }).click();
+    if (!await sidebar.isVisible()) {
+      const open = page.getByRole("button", {name: "Open conversations", exact: true});
+      await (await open.isVisible() ? open : page.getByRole("button", {name: "Show conversations", exact: true})).click();
+    }
     await expect(sidebar).toBeVisible();
   };
   const running = sidebar.getByRole("region", {name: "Working", exact: true});
@@ -72,9 +73,10 @@ test("parent project shows child conversations and opens their owned chat", asyn
   await page.goto(`/projects/${parent}/workbench?view=chat`);
   const sidebar = page.getByRole("complementary", {name: "Conversations", exact: true});
   const showSidebar = async () => {
-    if (!await sidebar.isVisible()) await page.getByRole("button", {
-      name: (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations", exact: true,
-    }).click();
+    if (!await sidebar.isVisible()) {
+      const open = page.getByRole("button", {name: "Open conversations", exact: true});
+      await (await open.isVisible() ? open : page.getByRole("button", {name: "Show conversations", exact: true})).click();
+    }
     await expect(sidebar).toBeVisible();
   };
   await showSidebar();
