@@ -5506,6 +5506,108 @@ async def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknow
     (await scenario())
 
 
+async def test_bounded_docker_goal_chat_reauthorizes_in_new_host_session(tmp_path):
+    store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+    scope = await store.create(
+        ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+    )
+    engagement = await store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    profile = await store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "unrestricted"},
+        expected_revision=profile.revision,
+    )
+    chat, _, first = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Keep the saved research context",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    _ = [event async for event in runtime.stream_turn(first.id)]
+    original = await store.get(HarnessSession, first.harness_session_id)
+    assert original.metadata["execution_mode"] == "docker"
+    assert original.metadata["scope_snapshot"]["bypass_permissions"] is False
+    original = await store.update(
+        HarnessSession,
+        original.id,
+        {
+            "metadata": {
+                **original.metadata,
+                "provider_subagent": {
+                    "harness_profile_id": profile.id,
+                    "model": original.model,
+                    "reasoning_effort": "low",
+                },
+            }
+        },
+        expected_revision=original.revision,
+    )
+
+    class HostCommands:
+        def __init__(self) -> None:
+            self.store = store
+
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
+            del engagement_id, transaction
+            return "host"
+
+        def chat_components(self, *, engagement_id: str):
+            del engagement_id
+            raise AutomationRuntimeUnavailable("command runtime is optional")
+
+    runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+    with pytest.raises(HarnessConfigurationError, match="Enable Allow all"):
+        await runtime._fork_session_for_execution_mode(
+            original, profile, execution_mode="host", reason="execution_mode_changed"
+        )
+    scope = await store.update(
+        ScopePolicy,
+        scope.id,
+        {"bypass_permissions": True},
+        expected_revision=scope.revision,
+    )
+    updated, _, second = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Continue the saved research goal on Host",
+        chat_session_id=chat.id,
+        harness_session_id=original.id,
+        mcp_server_ids=[],
+    )
+    replacement = await store.get(HarnessSession, second.harness_session_id)
+    assert updated.id == chat.id
+    assert updated.harness_session_id == replacement.id
+    assert replacement.id != original.id
+    assert replacement.external_session_id is None
+    assert replacement.metadata["execution_mode"] == "host"
+    assert replacement.metadata["scope_snapshot"]["bypass_permissions"] is True
+    assert replacement.metadata["scope_reauthorization"] == {
+        "from_revision": original.metadata["scope_snapshot"]["revision"],
+        "to_revision": scope.revision,
+    }
+    assert replacement.metadata["provider_subagent"]["reasoning_effort"] == "low"
+    assert (await store.get(HarnessSession, original.id)).metadata["scope_snapshot"][
+        "bypass_permissions"
+    ] is False
+    assert "Keep the saved research context" in second.prompt
+    _ = [event async for event in runtime.stream_turn(second.id)]
+    assert adapter.opens[-1].session.external_session_id is None
+    assert adapter.opens[-1].workspace == tmp_path
+    await runtime.shutdown()
+
+
 async def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
     store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
     (
