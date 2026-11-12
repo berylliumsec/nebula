@@ -981,9 +981,7 @@ async def test_inflight_harness_resume_survives_idle_reconciliation(
             base_url=origin, trust_env=False, timeout=20
         ) as client:
             headers = {"Authorization": f"Bearer {token}"}
-            unauthorized = await client.get(
-                f"/api/v1/chat/sessions/{session_id}/goal"
-            )
+            unauthorized = await client.get(f"/api/v1/chat/sessions/{session_id}/goal")
             assert unauthorized.status_code == 401
             resume_request = asyncio.create_task(
                 client.post(

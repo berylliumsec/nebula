@@ -1,5 +1,5 @@
 {
-  "change_digest": "ca0d4a4d244add9b75d7d55f04b6fec6b14693acf5af9a57e2ada690ca774803",
+  "change_digest": "7261671e6f0d19183000142c7ab1fe889246974aad68ea6834a57bb6f0858bb0",
   "reviewed_by": "Codex",
   "reason": "A slow harness goal resume can overlap the idle reconciler before it saves its turn claim. The new exact regression exercises the authenticated goal action on a disposable LAN Core and holds preparation after closed-session rebind through two reconciliation passes; the existing competing-dispatch test checks that only one turn is claimed.",
   "exclusions": "No UI, native, provider adapter, or browser-origin code changed. These two exact Python cases cover the backend dispatch handoff and concurrent claim. Deployment runs no local tests or backups.",
