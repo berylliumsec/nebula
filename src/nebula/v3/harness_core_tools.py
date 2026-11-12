@@ -283,7 +283,7 @@ async def call_core_tool(
 
     async def execute(approval: Any = None) -> Any:
         if spec.budget_class == "execution":
-            async with runtime._gateway_execution_gate(turn):
+            async with await runtime._gateway_execution_gate(turn):
                 return await components.broker.execute(
                     invocation, components.scope, approval=approval
                 )
