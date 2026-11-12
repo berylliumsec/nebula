@@ -2029,9 +2029,8 @@ class AutomationRuntimeManager:
 
         async def require_host_command_access() -> None:
             if (
-                (owner_kind == "chat" or (owner_kind == "harness" and chat_origin))
-                and unmanaged_commands_allowed(engagement_id)
-            ):
+                owner_kind == "chat" or (owner_kind == "harness" and chat_origin)
+            ) and unmanaged_commands_allowed(engagement_id):
                 return
             await self.memory_compute.reject_unsupported(
                 "local",

@@ -36,7 +36,8 @@ describe("child project conversations in parent sidebar", () => {
     } as unknown as ApiClient;
     const view = mount(api);
     const section = await screen.findByRole("region", { name: `${child.name} conversations` });
-    expect(await within(section).findByRole("button", { name: `${child.name} 11` })).toHaveAttribute("aria-expanded", "true");
+    expect(await within(section).findByText("11")).toBeVisible();
+    expect(within(section).getByRole("button", { name: `${child.name} chats` })).toHaveAttribute("aria-expanded", "true");
     expect(within(section).getAllByRole("link")).toHaveLength(8);
     expect(within(section).queryByText("Other project")).not.toBeInTheDocument();
     await user.click(within(section).getByRole("button", { name: "Show more chats (3)" }));

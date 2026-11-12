@@ -54,7 +54,7 @@ export function ChildProjectConversations({
   const matches = useMemo(() => sessions.filter(session => conversationMatchesSearch(session, query)), [sessions, query]);
   const shown = matches.slice(0, visibleCount);
   return <section className="session-list-group child-project-conversations" aria-label={`${project.name} conversations`}>
-    <h3 className="child-project-heading"><button className="session-list-group-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(current => !current)}>
+    <h3 className="child-project-heading"><button className="session-list-group-toggle" type="button" aria-label={`${project.name} chats`} aria-expanded={expanded} onClick={() => setExpanded(current => !current)}>
         <ChevronDown size={12} className={expanded ? undefined : "collapsed"} aria-hidden="true" />
         <FolderOpen size={12} aria-hidden="true" />
         <span className="child-project-name" title={project.name}>{project.name}</span>
