@@ -1,19 +1,20 @@
 {
-  "change_digest": "76da16d4d324608e950114629a821dfbe4d95499c66672ea99056405b9d181b7",
+  "change_digest": "7261671e6f0d19183000142c7ab1fe889246974aad68ea6834a57bb6f0858bb0",
   "reviewed_by": "Codex",
-  "reason": "The changed path is an execution-budget Core tool entering its per-turn async gateway gate. Run the existing exact gateway dispatch regression with the real gate so it verifies execution, the attached ledger call, and a non-execution catalog query.",
-  "exclusions": "No UI, native, provider adapter, or browser-origin code changed. The exact Python gateway regression covers this backend state transition. Deployment runs no local tests or backups.",
+  "reason": "A slow harness goal resume can overlap the idle reconciler before it saves its turn claim. The new exact regression exercises the authenticated goal action on a disposable LAN Core and holds preparation after closed-session rebind through two reconciliation passes; the existing competing-dispatch test checks that only one turn is claimed.",
+  "exclusions": "No UI, native, provider adapter, or browser-origin code changed. These two exact Python cases cover the backend dispatch handoff and concurrent claim. Deployment runs no local tests or backups.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 1,
+    "python": 2,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harnesses.py::test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog"
+    "tests/v3/test_harness_chat_goals.py::test_inflight_harness_resume_survives_idle_reconciliation",
+    "tests/v3/test_harness_chat_goals.py::test_competing_dispatches_claim_only_one_harness_goal_turn"
   ],
   "frontend": [],
   "native": [],

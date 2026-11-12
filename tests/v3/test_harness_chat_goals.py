@@ -7,11 +7,17 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import ipaddress
+import socket
+import time
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
+import httpx
 import pytest
+import uvicorn
 
+from nebula.v3.api import create_app
 from nebula.v3.chat_assistant_config import (
     ChatAssistantConfigPatch,
     update_chat_assistant_config,
@@ -52,6 +58,7 @@ from nebula.v3.harnesses import (
     HarnessGoalSnapshot,
     HarnessTurnFailedError,
 )
+from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 from nebula.v3.storage import ConflictError
 from tests.v3.test_harnesses import FakeConnection, _runtime
 
@@ -539,13 +546,17 @@ async def test_competing_dispatches_claim_only_one_harness_goal_turn(tmp_path):
                 GoalWrite(expected_revision=created.goal.revision, action="start"),
             )
         )
-        results = await asyncio.gather(
-            *[
-                (await runtime.dispatch_running_goal(created.session.id, "Begin once"))
-                for _ in range(2)
-            ]
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                runtime.dispatch_running_goal(created.session.id, "Begin once"),
+                runtime.dispatch_running_goal(created.session.id, "Begin once"),
+            ),
+            timeout=15,
         )
-        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        await asyncio.wait_for(
+            _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED),
+            timeout=10,
+        )
         assert len([result for result in results if result]) == 1
         assert (
             len((await store.list_session_entities(ChatTurn, created.session.id))) == 1
@@ -554,7 +565,7 @@ async def test_competing_dispatches_claim_only_one_harness_goal_turn(tmp_path):
             len((await store.list_session_entities(ChatMessage, created.session.id)))
             == 2
         )
-        await runtime.shutdown()
+        await asyncio.wait_for(runtime.shutdown(), timeout=10)
 
     (await scenario())
 
@@ -883,6 +894,133 @@ async def test_failed_harness_turn_pauses_goal_until_explicit_resume(tmp_path):
         await runtime.shutdown()
 
     (await scenario())
+
+
+async def test_inflight_harness_resume_survives_idle_reconciliation(
+    tmp_path, monkeypatch
+):
+    store, _engagement, _profile, _mcp, adapter, runtime = await _runtime(
+        tmp_path, fail=True
+    )
+    goals = ChatGoalService(store, runtime)
+    created = await _new_goal(goals, step_budget=2)
+    session_id = created.session.id
+    await goals.write(
+        session_id,
+        GoalWrite(expected_revision=created.goal.revision, action="start"),
+    )
+    assert await runtime.dispatch_running_goal(session_id, "Try once")
+    await _wait_for_goal(goals, session_id, ChatGoalStatus.PAUSED)
+    async with asyncio.timeout(5):
+        while runtime._chat_turn_tasks:
+            await asyncio.sleep(0.01)
+    previous_turns = await store.list_session_entities(ChatTurn, session_id)
+    assert len(previous_turns) == 1
+    assert previous_turns[0].status != ChatTurnStatus.COMPLETE
+
+    old_session_id = (await store.get(ChatSession, session_id)).harness_session_id
+    assert old_session_id
+    await runtime.close_session(old_session_id)
+    adapter.fail = False
+    paused = await goals.get(session_id)
+
+    preparation_bound = asyncio.Event()
+    release_preparation = asyncio.Event()
+    original_bind = runtime._bind_session_agent_messaging
+
+    async def hold_after_harness_binding(session, enabled):
+        bound = await original_bind(session, enabled)
+        preparation_bound.set()
+        await release_preparation.wait()
+        return bound
+
+    monkeypatch.setattr(
+        runtime, "_bind_session_agent_messaging", hold_after_harness_binding
+    )
+
+    class AvailableFixtureHost(HostLoadMonitor):
+        def cached(self):
+            return self.sample()
+
+        def sample(self):
+            return HostLoadSnapshot(
+                sampled_at=time.monotonic(),
+                cpu_capacity=4,
+                cpu_ratio=0.0,
+                memory_available_ratio=1.0,
+                busy=False,
+                reason=None,
+                measurements_available=True,
+            )
+
+    token = "synthetic-goal-resume-fixture"
+    app = create_app(
+        store,
+        auth_token=token,
+        harness_runtime_service=runtime,
+        execution_data_root=tmp_path,
+        host_load_gate=HostLoadGate(AvailableFixtureHost()),
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect(("192.0.2.1", 9))
+        host = probe.getsockname()[0]
+    assert not ipaddress.ip_address(host).is_loopback
+    listener = socket.socket()
+    listener.bind((host, 0))
+    listener.listen()
+    origin = f"http://{host}:{listener.getsockname()[1]}"
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    server_task = asyncio.create_task(server.serve(sockets=[listener]))
+    try:
+        async with asyncio.timeout(15):
+            while not server.started:
+                if server_task.done():
+                    await server_task
+                await asyncio.sleep(0.01)
+        async with httpx.AsyncClient(
+            base_url=origin, trust_env=False, timeout=20
+        ) as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            unauthorized = await client.get(f"/api/v1/chat/sessions/{session_id}/goal")
+            assert unauthorized.status_code == 401
+            resume_request = asyncio.create_task(
+                client.post(
+                    f"/api/v1/chat/sessions/{session_id}/goal/actions",
+                    headers=headers,
+                    json={"expected_revision": paused.revision, "action": "resume"},
+                )
+            )
+            try:
+                await asyncio.wait_for(preparation_bound.wait(), timeout=10)
+                rebound = await store.get(ChatSession, session_id)
+                assert rebound.harness_session_id != old_session_id
+                assert len(await store.list_session_entities(ChatTurn, session_id)) == 1
+                assert await runtime.reconcile_idle_running_goals() == []
+                assert await runtime.reconcile_idle_running_goals() == []
+                in_flight = await client.get(
+                    f"/api/v1/chat/sessions/{session_id}/goal", headers=headers
+                )
+                assert in_flight.status_code == 200
+                assert in_flight.json()["status"] == "running"
+            finally:
+                release_preparation.set()
+            response = await asyncio.wait_for(resume_request, timeout=10)
+            assert response.status_code == 200, response.text
+            assert response.json()["current_step"] == 2
+            turns = await store.list_session_entities(ChatTurn, session_id)
+            assert len(turns) == 2
+            new_turn = next(turn for turn in turns if turn.id != previous_turns[0].id)
+            assert new_turn.goal_id == created.goal.id
+            assert new_turn.harness_turn_id
+            assert (
+                await store.get(HarnessTurn, new_turn.harness_turn_id)
+            ).chat_turn_id == new_turn.id
+            print(f"disposable authenticated LAN Core: {origin}; goal turn saved")
+    finally:
+        release_preparation.set()
+        server.should_exit = True
+        await asyncio.wait_for(server_task, timeout=15)
+        listener.close()
 
 
 async def test_model_capacity_continues_goal_once_from_saved_state(tmp_path):
