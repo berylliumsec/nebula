@@ -55,7 +55,7 @@ async def profile(settings, *, enabled=True, model="synthetic"):
     )
 
 
-def adapter(settings, *, mode="normal"):
+def adapter(settings, *, mode="normal", managed=True):
     calls = []
     entered, release = asyncio.Event(), asyncio.Event()
     release.set()
@@ -79,8 +79,12 @@ def adapter(settings, *, mode="normal"):
 
     class Adapter:
         async def open(self, request):
-            pytest.fail("A host diagnostic fell back to unprotected native launch")
+            if managed:
+                pytest.fail("A managed host diagnostic used its direct opener")
+            calls.append(("open", request.session.external_session_id))
+            return Connection()
 
+    class ManagedAdapter(Adapter):
         async def open_memory_managed(self, request, controller):
             assert controller is settings.host.observations.memory_compute
             assert request.credential_store is settings.host.credentials
@@ -89,7 +93,9 @@ def adapter(settings, *, mode="normal"):
             calls.append(("open", request.session.external_session_id))
             return Connection()
 
-    settings.host.harness_factory = lambda _kind: Adapter()
+    settings.host.harness_factory = lambda _kind: (
+        ManagedAdapter() if managed else Adapter()
+    )
     return calls, entered, release
 
 
@@ -251,6 +257,26 @@ async def test_host_diagnostic_turn_replays_one_protected_turn_without_project_s
     assert is_host_settings_route("POST", "/api/v1/" + path)
 
 
+async def test_host_diagnostic_uses_native_adapter_without_memory_runner(settings):
+    await profile(settings)
+    calls, _, _ = adapter(settings, managed=False)
+    result = await settings.mutate(
+        "harnesses/diagnostic-profile/test-turn", key="native-diagnostic"
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["healthy"]
+    assert [entry[0] for entry in calls] == ["open", "turn", "close", "open", "close"]
+    async with settings.managed.database.session() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(MemoryJobRow)
+                .where(MemoryJobRow.resource_kind == "harness_worker")
+            )
+            == 0
+        )
+
+
 async def test_legacy_diagnostic_entry_reuses_extracted_canonical_helper(settings):
     from nebula.v3.harnesses import HarnessRuntimeService
 
@@ -309,7 +335,7 @@ async def test_slow_host_diagnostic_returns_receipt_and_recovers_without_resubmi
         release.set()
 
 
-async def test_host_diagnostic_without_protected_adapter_records_global_memory_refusal(
+async def test_host_diagnostic_native_adapter_failure_cleans_up_without_memory_job(
     settings,
 ):
     projects = {
@@ -318,22 +344,18 @@ async def test_host_diagnostic_without_protected_adapter_records_global_memory_r
     }
     await profile(settings)
 
-    class Unsupported:
+    class FailingAdapter:
         async def open(self, request):
-            pytest.fail("Unsupported native adapter was launched")
+            raise RuntimeError("synthetic native diagnostic failure")
 
-    settings.host.harness_factory = lambda _kind: Unsupported()
+    settings.host.harness_factory = lambda _kind: FailingAdapter()
     response = await settings.mutate(
-        "harnesses/diagnostic-profile/test-turn", key="unsupported-diagnostic"
+        "harnesses/diagnostic-profile/test-turn", key="failed-native-diagnostic"
     )
     assert response.status_code == 200 and not response.json()["healthy"], response.text
     async with settings.managed.database.session() as session:
         jobs = list(await session.scalars(select(MemoryJobRow)))
-        assert (
-            jobs
-            and jobs[-1].project_id is None
-            and jobs[-1].resource_kind == "harness_worker"
-        )
+        assert [job for job in jobs if job.resource_kind == "harness_worker"] == []
     assert {
         item.id: item.revision
         for item in await settings.store.list_entities(Engagement)

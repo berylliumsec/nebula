@@ -131,13 +131,14 @@ reuse remain available. No provisioning failure falls back to unrestricted
 Docker, BuildKit or a host shell.
 
 Host shells and Host Notebook kernels need a protected local memory-runner/v1
-agent; native vendor harnesses need a memory-managed adapter; PDF CPU work needs
-a contained CPU runner; raw SSH needs an authenticated remote agent that can
+agent; PDF CPU work needs a contained CPU runner; raw SSH needs an authenticated remote agent that can
 verify both kernel application and descendant cleanup; interactive terminals
 need a memory-managed PTY adapter. Unsupported paths are
 held or rejected with a durable explanation. They cannot fall back to a host
 thread, raw shell or SSH after queue failure. These integrations require explicit
 runner support and environment-specific validation before they are supported.
+Native vendor harnesses may use their bounded vendor adapter lifecycle without
+a Nebula memory-runner limit; adapters with a managed opener continue using it.
 Essential control operations are fixed internal actions such as runner info,
 image inspection, kernel readback and removal; arbitrary commands cannot acquire
 an administrative exemption by describing themselves as lightweight.

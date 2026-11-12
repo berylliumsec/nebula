@@ -20303,15 +20303,10 @@ class HarnessRuntimeService:
 
     async def _open_memory_managed(self, adapter, request: AdapterOpenRequest):
         opener = getattr(adapter, "open_memory_managed", None)
-        if opener is None:
-            await self.memory_compute.reject_unsupported(
-                "local",
-                project_id=request.session.engagement_id,
-                resource_kind="harness_worker",
-                resource_id=request.session.id,
-                detail="This native harness adapter has no protected memory-runner/v1 launch contract. Use a provider with memory-managed command tools, or connect a supported harness runner. It will not launch without verified limits.",
-            )
-        return await opener(request, self.memory_compute)
+        controller = getattr(self, "memory_compute", None)
+        if callable(opener) and controller is not None:
+            return await opener(request, controller)
+        return await adapter.open(request)
 
     async def _start_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:

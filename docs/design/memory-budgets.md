@@ -10,7 +10,7 @@ it never proves that a job has a lifetime limit.
 Temporary operator exception (2026-11-10): Host and SSH chat commands may use
 their legacy unprotected execution path only for project IDs listed in the
 Core process environment variable `NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS`.
-This is an explicit, reversible exception for Apple Bug Bounty while a protected
+This is an explicit, reversible exception for selected projects while a protected
 runner is built. It provides no memory limit or descendant-cleanup guarantee;
 leave the variable unset everywhere else and remove it when the runner ships.
 
@@ -19,7 +19,7 @@ leave the variable unset everywhere else and remove it when the runner ships.
 | `sandbox.py`, `runtime_platform.py` command and parser containers | Per-request OCI memory flag and runtime certification | Shared SQL reservation, frozen policy, explicit swap, protected guard/readback, full container tree |
 | `automation_runtime.py`, Docker `notebooks.py` sessions | Persistent container/session lifecycle | One persistent worker reservation; commands, Notebook kernels and background children share its limits |
 | Host command sessions and Host Notebook kernels | Host subprocesses, timeouts and policy grants | Held before process creation pending a protected local runner |
-| Native harness backends in `harnesses.py` | Vendor adapter lifecycle | Requires `open_memory_managed`; no fallback to unrestricted `open` |
+| Native harness backends in `harnesses.py` | Vendor adapter lifecycle | Uses a managed adapter when available; otherwise uses the vendor adapter's bounded `open` lifecycle without a Nebula memory-runner limit |
 | `environments.py` SSH tools | SSH command and timeout | Held before SSH submission pending a remote memory agent |
 | `reporting.py`, `report_cpu_executor.py` | Thread fallback or CPU affinity/queue bounds | Service-level hold before pool startup or dispatch, including injected executors |
 | Interactive terminals and owner-mapped debugger tools | PTY or read-only bind with a mapped owner | Held pending protected PTY and filesystem-export adapters |

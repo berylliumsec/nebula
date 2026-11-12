@@ -420,10 +420,6 @@ async def test_native_developer_and_system_payloads_keep_exact_standing_text(
         monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
         adapter = ClaudeAgentSdkAdapter()
 
-    async def inert_open(request, _memory):
-        return await adapter.open(request)
-
-    adapter.open_memory_managed = inert_open
     runtime.adapter_factory = lambda _: adapter
     _, _, turn = await prepare(runtime, project, profile)
     session = await store.get(HarnessSession, turn.harness_session_id)
