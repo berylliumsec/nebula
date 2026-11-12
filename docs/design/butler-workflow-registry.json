@@ -1014,7 +1014,7 @@
     },
     {
       "id": "chat.start_and_read",
-      "entry_point": "Workbench conversations: start a separate project chat and read its durable activity; streaming and polling are presentation transports",
+      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also links to direct child-project chats",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::streamChat",
         "ui/src/pages/SessionsPage.tsx::getChatSession",
@@ -1024,7 +1024,9 @@
         "ui/src/pages/useSessionState.ts::requestIfChanged",
         "ui/src/pages/WorkPage.tsx::listChatSessions",
         "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
-        "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\""
+        "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
+        "ui/src/pages/ChildProjectConversations.tsx::listChatSessionActivity",
+        "ui/src/pages/ChildProjectConversations.tsx::listChatSessions"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1032,9 +1034,9 @@
         "read": "nebula.work.chat and nebula.work.await_chat_result",
         "change": "nebula.work.start_chat and nebula.work.message_chat"
       },
-      "authority": "Selected project and enumerated runtime; private control/temporary chats and delegated children are not ordinary main-chat targets; a start receipt does not certify completion",
+      "authority": "Core owns each chat under its original project. A parent sidebar link opens the child canonical project route; private control/temporary chats and delegated children are not ordinary main-chat targets; a start receipt does not certify completion.",
       "observed_result_test": "tests/v3/test_control_assistant_work.py::test_start_chat_saves_a_separate_turn_for_core_owned_work",
-      "result": "Core stores a separate chat and turn; the same durable chat is discoverable while work continues independently of a viewing browser",
+      "result": "Core stores a separate chat and turn. Parent project navigation can discover and open a child-owned chat without moving its record; durable work continues independently of a viewing browser.",
       "status": "supported"
     },
     {
@@ -5399,6 +5401,14 @@
     },
     {
       "key": "ui/src/pages/AgentsPage.tsx::steerRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ChildProjectConversations.tsx::listChatSessionActivity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ChildProjectConversations.tsx::listChatSessions",
       "count": 1
     },
     {

@@ -3,6 +3,7 @@ import { ChevronDown, FolderOpen, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ApiClient } from "../api/client";
 import type { ChatSessionActivity, ChatSessionSummary, EngagementSummary } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { resourcePath } from "../resourceRoutes";
 import { conversationMatchesSearch } from "./chatBulkActions";
 
@@ -36,6 +37,7 @@ export function ChildProjectConversations({
         if (!controller.signal.aborted) setSessions(page.items.filter(session => session.engagementId === project.id && !session.isSideChat));
       })
       .catch(caught => {
+        void logCaughtDiagnostic("interface.child_project_conversations.list_failed", "Child project chats could not be loaded.", caught, "child_project_conversations");
         if (!controller.signal.aborted) setError(`Could not load chats: ${caught instanceof Error ? caught.message : "Try again."}`);
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -43,7 +45,7 @@ export function ChildProjectConversations({
       .then(items => {
         if (!controller.signal.aborted) setActivity(Object.fromEntries(items.map(item => [item.sessionId, item.state])));
       })
-      .catch(() => { /* Chat links remain available when activity is unavailable. */ });
+      .catch(caught => { void logCaughtDiagnostic("interface.child_project_conversations.activity_failed", "Child project chat activity could not be loaded.", caught, "child_project_conversations"); });
     return () => controller.abort();
   }, [api, project.id, expanded, reload]);
 

@@ -2319,6 +2319,7 @@ async def test_temporary_host_override_accepts_chat_origin_harness_only(
         manager=manager,
         store=store,
         output_service=ToolOutputService(store, artifacts),
+        execution_mode="host",
     )
     result = await broker.execute(
         invocation, await store.get(ScopePolicy, f"scope:{engagement.id}")
