@@ -25,11 +25,15 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessModelOptions,
+    HarnessProfile,
+    HarnessRuntimeOption,
     HarnessSession,
     ProviderProfile,
 )
 from nebula.v3.storage import ConflictError, NebulaStore
 from tests.v3.test_chat_api import ApiChatProvider
+from tests.v3.test_harnesses import _runtime
 
 
 @asynccontextmanager
@@ -89,6 +93,99 @@ def request(session, provider):
         model="model-a",
         expected_session_revision=session.revision,
     )
+
+
+async def test_provider_goal_switch_creates_codex_session_with_selected_options(
+    tmp_path,
+):
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
+    profile = await store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "capabilities": profile.capabilities.model_copy(
+                update={
+                    "models": ["gpt-6-sol"],
+                    "model_options": [
+                        HarnessModelOptions(
+                            model="gpt-6-sol",
+                            reasoning_efforts=[
+                                HarnessRuntimeOption(id="medium", label="Medium"),
+                                HarnessRuntimeOption(id="low", label="Low"),
+                            ],
+                            cyber_access_programs=["daybreakBlue"],
+                        )
+                    ],
+                }
+            ),
+        },
+        expected_revision=profile.revision,
+    )
+    provider = await store.create(
+        ProviderProfile(
+            name="Inert provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    session = await store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Goal to move",
+            backend=ChatBackend.PROVIDER,
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    goal = await store.create(
+        ChatGoal(
+            engagement_id=project.id,
+            session_id=session.id,
+            objective="Continue the same goal",
+            completion_criteria=["Evidence is saved"],
+            status=ChatGoalStatus.PAUSED,
+        )
+    )
+    chat = ChatService(store, workspace_resolver=lambda _: tmp_path)
+    chat.runtime_switcher.harness_runtime = runtime
+    try:
+        switched = await update_chat_assistant_config(
+            store,
+            session,
+            ChatAssistantConfigPatch(
+                backend=ChatBackend.HARNESS,
+                profile_id=profile.id,
+                model="gpt-6-sol",
+                harness_reasoning_effort="medium",
+                harness_cyber_access_program="daybreakBlue",
+                allow_subagents=True,
+                subagent_harness_profile_id=profile.id,
+                subagent_model="gpt-6-sol",
+                subagent_reasoning_effort="low",
+            ),
+            expected_revision=session.revision,
+            workspace_resolver=lambda _: tmp_path,
+        )
+        harness = await store.get(HarnessSession, switched.harness_session_id)
+        assert switched.id == session.id
+        assert switched.backend == ChatBackend.HARNESS
+        assert harness.harness_profile_id == profile.id
+        assert harness.metadata["runtime_options"]["reasoning_effort"] == "medium"
+        assert (
+            harness.metadata["runtime_options"]["cyber_access_program"]
+            == "daybreakBlue"
+        )
+        assert switched.metadata["assistant_config"]["subagent_model"] == "gpt-6-sol"
+        assert (
+            switched.metadata["assistant_config"]["subagent_reasoning_effort"] == "low"
+        )
+        assert await store.get(ChatGoal, goal.id) == goal
+    finally:
+        await chat.shutdown()
+        await runtime.shutdown()
+        await store.event_history.close()
+        await store.database.dispose()
 
 
 @pytest.mark.parametrize(

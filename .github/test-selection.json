@@ -1,22 +1,21 @@
 {
-  "change_digest": "9ed9d77c82d4b0ea00de372956a72c609f019fca612cc4c543b9c8caac812ee4",
-  "reviewed_by": "Codex authentication journey coverage review",
-  "reason": "Two real-Core authentication recovery cases across eight permanent browser profiles: missing and invalid bearer credentials, explicit alerts, rejected collection/direct reads without protected content, correction of the launch token, pairing recovery and reload persistence. Three selector tests verify catalog wiring. Core data and normal authentication are real; no model or command execution is required.",
-  "exclusions": "No full suites. No product code changes, so no component, Core unit or native suites. Existing TUI selection belonged to the already merged baseline and is not relevant to this browser-only change. Unrelated local ui/.env.example edits are excluded from this task digest. Physical devices, installed desktop shells, token expiry and revocation are outside these two journeys.",
+  "change_digest": "10d227456383fe5de00d4f82cd6d279f31e8199522e5829b49c2b7bd3af59cb8",
+  "reviewed_by": "Codex",
+  "reason": "Provider-to-Codex runtime selection must create and bind a harness session atomically. One focused regression covers the saved goal identity, Codex effort, Daybreak Blue, and child route.",
+  "exclusions": "No full suites, frontend, native, or Playwright tests: this change repairs a Core runtime binding, with no UI code change. The operator requested CI-only testing and no local tests. Production-LAN browser and local gates are omitted at the operator's request.",
+  "python_browser": false,
+  "python_node": false,
+  "checks": [],
   "expected_tests": {
-    "python": 3,
+    "python": 1,
     "frontend": 0,
     "native": 0,
-    "playwright": 16
+    "playwright": 0
   },
   "python": [
-    "tests/test_playwright_impact.py::test_authentication_recovery_selection_is_bounded_to_real_core_cases",
-    "tests/test_playwright_impact.py::test_full_manifest_covers_every_permanent_playwright_project",
-    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
+    "tests/v3/test_async_runtime_switching.py::test_provider_goal_switch_creates_codex_session_with_selected_options"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:authentication-recovery"
-  ]
+  "playwright": []
 }

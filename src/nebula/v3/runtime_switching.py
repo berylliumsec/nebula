@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -14,11 +15,15 @@ from .diagnostics import create_diagnostic_task
 from .domain import ChatBackend, ChatSession, ProviderProfile
 from .storage import ConflictError, NotFoundError
 
+if TYPE_CHECKING:
+    from .harnesses import HarnessRuntimeService
+
 
 class RuntimeSwitchService:
     def __init__(self, chat) -> None:
         self.chat = chat
         self.store = chat.store
+        self.harness_runtime: HarnessRuntimeService | None = None
         self._pending: set[str] = set()
         self._tasks: dict[str, asyncio.Task] = {}
         self._dirty: set[str] = set()
@@ -383,6 +388,32 @@ class RuntimeSwitchService:
                     "metadata": {**current.metadata, "pending_runtime_switch": desired}
                 }
             else:
+                if binding["backend"] == ChatBackend.HARNESS:
+                    if self.harness_runtime is None:
+                        raise ChatConfigurationError(
+                            "Harness runtime is unavailable for this conversation."
+                        )
+                    harness_session = await self.harness_runtime.create_session(
+                        engagement_id=current.engagement_id,
+                        profile_id=binding["harness_profile_id"],
+                        model=binding["model"],
+                        mcp_server_ids=selected["mcp_server_ids"],
+                        reasoning_effort=selected["harness_reasoning_effort"],
+                        service_tier=selected["harness_service_tier"],
+                        cyber_access_program=(
+                            None
+                            if selected["harness_cyber_access_program"] == "automatic"
+                            else selected["harness_cyber_access_program"]
+                        ),
+                        tools_enabled=selected["tools_enabled"],
+                        control_assistant=current.metadata.get("control_assistant")
+                        is True,
+                        transaction=transaction,
+                    )
+                    binding["harness_session_id"] = harness_session.id
+                    metadata["harness_runtime_options"] = harness_session.metadata[
+                        "runtime_options"
+                    ]
                 changes = {**binding, "metadata": metadata}
             saved = await transaction.update(
                 ChatSession, session.id, changes, expected_revision=expected_revision

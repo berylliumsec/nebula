@@ -2035,6 +2035,7 @@ def create_execution_kernel(
         runtime_capacity=runtime_capacity,
         stream_journal=stream_journal,
     )
+    provider_chat.runtime_switcher.harness_runtime = harness_runtime
     provider_chat.butler_memory = butler_memory_service
     if automation_runtime is not None:
         automation_runtime.bind_process_terminal_observer(
