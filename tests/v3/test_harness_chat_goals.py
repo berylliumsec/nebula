@@ -1015,6 +1015,10 @@ async def test_inflight_harness_resume_survives_idle_reconciliation(
             assert (
                 await store.get(HarnessTurn, new_turn.harness_turn_id)
             ).chat_turn_id == new_turn.id
+            await _wait_for_goal(goals, session_id, ChatGoalStatus.PAUSED)
+            async with asyncio.timeout(5):
+                while runtime._chat_turn_tasks:
+                    await asyncio.sleep(0.01)
             print(f"disposable authenticated LAN Core: {origin}; goal turn saved")
     finally:
         release_preparation.set()
