@@ -1,33 +1,22 @@
 {
-  "change_digest": "edfc1e8fd30a8c63303591977261ffc85c2974e4d779c4dbd777495d1bc27190",
+  "change_digest": "9038ee4a18a49854349b89ac7b320edfa947e008daaf456e2afdecc2ff2af870",
   "reviewed_by": "Codex",
-  "reason": "The changed journeys are child-project chat discovery from the parent, chat-origin harness Host commands, bounded Docker chat reauthorization into Host, gateway Core tool attachment, and valid staged deployment operation IDs. Select one exact Python regression per backend boundary, the two child-list component cases, and one child-chat production-LAN journey in the eight required desktop and mobile profiles.",
-  "exclusions": "Four exact Python cases, one two-case frontend file, and one Playwright journey in eight profiles. Existing sidebar ordering, unrelated harness capabilities, Docker execution, native desktop, and unrelated project workflows are unchanged. No local tests or backups during deployment.",
+  "reason": "The exact changed paths are harness goal-turn completion and next-turn rebinding after a harness session closes. Run one Python regression for each state transition and its durable chat/goal readback.",
+  "exclusions": "No UI, browser-origin, native, or frontend code changed. Existing child-project navigation and Host browser coverage passed on PR #982; repeating those journeys would not test these backend transitions. Deployment runs no local tests or backups.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 4,
-    "frontend": 2,
+    "python": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_automation_runtime.py::test_temporary_host_override_accepts_chat_origin_harness_only",
-    "tests/v3/test_harnesses.py::test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog",
-    "tests/v3/test_harnesses.py::test_bounded_docker_goal_chat_reauthorizes_in_new_host_session",
-    "tests/test_staged_deployer.py::test_promotion_moves_project_without_touching_continuing_data"
+    "tests/v3/test_harnesses.py::test_completed_harness_goal_turn_releases_its_execution_claim",
+    "tests/v3/test_harnesses.py::test_closed_harness_session_rebinds_same_chat_with_saved_context"
   ],
-  "frontend": ["ui/src/pages/ChildProjectConversations.test.tsx"],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:child-project-chats/model-desktop",
-    "entry:child-project-chats/model-compact",
-    "entry:child-project-chats/model-chromium-320",
-    "entry:child-project-chats/model-webkit-320",
-    "entry:child-project-chats/model-chromium-390",
-    "entry:child-project-chats/model-webkit-390",
-    "entry:child-project-chats/model-chromium-430",
-    "entry:child-project-chats/model-webkit-430"
-  ]
+  "playwright": []
 }

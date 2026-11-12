@@ -11202,6 +11202,7 @@ class HarnessRuntimeService:
         )
         settings_previous_session_id: str | None = None
         settings_handoff = ""
+        settings_rollover_reason: str | None = None
         if chat_session_id:
             chat = await self.store.get(ChatSession, chat_session_id)
             if chat.engagement_id != engagement_id:
@@ -11281,6 +11282,7 @@ class HarnessRuntimeService:
             )
             changed = (
                 session is None
+                or session.status == HarnessSessionStatus.CLOSED
                 or bool(session.metadata.get("control_assistant")) != control_assistant
                 or (
                     control_assistant
@@ -11306,9 +11308,20 @@ class HarnessRuntimeService:
                 )
             )
             if changed:
+                settings_rollover_reason = (
+                    "closed_session_recovery"
+                    if session is not None
+                    and session.status == HarnessSessionStatus.CLOSED
+                    else "assistant_settings_changed"
+                )
                 settings_previous_session_id = session.id if session else None
                 settings_handoff = await self._chat_handoff_context(
-                    chat, reason="an assistant settings update"
+                    chat,
+                    reason=(
+                        "a closed harness session"
+                        if settings_rollover_reason == "closed_session_recovery"
+                        else "an assistant settings update"
+                    ),
                 )
                 session = await self.create_session(
                     engagement_id=engagement_id,
@@ -11326,7 +11339,7 @@ class HarnessRuntimeService:
                     chat,
                     session,
                     previous_session_id=settings_previous_session_id or "",
-                    reason="assistant_settings_changed",
+                    reason=settings_rollover_reason,
                 )
             assert session is not None
             pending_context_message_id = chat.metadata.get("pending_context_message_id")
@@ -11481,9 +11494,7 @@ class HarnessRuntimeService:
                 engagement_id, pending_provider_subagent
             )
         forked_from_session_id = settings_previous_session_id
-        session_rollover_reason = (
-            "assistant_settings_changed" if settings_handoff else None
-        )
+        session_rollover_reason = settings_rollover_reason if settings_handoff else None
         handoff_context = settings_handoff
         if chat.metadata.get("harness_context_handoff_pending") is True:
             handoff_context = await self._chat_handoff_context(chat)
@@ -20532,6 +20543,9 @@ class HarnessRuntimeService:
                             "status": ChatTurnStatus.COMPLETE,
                             "usage": usage,
                             "final_message_id": message.id,
+                            "execution_owner_id": None,
+                            "execution_claim_id": None,
+                            "execution_claimed_at": None,
                         },
                         expected_revision=chat_turn.revision,
                     )
