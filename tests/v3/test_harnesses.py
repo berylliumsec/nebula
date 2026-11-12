@@ -112,6 +112,7 @@ from nebula.v3.harnesses import (
     _harness_developer_instructions,
 )
 from nebula.v3 import harnesses as harness_module
+from nebula.v3.harness_core_tools import call_core_tool
 from nebula.v3.exporter import export_engagement
 from nebula.v3.mcp import (
     GATEWAY_STARTUP_TIMEOUT_SECONDS,
@@ -119,9 +120,14 @@ from nebula.v3.mcp import (
     McpProbeService,
 )
 from nebula.v3.mcp_gateway import GatewayClient
-from nebula.v3.runtime_platform import notes_components, restrict_tool_components
+from nebula.v3.runtime_platform import (
+    RuntimeToolComponents,
+    notes_components,
+    restrict_tool_components,
+)
 from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.tool_results import ToolOutputService
+from nebula.v3.tools import ToolExecutionResult, ToolSpec
 
 
 class FakeConnection(HarnessConnection):
@@ -2900,6 +2906,72 @@ async def test_harness_gateway_catalog_awaits_core_tool_components(tmp_path):
     catalog = await runtime._gateway_catalog(session, turn=turn)
     assert calls == [engagement.id]
     assert "notes.write" in {item["name"] for item in catalog["tools"]}
+    await runtime.shutdown()
+
+
+async def test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    chat, chat_turn, turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Use the project tools",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    turn = await store.update(
+        HarnessTurn,
+        turn.id,
+        {"status": HarnessTurnStatus.RUNNING},
+        expected_revision=turn.revision,
+    )
+    session = await store.get(HarnessSession, turn.harness_session_id)
+    dispatched = []
+
+    class Broker:
+        async def execute(self, invocation, _scope, *, approval=None):
+            assert approval is None
+            dispatched.append(invocation.tool_name)
+            return ToolExecutionResult(output={"tool": invocation.tool_name})
+
+    @contextlib.asynccontextmanager
+    async def execution_gate(_turn):
+        yield
+
+    runtime._gateway_execution_gate = execution_gate
+    specs = {
+        name: ToolSpec(
+            name=name,
+            description="Synthetic project tool",
+            input_schema={"type": "object", "additionalProperties": False},
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+            budget_class="execution" if name.startswith("ssh.") else "artifact_query",
+        )
+        for name in ("ssh.synthetic.run_command", "tool_catalog.search")
+    }
+    components = RuntimeToolComponents(
+        broker=Broker(),
+        scope=ScopePolicy(engagement_id=engagement.id),
+        workspace=tmp_path,
+        specs=specs,
+    )
+    for name in specs:
+        result = await call_core_tool(runtime, session, turn, components, name, {})
+        assert result["structuredContent"] == {"tool": name}
+    assert dispatched == list(specs)
+    calls = await store.list_session_entities(ToolCall, chat.id)
+    assert {call.tool_name for call in calls} == set(specs)
+    assert all(call.status == ToolCallStatus.COMPLETE for call in calls)
+    assert set((await store.get(HarnessTurn, turn.id)).tool_call_ids) == {
+        call.id for call in calls
+    }
+    assert set((await store.get(ChatTurn, chat_turn.id)).tool_call_ids) == {
+        call.id for call in calls
+    }
     await runtime.shutdown()
 
 

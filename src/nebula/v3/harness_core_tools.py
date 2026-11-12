@@ -293,7 +293,7 @@ async def call_core_tool(
 
     ledger = StoreToolLedger(runtime.store)
     call = await ledger.reserve(invocation, spec)
-    call = runtime._attach_gateway_tool_call(turn, call.id)
+    call = await runtime._attach_gateway_tool_call(turn, call.id)
     if call.status == ToolCallStatus.COMPLETE:
         value = call.result
     else:

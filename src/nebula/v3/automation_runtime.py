@@ -1514,10 +1514,14 @@ class AutomationRuntimeManager:
         tool_call_id: str | None = None,
         chat_session_id: str | None = None,
         chat_turn_id: str | None = None,
+        chat_origin: bool = False,
         expected_execution_mode: Literal["docker", "host"] | None = None,
     ) -> CommandResult:
         managed = await self._get_or_create_session(
-            engagement_id=engagement_id, owner_kind=owner_kind, owner_id=owner_id
+            engagement_id=engagement_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            chat_origin=chat_origin and chat_session_id is not None,
         )
         if (
             expected_execution_mode
@@ -2014,28 +2018,41 @@ class AutomationRuntimeManager:
             return
 
     async def _get_or_create_session(
-        self, *, engagement_id: str, owner_kind: str, owner_id: str
+        self,
+        *,
+        engagement_id: str,
+        owner_kind: str,
+        owner_id: str,
+        chat_origin: bool = False,
     ) -> _ManagedSession:
+        from .temporary_command_override import unmanaged_commands_allowed
+
+        async def require_host_command_access() -> None:
+            if (
+                (owner_kind == "chat" or (owner_kind == "harness" and chat_origin))
+                and unmanaged_commands_allowed(engagement_id)
+            ):
+                return
+            await self.memory_compute.reject_unsupported(
+                "local",
+                project_id=engagement_id,
+                resource_kind="host_command_session",
+                resource_id=owner_id,
+                detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
+            )
+
         key = (engagement_id, owner_kind, owner_id)
         async with self._session_lock:
             existing_id = self._owner_sessions.get(key)
             if existing_id is not None and existing_id in self._sessions:
-                return self._sessions[existing_id]
+                existing = self._sessions[existing_id]
+                if existing.policy.execution_mode == "host":
+                    await require_host_command_access()
+                return existing
             engagement = await self.store.get(Engagement, engagement_id)
             policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
-                from .temporary_command_override import unmanaged_commands_allowed
-
-                if not (
-                    owner_kind == "chat" and unmanaged_commands_allowed(engagement_id)
-                ):
-                    await self.memory_compute.reject_unsupported(
-                        "local",
-                        project_id=engagement_id,
-                        resource_kind="host_command_session",
-                        resource_id=owner_id,
-                        detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
-                    )
+                await require_host_command_access()
                 if not policy.host_access_acknowledged:
                     raise AutomationPolicyDenied(
                         "Host access has not been acknowledged"

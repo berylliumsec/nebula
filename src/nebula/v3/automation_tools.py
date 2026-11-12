@@ -602,6 +602,7 @@ class AutomationBroker:
                     tool_call_id=call.id,
                     chat_session_id=invocation.chat_session_id,
                     chat_turn_id=invocation.chat_turn_id,
+                    chat_origin=invocation.origin.value == "chat",
                     expected_execution_mode=self.execution_mode,
                 )
             else:
