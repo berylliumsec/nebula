@@ -51,6 +51,8 @@ from nebula.v3.domain import (
     ChatCitation,
     ChatMessage,
     ChatContentBlock,
+    ChatGoal,
+    ChatGoalStatus,
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
@@ -5504,6 +5506,106 @@ async def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknow
             await runtime.close_session(session.id)
 
     (await scenario())
+
+
+async def test_completed_harness_goal_turn_releases_its_execution_claim(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    session = await runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        mcp_server_ids=[],
+    )
+    chat = await store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Goal chat",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=session.id,
+            model=session.model,
+        )
+    )
+    goal = await store.create(
+        ChatGoal(
+            engagement_id=engagement.id,
+            session_id=chat.id,
+            objective="Finish the saved research task",
+            completion_criteria=["Record a result"],
+            status=ChatGoalStatus.RUNNING,
+            started_at=utc_now(),
+            active_since=utc_now(),
+        )
+    )
+    _, owner, harness_turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Continue the goal",
+        chat_session_id=chat.id,
+        goal_id=goal.id,
+        harness_session_id=session.id,
+        mcp_server_ids=[],
+    )
+    assert (await store.get(ChatTurn, owner.id)).execution_claim_id == owner.id
+    await runtime._complete_owner(
+        harness_turn,
+        "Recorded the result.",
+        ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        usage_reported=True,
+    )
+    completed = await store.get(ChatTurn, owner.id)
+    saved_goal = await store.get(ChatGoal, goal.id)
+    assert completed.status == ChatTurnStatus.COMPLETE
+    assert completed.execution_owner_id is None
+    assert completed.execution_claim_id is None
+    assert completed.execution_claimed_at is None
+    assert saved_goal.execution_claim_id is None
+    assert saved_goal.status == ChatGoalStatus.RUNNING
+
+
+async def test_closed_harness_session_rebinds_same_chat_with_saved_context(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    chat, first_owner, first_turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Remember the original result",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    await runtime._complete_owner(
+        first_turn, "Original result retained.", ChatTokenUsage()
+    )
+    original = await runtime.close_session(first_turn.harness_session_id)
+    assert original.status == HarnessSessionStatus.CLOSED
+
+    rebound, next_owner, next_turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Continue the same conversation",
+        chat_session_id=chat.id,
+        harness_session_id=original.id,
+        mcp_server_ids=[],
+    )
+    replacement = await store.get(HarnessSession, next_turn.harness_session_id)
+    assert rebound.id == chat.id
+    assert rebound.harness_session_id == replacement.id
+    assert replacement.id != original.id
+    assert replacement.status == HarnessSessionStatus.STARTING
+    assert replacement.external_session_id is None
+    assert (
+        await store.get(HarnessSession, original.id)
+    ).status == HarnessSessionStatus.CLOSED
+    assert next_owner.request_snapshot["forked_from_harness_session_id"] == original.id
+    assert next_owner.request_snapshot["session_rollover_reason"] == (
+        "closed_session_recovery"
+    )
+    assert "Remember the original result" in next_turn.prompt
+    assert "Original result retained" in next_turn.prompt
+    assert (await store.get(ChatTurn, first_owner.id)).status == ChatTurnStatus.COMPLETE
 
 
 async def test_bounded_docker_goal_chat_reauthorizes_in_new_host_session(tmp_path):
