@@ -54,3 +54,45 @@ test("running conversations stay first through refresh and activity changes", as
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({path: info.outputPath("running-first.png")});
 });
+
+test("parent project shows child conversations and opens their owned chat", async ({page, request}, info) => {
+  const headers = {Authorization: "Bearer conversation-order-test-token"};
+  const local = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
+  const build = await (await request.get("/web-build.json")).json();
+  expect(build).toEqual(JSON.parse(await readFile("dist/web-build.json", "utf8")));
+  expect(new URL(String(info.project.use.baseURL)).hostname).not.toBe("127.0.0.1");
+  const seeded = await request.post(local + "/fixture/child-project-conversations", {headers});
+  expect(seeded.ok(), await seeded.text()).toBe(true);
+  const {parent, child, chat} = await seeded.json();
+  const pairing = await (await request.post(local + "/api/v1/auth/pairings", {headers, data: {name: "Child project chats"}})).json();
+  await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("Child project chats");
+  await page.getByRole("button", {name: "Pair device", exact: true}).click();
+  await expect(page.getByLabel("Device name")).toBeHidden({timeout: 20000});
+  await page.goto(`/projects/${parent}/workbench?view=chat`);
+  const sidebar = page.getByRole("complementary", {name: "Conversations", exact: true});
+  const showSidebar = async () => {
+    if (!await sidebar.isVisible()) await page.getByRole("button", {
+      name: (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations", exact: true,
+    }).click();
+    await expect(sidebar).toBeVisible();
+  };
+  await showSidebar();
+  const section = sidebar.getByRole("region", {name: "Child project conversations"});
+  const link = section.getByRole("link", {name: "Open Example child chat in Child project"});
+  await expect(link).toBeVisible();
+  await sidebar.getByRole("searchbox", {name: "Search conversations"}).fill("Example child");
+  await expect(link).toBeVisible();
+  await link.click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${child}/workbench\\?view=chat&session=${chat}$`));
+  await showSidebar();
+  await expect(sidebar.locator(".session-list-item.active .conversation-title-text")).toHaveText("Example child chat");
+  await page.reload();
+  await showSidebar();
+  await expect(sidebar.locator(".session-list-item.active .conversation-title-text")).toHaveText("Example child chat");
+  await page.goBack();
+  await showSidebar();
+  await expect(section).toBeVisible();
+  expect((await new AxeBuilder({page}).include(".child-project-conversations").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+});

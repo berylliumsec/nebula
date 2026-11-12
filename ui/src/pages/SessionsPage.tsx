@@ -47,6 +47,7 @@ import { appendSideToolTab, clearSideToolTabs, removeSideToolTab, sideToolLabel,
 import { SideToolSurface } from "./SideToolSurface";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
+import { ChildProjectConversations } from "./ChildProjectConversations";
 import { applyChatBulkAction, conversationMatchesSearch, type ChatBulkAction } from "./chatBulkActions";
 import { subagentRequestFields } from "./chatSubagentChoice";
 import { groupSubagentTranscriptMessages } from "./subagentTranscriptGroups";
@@ -1353,6 +1354,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     createObservation,
     deleteObservation,
     engagement,
+    engagements,
     evidence,
     observations,
     resourceStatus,
@@ -2050,6 +2052,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
   }, [activeFollowUpStorageKey]);
   const savedConversations = useMemo(() => sessions.filter(session => !session.isSideChat), [sessions]);
+  const childProjects = useMemo(() => engagements?.filter(project => project.parentEngagementId === engagement?.id) ?? [], [engagements, engagement?.id]);
   useEffect(() => {
     if (!sessionId) return;
     const byId = new Map(savedConversations.map(item => [item.id, item]));
@@ -7330,8 +7333,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 }}
               ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button>{!shellOnly && session.backend === "harness" && <button type="button" role="menuitem" disabled={sending || session.id !== sessionId} title={session.id !== sessionId ? "Open this conversation to continue it as a mission" : undefined} onClick={() => { setSessionActionsId(undefined); void continueAsMission(); }} data-guide="continue-mission"><Bot size={15} /> Continue as mission</button>}<button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationPriority(session, { pinned: !session.pinned })}><Bookmark size={15} /> {session.pinned ? "Unpin" : "Pin to top"}</button><div className="session-flag-picker" role="group" aria-label={`Flag ${session.title}`}><span>Flag</span><div>{(["red", "orange", "yellow", "green", "blue", "purple"] as const).map(color => <button key={color} type="button" role="menuitem" aria-label={`Set ${color} flag for ${session.title}${session.flagColor === color ? ", selected" : ""}`} title={`${color[0].toUpperCase()}${color.slice(1)} flag`} data-selected={session.flagColor === color} data-color={color} onClick={() => void setConversationPriority(session, { flagColor: color })}><Flag size={15} aria-hidden="true" /></button>)}<button type="button" role="menuitem" aria-label={`Clear flag for ${session.title}`} title="Clear flag" disabled={!session.flagColor} onClick={() => void setConversationPriority(session, { flagColor: null })}><X size={14} aria-hidden="true" /></button></div></div><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
             })}</section>)}
+            {api && !embeddedSideChat && !bulkSelectionMode && childProjects.map(project => <ChildProjectConversations key={project.id} api={api} project={project} query={sessionQuery} onOpen={compact ? () => setMobileListOpen(false) : undefined} />)}
             {loadingAllSessions && <p role="status">Searching saved conversations…</p>}
-            {sessionQuery && !loadingAllSessions && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
+            {sessionQuery && !loadingAllSessions && !sidebarConversations.matchCount && !childProjects.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
             {!sessionQuery && sessionNextOffset !== undefined && <button className="button quiet session-list-load-more" type="button" disabled={loadingOlderSessions} onClick={() => void loadOlderConversations()}>{loadingOlderSessions ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}<span>{loadingOlderSessions ? "Loading older conversations…" : "Load older conversations"}</span></button>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
