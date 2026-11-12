@@ -2939,11 +2939,6 @@ async def test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog(
             dispatched.append(invocation.tool_name)
             return ToolExecutionResult(output={"tool": invocation.tool_name})
 
-    @contextlib.asynccontextmanager
-    async def execution_gate(_turn):
-        yield
-
-    runtime._gateway_execution_gate = execution_gate
     specs = {
         name: ToolSpec(
             name=name,

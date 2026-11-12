@@ -1,20 +1,19 @@
 {
-  "change_digest": "9038ee4a18a49854349b89ac7b320edfa947e008daaf456e2afdecc2ff2af870",
+  "change_digest": "76da16d4d324608e950114629a821dfbe4d95499c66672ea99056405b9d181b7",
   "reviewed_by": "Codex",
-  "reason": "The exact changed paths are harness goal-turn completion and next-turn rebinding after a harness session closes. Run one Python regression for each state transition and its durable chat/goal readback.",
-  "exclusions": "No UI, browser-origin, native, or frontend code changed. Existing child-project navigation and Host browser coverage passed on PR #982; repeating those journeys would not test these backend transitions. Deployment runs no local tests or backups.",
+  "reason": "The changed path is an execution-budget Core tool entering its per-turn async gateway gate. Run the existing exact gateway dispatch regression with the real gate so it verifies execution, the attached ledger call, and a non-execution catalog query.",
+  "exclusions": "No UI, native, provider adapter, or browser-origin code changed. The exact Python gateway regression covers this backend state transition. Deployment runs no local tests or backups.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 2,
+    "python": 1,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harnesses.py::test_completed_harness_goal_turn_releases_its_execution_claim",
-    "tests/v3/test_harnesses.py::test_closed_harness_session_rebinds_same_chat_with_saved_context"
+    "tests/v3/test_harnesses.py::test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog"
   ],
   "frontend": [],
   "native": [],
