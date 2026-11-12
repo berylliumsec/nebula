@@ -175,16 +175,16 @@ async def test_codex_daybreak_catalog_and_turn_request():
     (await scenario())
 
 
-async def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_path):
+async def test_codex_daybreak_and_effort_on_start_and_resume(tmp_path):
     class ThreadRpc(ScriptedCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
-            self.calls.append((method, params))
             if method in {"thread/start", "thread/resume"}:
+                self.calls.append((method, params))
                 return {"thread": {"id": THREAD}}
-            return {}
+            return await super().request(method, params)
 
     async def scenario() -> None:
-        rpc = ThreadRpc()
+        rpc = ThreadRpc([_turn_completed()])
         adapter = CodexAppServerAdapter()
 
         async def connect(*_args: Any, **_kwargs: Any) -> ThreadRpc:
@@ -207,7 +207,12 @@ async def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_pat
             engagement_id="project",
             harness_profile_id=profile.id,
             model="gpt-cyber",
-            metadata={"runtime_options": {"cyber_access_program": "daybreakRed"}},
+            metadata={
+                "runtime_options": {
+                    "cyber_access_program": "daybreakRed",
+                    "reasoning_effort": "medium",
+                }
+            },
         )
         request = AdapterOpenRequest(
             profile=profile,
@@ -225,8 +230,15 @@ async def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_pat
             is True
         )
         assert connection.cyber_access_program == "daybreakRed"
+        assert "reasoningEffort" not in next(
+            params for method, params in rpc.calls if method == "thread/start"
+        )
+        [event async for event in connection.run_turn("Inspect patch", model="gpt-cyber")]
+        assert next(params for method, params in rpc.calls if method == "turn/start")[
+            "effort"
+        ] == "medium"
         rpc.calls.clear()
-        await adapter._open(
+        resumed = await adapter._open(
             AdapterOpenRequest(
                 profile=profile,
                 session=session.model_copy(update={"external_session_id": THREAD}),
@@ -240,6 +252,18 @@ async def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_pat
             "thread/metadata/update",
             {"threadId": THREAD, "daybreakEnabled": True},
         ) in rpc.calls
+        assert "reasoningEffort" not in next(
+            params for method, params in rpc.calls if method == "thread/resume"
+        )
+        [
+            event
+            async for event in resumed.run_turn(
+                "Inspect patch", model="gpt-cyber", mode="plan"
+            )
+        ]
+        turn = next(params for method, params in rpc.calls if method == "turn/start")
+        assert turn["effort"] == "medium"
+        assert turn["collaborationMode"]["settings"]["reasoning_effort"] == "medium"
 
     (await scenario())
 

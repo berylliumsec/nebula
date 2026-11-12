@@ -1247,9 +1247,10 @@ async def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert rpc.calls[0][1]["capabilities"]["mcpServerOpenaiFormElicitation"] is True
         _validate("v2/ThreadStartParams.json", rpc.calls[1][1])
         assert rpc.calls[1][1]["approvalPolicy"] == "never"
-        assert rpc.calls[1][1]["reasoningEffort"] == "high"
+        assert "reasoningEffort" not in rpc.calls[1][1]
         assert rpc.calls[1][1]["serviceTier"] == "fast"
         _validate("v2/TurnStartParams.json", rpc.calls[2][1])
+        assert rpc.calls[2][1]["effort"] == "high"
         assert rpc.calls[2][1]["summary"] == "detailed"
         assert [event.type for event in events] == [
             "started",
