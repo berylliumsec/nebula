@@ -85,6 +85,36 @@ async def main():
             await store.update(ChatTurn, "turn-" + session_id, {"status": "complete"})
             return {"finished": session_id}
 
+        @app.post("/fixture/child-project-conversations")
+        async def seed_child_project(request: Request):
+            authorize(request)
+            parent = await store.create(Engagement(name="Parent project"))
+            child = await store.create(
+                Engagement(
+                    name="Child project",
+                    parent_engagement_id=parent.id,
+                )
+            )
+            provider = await store.create(
+                ProviderProfile(
+                    name="Inert fixture",
+                    provider_type="vllm",
+                    is_local=True,
+                    endpoint="http://127.0.0.1:1",
+                    model_allowlist=["fixture"],
+                )
+            )
+            chat = await store.create(
+                ChatSession(
+                    engagement_id=child.id,
+                    title="Example child chat",
+                    provider_profile_id=provider.id,
+                    model="fixture",
+                    metadata={"initial_title_state": "operator"},
+                )
+            )
+            return {"parent": parent.id, "child": child.id, "chat": chat.id}
+
         controls = [
             route
             for route in app.router.routes

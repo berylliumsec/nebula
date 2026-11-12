@@ -5,6 +5,8 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter
+from nebula.v3.runtime_management import Identifier
 
 SOURCE = (
     Path(__file__).resolve().parents[1] / "scripts/simulation/nebula_staged_deployer.py"
@@ -37,6 +39,7 @@ class Host:
 
     def post(self, path, request):
         assert path == "deployment/operations"
+        TypeAdapter(Identifier).validate_python(request["operation_id"])
         key, action, values = (
             request["operation_id"],
             request["action"],

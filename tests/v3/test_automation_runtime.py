@@ -63,6 +63,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
+from nebula.v3.memory_policy import MemoryEnforcementUnavailable
 from nebula.v3.setup import create_engagement_with_default_scope
 from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 from nebula.v3.tool_results import (
@@ -2288,6 +2289,51 @@ async def test_host_mode_requires_consent_and_reads_external_folder_without_dock
         assert policy.execution_mode == "docker"
 
     (await scenario())
+
+
+async def test_temporary_host_override_accepts_chat_origin_harness_only(
+    tmp_path, monkeypatch
+):
+    manager, store, artifacts, engagement, _containers = await runtime(tmp_path)
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
+    await manager.update_project_policy(
+        engagement.id,
+        approval_policy=AutomationApprovalPolicy.NEVER,
+        network_enabled=False,
+        runner_profile_id=None,
+        max_timeout_ms=3000,
+        execution_mode="host",
+        host_access_acknowledged=True,
+    )
+    await create_tool_chat(store, engagement)
+    invocation = tool_invocation(
+        engagement,
+        tmp_path / "workspaces" / engagement.id,
+        "run_command",
+        {"command": "printf harness-ready"},
+        1,
+    ).model_copy(
+        update={"runtime_session_kind": "harness", "runtime_session_id": "harness-1"}
+    )
+    broker = AutomationBroker(
+        manager=manager,
+        store=store,
+        output_service=ToolOutputService(store, artifacts),
+        execution_mode="host",
+    )
+    result = await broker.execute(
+        invocation, await store.get(ScopePolicy, f"scope:{engagement.id}")
+    )
+    assert result.receipt is not None
+    assert result.receipt.status.value == "completed"
+    assert "harness-ready" in result.receipt.output_preview[0].text
+    with pytest.raises(MemoryEnforcementUnavailable, match="Host commands"):
+        await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="harness",
+            owner_id="harness-1",
+            request=RunCommandRequest(command="printf mission-must-not-run"),
+        )
 
 
 async def test_temporary_host_chat_command_on_disposable_lan_core(

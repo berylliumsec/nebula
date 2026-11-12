@@ -51,7 +51,7 @@ class StagedDeployer:
         entry = journal["steps"].get(step)
         if entry is None:
             entry = {
-                "operation_id": journal["id"] + "/" + step,
+                "operation_id": journal["id"] + ":" + step.replace("/", ":"),
                 "action": action,
                 "parameters": parameters,
             }

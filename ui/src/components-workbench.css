@@ -617,6 +617,17 @@ kbd { font-size: 11px; }
 .session-list-group-toggle svg { transition: transform .12s ease; }
 .session-list-group-toggle svg.collapsed { transform: rotate(-90deg); }
 .session-list-group-toggle span { font-variant-numeric: tabular-nums; opacity: .8; }
+.child-project-conversations { border-top: 1px solid var(--border-soft); margin-top: 7px; padding-top: 4px; }
+.child-project-conversations .child-project-heading { display: flex; align-items: center; justify-content: space-between; }
+.child-project-conversations .session-list-group-toggle { min-width: 0; min-height: 44px; text-align: left; }
+.child-project-conversations .child-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 1; }
+.child-project-conversations .child-project-chat { grid-template-columns: minmax(0, 1fr); margin-left: 16px; }
+.child-project-conversations .child-project-chat::before { position: absolute; top: 0; bottom: 0; left: -8px; width: 1px; background: var(--border); content: ""; }
+.child-project-status { margin: 4px 8px 8px 24px; color: var(--muted); font-size: 11px; }
+.child-project-status button, .child-project-more { border: 0; color: var(--blue); background: transparent; cursor: pointer; }
+.child-project-more { min-height: 44px; margin-left: 24px; text-align: left; }
+.child-project-refresh { width: 44px; height: 44px; justify-self: end; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
+.child-project-refresh:hover, .child-project-refresh:focus-visible, .child-project-more:hover, .child-project-more:focus-visible { color: var(--text); background: var(--surface-hover); }
 .session-butler-archive-toggle { display: flex; align-items: center; gap: 5px; min-height: 40px; margin-left: 24px; padding: 0 8px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: 11px; text-align: left; cursor: pointer; }
 .session-butler-archive-toggle:hover, .session-butler-archive-toggle:focus-visible { color: var(--text); background: var(--surface-hover); }
 .session-butler-archive-toggle svg.collapsed { transform: rotate(-90deg); }

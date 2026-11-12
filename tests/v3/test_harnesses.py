@@ -112,6 +112,7 @@ from nebula.v3.harnesses import (
     _harness_developer_instructions,
 )
 from nebula.v3 import harnesses as harness_module
+from nebula.v3.harness_core_tools import call_core_tool
 from nebula.v3.exporter import export_engagement
 from nebula.v3.mcp import (
     GATEWAY_STARTUP_TIMEOUT_SECONDS,
@@ -119,9 +120,14 @@ from nebula.v3.mcp import (
     McpProbeService,
 )
 from nebula.v3.mcp_gateway import GatewayClient
-from nebula.v3.runtime_platform import notes_components, restrict_tool_components
+from nebula.v3.runtime_platform import (
+    RuntimeToolComponents,
+    notes_components,
+    restrict_tool_components,
+)
 from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.tool_results import ToolOutputService
+from nebula.v3.tools import ToolExecutionResult, ToolSpec
 
 
 class FakeConnection(HarnessConnection):
@@ -2903,6 +2909,72 @@ async def test_harness_gateway_catalog_awaits_core_tool_components(tmp_path):
     await runtime.shutdown()
 
 
+async def test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    chat, chat_turn, turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Use the project tools",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    turn = await store.update(
+        HarnessTurn,
+        turn.id,
+        {"status": HarnessTurnStatus.RUNNING},
+        expected_revision=turn.revision,
+    )
+    session = await store.get(HarnessSession, turn.harness_session_id)
+    dispatched = []
+
+    class Broker:
+        async def execute(self, invocation, _scope, *, approval=None):
+            assert approval is None
+            dispatched.append(invocation.tool_name)
+            return ToolExecutionResult(output={"tool": invocation.tool_name})
+
+    @contextlib.asynccontextmanager
+    async def execution_gate(_turn):
+        yield
+
+    runtime._gateway_execution_gate = execution_gate
+    specs = {
+        name: ToolSpec(
+            name=name,
+            description="Synthetic project tool",
+            input_schema={"type": "object", "additionalProperties": False},
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+            budget_class="execution" if name.startswith("ssh.") else "artifact_query",
+        )
+        for name in ("ssh.synthetic.run_command", "tool_catalog.search")
+    }
+    components = RuntimeToolComponents(
+        broker=Broker(),
+        scope=ScopePolicy(engagement_id=engagement.id),
+        workspace=tmp_path,
+        specs=specs,
+    )
+    for name in specs:
+        result = await call_core_tool(runtime, session, turn, components, name, {})
+        assert result["structuredContent"] == {"tool": name}
+    assert dispatched == list(specs)
+    calls = await store.list_session_entities(ToolCall, chat.id)
+    assert {call.tool_name for call in calls} == set(specs)
+    assert all(call.status == ToolCallStatus.COMPLETE for call in calls)
+    assert set((await store.get(HarnessTurn, turn.id)).tool_call_ids) == {
+        call.id for call in calls
+    }
+    assert set((await store.get(ChatTurn, chat_turn.id)).tool_call_ids) == {
+        call.id for call in calls
+    }
+    await runtime.shutdown()
+
+
 async def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
@@ -5432,6 +5504,110 @@ async def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknow
             await runtime.close_session(session.id)
 
     (await scenario())
+
+
+async def test_bounded_docker_goal_chat_reauthorizes_in_new_host_session(tmp_path):
+    store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+    scope = await store.create(
+        ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+    )
+    engagement = await store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    profile = await store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "unrestricted"},
+        expected_revision=profile.revision,
+    )
+    chat, _, first = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Keep the saved research context",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    _ = [event async for event in runtime.stream_turn(first.id)]
+    original = await store.get(HarnessSession, first.harness_session_id)
+    assert original.metadata["execution_mode"] == "docker"
+    assert original.metadata["scope_snapshot"]["bypass_permissions"] is False
+    subagent = {
+        "harness_profile_id": profile.id,
+        "model": original.model,
+        "reasoning_effort": "low",
+    }
+    chat = await store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {**chat.metadata, "provider_subagent": subagent}},
+        expected_revision=chat.revision,
+    )
+    original = await store.update(
+        HarnessSession,
+        original.id,
+        {"metadata": {**original.metadata, "provider_subagent": subagent}},
+        expected_revision=original.revision,
+    )
+
+    class HostCommands:
+        def __init__(self) -> None:
+            self.store = store
+
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
+            del engagement_id, transaction
+            return "host"
+
+        def chat_components(self, *, engagement_id: str):
+            del engagement_id
+            raise AutomationRuntimeUnavailable("command runtime is optional")
+
+    runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+    with pytest.raises(HarnessConfigurationError, match="Enable Allow all"):
+        await runtime._fork_session_for_execution_mode(
+            original, profile, execution_mode="host", reason="execution_mode_changed"
+        )
+    scope = await store.update(
+        ScopePolicy,
+        scope.id,
+        {"bypass_permissions": True},
+        expected_revision=scope.revision,
+    )
+    updated, _, second = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Continue the saved research goal on Host",
+        chat_session_id=chat.id,
+        harness_session_id=original.id,
+        mcp_server_ids=[],
+    )
+    replacement = await store.get(HarnessSession, second.harness_session_id)
+    assert updated.id == chat.id
+    assert updated.harness_session_id == replacement.id
+    assert replacement.id != original.id
+    assert replacement.external_session_id is None
+    assert replacement.metadata["execution_mode"] == "host"
+    assert replacement.metadata["scope_snapshot"]["bypass_permissions"] is True
+    assert replacement.metadata["scope_reauthorization"] == {
+        "from_revision": original.metadata["scope_snapshot"]["revision"],
+        "to_revision": scope.revision,
+    }
+    assert updated.metadata["provider_subagent"] == subagent
+    assert (await store.get(HarnessSession, original.id)).metadata["scope_snapshot"][
+        "bypass_permissions"
+    ] is False
+    assert "Keep the saved research context" in second.prompt
+    _ = [event async for event in runtime.stream_turn(second.id)]
+    assert adapter.opens[-1].session.external_session_id is None
+    assert adapter.opens[-1].workspace == tmp_path
+    await runtime.shutdown()
 
 
 async def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):

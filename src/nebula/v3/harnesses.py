@@ -10281,7 +10281,7 @@ class HarnessRuntimeService:
         """Fork without carrying bindings or command runtime across mode changes."""
 
         frozen_scope = session.metadata.get("scope_snapshot")
-        if (
+        needs_fresh_authorization = (
             execution_mode == "host"
             and session.metadata.get("control_assistant") is not True
             and session.metadata.get("harness_permission_mode") == "unrestricted"
@@ -10289,14 +10289,53 @@ class HarnessRuntimeService:
                 isinstance(frozen_scope, dict)
                 and frozen_scope.get("bypass_permissions") is True
             )
-        ):
-            raise HarnessConfigurationError(
-                "This session has bounded project authorization. Start a new chat "
-                "after enabling Allow all, or choose Managed approvals."
+        )
+        if needs_fresh_authorization:
+            engagement = await self.store.get(Engagement, session.engagement_id)
+            scope = (
+                (await self.store.get(ScopePolicy, engagement.scope_policy_id))
+                if engagement.scope_policy_id
+                else ScopePolicy(engagement_id=engagement.id)
             )
+            if not scope.bypass_permissions:
+                raise HarnessConfigurationError(
+                    "This session has bounded project authorization. Enable "
+                    "Allow all for a new Host session, or choose Managed approvals."
+                )
+            options = session.metadata.get("runtime_options")
+            options = options if isinstance(options, dict) else {}
+            replacement = await self.create_session(
+                engagement_id=session.engagement_id,
+                profile_id=profile.id,
+                model=session.model,
+                mcp_server_ids=session.mcp_server_ids,
+                reasoning_effort=options.get("reasoning_effort"),
+                service_tier=options.get("service_tier"),
+                cyber_access_program=options.get("cyber_access_program"),
+                tools_enabled=True,
+            )
+            metadata = deepcopy(session.metadata)
+            metadata.update(replacement.metadata)
+            metadata.update(
+                {
+                    "forked_from_session_id": session.id,
+                    "fork_reason": reason,
+                    "scope_reauthorization": {
+                        "from_revision": (
+                            frozen_scope.get("revision")
+                            if isinstance(frozen_scope, dict)
+                            else None
+                        ),
+                        "to_revision": replacement.metadata["scope_snapshot"][
+                            "revision"
+                        ],
+                    },
+                }
+            )
+        else:
+            replacement = await self._fork_session(session, reason=reason)
+            metadata = deepcopy(replacement.metadata)
 
-        replacement = await self._fork_session(session, reason=reason)
-        metadata = deepcopy(replacement.metadata)
         metadata.pop("workspace_binding_version", None)
         metadata.pop("command_runtime_snapshot", None)
         metadata.update(
@@ -10305,6 +10344,8 @@ class HarnessRuntimeService:
                 "native_capabilities": (
                     HarnessNativeCapabilities()
                     if session.metadata.get("control_assistant") is True
+                    else _session_native_capabilities(replacement, profile)
+                    if needs_fresh_authorization
                     else _native_capabilities_for_execution_mode(
                         _session_native_capabilities(session, profile), execution_mode
                     )
