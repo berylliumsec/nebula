@@ -1,5 +1,5 @@
 {
-  "change_digest": "301b2d8af2819945580a0981e08f99b4c7595c4ab27289d86cf5dae782ae7ad8",
+  "change_digest": "49c14215419a3718ee10ceb2c7c48c0a11c25215bc81ee0f36b91d778351d21a",
   "reviewed_by": "Codex",
   "reason": "Review additive migration 0048 runtime compatibility and the strict CI receipt chain, including trusted workflow provenance, exact commit ancestry, and commit-bound test selections.",
   "exclusions": "No local tests or LAN workflow were run per operator instruction. CI should run these six focused Python cases. No DB backups, provider traffic, simulation deployment, Butler action, or NVMe operation is part of this change.",

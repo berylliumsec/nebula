@@ -239,8 +239,8 @@ def test_ci_acceptance_chain_binds_each_commit_to_exact_run(monkeypatch, tmp_pat
         lambda _directory, *, previous, sha: commits,
     )
 
-    def verify(run_id, *, previous, sha, directory):
-        calls.append((run_id, previous, sha, directory))
+    def verify(run_id, *, previous, sha, directory, trusted_baseline):
+        calls.append((run_id, previous, sha, directory, trusted_baseline))
         return receipts[len(calls) - 1]
 
     monkeypatch.setattr(deployer, "verify_ci_acceptance", verify)
@@ -249,8 +249,8 @@ def test_ci_acceptance_chain_binds_each_commit_to_exact_run(monkeypatch, tmp_pat
     )
 
     assert calls == [
-        ("98765", OLD, middle, tmp_path),
-        ("98766", middle, NEW, tmp_path),
+        ("98765", OLD, middle, tmp_path, OLD),
+        ("98766", middle, NEW, tmp_path, OLD),
     ]
     assert accepted == {
         "source": "github-actions-ci-chain",
