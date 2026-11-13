@@ -1891,10 +1891,10 @@ def wait_supervisor_host_ready(
                 continue
             if (
                 health.get("commit") != version
-                or health.get("recovery_version") != version
+                or health.get("recovery_version") != expected_package_version
             ):
                 raise RuntimeError(
-                    "Host health does not report the exact accepted release"
+                    "Host health does not report the accepted Core and recovery identities"
                 )
             snapshot = host_status_snapshot(
                 status,
@@ -1994,6 +1994,64 @@ def _switch_supervisor_host(
     return readback
 
 
+def reconcile_attention_activation(
+    record: dict[str, Any],
+    journal: dict[str, Any],
+    *,
+    version: str,
+    allow_degraded_workers: bool,
+) -> None:
+    """Resume only when a needs-attention activation is back on its verified old host."""
+    prior = journal.get("prior_status")
+    previous = journal.get("previous_version")
+    if (
+        not isinstance(prior, dict)
+        or not isinstance(previous, str)
+        or not isinstance(prior.get("api_version"), str)
+        or current_release_version() != previous
+        or unit_state(SERVICE) != "active"
+    ):
+        raise RuntimeError(
+            "Needs-attention activation is not on its recorded active previous host"
+        )
+    identity = host_connection(allow_stale=True)
+    previous_package_version = runtime_package_version(previous)
+    if identity is None or identity.get("package_version") != previous_package_version:
+        raise RuntimeError(
+            "Needs-attention activation has no exact previous Core process identity"
+        )
+    service_identity = supervisor_service_identity()
+    require_runtime_process_in_service(service_identity, identity, previous)
+    health, status = read_supervisor_health()
+    if (
+        health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != previous
+        or health.get("recovery_version") != previous_package_version
+    ):
+        raise RuntimeError(
+            "Needs-attention activation previous Core health is not exact"
+        )
+    snapshot = host_status_snapshot(
+        status,
+        allow_degraded=(
+            allow_degraded_workers and prior.get("health") == "degraded"
+        ),
+    )
+    if snapshot["api_version"] != prior["api_version"]:
+        raise RuntimeError(
+            "Needs-attention activation previous API release is not exact"
+        )
+    continuity = require_preserved_workers(prior, snapshot, admitted_version=version)
+    journal["state"] = "prepared"
+    journal["needs_attention_reconciled"] = {
+        "previous_version": previous,
+        "recovery_version": previous_package_version,
+        "retained_project_owners": continuity["retained"],
+    }
+    _save_host_activation(record, journal)
+
+
 def activate_supervisor_host(
     record: dict[str, Any],
     version: str,
@@ -2043,8 +2101,11 @@ def activate_supervisor_host(
                 "Staged deployment and durable host activation operation IDs differ"
             )
         if existing.get("state") == "needs_attention":
-            raise RuntimeError(
-                "Host activation needs explicit reconciliation before retry"
+            reconcile_attention_activation(
+                record,
+                existing,
+                version=version,
+                allow_degraded_workers=allow_degraded_workers,
             )
         if existing.get("state") == "complete":
             connection = host_connection(allow_stale=True)
@@ -2199,6 +2260,7 @@ def activate_supervisor_host(
                     health.get("status") != "ok"
                     or health.get("database") != "ok"
                     or health.get("commit") != previous
+                    or health.get("recovery_version") != previous_package_version
                     or host_status_snapshot(
                         status, allow_degraded=allow_degraded_workers
                     )["api_version"]
@@ -2241,6 +2303,8 @@ def activate_supervisor_host(
         health.get("status") != "ok"
         or health.get("database") != "ok"
         or health.get("commit") != previous_version
+        or health.get("recovery_version")
+        != runtime_package_version(previous_version)
     ):
         raise RuntimeError(
             "Current supervisor API/database health does not match its process identity"
@@ -2518,8 +2582,10 @@ def rollback_host() -> dict[str, Any]:
         snapshot = host_status_snapshot(status)
         if (
             health.get("status") != "ok"
+            or health.get("database") != "ok"
             or health.get("commit") != rolled_back_version
-            or health.get("recovery_version") != rolled_back_version
+            or health.get("recovery_version")
+            != runtime_package_version(rolled_back_version)
             or snapshot["api_version"] != prior_rollback.get("expected_api_version")
         ):
             raise RuntimeError("Completed host rollback readback is no longer current")
@@ -2558,7 +2624,13 @@ def rollback_host() -> dict[str, Any]:
         service_identity, current_identity, current_version
     )
     health, status = read_supervisor_health()
-    if health.get("status") != "ok" or health.get("commit") != current_version:
+    if (
+        health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != current_version
+        or health.get("recovery_version")
+        != runtime_package_version(current_version)
+    ):
         raise RuntimeError(
             "Current supervisor health is not verified for code rollback"
         )
