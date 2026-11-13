@@ -1,7 +1,7 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Review host activation identity binding between package version, exact release symlink, authenticated commit health, and wrapped Core process ancestry.",
-  "exclusions": "CI runs only the exact focused Python cases selected below across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
+  "reason": "Review explicit aggregate degraded-worker baseline acceptance during guarded host activation, including API/database health and exact owner/fence/resident-version continuity.",
+  "exclusions": "CI runs only the exact focused Python cases selected below across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Individual failed-worker equality is not asserted; live activation remains a separate guarded operation.",
   "python_versions": [
     "3.11",
     "3.12",
@@ -10,7 +10,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 18,
+    "python": 20,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -30,11 +30,13 @@
     "tests/test_simulation_host_activation.py::test_interrupted_host_rollback_replays_exact_journaled_target",
     "tests/test_simulation_host_activation.py::test_interrupted_rollback_restoration_replays_original_host",
     "tests/test_simulation_host_activation.py::test_package_version_discovery_binds_to_release_and_authenticated_health",
-    "tests/test_simulation_host_activation.py::test_host_process_identity_accepts_verified_onefile_child"
+    "tests/test_simulation_host_activation.py::test_host_process_identity_accepts_verified_onefile_child",
+    "tests/test_simulation_host_activation.py::test_degraded_worker_snapshot_requires_explicit_acceptance",
+    "tests/test_simulation_host_activation.py::test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_api_db"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "835adef8c31f4e5629c6a01c9b4c23aa277ba5978fabb69bc134214a091f17f7"
+  "change_digest": "c839014f20326daf0dd8f9e33a15a70e28a9f02a5a8d5e43b3c6eb4d8b8e7ca3"
 }
