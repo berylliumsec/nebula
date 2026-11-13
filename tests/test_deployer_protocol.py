@@ -152,6 +152,7 @@ def test_ci_acceptance_matches_exact_run_and_selection(monkeypatch, tmp_path):
             "state": "active",
         },
         "actions/runs/98765/artifacts?per_page=100": {
+            "total_count": 1,
             "artifacts": [
                 {
                     "id": 41,
@@ -160,7 +161,7 @@ def test_ci_acceptance_matches_exact_run_and_selection(monkeypatch, tmp_path):
                     "size_in_bytes": len(archive),
                     "digest": f"sha256:{digest}",
                 }
-            ]
+            ],
         },
         "actions/runs/98765/jobs?per_page=100&page=1": {
             "jobs": [
@@ -215,6 +216,13 @@ def test_selected_ci_jobs_reject_playwright_not_run_on_push():
     }
     with pytest.raises(RuntimeError, match="does not execute selected Playwright"):
         deployer.selected_ci_jobs(_ci_plan(playwright=["assistant.spec.ts"]))
+
+
+def test_ci_acceptance_rejects_incomplete_artifact_listing():
+    with pytest.raises(RuntimeError, match="artifact listing is incomplete"):
+        deployer.complete_ci_artifact_listing(
+            {"total_count": 101, "artifacts": [{"name": "test-selection-receipt"}]}
+        )
 
 
 def test_ci_acceptance_rejects_pull_request_runs(monkeypatch, tmp_path):

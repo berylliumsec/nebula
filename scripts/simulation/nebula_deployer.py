@@ -564,6 +564,19 @@ def ci_selection_artifact(
     return receipt, expected_digest
 
 
+def complete_ci_artifact_listing(response: dict[str, Any]) -> list[dict[str, Any]]:
+    artifacts = response.get("artifacts")
+    total = response.get("total_count")
+    if (
+        not isinstance(artifacts, list)
+        or type(total) is not int
+        or total != len(artifacts)
+        or any(not isinstance(item, dict) for item in artifacts)
+    ):
+        raise RuntimeError("GitHub CI artifact listing is incomplete or malformed")
+    return artifacts
+
+
 def selected_ci_jobs(plan: dict[str, Any]) -> set[str]:
     if plan.get("playwright"):
         raise RuntimeError(
@@ -675,9 +688,7 @@ def verify_ci_acceptance(
         raise RuntimeError("CI run did not use the active pinned CI workflow")
 
     artifacts = github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
-    artifact_rows = artifacts.get("artifacts")
-    if not isinstance(artifact_rows, list):
-        raise RuntimeError("GitHub CI artifact list is malformed")
+    artifact_rows = complete_ci_artifact_listing(artifacts)
     artifact_matches = [
         item
         for item in artifact_rows

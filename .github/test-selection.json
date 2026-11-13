@@ -1,5 +1,5 @@
 {
-  "change_digest": "0ef11d3f3c0e402dc9536fbc8558db278b031110a9861659740fa0890b29e636",
+  "change_digest": "43fcf8c7a13bbde0e34fd0929096140a3e6c347d1c7b4d601be75a96248b24f8",
   "reviewed_by": "Codex",
   "reason": "Exact-project chat admission and retirement, ownerless SQL read parity, and audited CI-run acceptance for deployment. Selection covers legacy vault-backed goal admission, parent-child isolation, retirement and recovery, ownerless work/chat reads, migration 0048, and CI receipt identity, job selection, and failure rejection.",
   "exclusions": "No local tests or LAN workflow were run per operator instruction; CI executes the focused selected cases. No DB backups, provider traffic, simulation deployment, Butler action, or NVMe operation is part of this PR. The deployer requires immutable CI acceptance for the exact candidate and selected jobs.",
@@ -7,7 +7,7 @@
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 58,
+    "python": 59,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -40,7 +40,8 @@
     "tests/test_deployer_protocol.py::test_ci_acceptance_matches_exact_run_and_selection",
     "tests/test_deployer_protocol.py::test_selected_ci_jobs_reject_playwright_not_run_on_push",
     "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_pull_request_runs",
-    "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_a_failed_selected_job"
+    "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_a_failed_selected_job",
+    "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_incomplete_artifact_listing"
   ],
   "frontend": [],
   "native": [],
