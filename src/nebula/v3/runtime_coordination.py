@@ -491,6 +491,46 @@ class RuntimeCoordination:
                 )
             return _receipt(row)
 
+    async def mark_queued_chat_start(
+        self,
+        *,
+        project_id: str,
+        command_id: str,
+        actor_id: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Promote one authenticated legacy HTTP command after vault inspection."""
+        async with self._write() as session:
+            await self._ensure_project(session, project_id)
+            held = await session.execute(
+                update(ProjectOwnershipRow)
+                .where(
+                    ProjectOwnershipRow.project_id == project_id,
+                    ProjectOwnershipRow.retirement_requested.is_(False),
+                )
+                .values(command_sequence=ProjectOwnershipRow.command_sequence)
+            )
+            if held.rowcount != 1:
+                return False
+            row = await session.get(
+                RuntimeCommandRow,
+                command_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.project_id != project_id
+                or row.actor_id != actor_id
+                or row.name != "http.invoke/v1"
+                or row.state != "queued"
+                or row.chat_start
+                or row.payload != payload
+            ):
+                return False
+            row.chat_start = True
+            return True
+
     async def claim_next(
         self, lease: ProjectLease, *, lane: Literal["work", "control"] | None = None
     ) -> ClaimedCommand | None:

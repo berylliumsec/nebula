@@ -60,6 +60,11 @@ STATES = ("waiting", "barrier", "complete", "failed")
             "/api/v1/chat/sessions/existing-chat/fork",
             {"through_message_id": "message"},
         ),
+        ("/api/v1/runs/completed-run/discuss", {}),
+        (
+            "/api/v1/executions/execution/chat-attachments",
+            {"backend_kind": "provider"},
+        ),
     ],
 )
 def test_session_creation_routes_are_explicit_chat_start_intents(path, body):

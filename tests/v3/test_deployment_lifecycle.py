@@ -29,7 +29,7 @@ from nebula.v3.deployment_protocol import (
 )
 from nebula.v3.domain import ChatSession, Engagement, Observation
 from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.process_identity import process_birth
 from tests.v3.test_runtime_coordination import location as location
 
@@ -208,6 +208,41 @@ async def test_project_retirement_uses_its_own_hold_and_releases_exact_owner(hos
         assert owner.fencing_token == lease.fencing_token
         assert not owner.retirement_requested
         assert not owner.admission_requested
+
+
+async def test_project_retirement_serializes_direct_chat_creation(host):
+    coordinator, store = host
+    runtime_id = await worker(host, "v1")
+    lease = await coordinator.coordination.claim_project("one", runtime_id)
+    archived = await store.create(
+        ChatSession(
+            id="archived-chat-before-retirement",
+            engagement_id="one",
+            title="Archived conversation",
+            model="synthetic-model",
+            provider_profile_id="synthetic-provider",
+            metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+        )
+    )
+
+    assert await coordinator.request_project_retirement(lease) is True
+    with pytest.raises(ConflictError, match="worker is closing"):
+        await store.create(
+            ChatSession(
+                id="new-chat-during-retirement",
+                engagement_id="one",
+                title="New conversation",
+                model="synthetic-model",
+                provider_profile_id="synthetic-provider",
+            )
+        )
+    with pytest.raises(ConflictError, match="worker is closing"):
+        await store.update(
+            ChatSession,
+            archived.id,
+            {"metadata": {}},
+            expected_revision=archived.revision,
+        )
 
 
 async def test_third_execution_version_stages_while_compatible_api_can_promote(host):

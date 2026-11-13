@@ -61,6 +61,7 @@ from .database import (
     Database,
     EntityRow,
     OperationEventRow,
+    ProjectOwnershipRow,
     ProviderTurnQueueRow,
     ProviderToolManifestRow,
     RunBudgetCounterRow,
@@ -386,6 +387,36 @@ class StoreTransaction:
         if isinstance(session_id, str) and session_id:
             self.chat_activity_session_ids.add(session_id)
 
+    async def _guard_project_chat_start(self, engagement_id: str | None) -> None:
+        """Serialize a new open chat against project worker retirement.
+
+        The ownership-row UPDATE is in the same transaction as the chat write.
+        It makes a concurrent retirement either observe the committed session,
+        or commit its hold first and cause this chat start to be rejected.
+        Projects without an ownership row remain unaffected.
+        """
+        if not engagement_id:
+            return
+        result = await self.session.execute(
+            update(ProjectOwnershipRow)
+            .where(
+                ProjectOwnershipRow.project_id == engagement_id,
+                ProjectOwnershipRow.retirement_requested.is_(False),
+            )
+            .values(command_sequence=ProjectOwnershipRow.command_sequence)
+        )
+        if result.rowcount == 1:
+            return
+        owner_exists = await self.session.scalar(
+            select(ProjectOwnershipRow.project_id).where(
+                ProjectOwnershipRow.project_id == engagement_id
+            )
+        )
+        if owner_exists is not None:
+            raise ConflictError(
+                "The project worker is closing; retry chat creation after retirement."
+            )
+
     async def lock_operation_stream(self, operation_id: str) -> None:
         """Serialize project-event sequence assignment before goal row writes.
 
@@ -425,6 +456,8 @@ class StoreTransaction:
             )
 
     async def add(self, entity: Entity) -> Entity:
+        if isinstance(entity, ChatSession):
+            await self._guard_project_chat_start(entity.engagement_id)
         row = EntityRow(
             id=entity.id,
             kind=entity.entity_kind,
@@ -554,6 +587,12 @@ class StoreTransaction:
             # such; otherwise the change itself is invalid.
             _row_to_entity(row, model)
             raise
+        if (
+            model.entity_kind == ChatSession.entity_kind
+            and row.payload.get("metadata", {}).get("archived_at") is not None
+            and updated.metadata.get("archived_at") is None
+        ):
+            await self._guard_project_chat_start(updated.engagement_id)
         self._runtime_activity(row.kind, row.id, payload)
         updated_goal = updated if isinstance(updated, ChatGoal) else None
         updated_turn = updated if isinstance(updated, ChatTurn) else None

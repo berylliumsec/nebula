@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from pathlib import Path
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from .database import (
     DeploymentHostRow,
@@ -39,6 +40,9 @@ class RuntimeAutoAdmission:
         self._pending: dict[str, str] = {}
         self._blocked: dict[str, tuple[int, int | None]] = {}
         self._retirement_cursor: str | None = None
+        self._legacy_chat_cursor: tuple[str, int, str] | None = None
+        self._legacy_chat_scan_complete = False
+        self._legacy_chat_vault = None
         self._recovery_blocked: dict[str, tuple[str, int, int]] = {}
         self._recovery_cursor: str | None = None
         self._serial = asyncio.Lock()
@@ -75,6 +79,7 @@ class RuntimeAutoAdmission:
     async def reconcile(self):
         async with self._serial:
             supervisor = self.supervisor
+            await self._recover_legacy_chat_starts()
             async with supervisor.coordinator.database.session() as session:
                 host = await session.get(DeploymentHostRow, "host")
                 if host is None or host.shutdown_requested:
@@ -115,6 +120,34 @@ class RuntimeAutoAdmission:
                     )
                     .exists()
                 )
+                untracked_open_projects = list(
+                    await session.scalars(
+                        select(EntityRow.engagement_id)
+                        .where(
+                            EntityRow.kind == "chat_sessions",
+                            EntityRow.engagement_id.is_not(None),
+                            EntityRow.payload["metadata"]["archived_at"]
+                            .as_string()
+                            .is_(None),
+                            ~select(ProjectOwnershipRow.project_id)
+                            .where(
+                                ProjectOwnershipRow.project_id
+                                == EntityRow.engagement_id
+                            )
+                            .exists(),
+                        )
+                        .distinct()
+                        .limit(16)
+                    )
+                )
+                # Some Core-owned paths create a chat session without first
+                # passing through RuntimeRouting. Give only that session's
+                # exact project a fencing counter so the normal open-chat
+                # demand query below can admit it.
+                for project_id in untracked_open_projects:
+                    await supervisor.coordinator.coordination._ensure_project(
+                        session, project_id
+                    )
                 pending_chat_start = (
                     select(RuntimeCommandRow.id)
                     .where(
@@ -349,6 +382,110 @@ class RuntimeAutoAdmission:
                 "read its saved deployment result before reconciliation"
             )
         return receipt["result"]
+
+    async def _recover_legacy_chat_starts(self):
+        """Promote queued legacy HTTP requests after authenticating their intent."""
+        host = getattr(self.supervisor, "host", None)
+        data_root = getattr(host, "data_root", None)
+        if data_root is None or self._legacy_chat_scan_complete:
+            return
+        from .runtime_chat_acceptance import HTTP_INVOKE_COMMAND
+        from .runtime_delivery import HttpIntent, RuntimeDelivery
+        from .runtime_vault import RuntimeVault
+
+        vault_root = Path(data_root) / "runtime" / "payloads"
+        if not (vault_root / "key").is_file():
+            return
+        if self._legacy_chat_vault is None:
+            self._legacy_chat_vault = RuntimeVault(vault_root)
+        vault = self._legacy_chat_vault
+        async with self.supervisor.coordinator.database.session() as session:
+            query = select(
+                RuntimeCommandRow.id,
+                RuntimeCommandRow.project_id,
+                RuntimeCommandRow.actor_id,
+                RuntimeCommandRow.payload,
+                RuntimeCommandRow.sequence,
+            ).where(
+                RuntimeCommandRow.name == HTTP_INVOKE_COMMAND,
+                RuntimeCommandRow.state == "queued",
+                RuntimeCommandRow.chat_start.is_(False),
+            )
+            if self._legacy_chat_cursor is not None:
+                project_id, sequence, command_id = self._legacy_chat_cursor
+                query = query.where(
+                    or_(
+                        RuntimeCommandRow.project_id > project_id,
+                        and_(
+                            RuntimeCommandRow.project_id == project_id,
+                            RuntimeCommandRow.sequence > sequence,
+                        ),
+                        and_(
+                            RuntimeCommandRow.project_id == project_id,
+                            RuntimeCommandRow.sequence == sequence,
+                            RuntimeCommandRow.id > command_id,
+                        ),
+                    )
+                )
+            candidates = list(
+                await session.execute(
+                    query.order_by(
+                        RuntimeCommandRow.project_id,
+                        RuntimeCommandRow.sequence,
+                        RuntimeCommandRow.id,
+                    ).limit(16)
+                )
+            )
+            self._legacy_chat_cursor = (
+                (
+                    candidates[-1].project_id,
+                    candidates[-1].sequence,
+                    candidates[-1].id,
+                )
+                if candidates
+                else None
+            )
+            self._legacy_chat_scan_complete = not candidates
+        for row in candidates:
+            try:
+                payload = row.payload
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"format", "request_reference"}
+                    or payload.get("format") != 1
+                    or not isinstance(payload.get("request_reference"), str)
+                ):
+                    continue
+                raw = await asyncio.to_thread(
+                    vault.get,
+                    payload["request_reference"],
+                    purpose=RuntimeDelivery._intent_purpose(row.actor_id),
+                )
+                intent = HttpIntent.model_validate_json(raw)
+                if (
+                    not RuntimeDelivery.is_chat_start_intent(intent)
+                    or intent.path != "/api/v1/chat/goal-conversations"
+                ):
+                    continue
+                request_body = json.loads(intent.body())
+                if request_body.get("engagement_id") != row.project_id:
+                    continue
+                await self.supervisor.coordinator.coordination.mark_queued_chat_start(
+                    project_id=row.project_id,
+                    command_id=row.id,
+                    actor_id=row.actor_id,
+                    payload=payload,
+                )
+            except Exception as error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.legacy_chat_start.unavailable",
+                    "A legacy queued command remains held because its chat intent "
+                    "could not be verified.",
+                    error,
+                    stage="admission",
+                    metadata={"entity_id": row.id, "kind": "runtime-command"},
+                )
 
     async def _recover_expired(self):
         supervisor = self.supervisor

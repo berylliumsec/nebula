@@ -1,13 +1,13 @@
 {
-  "change_digest": "b62d737b2412de74a0acd5ea80ae1f28f6785034d9a7fbb6585f569e1fb58468",
+  "change_digest": "01f99cbebfd6782693e2764db44990495c8fff0f2c5cda3c7ef8496209a6e745",
   "reviewed_by": "Codex",
-  "reason": "Project execution workers are now admitted only for an exact project's open chat or accepted chat-start command. Explicit goal-conversation creation is a chat start because it creates a durable ChatSession before the first turn. The selected Python cases cover chat-creation intents, five child lanes, parent-versus-child isolation, chat-close retirement, retirement holds across command lanes, expired-owner recovery, and migration 0048.",
+  "reason": "Project execution workers are now admitted only for an exact project's open chat or accepted chat-start command. Explicit goal-conversation creation is a chat start because it creates a durable ChatSession before the first turn. The selection covers encrypted legacy goal-command recovery, five exact child lanes, direct session creation and retirement serialization, parent-versus-child isolation, close-trigger retirement, all-lane holds, recovery, and migration 0048.",
   "exclusions": "No UI, frontend, native, or Playwright code changed. The operator explicitly requested no local tests or LAN test; those gates were not run. CI runs only these focused Python cases, including PostgreSQL migration coverage. No provider traffic, simulation deployment, DB backup, Butler action, or NVMe operation is part of this PR.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 52,
+    "python": 60,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -20,6 +20,8 @@
     "tests/v3/test_runtime_global_api.py::test_actual_chat_request_marks_only_its_command_for_admission",
     "tests/v3/test_runtime_global_api.py::test_goal_conversation_creation_marks_exact_project_chat_start",
     "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
+    "tests/v3/test_runtime_work_batches.py::test_open_chat_created_without_routing_gets_its_exact_project_worker",
+    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
     "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
     "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
     "tests/v3/test_shutdown_readmission.py::test_quiesced_and_fresh_projects_readmit_without_resetting_fences",
@@ -27,6 +29,7 @@
     "tests/v3/test_deployment_lifecycle.py::test_open_parent_chat_does_not_keep_child_project_worker",
     "tests/v3/test_deployment_lifecycle.py::test_open_child_chat_keeps_its_exact_project_worker",
     "tests/v3/test_deployment_lifecycle.py::test_project_retirement_uses_its_own_hold_and_releases_exact_owner",
+    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation",
     "tests/v3/test_runtime_auto_recovery.py::test_expired_positive_dead_owner_initiates_promoted_target_version",
     "tests/v3/test_runtime_auto_recovery.py::test_expired_owner_with_only_archived_chat_is_not_recovered",
     "tests/v3/test_runtime_auto_recovery.py::test_source_without_positive_os_absence_is_preserved",

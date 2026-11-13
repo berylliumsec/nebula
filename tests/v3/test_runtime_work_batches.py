@@ -748,6 +748,116 @@ async def test_metadata_batch_and_project_reads_never_admit_workers(batch):
         assert (await session.get(ProjectOwnershipRow, "two")).runtime_id is None
 
 
+async def test_open_chat_created_without_routing_gets_its_exact_project_worker(batch):
+    project = await batch.store.create(Engagement(name="Direct chat project"))
+    await batch.store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Created directly by Core",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+
+    prepared = []
+
+    async def prepare(_version):
+        runtime_id = f"direct-chat-worker-{len(prepared)}"
+        prepared.append(runtime_id)
+        await runtime(batch, runtime_id)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        return await batch.coordination.claim_project(project_id, runtime_id)
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+
+    async with batch.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, project.id)
+        assert owner.runtime_id == prepared[0]
+    assert len(prepared) == 1
+
+
+async def test_legacy_queued_goal_creates_admit_their_exact_five_projects(batch):
+    children = [
+        await batch.store.create(Engagement(name=f"Legacy goal lane {index}"))
+        for index in range(5)
+    ]
+    for child in children:
+        intent = HttpIntent.capture(
+            "POST",
+            "/api/v1/chat/goal-conversations",
+            b"",
+            [(b"content-type", b"application/json")],
+            json.dumps(
+                {
+                    "engagement_id": child.id,
+                    "objective": f"Start lane for {child.id}",
+                    "completion_criteria": ["The lane conversation is created"],
+                }
+            ).encode(),
+        )
+        receipt = await batch.delivery.accept(
+            intent,
+            project_id=child.id,
+            actor_id="operator",
+            idempotency_key=f"legacy-goal-create-{child.id}",
+        )
+        async with batch.database.session() as session:
+            command = await session.get(RuntimeCommandRow, receipt.command_id)
+            assert command.chat_start is False
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+
+    prepared = []
+
+    async def prepare(_version):
+        runtime_id = f"legacy-goal-worker-{len(prepared)}"
+        prepared.append(runtime_id)
+        await runtime(batch, runtime_id)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        return await batch.coordination.claim_project(project_id, runtime_id)
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            host=batch.host,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+
+    async with batch.database.session() as session:
+        for index, child in enumerate(children):
+            owner = await session.get(ProjectOwnershipRow, child.id)
+            command = await session.scalar(
+                select(RuntimeCommandRow).where(
+                    RuntimeCommandRow.project_id == child.id
+                )
+            )
+            assert owner.runtime_id == prepared[index]
+            assert command.chat_start is True
+    assert len(prepared) == 5
+
+
 async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child(
     batch,
 ):

@@ -220,6 +220,14 @@ class RuntimeDelivery:
         if re.fullmatch(r"/api/v1/chat/sessions/[^/]{1,200}/fork", intent.path):
             # Forking an archived conversation starts a new exact-project chat.
             return True
+        if re.fullmatch(r"/api/v1/runs/[^/]{1,200}/discuss", intent.path):
+            # Attaching a completed run creates or returns its project chat.
+            return True
+        if re.fullmatch(
+            r"/api/v1/executions/[^/]{1,200}/chat-attachments", intent.path
+        ):
+            # An operator explicitly asks to start an execution discussion chat.
+            return True
         if re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path):
             return intent.body() in (b"", b"{}")
         return False
