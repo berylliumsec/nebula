@@ -62,11 +62,13 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         )
     unowned = _status()
     unowned["projects"][0].update(runtime_id=None, runtime_version=None)
+    changed_unowned = _status()
+    changed_unowned["projects"][0].update(runtime_id=None, runtime_version=None)
+    changed_unowned["projects"][0]["fencing_token"] += 1
     with pytest.raises(RuntimeError, match="fencing token"):
-        changed_unowned = deployer.host_status_snapshot(_status())
-        changed_unowned["projects"]["child-project"]["fencing_token"] += 1
         deployer.require_preserved_workers(
-            deployer.host_status_snapshot(unowned), changed_unowned
+            deployer.host_status_snapshot(unowned),
+            deployer.host_status_snapshot(changed_unowned),
         )
     with pytest.raises(RuntimeError, match="outside the exact admitted release"):
         deployer.require_preserved_workers(
