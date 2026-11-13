@@ -1669,16 +1669,22 @@ def supervisor_service_identity() -> dict[str, Any]:
     }
 
 
-def host_status_snapshot(status: dict[str, Any]) -> dict[str, Any]:
+def host_status_snapshot(
+    status: dict[str, Any], *, allow_degraded: bool = False
+) -> dict[str, Any]:
+    deployment_health = status.get("health") if isinstance(status, dict) else None
     if (
         not isinstance(status, dict)
         or status.get("protocol") != "nebula.runtime/v1"
-        or status.get("health") != "ready"
+        or not (
+            deployment_health == "ready"
+            or allow_degraded and deployment_health == "degraded"
+        )
         or not isinstance(status.get("api_version"), str)
         or not SHA.fullmatch(status["api_version"])
     ):
         raise RuntimeError(
-            "A ready supervisor API status is required for host activation"
+            "A ready supervisor API status is required unless the existing degraded baseline was explicitly accepted"
         )
     residents = status.get("resident_versions")
     projects = status.get("projects")
@@ -1717,6 +1723,7 @@ def host_status_snapshot(status: dict[str, Any]) -> dict[str, Any]:
             "fencing_token": fencing_token,
         }
     return {
+        "health": deployment_health,
         "api_version": status["api_version"],
         "resident_versions": sorted(set(residents)),
         "projects": owners,
@@ -1852,6 +1859,8 @@ def wait_supervisor_host_ready(
     *,
     expected_api_version: str,
     prior_status: dict[str, Any] | None,
+    allow_degraded_workers: bool = False,
+    degraded_baseline: bool = False,
     timeout: int = 480,
 ) -> dict[str, Any]:
     expected_package_version = runtime_package_version(version)
@@ -1876,7 +1885,7 @@ def wait_supervisor_host_ready(
             service_identity = supervisor_service_identity()
             require_runtime_process_in_service(service_identity, identity, version)
             health, status = read_supervisor_health()
-            if health.get("status") != "ok":
+            if health.get("status") != "ok" or health.get("database") != "ok":
                 last_problem = "host health is not ready"
                 time.sleep(2)
                 continue
@@ -1887,7 +1896,10 @@ def wait_supervisor_host_ready(
                 raise RuntimeError(
                     "Host health does not report the exact accepted release"
                 )
-            snapshot = host_status_snapshot(status)
+            snapshot = host_status_snapshot(
+                status,
+                allow_degraded=(allow_degraded_workers and degraded_baseline),
+            )
             if snapshot["api_version"] != expected_api_version:
                 raise RuntimeError(
                     "Host activation unexpectedly changed the API release"
@@ -1904,6 +1916,10 @@ def wait_supervisor_host_ready(
                 "health_commit": health["commit"],
                 "recovery_version": health["recovery_version"],
                 "api_version": snapshot["api_version"],
+                "deployment_health": snapshot["health"],
+                "degraded_baseline_accepted": bool(
+                    allow_degraded_workers and degraded_baseline
+                ),
                 "resident_versions": snapshot["resident_versions"],
                 "retained_project_owners": continuity["retained"],
                 "runtime_pid": identity["pid"],
@@ -1940,6 +1956,7 @@ def _switch_supervisor_host(
     expected_api_version: str,
     prior_status: dict[str, Any],
     journal: dict[str, Any],
+    allow_degraded_workers: bool = False,
     journal_container: dict[str, Any] | None = None,
     record: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1967,6 +1984,8 @@ def _switch_supervisor_host(
         version,
         expected_api_version=expected_api_version,
         prior_status=prior_status,
+        allow_degraded_workers=allow_degraded_workers,
+        degraded_baseline=prior_status.get("health") == "degraded",
     )
     journal["state"] = "complete"
     journal["readback"] = readback
@@ -1975,7 +1994,12 @@ def _switch_supervisor_host(
     return readback
 
 
-def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, Any]:
+def activate_supervisor_host(
+    record: dict[str, Any],
+    version: str,
+    *,
+    allow_degraded_workers: bool = False,
+) -> dict[str, Any]:
     """Restart only the foreground supervisor from an accepted staged release."""
     if record.get("deployment_mode") != "supervisor":
         raise RuntimeError("Host activation requires supervisor deployment mode")
@@ -2005,6 +2029,12 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
     )
     existing = record.get("host_activation")
     if isinstance(existing, dict) and existing.get("version") == version:
+        recorded_allow_degraded = existing.get("allow_degraded_workers") is True
+        if allow_degraded_workers and not recorded_allow_degraded:
+            raise RuntimeError(
+                "A retry cannot add degraded-worker acceptance to an existing activation journal"
+            )
+        allow_degraded_workers = recorded_allow_degraded
         if (
             requested_operation_id is not None
             and existing.get("operation_id") != requested_operation_id
@@ -2033,10 +2063,18 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                 version,
                 expected_api_version=prior["api_version"],
                 prior_status=None,
+                allow_degraded_workers=allow_degraded_workers,
+                degraded_baseline=isinstance(prior, dict)
+                and prior.get("health") == "degraded",
             )
             readback = existing.get("readback")
-            if not isinstance(readback, dict) or readback.get("health_commit") != version:
-                raise RuntimeError("Completed host activation lost its verified readback")
+            if (
+                not isinstance(readback, dict)
+                or readback.get("health_commit") != version
+            ):
+                raise RuntimeError(
+                    "Completed host activation lost its verified readback"
+                )
             return {
                 "operation_id": existing["operation_id"],
                 "status": "host_activated",
@@ -2073,6 +2111,8 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                             version,
                             expected_api_version=prior["api_version"],
                             prior_status=prior,
+                            allow_degraded_workers=allow_degraded_workers,
+                            degraded_baseline=prior.get("health") == "degraded",
                         )
                     except Exception as error:
                         existing["readback_error"] = str(error)[:1000]
@@ -2097,6 +2137,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                         expected_api_version=prior["api_version"],
                         prior_status=prior,
                         journal=existing,
+                        allow_degraded_workers=allow_degraded_workers,
                         record=record,
                     )
                 except Exception as error:
@@ -2120,6 +2161,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                             expected_api_version=prior["api_version"],
                             prior_status=prior,
                             journal=rollback_operation,
+                            allow_degraded_workers=allow_degraded_workers,
                             journal_container=existing,
                             record=record,
                         )
@@ -2155,8 +2197,11 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                 health, status = read_supervisor_health()
                 if (
                     health.get("status") != "ok"
+                    or health.get("database") != "ok"
                     or health.get("commit") != previous
-                    or host_status_snapshot(status)["api_version"]
+                    or host_status_snapshot(
+                        status, allow_degraded=allow_degraded_workers
+                    )["api_version"]
                     != prior["api_version"]
                 ):
                     raise RuntimeError(
@@ -2168,6 +2213,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                 expected_api_version=prior["api_version"],
                 prior_status=prior,
                 journal=existing,
+                allow_degraded_workers=allow_degraded_workers,
                 record=record,
             )
             return {
@@ -2191,12 +2237,20 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
     if previous_version == version:
         raise RuntimeError("Pending host release is already the active supervisor")
     health, status = read_supervisor_health()
-    if health.get("status") != "ok" or health.get("commit") != previous_version:
+    if (
+        health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != previous_version
+    ):
         raise RuntimeError(
-            "Current supervisor health does not match its process identity"
+            "Current supervisor API/database health does not match its process identity"
         )
     require_host_schema_compatibility(manifest, health)
-    prior_status = host_status_snapshot(status)
+    prior_status = host_status_snapshot(status, allow_degraded=allow_degraded_workers)
+    if allow_degraded_workers and prior_status["health"] != "degraded":
+        raise RuntimeError(
+            "--allow-degraded-workers requires a degraded deployment baseline"
+        )
     if prior_status["api_version"] != record.get("active"):
         raise RuntimeError(
             "Deployer state differs from the current supervisor API version"
@@ -2222,6 +2276,12 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
         },
         "prior_service": service_identity,
         "operations": operations,
+        "allow_degraded_workers": allow_degraded_workers,
+        "degraded_baseline_reason": (
+            "Accepted aggregate degraded status attributed by read-only diagnosis to stale old execution-worker leases; individual failed-worker equality is not asserted."
+            if allow_degraded_workers
+            else None
+        ),
     }
     _save_host_activation(record, journal)
     try:
@@ -2231,6 +2291,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
             expected_api_version=prior_status["api_version"],
             prior_status=prior_status,
             journal=journal,
+            allow_degraded_workers=allow_degraded_workers,
             record=record,
         )
     except Exception as error:
@@ -2251,6 +2312,8 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                     previous_version,
                     expected_api_version=prior_status["api_version"],
                     prior_status=prior_status,
+                    allow_degraded_workers=allow_degraded_workers,
+                    degraded_baseline=prior_status["health"] == "degraded",
                 )
             else:
                 rollback_operation = {
@@ -2268,6 +2331,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                     expected_api_version=prior_status["api_version"],
                     prior_status=prior_status,
                     journal=rollback_operation,
+                    allow_degraded_workers=allow_degraded_workers,
                     journal_container=journal,
                     record=record,
                 )
@@ -2294,14 +2358,16 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
     }
 
 
-def activate_host() -> dict[str, Any]:
+def activate_host(*, allow_degraded_workers: bool = False) -> dict[str, Any]:
     record = state()
     pending = record.get("pending")
     if not isinstance(pending, str):
         raise RuntimeError(
             "No accepted pending candidate is available for host activation"
         )
-    return activate_supervisor_host(record, pending)
+    return activate_supervisor_host(
+        record, pending, allow_degraded_workers=allow_degraded_workers
+    )
 
 
 def rollback_host() -> dict[str, Any]:
@@ -2318,10 +2384,10 @@ def rollback_host() -> dict[str, Any]:
     restore_parent = None
     if isinstance(prior_rollback, dict):
         nested_restore = prior_rollback.get("restore_operation")
-        if (
-            prior_rollback.get("state") in {"restoring_current_host", "needs_attention"}
-            and isinstance(nested_restore, dict)
-        ):
+        if prior_rollback.get("state") in {
+            "restoring_current_host",
+            "needs_attention",
+        } and isinstance(nested_restore, dict):
             restore_operation = nested_restore
             restore_parent = prior_rollback
         elif (
@@ -2400,7 +2466,9 @@ def rollback_host() -> dict[str, Any]:
             or prior_status.get("api_version") != expected_api_version
             or selected not in {rolled_back_version, original_version}
         ):
-            raise RuntimeError("Interrupted host rollback journal or selected release is invalid")
+            raise RuntimeError(
+                "Interrupted host rollback journal or selected release is invalid"
+            )
         release, _ = runtime_release(rolled_back_version)
         readback = _switch_supervisor_host(
             rolled_back_version,
@@ -2452,8 +2520,7 @@ def rollback_host() -> dict[str, Any]:
             health.get("status") != "ok"
             or health.get("commit") != rolled_back_version
             or health.get("recovery_version") != rolled_back_version
-            or snapshot["api_version"]
-            != prior_rollback.get("expected_api_version")
+            or snapshot["api_version"] != prior_rollback.get("expected_api_version")
         ):
             raise RuntimeError("Completed host rollback readback is no longer current")
         if journal.get("state") != "rolled_back":
@@ -2470,9 +2537,8 @@ def rollback_host() -> dict[str, Any]:
             "code_only": True,
             **saved_readback,
         }
-    if (
-        journal.get("state") != "complete"
-        or journal.get("version") != record.get("host_active")
+    if journal.get("state") != "complete" or journal.get("version") != record.get(
+        "host_active"
     ):
         raise RuntimeError("No verified supervisor host activation can be rolled back")
     current_version = journal["version"]
@@ -3096,10 +3162,22 @@ def main() -> int:
             "repeat once per first-parent commit from the live baseline to the candidate"
         ),
     )
+    parser.add_argument(
+        "--allow-degraded-workers",
+        action="store_true",
+        help=(
+            "allow activate-host to proceed from a degraded aggregate worker baseline; "
+            "API/database health and exact owner continuity remain required"
+        ),
+    )
     args = parser.parse_args()
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
         raise RuntimeError("--ci-run-id is supported only with prepare")
+    if args.allow_degraded_workers and args.action != "activate-host":
+        raise RuntimeError(
+            "--allow-degraded-workers is supported only with activate-host"
+        )
     with (ROOT / ".deploy.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = (
@@ -3107,6 +3185,8 @@ def main() -> int:
             if args.action == "status"
             else prepare(ci_run_ids=args.ci_run_id)
             if args.action == "prepare"
+            else activate_host(allow_degraded_workers=args.allow_degraded_workers)
+            if args.action == "activate-host"
             else globals()[args.action.replace("-", "_")]()
         )
     print(json.dumps(result, sort_keys=True))

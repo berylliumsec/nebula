@@ -43,6 +43,83 @@ def _status(*, runtime_id: str = "worker-1", fencing_token: int = 7) -> dict:
     }
 
 
+def test_degraded_worker_snapshot_requires_explicit_acceptance() -> None:
+    status = _status()
+    status["health"] = "degraded"
+    with pytest.raises(RuntimeError, match="degraded baseline"):
+        deployer.host_status_snapshot(status)
+
+    snapshot = deployer.host_status_snapshot(status, allow_degraded=True)
+    assert snapshot["health"] == "degraded"
+    assert snapshot["projects"]["child-project"]["runtime_id"] == "worker-1"
+
+
+def test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_api_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit, api_version = "b" * 40, "a" * 40
+    package_version = "3.0.0-beta.3+80d43d956ba75c35"
+    process_birth = "linux:36155290-b5d2-43ea-9ee9-94c8b3220809:240197513"
+    monkeypatch.setattr(
+        deployer, "runtime_package_version", lambda _version: package_version
+    )
+    monkeypatch.setattr(deployer, "unit_state", lambda _unit: "active")
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **_kwargs: {
+            "package_version": package_version,
+            "pid": 434411,
+            "process_birth": process_birth,
+        },
+    )
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: {})
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
+    )
+    status = _status()
+    status["health"] = "degraded"
+    health = {
+        "status": "ok",
+        "database": "ok",
+        "commit": commit,
+        "recovery_version": commit,
+    }
+    monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (health, status))
+    baseline = deployer.host_status_snapshot(status, allow_degraded=True)
+
+    readback = deployer.wait_supervisor_host_ready(
+        commit,
+        expected_api_version=api_version,
+        prior_status=baseline,
+        allow_degraded_workers=True,
+        degraded_baseline=True,
+        timeout=1,
+    )
+    assert readback["deployment_health"] == "degraded"
+    assert readback["degraded_baseline_accepted"] is True
+
+    with pytest.raises(RuntimeError, match="ready supervisor API status"):
+        deployer.wait_supervisor_host_ready(
+            commit,
+            expected_api_version=api_version,
+            prior_status=None,
+            allow_degraded_workers=True,
+            degraded_baseline=False,
+            timeout=1,
+        )
+    health["database"] = "unavailable"
+    with pytest.raises(RuntimeError, match="within 0s"):
+        deployer.wait_supervisor_host_ready(
+            commit,
+            expected_api_version=api_version,
+            prior_status=baseline,
+            allow_degraded_workers=True,
+            degraded_baseline=True,
+            timeout=0,
+        )
+
+
 def test_host_activation_requires_exact_existing_worker_ownership() -> None:
     before = deployer.host_status_snapshot(_status())
 
@@ -154,7 +231,12 @@ def test_package_version_discovery_binds_to_release_and_authenticated_health(
     monkeypatch.setattr(
         deployer, "require_runtime_process_in_service", lambda *_args: None
     )
-    health = {"status": "ok", "commit": commit, "recovery_version": commit}
+    health = {
+        "status": "ok",
+        "database": "ok",
+        "commit": commit,
+        "recovery_version": commit,
+    }
     status = {
         "protocol": "nebula.runtime/v1",
         "health": "ready",
