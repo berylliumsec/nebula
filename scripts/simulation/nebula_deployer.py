@@ -24,6 +24,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import zipfile
 from typing import Any
@@ -646,17 +647,76 @@ def require_ci_jobs(jobs: list[dict[str, Any]], required: set[str]) -> dict[str,
     return {name: "success" for name in sorted(required)}
 
 
+def first_parent_commits(directory: Path, *, previous: str, sha: str) -> list[str]:
+    commits = run(
+        "git",
+        "-C",
+        str(directory),
+        "rev-list",
+        "--first-parent",
+        "--reverse",
+        f"{previous}..{sha}",
+        capture=True,
+    ).splitlines()
+    if not commits or commits[-1] != sha:
+        raise RuntimeError("CI acceptance requires a complete first-parent commit chain")
+    parent = previous
+    for commit in commits:
+        actual = run(
+            "git", "-C", str(directory), "rev-parse", f"{commit}^1", capture=True
+        )
+        if actual != parent:
+            raise RuntimeError("CI acceptance first-parent chain has a gap")
+        parent = commit
+    return commits
+
+
+def verify_ci_trust_inputs(
+    directory: Path, *, trusted_baseline: str, sha: str
+) -> None:
+    # These files define which checks run and how the selection artifact is
+    # validated. CI-only acceptance cannot trust a candidate to rewrite them.
+    try:
+        run(
+            "git",
+            "-C",
+            str(directory),
+            "diff",
+            "--quiet",
+            trusted_baseline,
+            sha,
+            "--",
+            ".github/workflows",
+            ".github/actions",
+            "scripts/test_selection.py",
+        )
+    except RuntimeError as error:
+        raise RuntimeError(
+            "CI acceptance refuses changes to trusted workflows, local actions, "
+            "or the test-selection validator"
+        ) from error
+
+
 def verify_ci_acceptance(
-    run_id: str, *, previous: str, sha: str, directory: Path
+    run_id: str,
+    *,
+    previous: str,
+    sha: str,
+    directory: Path,
+    trusted_baseline: str | None = None,
 ) -> dict[str, Any]:
     if not CI_RUN_ID.fullmatch(run_id):
         raise RuntimeError("CI run id must be a positive decimal identifier")
+    trusted_baseline = trusted_baseline or previous
+    verify_ci_trust_inputs(
+        directory, trusted_baseline=trusted_baseline, sha=sha
+    )
     first_parent = run(
         "git", "-C", str(directory), "rev-parse", f"{sha}^1", capture=True
     )
     if first_parent != previous:
         raise RuntimeError(
-            "CI acceptance requires the live baseline as the candidate first parent"
+            "CI acceptance requires the supplied baseline as the candidate first parent"
         )
     run_info = github_json(f"actions/runs/{run_id}")
     repository = run_info.get("repository")
@@ -712,20 +772,34 @@ def verify_ci_acceptance(
         raise RuntimeError(
             "CI selection receipt differs from the candidate's committed plan"
         )
-    validated = json.loads(
-        run(
-            "/usr/bin/python3",
-            "scripts/test_selection.py",
-            "--baseline",
-            previous,
-            "--candidate",
-            sha,
-            "--plan",
-            ".github/test-selection.json",
-            cwd=directory,
-            capture=True,
+    with tempfile.TemporaryDirectory(prefix="nebula-ci-acceptance-") as temporary:
+        plan_path = Path(temporary) / "test-selection.json"
+        plan_path.write_text(json.dumps(committed, sort_keys=True) + "\n")
+        validator_path = Path(temporary) / "test_selection.py"
+        validator_path.write_text(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{trusted_baseline}:scripts/test_selection.py",
+                capture=True,
+            )
         )
-    )
+        validated = json.loads(
+            run(
+                "/usr/bin/python3",
+                str(validator_path),
+                "--baseline",
+                previous,
+                "--candidate",
+                sha,
+                "--plan",
+                str(plan_path),
+                cwd=directory,
+                capture=True,
+            )
+        )
     if validated.get("coverage_review_required"):
         raise RuntimeError("Candidate selection plan fails independent validation")
     digest = validated.get("change_digest")
@@ -764,6 +838,117 @@ def verify_ci_acceptance(
         "artifact_sha256": artifact_digest,
         "selected_jobs": selected_conclusions,
     }
+
+
+def verify_ci_acceptance_chain(
+    run_ids: list[str], *, previous: str, sha: str, directory: Path
+) -> dict[str, Any]:
+    commits = first_parent_commits(directory, previous=previous, sha=sha)
+    if len(run_ids) != len(commits):
+        raise RuntimeError(
+            "CI acceptance requires exactly one run for each first-parent commit"
+        )
+    if len(set(run_ids)) != len(run_ids):
+        raise RuntimeError("CI acceptance run IDs must be unique")
+
+    receipts: list[dict[str, Any]] = []
+    baseline = previous
+    for run_id, commit in zip(run_ids, commits, strict=True):
+        receipt = verify_ci_acceptance(
+            run_id,
+            previous=baseline,
+            sha=commit,
+            directory=directory,
+            trusted_baseline=previous,
+        )
+        if receipt.get("baseline") != baseline or receipt.get("commit") != commit:
+            raise RuntimeError("CI acceptance receipt does not match its chain position")
+        receipts.append(receipt)
+        baseline = commit
+    if baseline != sha:
+        raise RuntimeError("CI acceptance chain does not end at the candidate")
+    if len(receipts) == 1:
+        return receipts[0]
+    return {
+        "source": "github-actions-ci-chain",
+        "baseline": previous,
+        "commit": sha,
+        "receipts": receipts,
+    }
+
+
+def validate_ci_acceptance_record(
+    ci: dict[str, Any], *, previous: str, sha: str,
+    expected_commits: list[str] | None = None,
+) -> None:
+    def validate_run(item: dict[str, Any], *, baseline: str, commit: str) -> None:
+        run_id = item.get("run_id")
+        if (
+            not SHA.fullmatch(baseline)
+            or not SHA.fullmatch(commit)
+            or item.get("source") != "github-actions-ci"
+            or item.get("commit") != commit
+            or item.get("baseline") != baseline
+            or type(run_id) is not int
+            or run_id < 1
+            or type(item.get("run_attempt")) is not int
+            or item["run_attempt"] < 1
+            or item.get("run_url")
+            != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+            or item.get("workflow_path") != ".github/workflows/ci.yml"
+            or not SHA256.fullmatch(str(item.get("artifact_sha256", "")))
+            or not SHA256.fullmatch(str(item.get("selection_change_digest", "")))
+            or not SHA256.fullmatch(str(item.get("selection_plan_sha256", "")))
+            or not isinstance(item.get("selected_jobs"), dict)
+            or not item["selected_jobs"]
+            or any(value != "success" for value in item["selected_jobs"].values())
+        ):
+            raise RuntimeError("release CI acceptance record is invalid")
+
+    if ci.get("source") == "github-actions-ci":
+        validate_run(ci, baseline=previous, commit=sha)
+        if expected_commits is not None and expected_commits != [sha]:
+            raise RuntimeError("release CI acceptance record is invalid")
+        return
+    if (
+        ci.get("source") != "github-actions-ci-chain"
+        or ci.get("baseline") != previous
+        or ci.get("commit") != sha
+        or not SHA.fullmatch(previous)
+        or not SHA.fullmatch(sha)
+        or not isinstance(ci.get("receipts"), list)
+        or len(ci["receipts"]) < 2
+    ):
+        raise RuntimeError("release CI acceptance record is invalid")
+    baseline = previous
+    run_ids: set[int] = set()
+    for item in ci["receipts"]:
+        if not isinstance(item, dict):
+            raise RuntimeError("release CI acceptance record is invalid")
+        commit = item.get("commit")
+        if not isinstance(commit, str):
+            raise RuntimeError("release CI acceptance record is invalid")
+        validate_run(item, baseline=baseline, commit=commit)
+        run_id = item["run_id"]
+        if run_id in run_ids:
+            raise RuntimeError("release CI acceptance record is invalid")
+        run_ids.add(run_id)
+        baseline = item["commit"]
+    if baseline != sha:
+        raise RuntimeError("release CI acceptance record is invalid")
+    if expected_commits is not None and [
+        item["commit"] for item in ci["receipts"]
+    ] != expected_commits:
+        raise RuntimeError("release CI acceptance record is invalid")
+
+
+def ci_acceptance_receipts(ci: dict[str, Any]) -> list[dict[str, Any]]:
+    if ci.get("source") == "github-actions-ci":
+        return [ci]
+    receipts = ci.get("receipts")
+    if ci.get("source") == "github-actions-ci-chain" and isinstance(receipts, list):
+        return receipts
+    raise RuntimeError("CI acceptance record has an unsupported source")
 
 
 def browser_args(entry: dict[str, Any]) -> list[str]:
@@ -848,13 +1033,13 @@ def copy_canonical_runtime_bundle(directory: Path, staging: Path) -> None:
     shutil.copytree(source, destination)
 
 
-def prepare(*, ci_run_id: str | None = None) -> dict[str, Any]:
+def prepare(*, ci_run_ids: list[str] | None = None) -> dict[str, Any]:
     git_source()
     previous = baseline()
     run("git", "-C", str(REPO), "fetch", "--no-tags", "origin", "main")
     sha = run("git", "-C", str(REPO), "rev-parse", "origin/main", capture=True)
     if sha == previous:
-        if ci_run_id is not None:
+        if ci_run_ids is not None:
             raise RuntimeError("CI-backed preparation requires a new main candidate")
         return {"status": "current", "commit": sha}
     if not SHA.fullmatch(sha):
@@ -867,9 +1052,9 @@ def prepare(*, ci_run_id: str | None = None) -> dict[str, Any]:
             raise RuntimeError(
                 "accepted candidate was reviewed against a different live commit"
             )
-        if ci_run_id is not None:
-            accepted_ci = verify_ci_acceptance(
-                ci_run_id, previous=previous, sha=sha, directory=candidate(sha)
+        if ci_run_ids is not None:
+            accepted_ci = verify_ci_acceptance_chain(
+                ci_run_ids, previous=previous, sha=sha, directory=candidate(sha)
             )
             if receipt.get("ci_acceptance") != accepted_ci:
                 raise RuntimeError(
@@ -881,22 +1066,27 @@ def prepare(*, ci_run_id: str | None = None) -> dict[str, Any]:
         return receipt
     directory = candidate(sha)
     ci_acceptance = (
-        verify_ci_acceptance(ci_run_id, previous=previous, sha=sha, directory=directory)
-        if ci_run_id is not None
+        verify_ci_acceptance_chain(
+            ci_run_ids, previous=previous, sha=sha, directory=directory
+        )
+        if ci_run_ids is not None
         else None
     )
     plan, entries = selected_plan(directory, previous)
     if ci_acceptance is not None:
         reviewed = plan.get("reviewed_commits", [])
-        if (
-            len(reviewed) != 1
-            or reviewed[0].get("commit") != sha
-            or reviewed[0].get("baseline") != previous
-            or reviewed[0].get("change_digest")
-            != ci_acceptance["selection_change_digest"]
-        ):
+        receipts = ci_acceptance_receipts(ci_acceptance)
+        accepted_commits = [
+            {
+                "commit": item["commit"],
+                "baseline": item["baseline"],
+                "change_digest": item["selection_change_digest"],
+            }
+            for item in receipts
+        ]
+        if reviewed != accepted_commits:
             raise RuntimeError(
-                "deployer test selection differs from the accepted CI selection"
+                "deployer selection does not match the ordered CI receipt chain"
             )
     run(POETRY, "check", cwd=directory)
     run(POETRY, "install", "--with", "dev", "--no-interaction", cwd=directory)
@@ -1153,26 +1343,17 @@ def verified_release(sha: str) -> Path:
             raise RuntimeError(f"release {relative} changed after acceptance")
     ci = receipt.get("ci_acceptance")
     if ci is not None:
-        if (
-            not isinstance(ci, dict)
-            or ci.get("source") != "github-actions-ci"
-            or ci.get("commit") != sha
-            or ci.get("baseline") != receipt.get("previous")
-            or type(ci.get("run_id")) is not int
-            or ci.get("run_id") < 1
-            or type(ci.get("run_attempt")) is not int
-            or ci.get("run_attempt") < 1
-            or ci.get("run_url")
-            != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{ci.get('run_id')}"
-            or not SHA256.fullmatch(str(ci.get("artifact_sha256", "")))
-            or not SHA256.fullmatch(str(ci.get("selection_change_digest", "")))
-            or not SHA256.fullmatch(str(ci.get("selection_plan_sha256", "")))
-            or ci.get("workflow_path") != ".github/workflows/ci.yml"
-            or not isinstance(ci.get("selected_jobs"), dict)
-            or not ci["selected_jobs"]
-            or any(value != "success" for value in ci["selected_jobs"].values())
-        ):
+        previous = receipt.get("previous")
+        if not isinstance(ci, dict) or not isinstance(previous, str):
             raise RuntimeError("release CI acceptance record is invalid")
+        validate_ci_acceptance_record(
+            ci,
+            previous=previous,
+            sha=sha,
+            expected_commits=first_parent_commits(
+                REPO, previous=previous, sha=sha
+            ),
+        )
     return release
 
 
@@ -1686,9 +1867,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--ci-run-id",
+        action="append",
         help=(
-            "accept selected checks from one successful exact-main CI push run; "
-            "local selected tests remain the default"
+            "accept selected checks from a successful exact-main CI push run; "
+            "repeat once per first-parent commit from the live baseline to the candidate"
         ),
     )
     args = parser.parse_args()
@@ -1700,7 +1882,7 @@ def main() -> int:
         result = (
             {"status": "state", **state()}
             if args.action == "status"
-            else prepare(ci_run_id=args.ci_run_id)
+            else prepare(ci_run_ids=args.ci_run_id)
             if args.action == "prepare"
             else globals()[args.action.replace("-", "_")]()
         )
