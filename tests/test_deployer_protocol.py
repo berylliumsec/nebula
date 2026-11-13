@@ -187,7 +187,7 @@ def test_ci_acceptance_matches_exact_run_and_selection(monkeypatch, tmp_path):
             return OLD
         if "show" in args:
             return json.dumps(selection)
-        if "test_selection.py" in args:
+        if any(argument.endswith("test_selection.py") for argument in args):
             return json.dumps(selection)
         pytest.fail(f"unexpected command in CI acceptance verifier: {args!r}")
 

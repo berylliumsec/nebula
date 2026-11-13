@@ -1,5 +1,5 @@
 {
-  "change_digest": "43fcf8c7a13bbde0e34fd0929096140a3e6c347d1c7b4d601be75a96248b24f8",
+  "change_digest": "79b6454e7fe7b51bdb630b0c4b19cecb9fa67c30b672a94c20ebe30bf0f261ad",
   "reviewed_by": "Codex",
   "reason": "Exact-project chat admission and retirement, ownerless SQL read parity, and audited CI-run acceptance for deployment. Selection covers legacy vault-backed goal admission, parent-child isolation, retirement and recovery, ownerless work/chat reads, migration 0048, and CI receipt identity, job selection, and failure rejection.",
   "exclusions": "No local tests or LAN workflow were run per operator instruction; CI executes the focused selected cases. No DB backups, provider traffic, simulation deployment, Butler action, or NVMe operation is part of this PR. The deployer requires immutable CI acceptance for the exact candidate and selected jobs.",
