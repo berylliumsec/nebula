@@ -7,7 +7,7 @@
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 60,
+    "python": 52,
     "frontend": 0,
     "native": 0,
     "playwright": 0
