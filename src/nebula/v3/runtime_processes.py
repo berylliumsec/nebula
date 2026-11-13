@@ -698,12 +698,13 @@ class RuntimeProcessHost:
                 )
                 if receipt is None:
                     return False
-                runtime_id = receipt.result.get("runtime_id")
-                if not isinstance(runtime_id, str) or not runtime_id:
+                receipt_runtime_id = receipt.result.get("runtime_id")
+                if not isinstance(receipt_runtime_id, str) or not receipt_runtime_id:
                     raise CoordinationConflict(
                         "Idle-project quiescence receipt lacks its runtime identity"
                     )
-                process = await session.get(RuntimeProcessRow, runtime_id)
+                runtime_id = receipt_runtime_id
+                process = await session.get(RuntimeProcessRow, receipt_runtime_id)
                 if process is None or process.state == "retired":
                     return True
 

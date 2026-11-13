@@ -1,5 +1,5 @@
 {
-  "change_digest": "e33e3e4ee0d2db62a4908fed7723c4db3e083321911e1ae4ca9dcaab093da116",
+  "change_digest": "e41a8410241fc5009bc24ea177f2f5923bd0f98742cdfd64cc6c9bdf4833315d",
   "reviewed_by": "Codex",
   "reason": "Project execution workers are admitted only for an exact project open chat or accepted chat-start command. Explicit goal-conversation creation is a start because it creates a durable ChatSession before the first turn. Cold project-scoped work and chat read views are served from Core SQL, retaining browsing without worker admission. The selection covers vault-backed legacy goal recovery, five exact child lanes, direct session creation and retirement serialization, parent-child isolation, close-trigger retirement, all-lane holds, recovery, ownerless reads, and migration 0048.",
   "exclusions": "No UI, frontend, native, or Playwright code changed. The operator explicitly requested no local tests or LAN test; those gates were not run. CI runs only these focused Python cases, including PostgreSQL migration coverage. No provider traffic, simulation deployment, DB backup, Butler action, or NVMe operation is part of this PR.",

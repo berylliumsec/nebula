@@ -587,12 +587,13 @@ class StoreTransaction:
             # such; otherwise the change itself is invalid.
             _row_to_entity(row, model)
             raise
-        if (
-            model.entity_kind == ChatSession.entity_kind
-            and row.payload.get("metadata", {}).get("archived_at") is not None
-            and updated.metadata.get("archived_at") is None
-        ):
-            await self._guard_project_chat_start(updated.engagement_id)
+        if model.entity_kind == ChatSession.entity_kind:
+            updated_session = cast(ChatSession, updated)
+            if (
+                row.payload.get("metadata", {}).get("archived_at") is not None
+                and updated_session.metadata.get("archived_at") is None
+            ):
+                await self._guard_project_chat_start(updated_session.engagement_id)
         self._runtime_activity(row.kind, row.id, payload)
         updated_goal = updated if isinstance(updated, ChatGoal) else None
         updated_turn = updated if isinstance(updated, ChatTurn) else None
