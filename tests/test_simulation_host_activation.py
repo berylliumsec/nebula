@@ -102,6 +102,83 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         )
 
 
+def test_package_version_discovery_binds_to_release_and_authenticated_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit, api_version = "b" * 40, "c" * 40
+    package_version = "3.0.0-beta.3+80d43d956ba75c35"
+    release = tmp_path / commit
+    bundle_manifest_path = release / "dist/nebula-runtime/nebula-runtime.json"
+    bundle_manifest_path.parent.mkdir(parents=True)
+    bundle_manifest_path.parent.chmod(0o700)
+    deployer.atomic_json(bundle_manifest_path, {"version": package_version})
+    relative = "dist/nebula-runtime/nebula-runtime.json"
+    deployer.atomic_json(
+        release / "nebula-runtime.json",
+        {"version": commit, "files": {relative: deployer.sha256(bundle_manifest_path)}},
+    )
+    monkeypatch.setattr(
+        deployer,
+        "runtime_release",
+        lambda requested: (release, "d" * 64) if requested == commit else None,
+    )
+    assert deployer.runtime_package_version(commit) == package_version
+
+    data_root = tmp_path / "state/v3"
+    runtime = data_root / "runtime"
+    runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
+    process_birth = "linux:36155290-b5d2-43ea-9ee9-94c8b3220809:240197513"
+    deployer.atomic_json(
+        runtime / "connection.json",
+        {
+            "protocol": "nebula-desktop-runtime-v1",
+            "data_root": str(data_root.resolve()),
+            "endpoint": "http://127.0.0.1:8000/api/v1",
+            "pid": 434411,
+            "process_birth": process_birth,
+            "version": package_version,
+            "startup_id": "startup-1",
+        },
+    )
+    monkeypatch.setattr(deployer, "DATA", data_root)
+    monkeypatch.setattr(
+        deployer,
+        "linux_process_birth",
+        lambda pid: process_birth if pid == 434411 else None,
+    )
+    monkeypatch.setattr(deployer, "unit_state", lambda _unit: "active")
+    monkeypatch.setattr(
+        deployer, "supervisor_service_identity", lambda: {"main_pid": 434411}
+    )
+    health = {"status": "ok", "commit": commit, "recovery_version": commit}
+    status = {
+        "protocol": "nebula.runtime/v1",
+        "health": "ready",
+        "api_version": api_version,
+        "resident_versions": [commit],
+        "projects": [],
+    }
+    monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (health, status))
+
+    readback = deployer.wait_supervisor_host_ready(
+        commit, expected_api_version=api_version, prior_status=None, timeout=1
+    )
+
+    assert readback["health_commit"] == commit
+    assert readback["runtime_pid"] == 434411
+    assert readback["runtime_process_birth"] == process_birth
+    health["commit"] = "a" * 40
+    with pytest.raises(RuntimeError, match="exact accepted release"):
+        deployer.wait_supervisor_host_ready(
+            commit, expected_api_version=api_version, prior_status=None, timeout=1
+        )
+
+    deployer.atomic_json(bundle_manifest_path, {"version": "tampered-package"})
+    with pytest.raises(RuntimeError, match="not hash-bound"):
+        deployer.runtime_package_version(commit)
+
+
 def test_host_readback_rejects_unverified_owner_release() -> None:
     before = deployer.host_status_snapshot(_status())
     after_status = _status()
@@ -191,6 +268,11 @@ def test_interrupted_activation_restarts_selected_release_without_discovery(
         deployer,
         "runtime_release",
         lambda _version: (release, "d" * 64),
+    )
+    monkeypatch.setattr(
+        deployer,
+        "runtime_package_version",
+        lambda _version: "3.0.0-beta.3+80d43d956ba75c35",
     )
     monkeypatch.setattr(
         deployer, "require_stage_migration_receipts", lambda *args, **kwargs: {}
@@ -409,7 +491,15 @@ def test_host_rollback_retry_returns_the_recorded_success(
     monkeypatch.setattr(
         deployer,
         "host_connection",
-        lambda **_kwargs: {"version": previous, "pid": 123},
+        lambda **_kwargs: {
+            "package_version": "3.0.0-beta.3+80d43d956ba75c35",
+            "pid": 123,
+        },
+    )
+    monkeypatch.setattr(
+        deployer,
+        "runtime_package_version",
+        lambda _version: "3.0.0-beta.3+80d43d956ba75c35",
     )
     monkeypatch.setattr(
         deployer,
