@@ -13,8 +13,12 @@ from nebula.v3.domain import (
     WorkItem,
     WorkUpdate,
 )
-from tests.v3.test_runtime_coordination import location as location
-from tests.v3.test_runtime_global_reads import AUTH, reads
+from tests.v3.test_runtime_global_reads import AUTH
+
+pytest_plugins = (
+    "tests.v3.test_runtime_coordination",
+    "tests.v3.test_runtime_global_reads",
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -23,18 +27,25 @@ def anyio_backend():
     return "asyncio"
 
 
-async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
-    parent = await reads.store.create(Engagement(name="Parent"))
-    child = await reads.store.create(
+@pytest.fixture
+async def project_reads(reads):
+    return reads
+
+
+async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(project_reads):
+    parent = await project_reads.store.create(Engagement(name="Parent"))
+    child = await project_reads.store.create(
         Engagement(name="Child", parent_engagement_id=parent.id)
     )
-    other = await reads.store.create(Engagement(name="Other"))
+    other = await project_reads.store.create(Engagement(name="Other"))
 
-    child_item = await reads.store.create(
+    child_item = await project_reads.store.create(
         WorkItem(engagement_id=child.id, title="Child work")
     )
-    await reads.store.create(WorkItem(engagement_id=other.id, title="Other work"))
-    update = await reads.store.create(
+    await project_reads.store.create(
+        WorkItem(engagement_id=other.id, title="Other work")
+    )
+    update = await project_reads.store.create(
         WorkUpdate(
             engagement_id=child.id,
             item_id=child_item.id,
@@ -44,7 +55,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
             actor_id="operator",
         )
     )
-    chat = await reads.store.create(
+    chat = await project_reads.store.create(
         ChatSession(
             engagement_id=child.id,
             title="Child chat",
@@ -52,7 +63,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
             model="model",
         )
     )
-    await reads.store.create(
+    await project_reads.store.create(
         ChatTurn(
             engagement_id=child.id,
             session_id=chat.id,
@@ -61,7 +72,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
             status=ChatTurnStatus.INTERRUPTED,
         )
     )
-    await reads.store.create(
+    await project_reads.store.create(
         ChatMessage(
             engagement_id=child.id,
             session_id=chat.id,
@@ -71,24 +82,26 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
         )
     )
 
-    work = await reads.client.get(f"/api/v1/engagements/{child.id}/work", headers=AUTH)
+    work = await project_reads.client.get(
+        f"/api/v1/engagements/{child.id}/work", headers=AUTH
+    )
     assert work.status_code == 200, work.text
     assert [item["id"] for item in work.json()] == [child_item.id]
 
-    updates = await reads.client.get(
+    updates = await project_reads.client.get(
         f"/api/v1/engagements/{child.id}/work/{child_item.id}/updates",
         headers=AUTH,
     )
     assert updates.status_code == 200, updates.text
     assert [item["id"] for item in updates.json()] == [update.id]
 
-    sessions = await reads.client.get(
+    sessions = await project_reads.client.get(
         "/api/v1/chat-sessions", params={"engagement_id": child.id}, headers=AUTH
     )
     assert sessions.status_code == 200, sessions.text
     assert [item["id"] for item in sessions.json()] == [chat.id]
 
-    activity = await reads.client.get(
+    activity = await project_reads.client.get(
         "/api/v1/chat/session-activity",
         params={"engagement_id": child.id},
         headers=AUTH,
@@ -98,7 +111,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
         {"session_id": chat.id, "state": "idle", "turn_id": None}
     ]
     assert activity.headers["etag"]
-    unchanged = await reads.client.get(
+    unchanged = await project_reads.client.get(
         "/api/v1/chat/session-activity",
         params={"engagement_id": child.id},
         headers={**AUTH, "If-None-Match": activity.headers["etag"]},
@@ -106,7 +119,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
     assert unchanged.status_code == 304
 
     for _ in range(2):
-        await reads.store.create(
+        await project_reads.store.create(
             ChatTurn(
                 engagement_id=child.id,
                 session_id=chat.id,
@@ -115,14 +128,14 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
                 status=ChatTurnStatus.QUEUED,
             )
         )
-    duplicate_turns = await reads.client.get(
+    duplicate_turns = await project_reads.client.get(
         "/api/v1/chat/session-activity",
         params={"engagement_id": child.id},
         headers=AUTH,
     )
     assert duplicate_turns.status_code == 409
 
-    search = await reads.client.get(
+    search = await project_reads.client.get(
         f"/api/v1/chat/projects/{child.id}/search",
         params={"q": "child-only searchable"},
         headers=AUTH,
@@ -130,7 +143,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
     assert search.status_code == 200, search.text
     assert [item["session_id"] for item in search.json()["items"]] == [chat.id]
 
-    async with reads.database.session() as session:
+    async with project_reads.database.session() as session:
         assert (
             await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
             == 0
@@ -142,11 +155,11 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
 
 
 async def test_ownerless_project_chat_search_excludes_other_projects_and_private_chats(
-    reads,
+    project_reads,
 ):
-    project = await reads.store.create(Engagement(name="Search project"))
-    other = await reads.store.create(Engagement(name="Other search project"))
-    visible = await reads.store.create(
+    project = await project_reads.store.create(Engagement(name="Search project"))
+    other = await project_reads.store.create(Engagement(name="Other search project"))
+    visible = await project_reads.store.create(
         ChatSession(
             engagement_id=project.id,
             title="Visible",
@@ -154,7 +167,7 @@ async def test_ownerless_project_chat_search_excludes_other_projects_and_private
             model="model",
         )
     )
-    hidden = await reads.store.create(
+    hidden = await project_reads.store.create(
         ChatSession(
             engagement_id=project.id,
             title="Side chat",
@@ -163,7 +176,7 @@ async def test_ownerless_project_chat_search_excludes_other_projects_and_private
             metadata={"side_chat": True},
         )
     )
-    foreign = await reads.store.create(
+    foreign = await project_reads.store.create(
         ChatSession(
             engagement_id=other.id,
             title="Foreign",
@@ -172,7 +185,7 @@ async def test_ownerless_project_chat_search_excludes_other_projects_and_private
         )
     )
     for session in (visible, hidden, foreign):
-        await reads.store.create(
+        await project_reads.store.create(
             ChatMessage(
                 engagement_id=session.engagement_id,
                 session_id=session.id,
@@ -182,7 +195,7 @@ async def test_ownerless_project_chat_search_excludes_other_projects_and_private
             )
         )
 
-    response = await reads.client.get(
+    response = await project_reads.client.get(
         f"/api/v1/chat/projects/{project.id}/search",
         params={"q": "needle"},
         headers=AUTH,
@@ -190,7 +203,7 @@ async def test_ownerless_project_chat_search_excludes_other_projects_and_private
     assert response.status_code == 200, response.text
     assert [item["session_id"] for item in response.json()["items"]] == [visible.id]
 
-    wrong_project = await reads.client.get(
+    wrong_project = await project_reads.client.get(
         f"/api/v1/chat/projects/{project.id}/search",
         params={"session_id": foreign.id},
         headers=AUTH,
