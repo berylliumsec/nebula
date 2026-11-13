@@ -13,6 +13,7 @@ from nebula.v3.database import (
     Database,
     RuntimeResourceRow,
     EntityRow,
+    ProjectOwnershipRow,
     RuntimeProcessRow,
     RuntimeInstanceRow,
 )
@@ -25,7 +26,7 @@ from nebula.v3.deployment_protocol import (
     ResourceSnapshot,
     WorkerIdentity,
 )
-from nebula.v3.domain import Engagement, Observation
+from nebula.v3.domain import ChatSession, Engagement, Observation
 from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
 from nebula.v3.storage import NebulaStore
 from nebula.v3.process_identity import process_birth
@@ -112,6 +113,87 @@ async def pair(host):
     first, second = await worker(host, "v1"), await worker(host, "v2")
     lease = await host[0].coordination.claim_project("one", first)
     return first, second, lease
+
+
+async def test_open_parent_chat_does_not_keep_child_project_worker(host):
+    coordinator, store = host
+    await store.create(
+        Engagement(
+            id="child",
+            name="Synthetic child",
+            parent_engagement_id="one",
+        )
+    )
+    runtime_id = await worker(host, "v1")
+    lease = await coordinator.coordination.claim_project("child", runtime_id)
+    await store.create(
+        ChatSession(
+            id="parent-chat",
+            engagement_id="one",
+            title="Parent chat",
+            model="synthetic-model",
+            provider_profile_id="synthetic-provider",
+        )
+    )
+
+    assert await coordinator.request_project_retirement(lease) is True
+    async with coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "child")
+        assert owner is not None and owner.retirement_requested
+        assert not owner.admission_requested
+
+
+async def test_open_child_chat_keeps_its_exact_project_worker(host):
+    coordinator, store = host
+    await store.create(
+        Engagement(
+            id="child",
+            name="Synthetic child",
+            parent_engagement_id="one",
+        )
+    )
+    runtime_id = await worker(host, "v1")
+    lease = await coordinator.coordination.claim_project("child", runtime_id)
+    await store.create(
+        ChatSession(
+            id="child-chat",
+            engagement_id="child",
+            title="Child chat",
+            model="synthetic-model",
+            provider_profile_id="synthetic-provider",
+        )
+    )
+
+    assert await coordinator.request_project_retirement(lease) is False
+    async with coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "child")
+        assert owner is not None and not owner.retirement_requested
+
+
+async def test_project_retirement_uses_its_own_hold_and_releases_exact_owner(host):
+    coordinator, store = host
+    runtime_id = await worker(host, "v1")
+    lease = await coordinator.coordination.claim_project("one", runtime_id)
+    await coordinator.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="queued-non-chat-work",
+        name="project.inspect",
+        payload={},
+    )
+
+    assert await coordinator.request_project_retirement(lease) is True
+    checkpoint = await coordinator.quiesce_checkpoint(lease, local_blockers=[])
+    assert checkpoint["project_id"] == "one"
+    await coordinator.release_quiesced_project(lease, checkpoint=checkpoint)
+
+    async with coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert owner is not None
+        assert owner.runtime_id is None
+        assert owner.fencing_token == lease.fencing_token
+        assert not owner.retirement_requested
+        assert not owner.admission_requested
 
 
 async def test_third_execution_version_stages_while_compatible_api_can_promote(host):

@@ -20,7 +20,12 @@ import httpx
 from pydantic import Field, SecretStr
 from sqlalchemy import select
 
-from .database import RuntimeProcessRow, RuntimeReleaseRow
+from .database import (
+    DeploymentReceiptRow,
+    ProjectOwnershipRow,
+    RuntimeProcessRow,
+    RuntimeReleaseRow,
+)
 from .async_utils import finish_cleanup
 from .database_pool import PoolSettings
 from .deployment_protocol import IPC_PROTOCOL, ReleaseManifest, WorkerIdentity
@@ -33,7 +38,7 @@ from .process_identity import (
     signal_process,
 )
 from .release_store import ReleaseStore
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, ProjectLease
 from .runtime_ipc import RuntimeCredentials, RuntimeIpcError, RuntimeRpcClient
 
 if TYPE_CHECKING:
@@ -573,6 +578,198 @@ class RuntimeProcessHost:
 
                 await finish_cleanup(failed_start())
                 raise
+
+    async def reconcile_idle_project_retirements(
+        self, *, limit: int = 8
+    ) -> list[str]:
+        """Finish bounded idle-project retirements interrupted after quiescence."""
+        if not 1 <= limit <= 32:
+            raise ValueError("idle-project retirement limit is outside its bound")
+        async with self.coordinator.database.session() as session:
+            receipts = list(
+                await session.scalars(
+                    select(DeploymentReceiptRow)
+                    .join(
+                        RuntimeProcessRow,
+                        RuntimeProcessRow.runtime_id
+                        == DeploymentReceiptRow.result["runtime_id"].as_string(),
+                    )
+                    .where(
+                        DeploymentReceiptRow.action == "project.quiesced",
+                        DeploymentReceiptRow.result["reason"].as_string()
+                        == "idle_chat_project",
+                        RuntimeProcessRow.state != "retired",
+                        ~select(ProjectOwnershipRow.project_id)
+                        .where(
+                            ProjectOwnershipRow.runtime_id
+                            == RuntimeProcessRow.runtime_id
+                        )
+                        .exists(),
+                    )
+                    .order_by(DeploymentReceiptRow.occurred_at_ms.desc())
+                    .limit(limit * 8)
+                )
+            )
+            candidates = []
+            seen = set()
+            for receipt in receipts:
+                runtime_id = receipt.result.get("runtime_id")
+                project_id = receipt.result.get("project_id")
+                fencing_token = receipt.result.get("fencing_token")
+                if (
+                    not isinstance(runtime_id, str)
+                    or not runtime_id
+                    or not isinstance(project_id, str)
+                    or not project_id
+                    or not isinstance(fencing_token, int)
+                    or runtime_id in seen
+                ):
+                    continue
+                seen.add(runtime_id)
+                owner = await session.get(ProjectOwnershipRow, project_id)
+                if (
+                    owner is not None
+                    and (
+                        owner.fencing_token < fencing_token
+                        or owner.runtime_id == runtime_id
+                    )
+                ):
+                    continue
+                process = await session.get(RuntimeProcessRow, runtime_id)
+                if process is None or process.state == "retired":
+                    continue
+                candidates.append((project_id, runtime_id, fencing_token, process))
+                if len(candidates) >= limit:
+                    break
+
+        retired = []
+        for project_id, runtime_id, fencing_token, process in candidates:
+            blockers = await self.coordinator.retirement_blockers(runtime_id)
+            if blockers:
+                continue
+            if same_process(process.pid, process.process_birth):
+                client = await self.rpc(runtime_id)
+                try:
+                    status = await client.call("execution.status/v1", {}, timeout=5)
+                except (httpx.HTTPError, OSError, RuntimeIpcError):
+                    continue
+                finally:
+                    await client.close()
+                lease = status.get("lease")
+                if (
+                    status.get("runtime_id") != runtime_id
+                    or status.get("state") != "closed"
+                    or status.get("cleanup_complete") is not True
+                    or not isinstance(status.get("quiesce_checkpoint"), dict)
+                    or lease is None
+                    or lease.get("project_id") != project_id
+                    or lease.get("fencing_token") != fencing_token
+                ):
+                    continue
+            await self.retire(runtime_id)
+            retired.append(runtime_id)
+        return retired
+
+    async def retire_idle_project(self, project_id: str) -> bool:
+        """Release and retire this project's worker only after its last chat closes.
+
+        The SQL hold fences new project work before the worker is asked to
+        quiesce. Lost replies are reconciled from the durable quiescence receipt;
+        any uncertain intermediate state retains the worker for review.
+        """
+        async with self.coordinator.database.session() as session:
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            if owner is not None and owner.runtime_id is not None:
+                lease = ProjectLease(
+                    project_id=project_id,
+                    runtime_id=owner.runtime_id,
+                    fencing_token=owner.fencing_token,
+                )
+                runtime_id = owner.runtime_id
+            else:
+                lease = None
+                receipt = await session.scalar(
+                    select(DeploymentReceiptRow)
+                    .where(
+                        DeploymentReceiptRow.action == "project.quiesced",
+                        DeploymentReceiptRow.result["project_id"].as_string()
+                        == project_id,
+                        DeploymentReceiptRow.result["reason"].as_string()
+                        == "idle_chat_project",
+                    )
+                    .order_by(DeploymentReceiptRow.occurred_at_ms.desc())
+                    .limit(1)
+                )
+                if receipt is None:
+                    return False
+                runtime_id = receipt.result.get("runtime_id")
+                if not isinstance(runtime_id, str) or not runtime_id:
+                    raise CoordinationConflict(
+                        "Idle-project quiescence receipt lacks its runtime identity"
+                    )
+                process = await session.get(RuntimeProcessRow, runtime_id)
+                if process is None or process.state == "retired":
+                    return True
+
+        if lease is None:
+            # The owner release committed before a lost retirement response.
+            # The receipt is exact; begin_retirement still rechecks every
+            # runtime owner, resource, command, and capacity reservation.
+            await self.retire(runtime_id)
+            return True
+
+        if not await self.coordinator.request_project_retirement(lease):
+            return False
+        client = await self.rpc(runtime_id)
+        try:
+            status = await client.call("execution.quiesce/v1", {}, timeout=30)
+        finally:
+            await client.close()
+        if status.get("quiesce_blockers"):
+            await self.coordinator.abort_project_retirement(
+                lease, worker_status=status
+            )
+            return False
+        if (
+            status.get("runtime_id") != runtime_id
+            or status.get("state") != "closed"
+            or status.get("cleanup_complete") is not True
+            or not isinstance(status.get("quiesce_checkpoint"), dict)
+        ):
+            raise CoordinationConflict(
+                "Project worker did not prove completed quiescence"
+            )
+        async with self.coordinator.database.session() as session:
+            current = await session.get(ProjectOwnershipRow, project_id)
+            if current is None or (current.runtime_id, current.fencing_token) != (
+                None,
+                lease.fencing_token,
+            ) or current.retirement_requested:
+                raise CoordinationConflict(
+                    "Project ownership release did not persist after quiescence"
+                )
+            receipt = await session.scalar(
+                select(DeploymentReceiptRow)
+                .where(
+                    DeploymentReceiptRow.action == "project.quiesced",
+                    DeploymentReceiptRow.result["project_id"].as_string()
+                    == project_id,
+                    DeploymentReceiptRow.result["runtime_id"].as_string()
+                    == runtime_id,
+                    DeploymentReceiptRow.result["fencing_token"].as_integer()
+                    == lease.fencing_token,
+                    DeploymentReceiptRow.result["reason"].as_string()
+                    == "idle_chat_project",
+                )
+                .order_by(DeploymentReceiptRow.occurred_at_ms.desc())
+                .limit(1)
+            )
+            if receipt is None:
+                raise CoordinationConflict(
+                    "Durable idle-project quiescence receipt is missing"
+                )
+        await self.retire(runtime_id)
+        return True
 
     async def retire(self, runtime_id: str, *, timeout: float = 30) -> WorkerIdentity:
         """Request graceful retirement only after SQL fences every admission.
