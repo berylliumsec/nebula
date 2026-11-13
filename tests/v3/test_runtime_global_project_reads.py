@@ -13,6 +13,7 @@ from nebula.v3.domain import (
     WorkItem,
     WorkUpdate,
 )
+from tests.v3.test_runtime_coordination import location as location
 from tests.v3.test_runtime_global_reads import AUTH, reads
 
 pytestmark = pytest.mark.anyio
