@@ -67,10 +67,12 @@ class RuntimeGlobalApi:
         from .runtime_global_reads import mount_global_reads
         from .runtime_global_work import mount_global_work
         from .runtime_global_resources import mount_global_resources
+        from .runtime_global_project_reads import mount_global_project_reads
 
         mount_global_settings(self.app, self.store, self.actor)
         mount_global_reads(self.app, self.store, self.actor)
         mount_global_resources(self.app, self.store)
+        mount_global_project_reads(self.app, self.store, self.actor)
         self.work_observer = mount_global_work(self.app, self.store, self.actor)
 
         for resource, model in (
