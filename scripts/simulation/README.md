@@ -79,11 +79,10 @@ after its durable stage and migration receipts are verified. It records a
 stable operation ID before stopping the foreground unit, atomically switches
 `current`, and restarts only `nebula-core.service`. It requires
 `KillMode=process` and `ExitType=main`, then checks the exact host commit and
-recovery asset version while requiring the API release and every continuing
-project owner and fencing token to remain unchanged. It accepts only the
-transactional idle-quiescence result for an owner released during startup:
-runtime ID/version cleared, the same fencing token retained, and admission no
-longer held. A replacement owner or changed fence fails readback. Normal
+recovery asset version while requiring every preexisting project owner ID,
+runtime version, and fencing token and every prior resident execution version
+to remain unchanged. Newly admitted owners are allowed only on the exact
+activated candidate version; unexpected worker versions fail readback. Normal
 `promote` uses this same guarded activation after migration and
 before API preparation. Interrupted retries read the durable host journal and
 verify live identity without repeating a completed restart. A failed exact

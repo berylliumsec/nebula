@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Review simulation supervisor activation recovery, exact host version health, fenced owner continuity including the transactional idle-quiescence outcome, idempotent code-only rollback, callback intent journaling, and serial project handoff.",
+  "reason": "Review simulation supervisor activation recovery, exact host version health, strict execution owner continuity, interrupted code-only rollback recovery, callback intent journaling, and serial project handoff.",
   "exclusions": "CI runs only the exact focused Python cases selected below across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
   "python_versions": [
     "3.11",
@@ -10,7 +10,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 11,
+    "python": 14,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -21,16 +21,17 @@
     "tests/test_staged_deployer.py::test_verified_no_chat_target_can_be_retired_before_source_release",
     "tests/test_staged_deployer.py::test_shared_source_stops_before_preparing_another_target",
     "tests/test_simulation_host_activation.py::test_host_activation_requires_exact_existing_worker_ownership",
-    "tests/test_simulation_host_activation.py::test_host_readback_accepts_only_fenced_idle_project_release",
+    "tests/test_simulation_host_activation.py::test_host_readback_rejects_unverified_owner_release",
     "tests/test_simulation_host_activation.py::test_host_activation_switches_only_current_code_and_records_readback",
     "tests/test_simulation_host_activation.py::test_interrupted_activation_restarts_selected_release_without_discovery",
     "tests/test_simulation_host_activation.py::test_failed_host_activation_can_journal_code_only_rollback",
     "tests/test_simulation_host_activation.py::test_staged_promotion_journals_host_intent_before_callback",
-    "tests/test_simulation_host_activation.py::test_host_rollback_retry_returns_the_recorded_success"
+    "tests/test_simulation_host_activation.py::test_host_rollback_retry_returns_the_recorded_success",
+    "tests/test_simulation_host_activation.py::test_interrupted_host_rollback_replays_exact_journaled_target"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "9e21f8f03859807f91a9e8a7ec874132f91be8945c1c03bf50c96a9a5fa0d597"
+  "change_digest": "28dfc8cccd289b64318f3b6e486f63fc6bc115e24d18e44d31285e92853d5b04"
 }

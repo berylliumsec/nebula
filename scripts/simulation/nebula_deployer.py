@@ -1573,7 +1573,10 @@ def host_status_snapshot(status: dict[str, Any]) -> dict[str, Any]:
 
 
 def require_preserved_workers(
-    before: dict[str, Any], after: dict[str, Any]
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    admitted_version: str | None = None,
 ) -> dict[str, Any]:
     previous_projects = before["projects"]
     current_projects = after["projects"]
@@ -1581,17 +1584,18 @@ def require_preserved_workers(
     if missing:
         raise RuntimeError("Host restart removed existing project records")
     retained = 0
-    verified_idle_releases = []
     for project_id, previous in previous_projects.items():
-        if previous["runtime_id"] is None:
-            continue
         current = current_projects[project_id]
-        if (
-            current["runtime_id"] is None
-            and current["runtime_version"] is None
-            and current["fencing_token"] == previous["fencing_token"]
-        ):
-            verified_idle_releases.append(project_id)
+        if previous["runtime_id"] is None:
+            if current["runtime_id"] is None:
+                continue
+            if (
+                admitted_version is None
+                or current["runtime_version"] != admitted_version
+            ):
+                raise RuntimeError(
+                    f"Host restart assigned an unowned project outside the exact admitted release: {project_id}"
+                )
             continue
         if (
             current["runtime_id"] != previous["runtime_id"]
@@ -1601,22 +1605,17 @@ def require_preserved_workers(
             raise RuntimeError(
                 f"Host restart changed the existing execution owner for project {project_id}"
             )
-        retained += 1
-    resident_versions = set(after["resident_versions"])
-    for version in before["resident_versions"]:
-        former_owners = {
-            project_id
-            for project_id, owner in previous_projects.items()
-            if owner["runtime_id"] is not None
-            and owner["runtime_version"] == version
-        }
-        if not former_owners or former_owners - set(verified_idle_releases):
-            if version not in resident_versions:
-                raise RuntimeError("Host restart lost a resident execution version")
-    return {
-        "retained": retained,
-        "verified_idle_releases": sorted(verified_idle_releases),
-    }
+        if previous["runtime_id"] is not None:
+            retained += 1
+    previous_residents = set(before["resident_versions"])
+    current_residents = set(after["resident_versions"])
+    if (
+        not previous_residents <= current_residents
+        or current_residents - previous_residents
+        - ({admitted_version} if admitted_version is not None else set())
+    ):
+        raise RuntimeError("Host restart changed resident execution versions unexpectedly")
+    return {"retained": retained}
 
 
 def require_stage_migration_receipts(
@@ -1737,9 +1736,11 @@ def wait_supervisor_host_ready(
                     "Host activation unexpectedly changed the API release"
                 )
             continuity = (
-                require_preserved_workers(prior_status, snapshot)
+                require_preserved_workers(
+                    prior_status, snapshot, admitted_version=version
+                )
                 if prior_status is not None
-                else {"retained": 0, "verified_idle_releases": []}
+                else {"retained": 0}
             )
             return {
                 "version": version,
@@ -1748,9 +1749,6 @@ def wait_supervisor_host_ready(
                 "api_version": snapshot["api_version"],
                 "resident_versions": snapshot["resident_versions"],
                 "retained_project_owners": continuity["retained"],
-                "verified_idle_project_releases": continuity[
-                    "verified_idle_releases"
-                ],
                 "runtime_pid": identity["pid"],
                 "runtime_process_birth": identity["process_birth"],
             }
@@ -2158,6 +2156,51 @@ def rollback_host() -> dict[str, Any]:
     ):
         raise RuntimeError("No verified supervisor host activation can be rolled back")
     prior_rollback = journal.get("rollback")
+    if (
+        isinstance(prior_rollback, dict)
+        and prior_rollback.get("state")
+        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        and prior_rollback.get("code_only") is True
+        and prior_rollback.get("version") == journal.get("previous_version")
+        and isinstance(prior_rollback.get("operation_id"), str)
+    ):
+        rolled_back_version = prior_rollback["version"]
+        original_version = journal.get("version")
+        expected_api_version = prior_rollback.get("expected_api_version")
+        prior_status = prior_rollback.get("prior_status")
+        selected = current_release_version()
+        if (
+            not isinstance(original_version, str)
+            or not isinstance(expected_api_version, str)
+            or not isinstance(prior_status, dict)
+            or prior_status.get("api_version") != expected_api_version
+            or selected not in {rolled_back_version, original_version}
+        ):
+            raise RuntimeError("Interrupted host rollback journal or selected release is invalid")
+        release, _ = runtime_release(rolled_back_version)
+        readback = _switch_supervisor_host(
+            rolled_back_version,
+            release=release,
+            expected_api_version=expected_api_version,
+            prior_status=prior_status,
+            journal=prior_rollback,
+            journal_container=journal,
+            record=record,
+        )
+        prior_rollback["state"] = "complete"
+        prior_rollback["readback"] = readback
+        journal["rollback"] = prior_rollback
+        journal["state"] = "rolled_back"
+        record["host_active"] = rolled_back_version
+        _save_host_activation(record, journal)
+        return {
+            "status": "host_rolled_back",
+            "operation_id": prior_rollback["operation_id"],
+            "version": rolled_back_version,
+            "previous_version": original_version,
+            "code_only": True,
+            **readback,
+        }
     if (
         isinstance(prior_rollback, dict)
         and prior_rollback.get("state") == "complete"

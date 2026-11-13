@@ -50,7 +50,7 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         deployer.require_preserved_workers(
             before, deployer.host_status_snapshot(_status())
         )
-        == {"retained": 1, "verified_idle_releases": []}
+        == {"retained": 1}
     )
     with pytest.raises(RuntimeError, match="changed the existing execution owner"):
         deployer.require_preserved_workers(
@@ -60,9 +60,31 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         deployer.require_preserved_workers(
             before, deployer.host_status_snapshot(_status(fencing_token=8))
         )
+    unowned = _status()
+    unowned["projects"][0].update(runtime_id=None, runtime_version=None)
+    with pytest.raises(RuntimeError, match="changed the existing execution owner"):
+        deployer.require_preserved_workers(
+            deployer.host_status_snapshot(unowned), deployer.host_status_snapshot(_status())
+        )
+    candidate = "c" * 40
+    admitted_status = _status(runtime_id="new-worker")
+    admitted_status["projects"][0]["runtime_version"] = candidate
+    admitted_status["resident_versions"].append(candidate)
+    assert deployer.require_preserved_workers(
+        deployer.host_status_snapshot(unowned),
+        deployer.host_status_snapshot(admitted_status),
+        admitted_version=candidate,
+    ) == {"retained": 0}
+    unexpected_status = _status(runtime_id="new-worker")
+    with pytest.raises(RuntimeError, match="outside the exact admitted release"):
+        deployer.require_preserved_workers(
+            deployer.host_status_snapshot(unowned),
+            deployer.host_status_snapshot(unexpected_status),
+            admitted_version=candidate,
+        )
 
 
-def test_host_readback_accepts_only_fenced_idle_project_release() -> None:
+def test_host_readback_rejects_unverified_owner_release() -> None:
     before = deployer.host_status_snapshot(_status())
     after_status = _status()
     after_status["resident_versions"] = []
@@ -70,10 +92,8 @@ def test_host_readback_accepts_only_fenced_idle_project_release() -> None:
 
     after = deployer.host_status_snapshot(after_status)
 
-    assert deployer.require_preserved_workers(before, after) == {
-        "retained": 0,
-        "verified_idle_releases": ["child-project"],
-    }
+    with pytest.raises(RuntimeError, match="changed the existing execution owner"):
+        deployer.require_preserved_workers(before, after)
     after["projects"]["child-project"]["fencing_token"] += 1
     with pytest.raises(RuntimeError, match="changed the existing execution owner"):
         deployer.require_preserved_workers(before, after)
@@ -178,7 +198,6 @@ def test_interrupted_activation_restarts_selected_release_without_discovery(
             "recovery_version": target,
             "api_version": api_version,
             "retained_project_owners": 1,
-            "verified_idle_project_releases": [],
         },
     )
     prior_status = deployer.host_status_snapshot(
@@ -401,3 +420,54 @@ def test_host_rollback_retry_returns_the_recorded_success(
     assert result["status"] == "host_rolled_back"
     assert result["operation_id"] == "rollback-op"
     assert result["version"] == previous
+
+
+@pytest.mark.parametrize(
+    "state", ["rolling_back", "service_stopped_release_selected", "service_started"]
+)
+def test_interrupted_host_rollback_replays_exact_journaled_target(
+    state: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous, current, api_version = "a" * 40, "b" * 40, "c" * 40
+    record = {
+        "deployment_mode": "supervisor",
+        "host_active": current,
+        "host_activation": {
+            "state": "complete",
+            "version": current,
+            "previous_version": previous,
+            "rollback": {
+                "operation_id": "rollback-op",
+                "state": state,
+                "version": previous,
+                "previous_version": current,
+                "expected_api_version": api_version,
+                "prior_status": {"api_version": api_version},
+                "code_only": True,
+            },
+        },
+    }
+    selected: list[str] = []
+
+    def switch(version: str, **kwargs: object) -> dict[str, str]:
+        selected.append(version)
+        assert version == previous
+        assert kwargs["journal"] is record["host_activation"]["rollback"]
+        return {"version": previous, "health_commit": previous}
+
+    monkeypatch.setattr(deployer, "state", lambda: record)
+    monkeypatch.setattr(deployer, "current_release_version", lambda: current)
+    monkeypatch.setattr(
+        deployer,
+        "runtime_release",
+        lambda _version: (tmp_path / previous, "d" * 64),
+    )
+    monkeypatch.setattr(deployer, "_switch_supervisor_host", switch)
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "state.json")
+
+    result = deployer.rollback_host()
+
+    assert selected == [previous]
+    assert result["operation_id"] == "rollback-op"
+    assert result["version"] == previous
+    assert record["host_activation"]["rollback"]["state"] == "complete"

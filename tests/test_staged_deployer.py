@@ -201,7 +201,7 @@ def test_host_activation_runs_after_migration_and_before_api_promotion():
     def activate_host(version):
         events.append("activate_host")
         return {
-            "operation_id": "activation-1",
+            "operation_id": record["runtime_deployment"]["host_activation"]["operation_id"],
             "status": "host_activated",
             "version": version,
             "health_commit": version,
