@@ -152,7 +152,6 @@ async def test_browser_runtime_exposes_backend_neutral_research_tools(tmp_path):
         assert {
             "target.crawl",
             "repeater.create",
-            "intruder.create",
             "analysis.tokens",
         } <= set(autonomous_browser_specs())
 
@@ -369,7 +368,7 @@ async def test_credential_use_is_lease_bound_and_stays_as_a_reference(tmp_path):
             targets=["https://app.example.test/"],
             allowed_risk_classes=[
                 RiskClass.PASSIVE,
-                RiskClass.ACTIVE_SCAN,
+                RiskClass.NETWORK_ACTION,
                 RiskClass.CREDENTIAL_USE,
             ],
             credential_refs=["vault:credential-1"],

@@ -996,7 +996,7 @@ def _native_tool_risk(tool_name: str) -> RiskClass:
         return RiskClass.LOCAL_READ
     if any(token in lowered for token in ("command", "bash", "file", "write", "edit")):
         return RiskClass.WORKSPACE_WRITE
-    return RiskClass.ACTIVE_SCAN
+    return RiskClass.NETWORK_ACTION
 
 
 def _native_plan_category(tool_name: str) -> str | None:
@@ -16112,9 +16112,9 @@ class HarnessRuntimeService:
                             in {RiskClass.LOCAL_READ, RiskClass.PASSIVE},
                             "destructiveHint": spec.risk_class
                             in {
-                                RiskClass.EXPLOITATION,
-                                RiskClass.PERSISTENCE,
-                                RiskClass.DESTRUCTIVE,
+                                RiskClass.HIGH_IMPACT_ACTION,
+                                RiskClass.PERSISTENT_CHANGE,
+                                RiskClass.DESTRUCTIVE_CHANGE,
                             },
                             "idempotentHint": spec.idempotency.value == "safe",
                             "openWorldHint": spec.network_access,
@@ -18496,7 +18496,7 @@ class HarnessRuntimeService:
         if tool.credentialed:
             return RiskClass.CREDENTIAL_USE
         if tool.destructive:
-            return RiskClass.DESTRUCTIVE
+            return RiskClass.DESTRUCTIVE_CHANGE
         if tool.read_only:
             return RiskClass.LOCAL_READ
         return RiskClass.WORKSPACE_WRITE
@@ -19595,7 +19595,7 @@ class HarnessRuntimeService:
                         native.subagents,
                     )
                 )
-                risk = RiskClass.ACTIVE_SCAN
+                risk = RiskClass.NETWORK_ACTION
                 capability = "interactive vendor capability"
             return (
                 McpApprovalMode.ASK if allowed else McpApprovalMode.DENY,
@@ -19649,7 +19649,7 @@ class HarnessRuntimeService:
                 McpApprovalMode.DENY,
                 server,
                 tool,
-                RiskClass.ACTIVE_SCAN,
+                RiskClass.NETWORK_ACTION,
                 "Tool is outside the MCP allow list",
             )
         if tool.name in server.disabled_tools:
@@ -19657,7 +19657,7 @@ class HarnessRuntimeService:
                 McpApprovalMode.DENY,
                 server,
                 tool,
-                RiskClass.ACTIVE_SCAN,
+                RiskClass.NETWORK_ACTION,
                 "Tool is explicitly disabled",
             )
         override = server.tool_overrides.get(tool.name)
@@ -19687,11 +19687,11 @@ class HarnessRuntimeService:
                 else "MCP tool has write, destructive, open-world, credential, or untrusted annotations"
             )
         if server.transport == McpTransport.BUILTIN:
-            risk = RiskClass.LOCAL_READ if tool.read_only else RiskClass.ACTIVE_SCAN
+            risk = RiskClass.LOCAL_READ if tool.read_only else RiskClass.NETWORK_ACTION
         elif tool.credentialed:
             risk = RiskClass.CREDENTIAL_USE
         elif tool.destructive:
-            risk = RiskClass.DESTRUCTIVE
+            risk = RiskClass.DESTRUCTIVE_CHANGE
         elif tool.read_only:
             risk = RiskClass.LOCAL_READ
         else:
@@ -19799,7 +19799,7 @@ class HarnessRuntimeService:
                     mcp_tool_name=event.tool_name,
                     vendor_tool_name=f"{event.server_id}:{event.tool_name}",
                     status=ToolCallStatus.RUNNING,
-                    risk_class=RiskClass.ACTIVE_SCAN,
+                    risk_class=RiskClass.NETWORK_ACTION,
                     arguments=_bounded(
                         event.payload.get("arguments", {}), limit=MAX_TOOL_ARGUMENT_TEXT
                     ),

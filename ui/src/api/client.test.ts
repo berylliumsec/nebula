@@ -1171,7 +1171,7 @@ describe("ApiClient", () => {
       engagement_id: "engagement-1",
       run_id: "run-1",
       status: "pending",
-      risk_class: "active_scan",
+      risk_class: "network_action",
       exact_request: {
         tool_name: "scan.tcp",
         arguments: { ports: [80] },
@@ -2877,46 +2877,6 @@ describe("ApiClient", () => {
     expect(fetchMock.mock.calls[1][0]).toBe(
       "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/workspace/source-control/diff?path=src%2Fscanner.py&staged=false",
     );
-  });
-
-  it("serializes a bounded issue-validation grant and maps its authority receipt", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
-      id: "grant-1",
-      revision: 1,
-      assessment_id: "assessment-1",
-      candidate_id: "candidate/one",
-      target_url: "https://app.example.test/search",
-      technique: "Replay one inert marker and one negative encoding control.",
-      max_requests: 8,
-      requests_used: 0,
-      duration_seconds: 300,
-      expires_at: "2026-08-28T12:05:00Z",
-      status: "active",
-      created_at: "2026-08-28T12:00:00Z",
-      updated_at: "2026-08-28T12:00:00Z",
-    }), { status: 201, headers: { "content-type": "application/json" } }));
-    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
-
-    const grant = await client.grantSecurityBrowserCandidateValidation({
-      id: "candidate/one", revision: 4, assessmentId: "assessment-1", ruleId: "reflected-input",
-      checkFamily: "xss", title: "Reflected input", targetUrl: "https://app.example.test/search",
-      severity: "medium", confidence: "firm", evidenceIds: ["evidence-1"], validationStatus: "unvalidated",
-    }, {
-      technique: "Replay one inert marker and one negative encoding control.",
-      maxRequests: 8,
-      durationSeconds: 300,
-    });
-
-    expect(grant).toMatchObject({ id: "grant-1", maxRequests: 8, durationSeconds: 300, status: "active" });
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://127.0.0.1:8765/api/v1/browser-issue-candidates/candidate%2Fone/validation-grant");
-    expect(JSON.parse(String(init?.body))).toEqual({
-      expected_candidate_revision: 4,
-      technique: "Replay one inert marker and one negative encoding control.",
-      max_requests: 8,
-      duration_seconds: 300,
-      idempotency_key: "validation-grant:candidate/one:4",
-    });
   });
 });
 

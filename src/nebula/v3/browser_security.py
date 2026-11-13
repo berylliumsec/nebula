@@ -903,7 +903,7 @@ class BrowserSecurityService:
                     "replay body must be a string no larger than 64 KiB"
                 )
             self._require_in_scope(
-                scope, target, "browser.replay", RiskClass.ACTIVE_SCAN
+                scope, target, "browser.replay", RiskClass.NETWORK_ACTION
             )
         action = BrowserAction(
             engagement_id=session.engagement_id,
@@ -1009,7 +1009,7 @@ class BrowserSecurityService:
             if not isinstance(target, str):
                 raise BrowserWorkflowError("approved replay action lost its URL")
             self._require_in_scope(
-                scope, target, "browser.replay", RiskClass.ACTIVE_SCAN
+                scope, target, "browser.replay", RiskClass.NETWORK_ACTION
             )
         return await self._transition_action(
             action,

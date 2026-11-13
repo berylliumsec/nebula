@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+
 import { RefreshCw, Square } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { SecurityBrowserAutomationStatus, SecurityBrowserResearchWorkspace, SecurityBrowserWorkspace } from "../api/types";
@@ -39,7 +40,6 @@ export function SecurityDashboard({ api, projectId }: { api: ApiClient; projectI
   const traffic = data?.workspace.traffic.filter((item) => sessionIds.has(item.sessionId)) ?? [];
   const frames = data?.workspace.frames.filter((item) => sessionIds.has(item.sessionId)) ?? [];
   const intercepts = data?.research.intercepts.filter((item) => sessionIds.has(item.sessionId)) ?? [];
-  const attacks = data?.research.attacks.filter((item) => sessionIds.has(item.sessionId)) ?? [];
   const repeater = data?.research.repeaterResults.filter((item) => {
     const tab = data.research.repeaterTabs.find((candidate) => candidate.id === item.tabId);
     return Boolean(tab && sessionIds.has(tab.sessionId));
@@ -80,14 +80,13 @@ export function SecurityDashboard({ api, projectId }: { api: ApiClient; projectI
     </header>
     {error && <div role="alert">Security dashboard could not refresh: {error} <button className="button quiet" onClick={() => void refresh()}>Retry</button></div>}
     {!loading && !securitySessions.length && <p className="security-dashboard-empty">No agent security session yet. Enable browser-security-testing-tools in Chat to start authorized research.</p>}
-    <div className="security-dashboard-counts" role="status"><span>{traffic.length} HTTP exchanges</span><span>{frames.length} WebSocket frames</span><span>{intercepts.filter((item) => item.state === "paused").length} paused</span><span>{repeater.length} Repeater results</span><span>{attacks.length} Intruder runs</span></div>
+    <div className="security-dashboard-counts" role="status"><span>{traffic.length} HTTP exchanges</span><span>{frames.length} WebSocket frames</span><span>{intercepts.filter((item) => item.state === "paused").length} paused</span><span>{repeater.length} Repeater results</span></div>
     {intercepts.filter((item) => item.state === "paused").map((item) => <div className="security-dashboard-intercept" key={item.id}>
       <strong>{item.phase === "request" ? "Request paused" : "Response paused"}</strong><span>{item.method} {item.url}</span>
       <button className="button secondary" type="button" disabled={busy} onClick={() => void decide(item.id, "forward")}>Forward</button>
       <button className="button quiet" type="button" disabled={busy} onClick={() => void decide(item.id, "drop")}>Drop</button>
     </div>)}
     {traffic.length > 0 && <details><summary>Recent traffic</summary><ul>{traffic.slice(-30).reverse().map((item) => <li key={item.id}>{item.method} {item.url} · {item.statusCode ?? item.error ?? "pending"}</li>)}</ul></details>}
-    {attacks.length > 0 && <details><summary>Intruder results</summary><ul>{attacks.slice(-20).reverse().map((item) => <li key={item.id}>{item.name} · {item.state} · {item.requestCount}/{item.maxRequests} requests</li>)}</ul></details>}
     {oldSessions.length > 0 && <details><summary>Previous browser research ({oldSessions.length})</summary><p>Historical Native and Assistant records remain available. They cannot receive new agent security commands.</p></details>}
   </section>;
 }

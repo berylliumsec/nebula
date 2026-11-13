@@ -19,8 +19,6 @@ from .browser_automation import (
     BrowserProxyRuleRequest,
 )
 from .browser_research import (
-    AttackCreateRequest,
-    AttackStateRequest,
     BrowserResearchService,
     CompareRequest,
     CrawlCreateRequest,
@@ -32,7 +30,6 @@ from .browser_research import (
 from .domain import (
     Approval,
     BrowserActionKind,
-    BrowserAttack,
     BrowserCaptureMode,
     BrowserCommandStatus,
     BrowserSession,
@@ -186,7 +183,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
             "browser.navigate",
             "Navigate one selected browser tab to an in-scope URL.",
             navigate,
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
             network=True,
             target="url",
         ),
@@ -204,13 +201,13 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                 },
                 "required": ["tab_id", "action"],
             },
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
         ),
         "browser.interact": spec(
             "browser.interact",
             "Interact with one uniquely matched page element; secret values must use credential_ref.",
             interact,
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
             network=True,
             target="page_url",
         ),
@@ -231,7 +228,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
             "browser.replay",
             "Replay an in-scope request through the selected identity without reusable secret headers.",
             replay,
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
             network=True,
             target="url",
         ),
@@ -272,13 +269,13 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                 },
                 "required": [],
             },
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
         ),
         "proxy.add_rule": spec(
             "proxy.add_rule",
             "Install a bounded declarative HTTP or WebSocket rule owned by this run.",
             rule,
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
         ),
         "proxy.remove_rule": spec(
             "proxy.remove_rule",
@@ -291,13 +288,13 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                 },
                 "required": ["rule_id"],
             },
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
         ),
         "proxy.replay": spec(
             "proxy.replay",
             "Replay a captured request through the selected browser identity.",
             replay,
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
             network=True,
             target="url",
         ),
@@ -309,7 +306,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                 "additionalProperties": False,
                 "properties": {"reason": {"type": "string", "maxLength": 4000}},
             },
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
         ),
         "target.observe": spec(
             "target.observe",
@@ -341,7 +338,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                 },
                 "required": ["start_url"],
             },
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
             target="start_url",
         ),
         "repeater.create": spec(
@@ -358,85 +355,8 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                 },
                 "required": ["name", "method", "url"],
             },
-            risk=RiskClass.ACTIVE_SCAN,
+            risk=RiskClass.NETWORK_ACTION,
             target="url",
-        ),
-        "intruder.create": spec(
-            "intruder.create",
-            "Create a bounded Intruder draft using inert payload values.",
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "name": {"type": "string", "minLength": 1, "maxLength": 200},
-                    "strategy": {
-                        "type": "string",
-                        "enum": [
-                            "sniper",
-                            "battering_ram",
-                            "pitchfork",
-                            "cluster_bomb",
-                        ],
-                    },
-                    "method": {"type": "string", "pattern": "^[A-Za-z]{1,16}$"},
-                    "url_template": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16384,
-                    },
-                    "positions": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 32,
-                        "items": {"type": "string", "maxLength": 200},
-                    },
-                    "payload_values": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 10000,
-                        "items": {"type": "string", "maxLength": 4000},
-                    },
-                    "max_requests": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100000,
-                    },
-                },
-                "required": [
-                    "name",
-                    "strategy",
-                    "method",
-                    "url_template",
-                    "positions",
-                    "payload_values",
-                ],
-            },
-            risk=RiskClass.ACTIVE_SCAN,
-        ),
-        "intruder.control": spec(
-            "intruder.control",
-            "Queue, pause, resume, cancel, or complete a lease-session attack.",
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "attack_id": {"type": "string", "minLength": 1, "maxLength": 200},
-                    "expected_revision": {"type": "integer", "minimum": 1},
-                    "action": {
-                        "type": "string",
-                        "enum": [
-                            "queue",
-                            "start",
-                            "pause",
-                            "resume",
-                            "cancel",
-                            "complete",
-                        ],
-                    },
-                },
-                "required": ["attack_id", "expected_revision", "action"],
-            },
-            risk=RiskClass.ACTIVE_SCAN,
         ),
         "analysis.decode": spec(
             "analysis.decode",
@@ -575,7 +495,7 @@ class BrowserAutomationBroker(ToolBroker):
             lease = await self.automation.active_lease_for_run(invocation.run_id)
             lease_id = lease.id
             if invocation.tool_name.startswith(
-                ("target.", "repeater.", "intruder.", "analysis.", "finding.")
+                ("target.", "repeater.", "analysis.", "finding.")
             ):
                 research = BrowserResearchService(
                     self.store, BrowserSecurityService(self.store)
@@ -618,39 +538,6 @@ class BrowserAutomationBroker(ToolBroker):
                         invocation.requested_by,
                     )
                     output = {"status": "complete", "tab": tab.model_dump(mode="json")}
-                elif invocation.tool_name == "intruder.create":
-                    values = arguments.pop("payload_values")
-                    arguments["method"] = str(arguments["method"]).upper()
-                    attack = await research.create_attack(
-                        AttackCreateRequest(
-                            session_id=session.id,
-                            identity_id=session.identity_id,
-                            payload_sets=[{"kind": "list", "values": values}],
-                            **arguments,
-                        ),
-                        invocation.requested_by,
-                    )
-                    output = {
-                        "status": "draft",
-                        "attack": attack.model_dump(mode="json"),
-                    }
-                elif invocation.tool_name == "intruder.control":
-                    attack_id = str(arguments.pop("attack_id"))
-                    current_attack = await self.store.get(BrowserAttack, attack_id)
-                    if current_attack.session_id != session.id:
-                        raise InvalidToolArguments(
-                            "attack belongs to another browser lease session"
-                        )
-                    attack = await research.transition_attack(
-                        attack_id,
-                        AttackStateRequest(
-                            actor_id=invocation.requested_by, **arguments
-                        ),
-                    )
-                    output = {
-                        "status": attack.state,
-                        "attack": attack.model_dump(mode="json"),
-                    }
                 elif invocation.tool_name == "analysis.decode":
                     output = research.decode(DecoderRequest.model_validate(arguments))
                 elif invocation.tool_name == "analysis.compare":
@@ -984,7 +871,7 @@ def browser_action_spec(session_id: str) -> ToolSpec:
         },
         # Proposals remain inert, but their metadata must accurately tell
         # mission policy that navigation/replay can cause network effects.
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
         network_access=True,
         target_argument="page_url",
         filesystem_access="none",

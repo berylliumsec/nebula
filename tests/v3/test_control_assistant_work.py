@@ -1187,7 +1187,7 @@ async def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_
         Approval(
             engagement_id=other.id,
             run_id=foreign_run.id,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             exact_request={"tool_name": "scan"},
             policy_rationale="Review scan",
             requested_by="Foreign mission",
@@ -2538,7 +2538,7 @@ async def test_butler_discovers_project_browser_and_starts_scoped_mission(
         started.append(kwargs)
         saved_autonomy = kwargs["browser_autonomy"].model_dump(mode="json")
         if kwargs["name"] == "Mismatched lease":
-            saved_autonomy["allowed_risk_classes"] = ["passive", "active_scan"]
+            saved_autonomy["allowed_risk_classes"] = ["passive", "network_action"]
         return await store.create(
             AgentRun(
                 engagement_id=kwargs["engagement_id"],
@@ -2600,13 +2600,13 @@ async def test_butler_discovers_project_browser_and_starts_scoped_mission(
         for risks in (
             [],
             ["local_read"],
-            ["active_scan"],
+            ["network_action"],
             ["credential_use"],
             ["exploitation"],
             ["persistence"],
             ["destructive"],
             ["scope_change"],
-            ["passive", "active_scan"],
+            ["passive", "network_action"],
         ):
             invalid = {
                 **request,

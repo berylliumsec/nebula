@@ -79,15 +79,9 @@ _ROLE_BY_PREFIX: tuple[tuple[str, SpecialistRole], ...] = (
     ("proxy.", SpecialistRole.NETWORK_SERVICE),
     ("target.", SpecialistRole.NETWORK_SERVICE),
     ("repeater.", SpecialistRole.NETWORK_SERVICE),
-    ("intruder.", SpecialistRole.NETWORK_SERVICE),
     ("analysis.", SpecialistRole.NETWORK_SERVICE),
     ("finding.", SpecialistRole.NETWORK_SERVICE),
     ("environment.", SpecialistRole.NETWORK_SERVICE),
-    ("nmap.", SpecialistRole.NETWORK_SERVICE),
-    ("nuclei.", SpecialistRole.WEB_API),
-    ("nikto.", SpecialistRole.WEB_API),
-    ("searchsploit.", SpecialistRole.VULNERABILITY_INTELLIGENCE),
-    ("semgrep.", SpecialistRole.CODE_ANALYSIS),
 )
 FINISH_TOOL = "nebula.finish_task"
 _FINISH_FIELDS = frozenset({"status", "summary", "rationale"})
@@ -123,18 +117,24 @@ _RISK_PRIORITY = {
     RiskClass.LOCAL_READ: 0,
     RiskClass.WORKSPACE_WRITE: 1,
     RiskClass.PASSIVE: 2,
-    RiskClass.ACTIVE_SCAN: 3,
+    RiskClass.NETWORK_ACTION: 3,
     RiskClass.CREDENTIAL_USE: 4,
-    RiskClass.EXPLOITATION: 5,
-    RiskClass.PERSISTENCE: 6,
-    RiskClass.DESTRUCTIVE: 7,
+    RiskClass.HIGH_IMPACT_ACTION: 5,
+    RiskClass.PERSISTENT_CHANGE: 6,
+    RiskClass.DESTRUCTIVE_CHANGE: 7,
 }
 
 
-def role_for_tool(tool_name: str) -> SpecialistRole:
+def role_for_tool(tool_name: str, spec: ToolSpec | None = None) -> SpecialistRole:
     for prefix, role in _ROLE_BY_PREFIX:
         if tool_name.startswith(prefix):
             return role
+    if spec is not None:
+        if spec.network_access or spec.opaque_network_access:
+            return SpecialistRole.NETWORK_SERVICE
+        if spec.filesystem_access != "none":
+            return SpecialistRole.CODE_ANALYSIS
+        return SpecialistRole.NETWORK_SERVICE
     raise MissionError(f"tool {tool_name!r} has no bounded specialist role")
 
 
@@ -156,7 +156,9 @@ class ToolMissionSupervisor:
 
         role_groups: dict[SpecialistRole, list[str]] = {}
         for name in selected:
-            role_groups.setdefault(role_for_tool(name), []).append(name)
+            role_groups.setdefault(role_for_tool(name, self.specs[name]), []).append(
+                name
+            )
         if len(role_groups) > budget.max_concurrency * 8:
             raise MissionError("selected tool set produces an excessive task graph")
 
@@ -178,7 +180,7 @@ class ToolMissionSupervisor:
                 if not title or not stage_objective:
                     continue
                 task = PlannedTask(
-                    role=role_for_tool(names[0]),
+                    role=role_for_tool(names[0], self.specs[names[0]]),
                     title=title,
                     instructions=(
                         f"Overall objective: {objective}\n"
@@ -282,7 +284,8 @@ class BrokeredToolSpecialist:
         role_specs = {
             name: spec
             for name, spec in specs.items()
-            if spec.budget_class == "artifact_query" or role_for_tool(name) == role
+            if spec.budget_class == "artifact_query"
+            or role_for_tool(name, spec) == role
         }
         if not role_specs:
             raise MissionError(f"no tools are assigned to specialist {role.value}")

@@ -909,11 +909,11 @@ def _mcp_tool_risk(tool: McpToolSnapshot, profile: McpServerProfile) -> RiskClas
     if profile.metadata.get("built_in") == "notebook_v1":
         return RiskClass.LOCAL_READ if tool.read_only else RiskClass.WORKSPACE_WRITE
     if profile.transport == McpTransport.BUILTIN:
-        return RiskClass.LOCAL_READ if tool.read_only else RiskClass.ACTIVE_SCAN
+        return RiskClass.LOCAL_READ if tool.read_only else RiskClass.NETWORK_ACTION
     if tool.credentialed:
         return RiskClass.CREDENTIAL_USE
     if tool.destructive:
-        return RiskClass.DESTRUCTIVE
+        return RiskClass.DESTRUCTIVE_CHANGE
     if tool.read_only:
         return RiskClass.LOCAL_READ
     return RiskClass.WORKSPACE_WRITE

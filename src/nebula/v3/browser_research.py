@@ -20,7 +20,7 @@ from datetime import timedelta
 from typing import Any, Literal
 from urllib.parse import parse_qsl, unquote, quote, urlsplit, urlunsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field
 
 from .artifacts import ArtifactStore
 from .browser_security import (
@@ -30,8 +30,6 @@ from .browser_security import (
 )
 from .domain import (
     Artifact,
-    BrowserAttack,
-    BrowserAttackResult,
     BrowserCrawlJob,
     BrowserInterceptItem,
     BrowserRepeaterResult,
@@ -66,12 +64,6 @@ ALLOWED_TRANSFORMS = {
     "lowercase",
     "uppercase",
 }
-CURATED_PAYLOADS: dict[str, tuple[str, ...]] = {
-    "booleans": ("true", "false", "1", "0", "null"),
-    "boundary_numbers": ("-1", "0", "1", "2147483647", "2147483648"),
-    "path_boundaries": (".", "..", "../", "%2e%2e%2f"),
-    "header_boundaries": ("", "0", "null", "undefined"),
-}
 
 
 class BrowserResearchWorkspace(NebulaModel):
@@ -81,8 +73,6 @@ class BrowserResearchWorkspace(NebulaModel):
     intercepts: list[BrowserInterceptItem]
     repeater_tabs: list[BrowserRepeaterTab]
     repeater_results: list[BrowserRepeaterResult]
-    attacks: list[BrowserAttack]
-    attack_results: list[BrowserAttackResult]
     token_analyses: list[BrowserTokenAnalysis]
 
 
@@ -92,7 +82,7 @@ class SiteNodeRecordRequest(NebulaModel):
     method: str = Field(default="GET", pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
     kind: Literal["page", "api", "form", "resource", "websocket"] = "page"
     discovery_source: Literal[
-        "browser", "proxy", "crawl", "repeater", "intruder", "har", "automation"
+        "browser", "proxy", "crawl", "repeater", "har", "automation"
     ] = "browser"
     status_code: int | None = Field(default=None, ge=100, le=999)
     parameter_names: list[str] = Field(default_factory=list, max_length=256)
@@ -213,113 +203,6 @@ class RepeaterResultRequest(NebulaModel):
     actor_id: str = Field(min_length=1, max_length=200)
 
 
-class PayloadSourceProvenance(NebulaModel):
-    kind: Literal["manual", "upload", "assistant", "script"] = "manual"
-    display_name: str = Field(default="Manual entry", min_length=1, max_length=1024)
-    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    value_count: int = Field(ge=1, le=50_000)
-    prompt_version: str | None = Field(default=None, max_length=200)
-    model: str | None = Field(default=None, max_length=500)
-    provider_profile_id: str | None = Field(default=None, max_length=200)
-
-
-class AttackCreateRequest(NebulaModel):
-    session_id: str = Field(min_length=1, max_length=200)
-    identity_id: str = Field(min_length=1, max_length=200)
-    name: str = Field(default="Intruder attack", min_length=1, max_length=200)
-    strategy: Literal["sniper", "battering_ram", "pitchfork", "cluster_bomb"]
-    method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
-    url_template: str = Field(min_length=1, max_length=16_384)
-    headers_template: list[tuple[str, str]] = Field(
-        default_factory=list, max_length=200
-    )
-    body_template: str = Field(default="", max_length=65_536)
-    positions: list[str] = Field(min_length=1, max_length=32)
-    payload_sets: list[dict[str, Any]] = Field(min_length=1, max_length=32)
-    transforms: list[str] = Field(default_factory=list, max_length=16)
-    max_requests: int = Field(default=100, ge=1, le=100_000)
-    max_concurrency: int = Field(default=1, ge=1, le=32)
-    requests_per_second: float = Field(default=2.0, gt=0, le=100.0)
-    payload_source: PayloadSourceProvenance | None = None
-
-    @field_validator("transforms")
-    @classmethod
-    def transforms_are_declarative(cls, values: list[str]) -> list[str]:
-        unknown = set(values) - ALLOWED_TRANSFORMS
-        if unknown:
-            raise ValueError(f"unsupported Intruder transforms: {sorted(unknown)}")
-        return values
-
-    @model_validator(mode="after")
-    def payloads_are_inert_and_bounded(self) -> "AttackCreateRequest":
-        total = 0
-        for item in self.payload_sets:
-            kind = item.get("kind")
-            if kind == "curated":
-                if item.get("name") not in CURATED_PAYLOADS:
-                    raise ValueError("unknown curated payload set")
-                total += len(CURATED_PAYLOADS[str(item["name"])])
-            elif kind == "list":
-                values = item.get("values")
-                if not isinstance(values, list) or not values or len(values) > 10_000:
-                    raise ValueError("custom payload sets require 1-10000 inert values")
-                if not all(
-                    isinstance(value, str) and len(value) <= 16_384 for value in values
-                ):
-                    raise ValueError("custom payload values must be bounded strings")
-                total += len(values)
-            else:
-                raise ValueError("payload sets must be curated or inert lists")
-        if total > 50_000:
-            raise ValueError("combined payload sets exceed the 50000-value limit")
-        if len(set(self.positions)) != len(self.positions) or any(
-            not position.strip() for position in self.positions
-        ):
-            raise ValueError("Intruder positions must be unique non-empty names")
-        templates = "\n".join(
-            [
-                self.url_template,
-                self.body_template,
-                *(value for _, value in self.headers_template),
-            ]
-        )
-        missing = [
-            position for position in self.positions if f"§{position}§" not in templates
-        ]
-        if missing:
-            raise ValueError(
-                f"Intruder templates are missing position markers: {sorted(missing)}"
-            )
-        expected_sets = (
-            1 if self.strategy in {"sniper", "battering_ram"} else len(self.positions)
-        )
-        if len(self.payload_sets) != expected_sets:
-            raise ValueError(
-                f"{self.strategy} requires {expected_sets} payload set(s) for {len(self.positions)} position(s)"
-            )
-        return self
-
-
-class AttackStateRequest(NebulaModel):
-    expected_revision: int = Field(ge=1)
-    action: Literal[
-        "queue", "start", "pause", "resume", "retry", "cancel", "complete", "fail"
-    ]
-    actor_id: str = Field(min_length=1, max_length=200)
-    error: str | None = Field(default=None, max_length=4_000)
-
-
-class AttackResultRequest(NebulaModel):
-    sequence: int = Field(ge=0)
-    payloads: list[str] = Field(default_factory=list, max_length=32)
-    exchange_id: str | None = Field(default=None, max_length=200)
-    status_code: int | None = Field(default=None, ge=100, le=999)
-    response_bytes: int | None = Field(default=None, ge=0)
-    duration_ms: int | None = Field(default=None, ge=0)
-    error: str | None = Field(default=None, max_length=4_000)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
-
-
 class DecoderRequest(NebulaModel):
     operation: Literal[
         "url_encode",
@@ -411,16 +294,6 @@ class BrowserResearchService:
             repeater_results=(
                 await self.store.list_latest_entities(
                     BrowserRepeaterResult, engagement_id=engagement_id
-                )
-            ),
-            attacks=(
-                await self.store.list_latest_entities(
-                    BrowserAttack, engagement_id=engagement_id
-                )
-            ),
-            attack_results=(
-                await self.store.list_latest_entities(
-                    BrowserAttackResult, engagement_id=engagement_id
                 )
             ),
             token_analyses=(
@@ -935,146 +808,6 @@ class BrowserResearchService:
             )
         )
 
-    async def create_attack(
-        self, request: AttackCreateRequest, actor_id: str
-    ) -> BrowserAttack:
-        session = await self.store.get(BrowserSession, request.session_id)
-        self.security._require_agent_security_runtime(session)
-        if session.identity_id != request.identity_id:
-            raise BrowserWorkflowError(
-                "attack identity must match the selected session"
-            )
-        sample_url = request.url_template
-        for position in request.positions:
-            sample_url = sample_url.replace(f"§{position}§", "sample")
-        self.security._require_in_scope(
-            (await self.security._scope(session.engagement_id)),
-            sample_url,
-            "browser.intruder.create",
-            self._active_risk(),
-            native_scope_authority=True,
-        )
-        attack_data = request.model_dump(exclude={"payload_source"})
-        attack = BrowserAttack(
-            engagement_id=session.engagement_id,
-            metadata={"payload_source": request.payload_source.model_dump(mode="json")}
-            if request.payload_source
-            else {},
-            **attack_data,
-        )
-        return await self._create(attack, "browser_attack.created", actor_id)
-
-    async def transition_attack(
-        self, attack_id: str, request: AttackStateRequest
-    ) -> BrowserAttack:
-        attack = await self.store.get(BrowserAttack, attack_id)
-        transitions = {
-            "draft": {"queue": "queued", "cancel": "cancelled"},
-            "queued": {"start": "running", "cancel": "cancelled", "fail": "failed"},
-            "running": {
-                "pause": "paused",
-                "cancel": "cancelled",
-                "complete": "complete",
-                "fail": "failed",
-            },
-            "paused": {"resume": "running", "cancel": "cancelled", "fail": "failed"},
-            "failed": {"retry": "queued", "cancel": "cancelled"},
-            "cancelled": {"retry": "queued"},
-        }
-        next_state = transitions.get(attack.state, {}).get(request.action)
-        if next_state is None:
-            raise BrowserWorkflowError(
-                f"cannot {request.action} an attack in {attack.state} state"
-            )
-        changes: dict[str, Any] = {"state": next_state, "error": request.error}
-        if next_state == "running" and attack.started_at is None:
-            changes["started_at"] = utc_now()
-        if next_state in {"complete", "cancelled", "failed"}:
-            changes["completed_at"] = utc_now()
-        updated, _ = await self.store.update_with_operation_event(
-            BrowserAttack,
-            attack.id,
-            changes,
-            expected_revision=request.expected_revision,
-            operation_id=attack.id,
-            operation_kind="browser_attack",
-            engagement_id=attack.engagement_id,
-            event_type=f"browser_attack.{next_state}",
-            event_payload={},
-            actor_id=request.actor_id,
-        )
-        return updated
-
-    async def add_attack_result(
-        self, attack_id: str, request: AttackResultRequest, actor_id: str
-    ) -> BrowserAttackResult:
-        attack = await self.store.get(BrowserAttack, attack_id)
-        if attack.state != "running":
-            raise BrowserWorkflowError("attack results require a running attack")
-        if attack.request_count >= attack.max_requests:
-            raise BrowserWorkflowError("attack request budget is exhausted")
-        existing = await self.store.find_entities(
-            BrowserAttackResult,
-            {"attack_id": attack.id, "sequence": request.sequence},
-            engagement_id=attack.engagement_id,
-            limit=1,
-        )
-        if existing:
-            return existing[0]
-        if request.exchange_id:
-            exchange = await self._owned(
-                BrowserTrafficExchange, request.exchange_id, attack.engagement_id
-            )
-            if exchange.session_id != attack.session_id:
-                raise BrowserWorkflowError(
-                    "Intruder result belongs to another browser session"
-                )
-        result = BrowserAttackResult(
-            engagement_id=attack.engagement_id,
-            attack_id=attack.id,
-            **request.model_dump(),
-        )
-        created = await self._create(result, "browser_attack_result.created", actor_id)
-        latest = await self.store.get(BrowserAttack, attack.id)
-        next_count = latest.request_count + 1
-        complete = next_count >= latest.max_requests
-        (
-            await self.store.update_with_operation_event(
-                BrowserAttack,
-                latest.id,
-                {
-                    "request_count": next_count,
-                    "error_count": latest.error_count + (1 if request.error else 0),
-                    "state": "complete" if complete else latest.state,
-                    "completed_at": utc_now() if complete else latest.completed_at,
-                },
-                expected_revision=latest.revision,
-                operation_id=latest.id,
-                operation_kind="browser_attack",
-                engagement_id=latest.engagement_id,
-                event_type="browser_attack.progress",
-                event_payload={"request_count": next_count, "complete": complete},
-                actor_id=actor_id,
-            )
-        )
-        return created
-
-    async def delete_attack(self, attack_id: str, expected_revision: int) -> None:
-        attack = await self.store.get(BrowserAttack, attack_id)
-        if attack.state in {"queued", "running", "paused"}:
-            raise BrowserWorkflowError("cancel the Intruder attack before deleting it")
-        for result in await self.store.find_entities(
-            BrowserAttackResult,
-            {"attack_id": attack.id},
-            engagement_id=attack.engagement_id,
-        ):
-            (await self.store.delete(BrowserAttackResult, result.id))
-        (
-            await self.store.delete(
-                BrowserAttack, attack.id, expected_revision=expected_revision
-            )
-        )
-
     def decode(self, request: DecoderRequest) -> dict[str, Any]:
         value = request.value
         operation = request.operation
@@ -1450,7 +1183,7 @@ class BrowserResearchService:
     def _active_risk():
         from .domain import RiskClass
 
-        return RiskClass.ACTIVE_SCAN
+        return RiskClass.NETWORK_ACTION
 
     async def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
         entity = await self.store.get(model, entity_id)
@@ -1502,9 +1235,6 @@ class BrowserResearchService:
 
 
 __all__ = [
-    "AttackCreateRequest",
-    "AttackResultRequest",
-    "AttackStateRequest",
     "BrowserResearchService",
     "BrowserResearchWorkspace",
     "CompareRequest",

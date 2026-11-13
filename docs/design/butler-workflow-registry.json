@@ -1431,19 +1431,16 @@
       "id": "browser.manual_research",
       "entry_point": "Operator-controlled research tabs, private traffic inspection and manual testing",
       "ui_calls": [
-        "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserAttack",
         "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserCrawl",
         "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserRepeaterTab",
         "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserTokenAnalysis",
         "ui/src/components/BrowserResearchSuite.tsx::decideSecurityBrowserIntercept",
-        "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserAttack",
         "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserCrawl",
         "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserRepeaterTab",
         "ui/src/components/BrowserResearchSuite.tsx::getArtifactContent",
         "ui/src/components/BrowserResearchSuite.tsx::getSecurityBrowserResearch",
         "ui/src/components/BrowserResearchSuite.tsx::securityBrowserCompare",
         "ui/src/components/BrowserResearchSuite.tsx::securityBrowserDecode",
-        "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserAttack",
         "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserCrawl",
         "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserRepeaterTab",
         "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab",
@@ -1465,38 +1462,6 @@
         "owner": "requesting_browser",
         "boundary": "device_interaction",
         "reason": "Operator-controlled research tabs, private traffic inspection and manual testing belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
-        "observed_result": "opened"
-      }
-    },
-    {
-      "id": "browser.assessment_consent",
-      "entry_point": "Personal assessment review and validation grant or revocation",
-      "ui_calls": [
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::createSecurityBrowserAssessment",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::deleteSecurityBrowserAssessment",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getSecurityBrowserAssessments",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getToken",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::grantSecurityBrowserCandidateValidation",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::refreshSecurityBrowserAssessmentReadiness",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::revokeSecurityBrowserCandidateValidation",
-        "ui/src/components/SecurityBrowserWorkspacePanel.tsx::transitionSecurityBrowserAssessment"
-      ],
-      "core_owner": "Personal assessment review and validation grant or revocation services and the requesting browser",
-      "butler": {
-        "discover": "nebula.settings.catalog",
-        "read": "nebula.settings.catalog",
-        "change": "nebula.navigate.open destination_id=browser"
-      },
-      "authority": "The requesting operator retains private device input, browser state and personal consent; opening grants no mutation authority",
-      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
-      "result": "The requesting browser opens the exact catalog destination. Further input, approval and saved-state checks remain with its visible controls; no downstream completion is claimed.",
-      "status": "device_handoff",
-      "handoff": {
-        "operation": "nebula.navigate.open",
-        "target_id": "browser",
-        "owner": "requesting_browser",
-        "boundary": "operator_authority",
-        "reason": "Personal assessment review and validation grant or revocation belongs to the operator-controlled interface; a model instruction cannot impersonate that private input or consent.",
         "observed_result": "opened"
       }
     },
@@ -2061,10 +2026,8 @@
         "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserAutomation",
         "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserResearch",
         "ui/src/components/BrowserAutomationWorker.tsx::getSecurityBrowserWorkspace",
-        "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserAttackResult",
         "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserRepeaterResult",
         "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserSiteNode",
-        "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserAttack",
         "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserCrawl",
         "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserRepeaterTab",
         "ui/src/components/BrowserAutomationWorker.tsx::uploadEvidence",
@@ -3593,7 +3556,7 @@
     },
     {
       "id": "host.cpu_budget",
-      "entry_point": "Settings → Setup → CPU budget, or an explicit Butler request to configure this Core host",
+      "entry_point": "Settings \u2192 Setup \u2192 CPU budget, or an explicit Butler request to configure this Core host",
       "ui_calls": [
         "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
         "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\""
@@ -3606,7 +3569,7 @@
       },
       "authority": "Explicit host CPU budget request; enabling/disabling additionally requires an explicit activation request. Use fresh host_id/expected_revision and enabled only when requested; omission preserves state. Core persists and reads back policy. Running requires observed live workers/affinity with executor_state=running and apply_state=applied; disabled requires zero workers. Resize/disable drains accepted PDF work.",
       "observed_result_test": "tests/v3/test_report_cpu_activation.py::test_butler_activates_and_reads_actual_running_then_disabled_workers",
-      "result": "One PDF worker pool shared across this host’s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
+      "result": "One PDF worker pool shared across this host\u2019s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
       "status": "supported"
     },
     {
@@ -3820,20 +3783,12 @@
       "count": 2
     },
     {
-      "key": "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserAttackResult",
-      "count": 1
-    },
-    {
       "key": "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserRepeaterResult",
       "count": 1
     },
     {
       "key": "ui/src/components/BrowserAutomationWorker.tsx::recordSecurityBrowserSiteNode",
       "count": 1
-    },
-    {
-      "key": "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserAttack",
-      "count": 3
     },
     {
       "key": "ui/src/components/BrowserAutomationWorker.tsx::transitionSecurityBrowserCrawl",
@@ -3852,10 +3807,6 @@
       "count": 1
     },
     {
-      "key": "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserAttack",
-      "count": 1
-    },
-    {
       "key": "ui/src/components/BrowserResearchSuite.tsx::createSecurityBrowserCrawl",
       "count": 1
     },
@@ -3869,10 +3820,6 @@
     },
     {
       "key": "ui/src/components/BrowserResearchSuite.tsx::decideSecurityBrowserIntercept",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/BrowserResearchSuite.tsx::deleteSecurityBrowserAttack",
       "count": 1
     },
     {
@@ -3897,10 +3844,6 @@
     },
     {
       "key": "ui/src/components/BrowserResearchSuite.tsx::securityBrowserDecode",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserAttack",
       "count": 1
     },
     {
@@ -4793,38 +4736,6 @@
     },
     {
       "key": "ui/src/components/ScopeImportDialog.tsx::discardScopeImport",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::createSecurityBrowserAssessment",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::deleteSecurityBrowserAssessment",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getSecurityBrowserAssessments",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::getToken",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::grantSecurityBrowserCandidateValidation",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::refreshSecurityBrowserAssessmentReadiness",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::revokeSecurityBrowserCandidateValidation",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/SecurityBrowserWorkspacePanel.tsx::transitionSecurityBrowserAssessment",
       "count": 1
     },
     {

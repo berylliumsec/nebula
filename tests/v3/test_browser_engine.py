@@ -35,7 +35,7 @@ async def test_browserd_adapter_maps_authenticated_readiness_without_url_secrets
             json={
                 "adapter": "managed-chromium",
                 "display_name": "Managed Chromium",
-                "contract_version": "1",
+                "contract_version": "2",
                 "state": "ready",
                 "installed_version": "149.0.0",
                 "digest": f"sha256:{'a' * 64}",
@@ -66,7 +66,7 @@ async def test_browserd_adapter_fails_closed_on_contract_drift():
             json={
                 "adapter": "managed-chromium",
                 "display_name": "Managed Chromium",
-                "contract_version": "2",
+                "contract_version": "99",
                 "state": "ready",
                 "actions": [],
                 "protocols": [],
@@ -93,7 +93,7 @@ async def test_browserd_lost_side_effect_receipt_is_ambiguous_and_never_auto_rep
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     action = BrowserEngineAction(
         action_token="action-once",
-        assessment_id="assessment-1",
+        automation_id="assessment-1",
         session_id="session-1",
         identity_id="identity-1",
         tab_id="tab-1",
@@ -170,7 +170,7 @@ async def test_action_client_deadline_covers_playwright_operation_timeout():
 
     action = BrowserEngineAction(
         action_token="action-slow",
-        assessment_id="assessment-1",
+        automation_id="assessment-1",
         session_id="session-1",
         identity_id="identity-1",
         tab_id="tab-1",

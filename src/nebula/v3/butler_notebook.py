@@ -381,7 +381,7 @@ class ButlerNotebook:
                         risk_class=(
                             RiskClass.PASSIVE
                             if name == "search_package"
-                            else RiskClass.PERSISTENCE
+                            else RiskClass.PERSISTENT_CHANGE
                             if name == "install_package"
                             else RiskClass.LOCAL_READ
                             if read_only

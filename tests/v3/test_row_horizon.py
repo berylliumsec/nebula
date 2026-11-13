@@ -26,7 +26,7 @@ from nebula.v3.domain import (
     Artifact,
     BrowserAutomationLease,
     BrowserAutomationLeaseStatus,
-    BrowserAttackResult,
+    BrowserRepeaterResult,
     ChatContentBlock,
     ChatRole,
     Engagement,
@@ -195,28 +195,26 @@ async def test_find_entities_reaches_a_row_past_the_first_page_by_indexed_and_in
         )
     ) == []
 
-    result = BrowserAttackResult(
-        engagement_id=project.id, attack_id="attack-1", sequence=0
-    )
+    result = BrowserRepeaterResult(engagement_id=project.id, tab_id="tab-1", sequence=0)
     (await seed_older_copies(store, result, vary=lambda index: {"sequence": index}))
     newest = await store.create(
         result.model_copy(update={"id": "result-newest", "sequence": PAGE})
     )
     assert (
         await store.find_entities(
-            BrowserAttackResult, {"attack_id": "attack-1", "sequence": PAGE}
+            BrowserRepeaterResult, {"tab_id": "tab-1", "sequence": PAGE}
         )
     ) == [newest]
     assert [
         item.sequence
         for item in (
             await store.find_entities(
-                BrowserAttackResult, {"attack_id": "attack-1", "sequence": 7}
+                BrowserRepeaterResult, {"tab_id": "tab-1", "sequence": 7}
             )
         )
     ] == [7]
     with pytest.raises(TypeError, match="boolean"):
-        (await store.find_entities(BrowserAttackResult, {"blocked": True}))
+        (await store.find_entities(BrowserRepeaterResult, {"blocked": True}))
 
 
 async def test_list_latest_entities_windows_from_the_newest_end_in_chronological_order(

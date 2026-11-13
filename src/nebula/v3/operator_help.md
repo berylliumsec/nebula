@@ -186,7 +186,7 @@ targets and fails if the saved scope revision changed during review. Cloud provi
 require one-request consent, while local-only scope blocks cloud processing entirely.
 
 Ordinary permitted local commands and in-scope scans do not need a per-command
-approval. Credential use, exploitation, persistence, destructive actions, scope
+approval. Credential use, high-impact actions, persistent changes, destructive changes, scope
 changes, and external filesystem writes require explicit operator approval. An
 optional high-risk grant must name risk classes, capabilities, targets, and an
 expiry, and it cannot expand the engagement scope. The operator may approve or deny

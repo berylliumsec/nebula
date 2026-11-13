@@ -9,7 +9,6 @@ from jsonschema import Draft202012Validator
 
 from nebula.v3.agent_security_tools import (
     SecurityToolsRuntime,
-    _attack_payloads,
     PROFILE_ID,
     PROFILE_NAME,
 )
@@ -21,7 +20,6 @@ from nebula.v3.browser_security import (
 )
 from nebula.v3.domain import (
     Artifact,
-    BrowserAttack,
     BrowserIdentity,
     BrowserRepeaterResult,
     BrowserSession,
@@ -268,33 +266,6 @@ async def test_interception_control_and_project_stop_are_separate_from_visible_b
         await runtime.close()
 
     (await run())
-
-
-def test_intruder_payload_strategies_match_durable_sequence():
-    common = dict(
-        engagement_id="project",
-        session_id="session",
-        identity_id="identity",
-        name="Intruder fixture",
-        method="GET",
-        url_template="https://example.test/?a=§a§&b=§b§",
-        positions=["a", "b"],
-        max_requests=20,
-    )
-    one = [{"kind": "list", "values": ["x", "y"]}]
-    two = [
-        {"kind": "list", "values": ["1", "2"]},
-        {"kind": "list", "values": ["a", "b"]},
-    ]
-    sniper = BrowserAttack(strategy="sniper", payload_sets=one, **common)
-    battering = BrowserAttack(strategy="battering_ram", payload_sets=one, **common)
-    pitchfork = BrowserAttack(strategy="pitchfork", payload_sets=two, **common)
-    cluster = BrowserAttack(strategy="cluster_bomb", payload_sets=two, **common)
-    assert _attack_payloads(sniper, 0) == {"a": "x", "b": ""}
-    assert _attack_payloads(sniper, 2) == {"a": "", "b": "x"}
-    assert _attack_payloads(battering, 1) == {"a": "y", "b": "y"}
-    assert _attack_payloads(pitchfork, 1) == {"a": "2", "b": "b"}
-    assert _attack_payloads(cluster, 2) == {"a": "2", "b": "a"}
 
 
 pytestmark = pytest.mark.anyio

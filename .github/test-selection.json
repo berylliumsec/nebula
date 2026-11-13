@@ -1,26 +1,45 @@
 {
-  "change_digest": "49c14215419a3718ee10ceb2c7c48c0a11c25215bc81ee0f36b91d778351d21a",
   "reviewed_by": "Codex",
-  "reason": "Review additive migration 0048 runtime compatibility and the strict CI receipt chain, including trusted workflow provenance, exact commit ancestry, and commit-bound test selections.",
-  "exclusions": "No local tests or LAN workflow were run per operator instruction. CI should run these six focused Python cases. No DB backups, provider traffic, simulation deployment, Butler action, or NVMe operation is part of this change.",
-  "python_browser": false,
+  "reason": "Cold removal of Intruder and guided assessments; preserve browser primitives and neutral risk approval semantics. Focused backend, component, production LAN and knowledge sync coverage. Independent troubleshooting exposed existing async test stubs, graph evidence reads and approval races; focused graph checks and retained companion tests cover their narrow repairs. The real sidecar test exposed unawaited live proxy authorization; four sync/async proxy cases check authentication and revocation.",
+  "exclusions": "No full suites, deployment, physical devices, or external targets. Only two browser UI journeys are enabled across eight required profiles. One real headless capture/stop case uses staged Chromium and a pinned proxy; other Python cases use isolated Core and adapters. Native desktop execution is not claimed. Python 3.12 is selected in CI for mitmproxy 12 compatibility; local Core unit tests use 3.11 and the proxy uses 3.12.",
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": true,
   "python_node": false,
-  "checks": [],
   "expected_tests": {
-    "python": 6,
-    "frontend": 0,
+    "python": 127,
+    "frontend": 52,
     "native": 0,
-    "playwright": 0
+    "playwright": 16
   },
   "python": [
-    "tests/v3/test_runtime_bundle.py::test_compatibility_reviews_chat_scoped_admission_schema",
-    "tests/test_deployer_protocol.py::test_ci_acceptance_chain_binds_each_commit_to_exact_run",
-    "tests/test_deployer_protocol.py::test_ci_acceptance_chain_rejects_missing_extra_and_duplicate_runs",
-    "tests/test_deployer_protocol.py::test_ci_acceptance_chain_rejects_reordered_or_gap_receipts",
-    "tests/test_deployer_protocol.py::test_ci_acceptance_chain_receipt_readback_rejects_tampering",
-    "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_modified_trusted_workflow_or_validator"
+    "tests/v3/test_browser_research.py",
+    "tests/v3/test_policy.py",
+    "tests/v3/test_agent_security_tools.py",
+    "tests/v3/test_browser_automation.py",
+    "tests/v3/test_browser_engine.py",
+    "tests/v3/test_browserd.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_application_model.py::test_transaction_persistence_claim_history_and_acceptance",
+    "tests/v3/test_application_model.py::test_project_and_evidence_revision_isolation",
+    "tests/v3/test_product_knowledge.py::test_browser_harness_guidance_retains_tools_without_attack_recipes",
+    "tests/v3/test_agent_security_headless.py::test_real_headless_identity_captures_only_its_own_scoped_request",
+    "tests/v3/test_browser_host_proxy.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/BrowserResearchSuite.test.tsx",
+    "ui/src/components/SecurityBrowserWorkspacePanel.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/components/SecurityDashboard.test.tsx",
+    "ui/src/components/RepeaterWorkspace.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:browser-harness"
+  ],
+  "change_digest": "fdb1ee63d1a5e2040d953aac9459c39777456a6f2466307e528b49a545109443",
+  "checks": []
 }

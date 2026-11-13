@@ -1462,7 +1462,7 @@ async def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
         origin=ToolCallOrigin.CHAT,
         chat_session_id=session.id,
         chat_turn_id=turn.id,
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
         exact_request={"tool_name": "safe.scan", "arguments": {"target": "host"}},
         policy_rationale="operator confirmation required",
         requested_by="chat-assistant",
@@ -1808,7 +1808,7 @@ async def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
         Approval(
             engagement_id=engagement.id,
             run_id=run.id,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             exact_request={
                 "tool_name": "scan.tcp",
                 "arguments": {"ports": [80]},
@@ -2394,50 +2394,6 @@ async def test_harness_turn_event_socket_sends_an_error_frame_on_stream_failure(
     assert frame["kind"] == "error"
     assert frame["retryable"] is True
     assert "ledger unavailable" not in json.dumps(frame)
-
-
-async def test_browser_assessment_event_socket_completes_when_the_assessment_is_deleted(
-    api,
-):
-    # The poll loop looked the assessment up every tick; deleting it raised
-    # NotFoundError out of the handler and the viewer saw an abnormal close.
-    from nebula.v3.domain import BrowserAssessment
-
-    client, store, _ = api
-    engagement = await store.create(Engagement(name="Assessment stream"))
-    assessment = await store.create(
-        BrowserAssessment(
-            engagement_id=engagement.id,
-            name="Login review",
-            objective="Review the login flow",
-            session_id="session-1",
-            identity_ids=["identity-1"],
-            primary_identity_id="identity-1",
-            target_urls=["https://target.example"],
-            scope_policy_id="scope-1",
-            scope_policy_revision=1,
-            status="running",
-            created_by="operator",
-        )
-    )
-
-    async with client.websocket_connect(
-        f"/api/v1/browser-assessments/{assessment.id}/events/ws",
-        headers=_auth(),
-        subprotocols=["nebula.events.v1"],
-    ) as websocket:
-        assert (await websocket.receive_json()) == {
-            "kind": "replay_complete",
-            "after_sequence": 0,
-        }
-        (await store.delete(BrowserAssessment, assessment.id))
-        assert (await websocket.receive_json()) == {
-            "kind": "complete",
-            "after_sequence": 0,
-        }
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            (await websocket.receive_json())
-    assert exc_info.value.code == 4404
 
 
 async def test_health_does_not_expose_host_paths(tmp_path):
@@ -3156,7 +3112,7 @@ async def test_chat_attention_lists_pending_operator_actions_across_projects_onl
             origin=ToolCallOrigin.CHAT,
             chat_session_id=provider_session.id,
             chat_turn_id=provider_turn.id,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             exact_request={"tool_name": "safe.scan"},
             policy_rationale="review",
             requested_by="chat-assistant",
@@ -3225,7 +3181,7 @@ async def test_chat_attention_lists_pending_operator_actions_across_projects_onl
                 id="attention-mission",
                 engagement_id=second.id,
                 run_id="mission",
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 exact_request={},
                 policy_rationale="mission",
                 requested_by="mission",
@@ -3262,7 +3218,7 @@ async def test_chat_attention_lists_pending_operator_actions_across_projects_onl
                 origin=ToolCallOrigin.CHAT,
                 chat_session_id="attention-archived-chat",
                 chat_turn_id=archived_turn.id,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 exact_request={},
                 policy_rationale="review",
                 requested_by="chat-assistant",

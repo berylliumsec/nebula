@@ -43,7 +43,7 @@ from .domain import (
     CompanionAction,
 )
 from .artifacts import ArtifactStore
-from .storage import NebulaStore
+from .storage import ConflictError, NebulaStore
 from .credentials import CredentialStore, CredentialCreateRequest
 from .runtime_browser_bridge import BRIDGE_UNAVAILABLE, CurrentVisibleAdapter
 
@@ -966,12 +966,18 @@ class BrowserCompanion:
                 and not action.operator_requested
             )
         ):
-            return await self.store.update(
-                CompanionAction,
-                action.id,
-                {"status": "revoked"},
-                expected_revision=action.revision,
-            )
+            try:
+                return await self.store.update(
+                    CompanionAction,
+                    action.id,
+                    {"status": "revoked"},
+                    expected_revision=action.revision,
+                )
+            except ConflictError:
+                latest = await self.store.get(CompanionAction, action.id)
+                if latest.status == "revoked":
+                    return latest
+                raise
         running = await self.store.update(
             CompanionAction,
             action.id,

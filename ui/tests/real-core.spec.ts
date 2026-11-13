@@ -562,7 +562,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   }
   if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
   const dataDir = options.dataDir ?? await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
-  let token = options.token ?? "playwright-real-core-token-2026";
+  let token = options.token ?? "playwright-real-core-token-2026-fixture";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
   let tlsCert: string | undefined;
@@ -2560,6 +2560,7 @@ async function startBrowserPentestAuditFixture(options: {runtimeRoot?: string} =
     const targetUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/start`;
     core = await startRealCore({
       bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+      fixtureScript: path.resolve(import.meta.dirname, "../../tests/v3/browser_harness_fixture.py"),
       env: options.runtimeRoot ? {PLAYWRIGHT_BROWSERS_PATH: options.runtimeRoot} : undefined,
     });
     api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
@@ -2597,7 +2598,10 @@ async function pairBrowserPentestAudit(page: Page, fixture: BrowserPentestAuditF
   expect(response.ok(), await response.text()).toBe(true);
   const pairing = await response.json() as {secret: string; confirmation_code: string};
   await pairingApi.dispose();
-  await page.goto(`${fixture.core.origin}/?view=browser#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.goto(`${fixture.core.origin}/?view=browser#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`, {waitUntil: "domcontentloaded"});
+  await expect(page.getByRole("heading", {name: "Pair this device"})).toBeVisible();
+  await expect(page.getByLabel("Device name")).toBeEditable();
+  await expect(page.getByRole("button", {name: "Pair device"})).toBeEnabled();
   await page.getByLabel("Device name").fill("Local pentest audit browser");
   await page.getByRole("button", {name: "Pair device"}).click();
   await page.waitForURL(url => url.origin === fixture.core.origin && url.pathname === "/" && !url.search && !url.hash, {waitUntil: "load", timeout: 20_000});
@@ -4838,22 +4842,6 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
       identities: Array<{ id: string }>;
       sessions: Array<{ id: string }>;
     };
-    const assessmentResponse = await api.post(
-      `engagements/${projectId}/browser-assessments`,
-      { data: {
-        name: "LAN guided assessment",
-        objective: "Map the authorized account surface and preserve evidence.",
-        profile: "explore",
-        session_id: browserWorkspace.sessions[0].id,
-        identity_ids: [browserWorkspace.identities[0].id],
-        primary_identity_id: browserWorkspace.identities[0].id,
-        target_urls: ["https://example.com/"],
-      } },
-    );
-    expect(assessmentResponse.ok(), await assessmentResponse.text()).toBe(true);
-    const assessment = await assessmentResponse.json() as { id: string; status: string };
-    expect(assessment.status).toBe("draft");
-
     await page.addInitScript(() => {
       window.open = () => ({}) as Window;
     });
@@ -4870,10 +4858,6 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Research workbench" }).click();
-    await expect(page.getByRole("heading", { name: "LAN guided assessment" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Prepare / Retry" })).toBeVisible();
-    await expect(page.getByText(/Manual legacy browsing remains available/)).toBeVisible();
-    await expect.poll(() => new URL(page.url()).searchParams.get("assessment")).toBe(assessment.id);
     await page.getByRole("button", { name: "Repeater", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
     await page.getByRole("textbox", { name: "Name", exact: true }).fill("Durable account request");
@@ -4897,7 +4881,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
   ]);
 });
 
-test("stabilization browser pentest local target and durable request drafts on LAN", async ({page}, testInfo) => {
+test("browser harness local target and durable request drafts on LAN", async ({page}, testInfo) => {
   test.setTimeout(150_000);
   page.setDefaultTimeout(8_000);
   const fixture = await startBrowserPentestAuditFixture();
@@ -4916,6 +4900,8 @@ test("stabilization browser pentest local target and durable request drafts on L
 
     await page.getByRole("button", {name: "Research workbench"}).click();
     const tools = page.getByRole("navigation", {name: "Security Browser tools"});
+    await expect(tools.getByRole("button", {name: /Intruder|Automate/})).toHaveCount(0);
+    await expect(page.getByRole("button", {name: "Start guided test"})).toHaveCount(0);
     if ((page.viewportSize()?.width ?? 1440) <= 430) {
       const navigation = page.locator(".side-nav");
       await navigation.getByRole("button", {name: "Open navigation"}).click();
@@ -4957,26 +4943,6 @@ test("stabilization browser pentest local target and durable request drafts on L
     await page.getByRole("button", {name: "GET Local audit request"}).click();
     await expect(editor.getByLabel("URL", {exact: true})).toHaveValue(fixture.targetUrl);
 
-    await tools.getByRole("button", {name: /Automate/}).click();
-    await expect(page.getByRole("heading", {name: "Intruder"})).toBeVisible();
-    await page.getByLabel("Name", {exact: true}).fill("Local audit attack");
-    await page.getByLabel("URL template").fill(fixture.targetUrl);
-    await page.getByRole("button", {name: "Save attack draft"}).click();
-    await expect(page.getByRole("alert").filter({hasText: "Add §id§"})).toBeVisible();
-    await page.getByLabel("URL template").fill(`${fixture.targetUrl}?id=§id§`);
-    await page.getByLabel("Payload sets").fill("alpha\nbeta");
-    await page.getByRole("button", {name: "Save attack draft"}).click();
-    await expect(page.getByRole("status").filter({hasText: "Intruder attack saved"})).toBeVisible();
-    const attack = page.locator(".browser-suite-list li").filter({hasText: "Local audit attack"});
-    await expect(attack).toContainText("0/2 requests");
-    await attack.getByRole("button", {name: "Queue on desktop"}).click();
-    await expect(attack).toContainText("queued");
-    await attack.getByRole("button", {name: "Cancel"}).click();
-    await expect(attack).toContainText("cancelled");
-    await attack.getByRole("button", {name: "Delete Intruder attack Local audit attack"}).click();
-    await page.getByRole("dialog", {name: "Delete Local audit attack?"}).getByRole("button", {name: "Delete attack"}).click();
-    await expect(attack).toHaveCount(0);
-    await tools.getByRole("button", {name: "Repeater", exact: true}).click();
     await page.getByRole("button", {name: "Delete Repeater request Local audit request"}).click();
     await page.getByRole("dialog", {name: "Delete Local audit request?"}).getByRole("button", {name: "Delete request"}).click();
     await expect(page.getByRole("button", {name: "GET Local audit request"})).toHaveCount(0);
@@ -4988,101 +4954,7 @@ test("stabilization browser pentest local target and durable request drafts on L
   }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
 });
 
-test("browser pentest upload and script payload sources work on LAN", async ({page}, testInfo) => {
-  test.setTimeout(90_000);
-  const fixture = await startBrowserPentestAuditFixture();
-  await withOwnedCleanup(async () => {
-    await pairBrowserPentestAudit(page, fixture);
-    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
-    const browserContext = await page.evaluate(() => ({secure: isSecureContext, subtle: Boolean(crypto.subtle)}));
-    expect(browserContext).toEqual({secure: false, subtle: false});
-    await testInfo.attach("browser-context", {body: JSON.stringify({origin: fixture.core.origin, ...browserContext}), contentType: "application/json"});
-    await page.getByRole("tab", {name: "Upload file"}).click();
-    const uploadBytes = Buffer.from('["alpha", "beta"]');
-    await page.getByLabel("Upload payload file").setInputFiles({name: "local-values.json", mimeType: "application/json", buffer: uploadBytes});
-    await expect(page.getByText("Reviewed values (2)")).toBeVisible();
-    await page.getByLabel("Name", {exact: true}).fill("LAN upload provenance");
-    await page.getByLabel("URL template").fill(`${fixture.targetUrl}?id=§id§`);
-    await page.getByRole("button", {name: "Save attack draft"}).click();
-    await expect(page.locator(".browser-suite-list li").filter({hasText: "LAN upload provenance"})).toBeVisible();
-    await page.getByRole("tab", {name: "Script"}).click();
-    const script = 'values("é", "admin")';
-    await page.getByLabel("Payload script").fill(script);
-    await page.getByRole("button", {name: "Run preview"}).click();
-    await expect(page.getByText("Reviewed values (2)")).toBeVisible();
-    await page.getByLabel("Name", {exact: true}).fill("LAN script provenance");
-    await page.getByRole("button", {name: "Save attack draft"}).click();
-    await expect(page.locator(".browser-suite-list li").filter({hasText: "LAN script provenance"})).toBeVisible();
-    const workspaceResponse = await fixture.api.get(`engagements/${fixture.projectId}/browser-research`);
-    expect(workspaceResponse.ok(), await workspaceResponse.text()).toBe(true);
-    const workspace = await workspaceResponse.json() as {attacks: Array<{name: string; metadata: {payload_source?: {kind: string; sha256: string}}}>};
-    expect(workspace.attacks.find(attack => attack.name === "LAN upload provenance")?.metadata.payload_source).toMatchObject({
-      kind: "upload", sha256: createHash("sha256").update(uploadBytes).digest("hex"),
-    });
-    expect(workspace.attacks.find(attack => attack.name === "LAN script provenance")?.metadata.payload_source).toMatchObject({
-      kind: "script", sha256: createHash("sha256").update(script).digest("hex"),
-    });
-    await testInfo.attach("payload-sources-LAN", {body: await page.screenshot(), contentType: "image/png"});
-
-    await page.goto(`http://127.0.0.1:${new URL(fixture.core.origin).port}/?view=browser#token=${encodeURIComponent(fixture.core.token)}`);
-    await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
-    expect(await page.evaluate(() => ({secure: isSecureContext, subtle: Boolean(crypto.subtle)}))).toEqual({secure: true, subtle: true});
-    await page.getByLabel("Browser engine").selectOption("native");
-    await page.getByRole("button", {name: "Research workbench"}).click();
-    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
-    await page.getByRole("tab", {name: "Upload file"}).click();
-    await page.getByLabel("Upload payload file").setInputFiles({name: "local-values.json", mimeType: "application/json", buffer: Buffer.from('["alpha", "beta"]')});
-    await expect(page.getByText("Reviewed values (2)")).toBeVisible();
-    await page.getByRole("tab", {name: "Script"}).click();
-    await page.getByRole("button", {name: "Run preview"}).click();
-    await expect(page.getByText("Reviewed values (13)")).toBeVisible();
-  }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
-});
-
-test("browser pentest Intruder strategy budgets are durable and do not send during setup", async ({page}) => {
-  test.setTimeout(90_000);
-  const fixture = await startBrowserPentestAuditFixture();
-  await withOwnedCleanup(async () => {
-    await pairBrowserPentestAudit(page, fixture);
-    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
-    const variants = [
-      {strategy: "sniper", name: "Audit sniper", payloads: "one\ntwo", requests: 4},
-      {strategy: "battering_ram", name: "Audit battering ram", payloads: "one\ntwo", requests: 2},
-      {strategy: "pitchfork", name: "Audit pitchfork", payloads: "one\ntwo\n---\nadmin\nuser", requests: 2},
-      {strategy: "cluster_bomb", name: "Audit cluster bomb", payloads: "one\ntwo\n---\nadmin\nuser", requests: 4},
-    ];
-    for (const variant of variants) {
-      await page.getByLabel("Name", {exact: true}).fill(variant.name);
-      await page.getByLabel("Strategy").selectOption(variant.strategy);
-      await page.getByLabel("Position names").fill("id, role");
-      await page.getByLabel("URL template").fill(`${fixture.targetUrl}?id=§id§&role=§role§`);
-      await page.getByLabel("Payload sets").fill(variant.payloads);
-      await page.getByRole("button", {name: "Save attack draft"}).click();
-      const attack = page.locator(".browser-suite-list li").filter({hasText: variant.name});
-      await expect(attack).toContainText(`0/${variant.requests} requests`);
-      await expect(attack).toContainText(variant.strategy.replaceAll("_", " "));
-    }
-    await page.reload();
-    await expect(page.getByLabel("Browser engine")).toBeVisible({timeout: 20_000});
-    await page.getByLabel("Browser engine").selectOption("native");
-    await page.getByRole("button", {name: "Research workbench"}).click();
-    await page.getByRole("navigation", {name: "Security Browser tools"}).getByRole("button", {name: /Automate/}).click();
-    for (const variant of variants) {
-      await expect(page.locator(".browser-suite-list li").filter({hasText: variant.name})).toContainText(`0/${variant.requests} requests`);
-    }
-    const response = await fixture.api.get(`engagements/${fixture.projectId}/browser-research`);
-    expect(response.ok(), await response.text()).toBe(true);
-    const workspace = await response.json() as {attacks: Array<{name: string; strategy: string; max_requests: number; request_count: number; state: string}>};
-    for (const variant of variants) {
-      expect(workspace.attacks).toEqual(expect.arrayContaining([expect.objectContaining({
-        name: variant.name, strategy: variant.strategy, max_requests: variant.requests, request_count: 0, state: "draft",
-      })]));
-    }
-    expect(fixture.targetHits).toEqual([]);
-  }, [{name: "local pentest fixture", dispose: () => stopBrowserPentestAuditFixture(fixture)}]);
-});
-
-test("browser pentest Decoder Comparer and Sequencer use real Core on LAN", async ({page}) => {
+test("browser harness Decoder Comparer and Sequencer use real Core on LAN", async ({page}) => {
   test.setTimeout(120_000);
   const fixture = await startBrowserPentestAuditFixture();
   await withOwnedCleanup(async () => {

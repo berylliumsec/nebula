@@ -49,18 +49,12 @@ from .domain import utc_now
 #                              `nebula-core doctor` checks the project's
 #                              terminal command rows against them;
 #   terminal_recording_policy  the id names the project's policy stream;
-#   browser_assessment         issue candidates and validation grants outlive
-#                              a deleted assessment and look their receipts
-#                              up in its ledger.
 # A kind added later is kept until it is listed here and in the triggers.
 OPERATION_EVENT_OWNER_KINDS: dict[str, str] = {
     "action_intent": "action_intents",
     "artifact": "artifacts",
     "browser_action": "browser_actions",
     "browser_actions": "browser_actions",
-    "browser_attack": "browser_attacks",
-    "browser_attack_results": "browser_attack_results",
-    "browser_attacks": "browser_attacks",
     "browser_automation_lease": "browser_automation_leases",
     "browser_automation_leases": "browser_automation_leases",
     "browser_command": "browser_commands",

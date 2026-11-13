@@ -5,6 +5,8 @@ from tests.v3.async_test_support import (
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from nebula.v3.browser_companion import (
@@ -538,7 +540,11 @@ async def test_manual_action_revokes_approvals_without_clearing_control_grant(tm
                     ),
                 )
             )
-            await asyncio.sleep(0)
+            async with asyncio.timeout(2):
+                while (
+                    await store.get(CompanionAction, pending.id)
+                ).status == "pending":
+                    await asyncio.sleep(0.01)
             assert not task.done()
             assert (await service.session(session.id)).metadata[
                 "assistant_paused"
@@ -577,7 +583,9 @@ async def test_cancelled_turn_cannot_dispatch_an_approved_action_waiting_for_con
         lock = service._locks.setdefault(session.id, asyncio.Lock())
         async with lock:
             task = asyncio.create_task(service.decide(session.id, action.id, "approve"))
-            await asyncio.sleep(0)
+            async with asyncio.timeout(2):
+                while (await store.get(CompanionAction, action.id)).status == "pending":
+                    await asyncio.sleep(0.01)
             assert (await store.get(CompanionAction, action.id)).status == "running"
             (
                 await store.update(
@@ -804,7 +812,7 @@ async def test_protected_reference_fills_only_after_approval_and_retains_capture
         return Adapter()
 
     monkeypatch.setattr(service, "adapter", adapter)
-    monkeypatch.setattr(service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(service.security, "_scope", AsyncMock(return_value=None))
     monkeypatch.setattr(service.security, "_require_in_scope", lambda *args: None)
     assert payloads == []
     result = await service.decide(session.id, action.id, "approve")
@@ -944,7 +952,7 @@ async def test_background_tab_poll_reports_lost_state_once_without_repausing_on_
         return Adapter()
 
     monkeypatch.setattr(service, "adapter", adapter)
-    monkeypatch.setattr(service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(service.security, "_scope", AsyncMock(return_value=None))
     monkeypatch.setattr(service.security, "_require_in_scope", lambda *args: None)
 
     async def run():
@@ -1742,7 +1750,7 @@ async def test_control_paused_mid_request_is_refused_before_the_browser_acts(
         return Adapter()
 
     monkeypatch.setattr(broker.service, "adapter", adapter)
-    monkeypatch.setattr(broker.service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(broker.service.security, "_scope", AsyncMock(return_value=None))
     monkeypatch.setattr(
         broker.service.security, "_require_in_scope", lambda *args: None
     )
@@ -1872,7 +1880,7 @@ async def test_browser_service_refusals_reach_the_model_classified(
         return host
 
     monkeypatch.setattr(broker.service, "adapter", adapter)
-    monkeypatch.setattr(broker.service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(broker.service.security, "_scope", AsyncMock(return_value=None))
     monkeypatch.setattr(broker.service.security, "_require_in_scope", _out_of_scope)
 
     completion = await service.complete(prepared)
@@ -1966,10 +1974,10 @@ async def test_harness_gateway_reports_another_projects_browser_as_unavailable(
         def __init__(self):
             pass
 
-        def _active_gateway_turn(self, session_id):
+        async def _active_gateway_turn(self, session_id):
             return None
 
-        def _gateway_catalog(self, harness_session, params=None, *, turn=None):
+        async def _gateway_catalog(self, harness_session, params=None, *, turn=None):
             return {
                 "tools": [
                     {

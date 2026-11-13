@@ -314,7 +314,7 @@ async def test_terminal_background_process_without_callback_becomes_unknown_fail
                 chat_turn_id=turn.id,
                 tool_name="run_command",
                 status=ToolCallStatus.RUNNING,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 arguments={"command": "wait-forever", "background": True},
                 started_at=utc_now(),
             )
@@ -392,7 +392,7 @@ async def test_terminal_background_process_without_callback_becomes_unknown_fail
                 chat_turn_id="turn-settled-missing-callback",
                 tool_name="run_command",
                 status=ToolCallStatus.RUNNING,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 arguments={"command": "wait-forever", "background": True},
                 started_at=utc_now(),
             )
@@ -1225,7 +1225,7 @@ async def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_ba
                 chat_turn_id="turn-in-ledger",
                 tool_name="run_command",
                 status=ToolCallStatus.RUNNING,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 arguments=entry["arguments"],
                 result=receipt,
                 started_at=utc_now(),

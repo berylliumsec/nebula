@@ -76,7 +76,7 @@ class ApplicationModelService:
     async def snapshot(self, project):
         (await self.project(project))
         async with self.store.database.connection() as connection:
-            return self._read(connection, project)
+            return await connection.run_sync(lambda sync: self._read(sync, project))
 
     def registry(self, graph):
         active = builtin_registry()
@@ -430,12 +430,16 @@ class ApplicationModelService:
     async def evidence(self, project, kind, identifier):
         (await self.project(project))
         async with self.store.database.connection() as connection:
-            return self._evidence(connection, project, kind, identifier)
+            return await connection.run_sync(
+                lambda sync: self._evidence(sync, project, kind, identifier)
+            )
 
     async def evidence_list(self, project, offset=0, limit=100):
         (await self.project(project))
         async with self.store.database.connection() as connection:
-            cutoff = self._read(connection, project).get("evidence_since")
+            cutoff = (
+                await connection.run_sync(lambda sync: self._read(sync, project))
+            ).get("evidence_since")
             rows = (
                 await connection.execute(
                     select(EntityRow.kind, EntityRow.id)
@@ -453,7 +457,9 @@ class ApplicationModelService:
             ).all()
             return {
                 "evidence": [
-                    self._evidence(connection, project, row.kind, row.id)
+                    await connection.run_sync(
+                        lambda sync: self._evidence(sync, project, row.kind, row.id)
+                    )
                     for row in rows[:limit]
                 ],
                 "next_offset": offset + limit if len(rows) > limit else None,
@@ -534,7 +540,9 @@ class ApplicationModelService:
                             409, "Retry key was already used for a different edit"
                         )
                     return receipt.payload["result"]
-                graph = self._read(connection, project)
+                graph = await connection.run_sync(
+                    lambda sync: self._read(sync, project)
+                )
                 if graph["revision"] != request.expected_revision:
                     raise HTTPException(
                         409,
@@ -719,8 +727,8 @@ class ApplicationModelService:
                                 raise HTTPException(
                                     409, "Property was dismissed; review its history"
                                 )
-                            properties[key] = self._claim(
-                                connection, project, value, stamp
+                            properties[key] = await connection.run_sync(
+                                lambda sync: self._claim(sync, project, value, stamp)
                             )
                         hints = registry.types[typename].identity_hints
                         identity = (
@@ -758,8 +766,10 @@ class ApplicationModelService:
                             "id": identifier,
                             "identity": identity,
                             **stamp,
-                            "classification": self._claim(
-                                connection, project, op["classification"], stamp
+                            "classification": await connection.run_sync(
+                                lambda sync: self._claim(
+                                    sync, project, op["classification"], stamp
+                                )
                             ),
                             "properties": properties,
                         }
@@ -831,8 +841,10 @@ class ApplicationModelService:
                             "source": source,
                             "target": target,
                             **stamp,
-                            "claim": self._claim(
-                                connection, project, op["claim"], stamp
+                            "claim": await connection.run_sync(
+                                lambda sync: self._claim(
+                                    sync, project, op["claim"], stamp
+                                )
                             ),
                         }
                     graph[collection][identifier] = item

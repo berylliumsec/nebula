@@ -124,7 +124,7 @@ class SecurityFlowBridge:
                 (await self.security._scope(session.engagement_id)),
                 url,
                 "agent_security.proxy.request",
-                RiskClass.ACTIVE_SCAN,
+                RiskClass.NETWORK_ACTION,
                 native_scope_authority=True,
             )
             return {

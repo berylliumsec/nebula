@@ -372,7 +372,7 @@ def _approval(approval_id: str) -> Approval:
         id=approval_id,
         engagement_id="project",
         run_id="run",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
         exact_request={"tool_name": "scan", "arguments": {}},
         policy_rationale="active operation",
         requested_by="agent",

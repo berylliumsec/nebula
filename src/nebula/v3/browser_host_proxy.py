@@ -117,7 +117,7 @@ class BrowserHostProxy:
             )
             assert upstream is not None
             # Revalidate after DNS/connect; no bytes reach a newly revoked scope.
-            self.authorize(destination)
+            await call_async(self.authorize, destination)
             if tunnel:
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
@@ -153,7 +153,7 @@ class BrowserHostProxy:
             ) -> None:
                 idle = 0
                 while idle < 300:
-                    self.authorize(destination)
+                    await call_async(self.authorize, destination)
                     try:
                         chunk = await asyncio.wait_for(source.read(65536), 1)
                     except TimeoutError:
@@ -163,7 +163,7 @@ class BrowserHostProxy:
                     if not chunk:
                         return
                     idle = 0
-                    self.authorize(destination)
+                    await call_async(self.authorize, destination)
                     sink.write(chunk)
                     await asyncio.wait_for(sink.drain(), 10)
 

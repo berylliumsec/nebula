@@ -11,8 +11,6 @@ from tests.v3.async_test_support import AsyncTestClient as TestClient
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
-    BrowserAttack,
-    BrowserAttackResult,
     BrowserCrawlJob,
     BrowserInterceptItem,
     BrowserRepeaterTab,
@@ -269,7 +267,7 @@ async def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_pat
     assert outside.status_code == 422
 
 
-async def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
+async def test_repeater_lifecycle_is_durable_and_budgeted(tmp_path):
     store, client, project, identity, session = await _setup(tmp_path)
     repeater = await client.post(
         f"/api/v1/engagements/{project.id}/browser-repeater-tabs",
@@ -325,110 +323,6 @@ async def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_pat
     assert saved_repeater["state"] == "ready"
     assert saved_repeater["request_count"] == 1
     assert saved_repeater["history_exchange_ids"] == [result.json()["id"]]
-
-    attack = await client.post(
-        f"/api/v1/engagements/{project.id}/browser-attacks",
-        headers=_auth(),
-        json={
-            "session_id": session["id"],
-            "identity_id": identity["id"],
-            "name": "Identifier boundaries",
-            "strategy": "sniper",
-            "method": "GET",
-            "url_template": "https://app.example.test/api/users/§id§",
-            "positions": ["id"],
-            "payload_sets": [{"kind": "curated", "name": "boundary_numbers"}],
-            "transforms": ["url_encode"],
-            "max_requests": 2,
-            "payload_source": {
-                "kind": "upload",
-                "display_name": "boundaries.txt",
-                "sha256": "a" * 64,
-                "value_count": 5,
-            },
-        },
-    )
-    assert attack.status_code == 201, attack.text
-    current = attack.json()
-    for action in ("queue", "start", "pause", "resume"):
-        moved = await client.post(
-            f"/api/v1/browser-attacks/{current['id']}/state",
-            headers=_auth(),
-            json={
-                "expected_revision": current["revision"],
-                "action": action,
-                "actor_id": "operator-1",
-            },
-        )
-        assert moved.status_code == 200, moved.text
-        current = moved.json()
-    assert current["state"] == "running"
-    for sequence in range(2):
-        result = await client.post(
-            f"/api/v1/browser-attacks/{current['id']}/results",
-            headers=_auth(),
-            json={
-                "sequence": sequence,
-                "payloads": [str(sequence)],
-                "status_code": 200,
-            },
-        )
-        assert result.status_code == 201, result.text
-    exhausted = await client.post(
-        f"/api/v1/browser-attacks/{current['id']}/results",
-        headers=_auth(),
-        json={"sequence": 2, "payloads": ["2"], "status_code": 200},
-    )
-    assert exhausted.status_code == 422
-    assert (await store.count(BrowserAttack)) == 1
-    assert (await store.count(BrowserAttackResult)) == 2
-    saved_attack = await store.get(BrowserAttack, current["id"])
-    assert saved_attack.state == "complete"
-    assert saved_attack.metadata["payload_source"] == {
-        "kind": "upload",
-        "display_name": "boundaries.txt",
-        "sha256": "a" * 64,
-        "value_count": 5,
-        "prompt_version": None,
-        "model": None,
-        "provider_profile_id": None,
-    }
-
-
-async def test_intruder_requires_real_markers_and_strategy_payload_cardinality(
-    tmp_path,
-):
-    _, client, project, identity, session = await _setup(tmp_path)
-    base = {
-        "session_id": session["id"],
-        "identity_id": identity["id"],
-        "name": "Invalid attack",
-        "strategy": "sniper",
-        "method": "GET",
-        "url_template": "https://app.example.test/api/users/static",
-        "positions": ["id"],
-        "payload_sets": [{"kind": "list", "values": ["1"]}],
-    }
-    missing = await client.post(
-        f"/api/v1/engagements/{project.id}/browser-attacks",
-        headers=_auth(),
-        json=base,
-    )
-    assert missing.status_code == 422
-    assert "missing position markers" in missing.text
-
-    wrong_sets = await client.post(
-        f"/api/v1/engagements/{project.id}/browser-attacks",
-        headers=_auth(),
-        json={
-            **base,
-            "strategy": "pitchfork",
-            "url_template": "https://app.example.test/api/§id§/§role§",
-            "positions": ["id", "role"],
-        },
-    )
-    assert wrong_sets.status_code == 422
-    assert "requires 2 payload set" in wrong_sets.text
 
 
 async def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
@@ -532,8 +426,8 @@ async def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
     assert (await store.count(Finding)) == 1
 
 
-def _enable_interception(client, session):
-    enabled = client.put(
+async def _enable_interception(client, session):
+    enabled = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json={
@@ -553,7 +447,7 @@ async def test_intercepts_after_a_page_of_history_stay_single_visible_and_expire
     tmp_path,
 ):
     store, client, project, _, session = await _setup(tmp_path)
-    session = _enable_interception(client, session)
+    session = await _enable_interception(client, session)
     (
         await seed_older_copies(
             store,
@@ -692,19 +586,10 @@ async def test_site_map_and_har_export_reach_records_after_a_page_of_history(tmp
     assert workspace["traffic"][-1]["id"] == captured.json()["id"]
 
 
-async def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(
+async def test_repeater_results_after_a_page_of_history_stay_owned(
     tmp_path,
 ):
     store, client, project, identity, session = await _setup(tmp_path)
-    (
-        await seed_older_copies(
-            store,
-            BrowserAttackResult(
-                engagement_id=project.id, attack_id="earlier-attack", sequence=0
-            ),
-            vary=lambda index: {"sequence": index},
-        )
-    )
     (
         await seed_older_copies(
             store,
@@ -714,46 +599,6 @@ async def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(
             vary=lambda index: {"sequence": index},
         )
     )
-    attack = await client.post(
-        f"/api/v1/engagements/{project.id}/browser-attacks",
-        headers=_auth(),
-        json={
-            "session_id": session["id"],
-            "identity_id": identity["id"],
-            "name": "Identifier boundaries",
-            "strategy": "sniper",
-            "method": "GET",
-            "url_template": "https://app.example.test/api/users/§id§",
-            "positions": ["id"],
-            "payload_sets": [{"kind": "curated", "name": "boundary_numbers"}],
-            "max_requests": 3,
-        },
-    )
-    assert attack.status_code == 201, attack.text
-    current = attack.json()
-    for action in ("queue", "start"):
-        moved = await client.post(
-            f"/api/v1/browser-attacks/{current['id']}/state",
-            headers=_auth(),
-            json={
-                "expected_revision": current["revision"],
-                "action": action,
-                "actor_id": "operator-1",
-            },
-        )
-        assert moved.status_code == 200, moved.text
-        current = moved.json()
-    for _ in range(2):
-        result = await client.post(
-            f"/api/v1/browser-attacks/{current['id']}/results",
-            headers=_auth(),
-            json={"sequence": 0, "payloads": ["0"], "status_code": 200},
-        )
-        assert result.status_code == 201, result.text
-    owned = await store.find_entities(BrowserAttackResult, {"attack_id": current["id"]})
-    assert len(owned) == 1
-    assert (await store.get(BrowserAttack, current["id"])).request_count == 1
-
     repeater = await client.post(
         f"/api/v1/engagements/{project.id}/browser-repeater-tabs",
         headers=_auth(),
@@ -801,3 +646,34 @@ async def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_retired_workflows_are_absent_from_core_and_discovery(tmp_path):
+    from nebula.v3.agent_security_tools import SecurityToolsRuntime
+
+    store, client, project, identity, session = await _setup(tmp_path)
+    for resource in ("browser-attacks", "browser-assessments"):
+        response = await client.post(
+            f"/api/v1/engagements/{project.id}/{resource}", headers=_auth(), json={}
+        )
+        assert response.status_code in {404, 405}
+    response = await client.post(
+        "/api/v1/browser-issue-candidates", headers=_auth(), json={}
+    )
+    assert response.status_code in {404, 405}
+    schemas = (await client.get("/openapi.json")).json()
+    assert not any(
+        "browser-attacks" in path
+        or "browser-assessments" in path
+        or "browser-issue-candidates" in path
+        for path in schemas["paths"]
+    )
+    names = {tool.name for tool in SecurityToolsRuntime.capabilities().tools}
+    assert "intruder" not in names
+    assert {"repeater", "crawl"} <= names
+    workspace = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+        )
+    ).json()
+    assert "attacks" not in workspace and "attack_results" not in workspace

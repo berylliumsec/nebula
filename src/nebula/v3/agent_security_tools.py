@@ -6,18 +6,14 @@ from .async_utils import async_done_callback
 
 import asyncio
 import base64
-import html
 import json
 from html.parser import HTMLParser
 from typing import Any, Literal
-from urllib.parse import quote, unquote, urljoin
+from urllib.parse import urljoin
 
 from .agent_security import AgentSecuritySessions
 from .browser_engine import BrowserEngineAction
 from .browser_research import (
-    AttackCreateRequest,
-    AttackResultRequest,
-    AttackStateRequest,
     BrowserResearchService,
     CrawlCreateRequest,
     CrawlStateRequest,
@@ -38,7 +34,6 @@ from .browser_security import (
 from .browserd import BrowserdSecurityRequest
 from .diagnostics import record_caught_exception, scrub_host_paths
 from .domain import (
-    BrowserAttack,
     BrowserCaptureMode,
     BrowserCrawlJob,
     BrowserInterceptItem,
@@ -133,7 +128,7 @@ _HEADERS = {
 _TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     (
         "status",
-        "Read the headless security session, intercept queue, traffic and attack status.",
+        "Read the headless security session, intercept queue, traffic and crawl status.",
         _object({}),
         True,
     ),
@@ -188,32 +183,6 @@ _TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         _object(
             {"method": _STRING, "url": _URL, "headers": _HEADERS, "body": _STRING},
             ["method", "url"],
-        ),
-        False,
-    ),
-    (
-        "intruder",
-        "Queue a bounded headless Intruder attack with sniper, battering ram, pitchfork or cluster bomb payloads.",
-        _object(
-            {
-                "strategy": {
-                    "enum": ["sniper", "battering_ram", "pitchfork", "cluster_bomb"]
-                },
-                "method": _STRING,
-                "url_template": _URL,
-                "headers_template": {"type": "array"},
-                "body_template": _STRING,
-                "positions": {"type": "array", "items": _STRING},
-                "payload_sets": {"type": "array"},
-                "transforms": {"type": "array", "items": _STRING},
-                "max_requests": {"type": "integer", "minimum": 1, "maximum": 100000},
-                "requests_per_second": {
-                    "type": "number",
-                    "exclusiveMinimum": 0,
-                    "maximum": 100,
-                },
-            },
-            ["strategy", "method", "url_template", "positions", "payload_sets"],
         ),
         False,
     ),
@@ -318,77 +287,6 @@ class _Links(HTMLParser):
             self.links.extend(value for key, value in attrs if key == name and value)
 
 
-def _payload_values(source: dict[str, Any]) -> list[str]:
-    if source.get("kind") == "curated":
-        return list(_CURATED[str(source.get("name"))])
-    return list(source["values"])
-
-
-def _transform(value: str, transforms: list[str]) -> str:
-    for transform in transforms:
-        if transform == "url_encode":
-            value = quote(value, safe="")
-        elif transform == "url_decode":
-            value = unquote(value)
-        elif transform == "base64_encode":
-            value = base64.b64encode(value.encode()).decode()
-        elif transform == "base64_decode":
-            value = base64.b64decode(value).decode(errors="replace")
-        elif transform == "hex_encode":
-            value = value.encode().hex()
-        elif transform == "hex_decode":
-            value = bytes.fromhex(value).decode(errors="replace")
-        elif transform == "html_encode":
-            value = html.escape(value, quote=True)
-        elif transform == "html_decode":
-            value = html.unescape(value)
-        elif transform == "lowercase":
-            value = value.lower()
-        elif transform == "uppercase":
-            value = value.upper()
-    return value
-
-
-def _attack_payloads(attack: BrowserAttack, sequence: int) -> dict[str, str] | None:
-    sets = [_payload_values(source) for source in attack.payload_sets]
-    if not sets or any(not values for values in sets):
-        return None
-    result: dict[str, str] = {}
-    if attack.strategy == "battering_ram":
-        if sequence >= len(sets[0]):
-            return None
-        result = {position: sets[0][sequence] for position in attack.positions}
-    elif attack.strategy == "sniper":
-        index, offset = divmod(sequence, len(sets[0]))
-        if index >= len(attack.positions):
-            return None
-        result = dict.fromkeys(attack.positions, "")
-        result[attack.positions[index]] = sets[0][offset]
-    elif attack.strategy == "pitchfork":
-        if sequence >= min(map(len, sets)):
-            return None
-        result = {
-            position: sets[index][sequence]
-            for index, position in enumerate(attack.positions)
-        }
-    else:
-        remaining = sequence
-        for index in range(len(sets) - 1, -1, -1):
-            remaining, offset = divmod(remaining, len(sets[index]))
-            result[attack.positions[index]] = sets[index][offset]
-        if remaining:
-            return None
-    return {
-        name: _transform(value, attack.transforms) for name, value in result.items()
-    }
-
-
-def _substitute(template: str, values: dict[str, str]) -> str:
-    for name, value in values.items():
-        template = template.replace(f"§{name}§", value)
-    return template
-
-
 class SecurityToolsRuntime:
     """Project-bound MCP dispatch; only Core owns execution and durable state."""
 
@@ -433,7 +331,7 @@ class SecurityToolsRuntime:
                 McpServerProfile(
                     id=PROFILE_ID,
                     name=PROFILE_NAME,
-                    description="Headless Project security testing: interception, Repeater, Intruder and crawl.",
+                    description="Headless Project security testing: interception, Repeater and crawl.",
                     transport=McpTransport.BUILTIN,
                     enabled=True,
                     default_approval=McpApprovalMode.RISK_BASED,
@@ -583,16 +481,6 @@ class SecurityToolsRuntime:
                         item.model_dump(mode="json")
                         for item in research.intercepts
                         if owned(item) and item.state == "paused"
-                    ],
-                    "attacks": [
-                        {
-                            "id": item.id,
-                            "state": item.state,
-                            "request_count": item.request_count,
-                            "max_requests": item.max_requests,
-                        }
-                        for item in research.attacks
-                        if owned(item)
                     ],
                     "crawl_jobs": [
                         {
@@ -765,14 +653,14 @@ class SecurityToolsRuntime:
                 (await self.security._scope(project_id)),
                 url,
                 "agent_security.navigate",
-                RiskClass.ACTIVE_SCAN,
+                RiskClass.NETWORK_ACTION,
                 native_scope_authority=True,
             )
             adapter = await self.sessions.host.adapter()
             receipt = await adapter.execute(
                 BrowserEngineAction(
                     action_token=f"security-navigate-{__import__('uuid').uuid4()}",
-                    assessment_id=session.id,
+                    automation_id=session.id,
                     session_id=session.id,
                     identity_id=session.identity_id,
                     tab_id=session.active_tab_id or "",
@@ -995,31 +883,6 @@ class SecurityToolsRuntime:
                     "body_capture_note": capture_note,
                 }
             )
-        if name == "intruder":
-            attack_request = AttackCreateRequest.model_validate(
-                {
-                    **arguments,
-                    "session_id": session.id,
-                    "identity_id": session.identity_id,
-                }
-            )
-            attack = await self.research.create_attack(attack_request, _ACTOR)
-            attack = await self.research.transition_attack(
-                attack.id,
-                AttackStateRequest(
-                    expected_revision=attack.revision,
-                    action="queue",
-                    actor_id=_ACTOR,
-                ),
-            )
-            self._start_task(project_id, self._run_attack(project_id, attack.id))
-            return self._result(
-                {
-                    "attack_id": attack.id,
-                    "state": "queued",
-                    "max_requests": attack.max_requests,
-                }
-            )
         if name == "crawl":
             crawl_request = CrawlCreateRequest.model_validate(
                 {
@@ -1103,93 +966,6 @@ class SecurityToolsRuntime:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
-    async def _run_attack(self, project_id: str, attack_id: str) -> None:
-        attack = await self.store.get(BrowserAttack, attack_id)
-        try:
-            attack = await self.research.transition_attack(
-                attack.id,
-                AttackStateRequest(
-                    expected_revision=attack.revision,
-                    action="start",
-                    actor_id=_ACTOR,
-                ),
-            )
-            while (
-                attack.state == "running" and attack.request_count < attack.max_requests
-            ):
-                if (await self._active(project_id)) is None:
-                    raise ValueError("the security session stopped")
-                values = _attack_payloads(attack, attack.request_count)
-                if values is None:
-                    (
-                        await self.research.transition_attack(
-                            attack.id,
-                            AttackStateRequest(
-                                expected_revision=attack.revision,
-                                action="complete",
-                                actor_id=_ACTOR,
-                            ),
-                        )
-                    )
-                    return
-                sequence = attack.request_count
-                url = _substitute(attack.url_template, values)
-                headers = {
-                    name: _substitute(value, values)
-                    for name, value in attack.headers_template
-                }
-                try:
-                    response = await self.sessions.request(
-                        project_id,
-                        BrowserdSecurityRequest(
-                            identity_id=attack.identity_id,
-                            method=attack.method,
-                            url=url,
-                            headers=headers,
-                            body=_substitute(attack.body_template, values),
-                        ),
-                    )
-                    result = AttackResultRequest(
-                        sequence=sequence,
-                        payloads=[values[name] for name in attack.positions],
-                        status_code=response.status_code,
-                        response_bytes=response.body_bytes,
-                    )
-                except Exception as exc:
-                    if (await self._active(project_id)) is None:
-                        raise
-                    result = AttackResultRequest(
-                        sequence=sequence,
-                        payloads=[values[name] for name in attack.positions],
-                        error=f"{type(exc).__name__}: {str(exc)[:3000]}",
-                    )
-                (await self.research.add_attack_result(attack.id, result, _ACTOR))
-                attack = await self.store.get(BrowserAttack, attack.id)
-                if attack.state == "running":
-                    await asyncio.sleep(1 / attack.requests_per_second)
-        except (Exception, asyncio.CancelledError) as exc:
-            latest = await self.store.get(BrowserAttack, attack_id)
-            if latest.state in {"queued", "running", "paused"}:
-                action: Literal["cancel", "fail"] = (
-                    "cancel"
-                    if isinstance(exc, asyncio.CancelledError)
-                    or (await self._active(project_id)) is None
-                    else "fail"
-                )
-                (
-                    await self.research.transition_attack(
-                        latest.id,
-                        AttackStateRequest(
-                            expected_revision=latest.revision,
-                            action=action,
-                            actor_id=_ACTOR,
-                            error=str(exc)[:3000] or "Security session stopped",
-                        ),
-                    )
-                )
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-
     async def _run_crawl(self, project_id: str, crawl_id: str) -> None:
         job = await self.store.get(BrowserCrawlJob, crawl_id)
         try:
@@ -1250,7 +1026,7 @@ class SecurityToolsRuntime:
                                 (await self.security._scope(project_id)),
                                 target,
                                 "agent_security.crawl",
-                                RiskClass.ACTIVE_SCAN,
+                                RiskClass.NETWORK_ACTION,
                                 native_scope_authority=True,
                             )
                         except BrowserWorkflowError:

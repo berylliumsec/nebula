@@ -15,7 +15,7 @@ function dashboardApi() {
       ], frames: [],
     }),
     getSecurityBrowserResearch: vi.fn().mockResolvedValue({
-      intercepts: [], attacks: [], repeaterResults: [], repeaterTabs: [],
+      intercepts: [], repeaterResults: [], repeaterTabs: [],
     }),
     getSecurityBrowserAutomation: vi.fn().mockResolvedValue({ leases: [] }),
     stopAgentSecurity: vi.fn().mockResolvedValue({ stopped_sessions: 1 }),
@@ -39,7 +39,7 @@ describe("SecurityDashboard", () => {
     const api = dashboardApi();
     api.getSecurityBrowserResearch.mockResolvedValue({
       intercepts: [{ id: "pause-1", sessionId: "headless", state: "paused", phase: "request", method: "GET", url: "https://example.test/" }],
-      attacks: [], repeaterResults: [], repeaterTabs: [],
+      repeaterResults: [], repeaterTabs: [],
     });
     const decide = vi.fn().mockResolvedValue({});
     const fullApi = { ...api, decideSecurityBrowserIntercept: decide };

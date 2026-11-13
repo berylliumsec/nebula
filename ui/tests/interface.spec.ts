@@ -398,27 +398,6 @@ async function installTruthfulCore(page: Page) {
         actions: [],
         handoffs: [],
       };
-    } else if (path.endsWith("/engagements/scratch-project/browser-assessments")) {
-      const budget = { max_requests: 2000, max_actions: 500, max_duration_seconds: 3600, max_concurrency: 2, requests_used: 0, actions_used: 0 };
-      body = {
-        assessments: [],
-        steps: [],
-        login_flows: [],
-        recipes: [],
-        candidates: [],
-        validation_grants: [],
-        profiles: [
-          { id: "explore", name: "Explore", summary: "Guided manual exploration.", risk_classes: ["passive"], required_adapters: ["managed-chromium"], default_budget: budget, validation_locked: false },
-          { id: "standard", name: "Standard", summary: "Crawl and passive analysis.", risk_classes: ["passive"], required_adapters: ["managed-chromium", "zap"], default_budget: budget, validation_locked: false },
-          { id: "deep", name: "Deep", summary: "Bounded active checks.", risk_classes: ["passive", "active_scan"], required_adapters: ["managed-chromium", "zap"], default_budget: budget, validation_locked: false },
-          { id: "api", name: "API", summary: "API import and testing.", risk_classes: ["passive", "active_scan"], required_adapters: ["managed-chromium", "zap"], default_budget: budget, validation_locked: false },
-          { id: "validation", name: "Validation", summary: "Issue-specific validation.", risk_classes: ["exploitation"], required_adapters: ["managed-chromium"], default_budget: budget, validation_locked: true },
-        ],
-        engines: [
-          { adapter: "managed-chromium", display_name: "Managed Chromium", contract_version: "1", state: "unavailable", installed_version: null, digest: null, actions: [], protocols: [], check_families: [], unavailability_reason: "Managed runtime is not prepared.", recovery_action: "Prepare the managed browser runtime.", desktop_only: true },
-          { adapter: "legacy-webview", display_name: "Legacy system WebView", contract_version: "1", state: "degraded", installed_version: null, digest: null, actions: ["manual.navigate"], protocols: ["http", "https"], check_families: [], unavailability_reason: "Manual-only fallback.", recovery_action: "Prepare Managed Chromium.", desktop_only: true },
-        ],
-      };
     } else if (path.endsWith("/engagements/scratch-project/browser-research")) {
       body = {
         site_nodes: [],
@@ -458,8 +437,6 @@ async function installTruthfulCore(page: Page) {
           response_body_artifact_id: null,
           error: null,
         }],
-        attacks: [],
-        attack_results: [],
         token_analyses: [],
       };
     } else if (path.endsWith("/browser-sessions/browser-session-preview/tabs") && request.method() === "PUT") {
@@ -1253,7 +1230,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   expect(compactGeometry.panel.right).toBeLessThanOrEqual(compactGeometry.root.right + 1);
   await securityWorkspace.getByRole("button", { name: "Session", exact: true }).click();
   const sessionPanel = securityWorkspace.locator(".browser-session-workbench");
-  await expect(securityWorkspace.locator(".security-browser-assessment-rail")).toHaveCSS("display", "none");
+  await expect(securityWorkspace.locator(".security-browser-assessment-rail")).toHaveCount(0);
   await expect(sessionPanel.locator(".browser-session-status")).toContainText("Capture proxy: Off · Interception: Off");
   const proxyAction = sessionPanel.getByRole("button", { name: "I trust the CA · enable capture proxy" });
   await expect(proxyAction).toBeVisible();
@@ -1276,7 +1253,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   }
   await page.screenshot({ path: testInfo.outputPath("browser-session-compact.png") });
   await securityWorkspace.getByRole("button", { name: "Target", exact: true }).click();
-  await expect(securityWorkspace.locator(".security-browser-assessment-rail")).toBeVisible();
+  await expect(securityWorkspace.locator(".security-browser-assessment-rail")).toHaveCount(0);
   await securityWorkspace.getByRole("button", { name: "Session", exact: true }).click();
   await toggleAssistant.click();
   await expect(securityResize).toBeVisible();
@@ -11894,26 +11871,9 @@ test("browser research tools expose durable workflows on paired clients", async 
   await page.getByText("Result history (1)").click();
   await expect(page.getByText("128 bytes", { exact: false })).toBeVisible();
 
-  await page.getByRole("button", { name: /Automate/ }).click();
-  await expect(page.getByRole("heading", { name: "Intruder" })).toBeVisible();
-  await expect(page.getByLabel("Position names")).toBeVisible();
-  await expect(page.locator("label", { hasText: "Payload sets" }).locator("small")).toContainText("separate sets with a line containing only");
-  await page.getByRole("tab", { name: "Upload file" }).click();
-  const upload = page.getByLabel("Upload payload file");
-  await expect(upload).toBeAttached();
-  await upload.setInputFiles({
-    name: "roles.json",
-    mimeType: "application/json",
-    buffer: Buffer.from('["admin", "auditor"]'),
-  });
-  await expect(page.getByText("Reviewed values (2)")).toBeVisible();
-  await expect(page.getByText("roles.json", { exact: false })).toBeVisible();
-  await page.getByRole("tab", { name: "Script" }).click();
-  await expect(page.getByLabel("Payload script")).toContainText("range(0, 10)");
-  await page.getByRole("button", { name: "Run preview" }).click();
-  await expect(page.getByText("Reviewed values (13)")).toBeVisible();
-  await page.getByRole("tab", { name: "Assistant" }).click();
-  await expect(page.getByText(/headers, cookies, or body content/i)).toBeVisible();
+  await page.getByRole("button", { name: "Target", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Target map" })).toBeVisible();
+  await expect(page.getByRole("button", {name: /Intruder|Automate/})).toHaveCount(0);
 
   const suite = page.locator(".browser-suite");
   expect(await suite.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);

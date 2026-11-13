@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { SecurityBrowserIdentity, SecurityBrowserSession } from "../api/types";
-import { BrowserResearchSuite, parsePayloadDocument, runPayloadScript } from "./BrowserResearchSuite";
+import { BrowserResearchSuite } from "./BrowserResearchSuite";
 import { DialogProvider } from "./DialogSystem";
 
 const identity = { id: "identity-1", name: "Operator" } as SecurityBrowserIdentity;
@@ -26,56 +26,13 @@ function api(overrides: Record<string, unknown> = {}): ApiClient {
         discoverySource: "proxy", statusCode: 200, parameterNames: ["page"], evidenceIds: [],
         firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
       }],
-      crawlJobs: [], intercepts: [], repeaterTabs: [], repeaterResults: [], attacks: [], attackResults: [], tokenAnalyses: [],
+      crawlJobs: [], intercepts: [], repeaterTabs: [], repeaterResults: [], tokenAnalyses: [],
     }),
     ...overrides,
   } as unknown as ApiClient;
 }
 
 describe("BrowserResearchSuite", () => {
-  it("parses bounded text, CSV, and JSON payload documents", () => {
-    expect(parsePayloadDocument("admin\nuser\n", "roles.txt")).toEqual(["admin", "user"]);
-    expect(parsePayloadDocument('"tenant,one",ignored\ntenant-two,ignored', "tenants.csv")).toEqual(["tenant,one", "tenant-two"]);
-    expect(parsePayloadDocument('[0, "admin"]', "values.json")).toEqual(["0", "admin"]);
-    expect(() => parsePayloadDocument('{"value":"admin"}', "values.json")).toThrow(/flat array/i);
-  });
-
-  it("runs only the bounded declarative payload script language", () => {
-    expect(runPayloadScript('range(0, 2)\nvalues("admin", 9)\nprefix("tenant-", 1, 2)')).toEqual(["0", "1", "2", "admin", "9", "tenant-1", "tenant-2"]);
-    expect(() => runPayloadScript("fetch('https://example.test')")).toThrow(/must use values/i);
-    expect(() => runPayloadScript("range(0, 20000)")).toThrow(/10,000-value limit/i);
-  });
-
-  it("saves exact upload bytes and UTF-8 script provenance without Web Crypto", async () => {
-    const create = vi.fn().mockResolvedValue({ id: "attack-1" });
-    renderSuite(<BrowserResearchSuite api={api({ createSecurityBrowserAttack: create })} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intruder" />);
-    await screen.findByRole("heading", { name: "Intruder" });
-    fireEvent.change(screen.getByLabelText(/URL template/), { target: { value: "https://app.example.test/?id=§id§" } });
-
-    fireEvent.click(screen.getByRole("tab", { name: "Upload file" }));
-    const bytes = new TextEncoder().encode('["alpha", "beta"]');
-    const file = new File([bytes], "values.json", { type: "application/json" });
-    Object.defineProperty(file, "arrayBuffer", { value: () => Promise.resolve(bytes.buffer) });
-    fireEvent.change(screen.getByLabelText("Upload payload file"), { target: { files: [file] } });
-    expect(await screen.findByText("Reviewed values (2)")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Save attack draft" }));
-    await waitFor(() => expect(create).toHaveBeenCalledWith("project-1", expect.objectContaining({
-      payloadSource: expect.objectContaining({
-        kind: "upload", sha256: "b0bf75e6646cbdfeec6709c5daddc1353a8e368101a91a751d2c0d188e9815c1", valueCount: 2,
-      }),
-    })));
-
-    fireEvent.click(screen.getByRole("tab", { name: "Script" }));
-    fireEvent.change(screen.getByLabelText("Payload script"), { target: { value: 'values("é", "admin")' } });
-    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
-    expect(await screen.findByText("Reviewed values (2)")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Save attack draft" }));
-    await waitFor(() => expect(create).toHaveBeenLastCalledWith("project-1", expect.objectContaining({
-      payloadSource: expect.objectContaining({
-        kind: "script", sha256: "8335001b1f002b76e1b0047ddcae2ac322adfd925dbb3583bbedc16e037859f7", valueCount: 2,
-      }),
-    })));
-  });
 
   it("renders the durable target map and bounded crawl controls", async () => {
     renderSuite(<BrowserResearchSuite api={api()} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="target" />);
@@ -117,7 +74,7 @@ describe("BrowserResearchSuite", () => {
 
   it("edits and queues a durable Repeater request while showing retained results", async () => {
     const workspace = {
-      siteNodes: [], crawlJobs: [], intercepts: [], attacks: [], attackResults: [], tokenAnalyses: [],
+      siteNodes: [], crawlJobs: [], intercepts: [], tokenAnalyses: [],
       repeaterTabs: [{
         id: "repeater-1", revision: 2, sessionId: session.id, identityId: identity.id,
         name: "Profile", group: "Ungrouped", notes: "", protocol: "http", method: "POST",
@@ -152,7 +109,7 @@ describe("BrowserResearchSuite", () => {
 
   it("keeps native Repeater sends disabled on a paired browser", async () => {
     const workspace = {
-      siteNodes: [], crawlJobs: [], intercepts: [], attacks: [], attackResults: [], tokenAnalyses: [], repeaterResults: [],
+      siteNodes: [], crawlJobs: [], intercepts: [], tokenAnalyses: [], repeaterResults: [],
       repeaterTabs: [{
         id: "repeater-1", revision: 1, sessionId: session.id, identityId: identity.id,
         name: "Profile", group: "Ungrouped", notes: "", protocol: "http", method: "GET",
@@ -179,7 +136,7 @@ describe("BrowserResearchSuite", () => {
     const create = vi.fn().mockResolvedValue(created);
     const decide = vi.fn();
     const client = api({
-      getSecurityBrowserResearch: vi.fn().mockResolvedValue({ siteNodes: [], crawlJobs: [], intercepts: [intercept], repeaterTabs: [], repeaterResults: [], attacks: [], attackResults: [], tokenAnalyses: [] }),
+      getSecurityBrowserResearch: vi.fn().mockResolvedValue({ siteNodes: [], crawlJobs: [], intercepts: [intercept], repeaterTabs: [], repeaterResults: [], tokenAnalyses: [] }),
       createSecurityBrowserRepeaterTab: create,
       decideSecurityBrowserIntercept: decide,
     });
@@ -200,7 +157,7 @@ describe("BrowserResearchSuite", () => {
     };
     const decide = vi.fn().mockResolvedValue({ ...intercept, state: "forwarded" });
     const client = api({
-      getSecurityBrowserResearch: vi.fn().mockResolvedValue({ siteNodes: [], crawlJobs: [], intercepts: [intercept], repeaterTabs: [], repeaterResults: [], attacks: [], attackResults: [], tokenAnalyses: [] }),
+      getSecurityBrowserResearch: vi.fn().mockResolvedValue({ siteNodes: [], crawlJobs: [], intercepts: [intercept], repeaterTabs: [], repeaterResults: [], tokenAnalyses: [] }),
       decideSecurityBrowserIntercept: decide,
     });
     renderSuite(<BrowserResearchSuite api={client} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intercepts" />);
@@ -214,34 +171,5 @@ describe("BrowserResearchSuite", () => {
       url: "https://app.example.test/api/profile?role=admin",
       headers: [["Accept", "text/plain"]],
     }));
-  });
-
-  it("rejects an Intruder draft whose declared marker is absent", async () => {
-    const create = vi.fn();
-    renderSuite(<BrowserResearchSuite api={api({ createSecurityBrowserAttack: create })} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intruder" />);
-    await screen.findByRole("heading", { name: "Intruder" });
-    fireEvent.change(screen.getByLabelText(/URL template/), { target: { value: "https://app.example.test/static" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save attack draft" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Add §id§");
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("maps pitchfork positions to ordered payload sets with an exact request budget", async () => {
-    const create = vi.fn().mockResolvedValue({ id: "attack-1" });
-    renderSuite(<BrowserResearchSuite api={api({ createSecurityBrowserAttack: create })} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intruder" />);
-    await screen.findByRole("heading", { name: "Intruder" });
-    fireEvent.change(screen.getByLabelText("Strategy"), { target: { value: "pitchfork" } });
-    fireEvent.change(screen.getByLabelText(/Position names/), { target: { value: "id, role" } });
-    fireEvent.change(screen.getByLabelText(/URL template/), { target: { value: "https://app.example.test/users/§id§" } });
-    fireEvent.change(screen.getByLabelText("Body template"), { target: { value: '{"role":"§role§"}' } });
-    fireEvent.change(screen.getByLabelText(/Payload sets/), { target: { value: "1\n2\n---\nuser\nadmin" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save attack draft" }));
-    await waitFor(() => expect(create).toHaveBeenCalledWith("project-1", expect.objectContaining({
-      strategy: "pitchfork",
-      positions: ["id", "role"],
-      payloadSets: [["1", "2"], ["user", "admin"]],
-      maxRequests: 2,
-      payloadSource: expect.objectContaining({ kind: "manual", valueCount: 4 }),
-    })));
   });
 });

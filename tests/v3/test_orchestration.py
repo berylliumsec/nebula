@@ -108,7 +108,7 @@ class ApprovalSpecialist:
                     engagement_id=context.engagement_id,
                     run_id=context.run_id,
                     task_id=context.task.id,
-                    risk_class=RiskClass.ACTIVE_SCAN,
+                    risk_class=RiskClass.NETWORK_ACTION,
                     exact_request={
                         "tool_name": "scan.tcp",
                         "arguments": {"ports": [443]},
@@ -723,7 +723,7 @@ async def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_pa
         role=SpecialistRole.NETWORK_SERVICE,
         title="Scan approved service",
         instructions="Perform only the approved operation",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
     )
     supervisor = PlannedSupervisor(
         MissionPlan(summary="Approval mission", rationale="Operator gate", tasks=[task])
@@ -790,7 +790,7 @@ async def test_rejected_approval_becomes_an_observation_and_allows_an_alternativ
                         engagement_id=context.engagement_id,
                         run_id=context.run_id,
                         task_id=context.task.id,
-                        risk_class=RiskClass.ACTIVE_SCAN,
+                        risk_class=RiskClass.NETWORK_ACTION,
                         exact_request={
                             "tool_name": "scan.tcp",
                             "arguments": {"ports": [443]},
@@ -1009,7 +1009,7 @@ async def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
         role=SpecialistRole.NETWORK_SERVICE,
         title="Scan approved service",
         instructions="Perform only the approved operation",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
     )
     supervisor = PlannedSupervisor(
         MissionPlan(summary="Budget vs approval", rationale="Gate", tasks=[task])
@@ -1031,7 +1031,7 @@ async def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
                     engagement_id=context.engagement_id,
                     run_id=context.run_id,
                     task_id=context.task.id,
-                    risk_class=RiskClass.ACTIVE_SCAN,
+                    risk_class=RiskClass.NETWORK_ACTION,
                     exact_request={
                         "tool_name": "scan.tcp",
                         "arguments": {"ports": [443]},

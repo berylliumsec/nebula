@@ -97,13 +97,13 @@ def test_scope_treats_root_urls_as_domains_but_rejects_lossy_domain_urls():
 def test_mission_grants_are_typed_and_expire_after_grant():
     granted_at = utc_now()
     grant = MissionGrant(
-        risk_classes=[RiskClass.PASSIVE, RiskClass.ACTIVE_SCAN],
+        risk_classes=[RiskClass.PASSIVE, RiskClass.NETWORK_ACTION],
         targets=["10.0.0.0/24"],
         granted_at=granted_at,
         expires_at=granted_at + timedelta(minutes=30),
         granted_by="operator-1",
     )
-    assert grant.risk_classes == [RiskClass.PASSIVE, RiskClass.ACTIVE_SCAN]
+    assert grant.risk_classes == [RiskClass.PASSIVE, RiskClass.NETWORK_ACTION]
     with pytest.raises(ValidationError):
         MissionGrant(
             risk_classes=[RiskClass.PASSIVE],

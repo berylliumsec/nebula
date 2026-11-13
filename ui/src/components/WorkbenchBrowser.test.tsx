@@ -612,7 +612,6 @@ describe("WorkbenchBrowser", () => {
     const pairedSession = { ...workspace.sessions[0], deviceOwner: "desktop-test" };
     api.getSecurityBrowserWorkspace = vi.fn(async () => ({ ...workspace, sessions: [pairedSession] }));
     api.syncSecurityBrowserSession = vi.fn(async (_session, tabs, activeTabId) => ({ ...pairedSession, tabs, activeTabId, revision: 2 }));
-    api.getSecurityBrowserAssessments = vi.fn(async () => ({ assessments: [], steps: [], profiles: [], engines: [], candidates: [], validationGrants: [] }));
     api.listProviders = vi.fn(async () => ({ items: [{
       id: "provider-1", revision: 1, name: "Local runtime", providerType: "openai_compatible", kind: "local", local: true,
       state: "healthy", enabled: true, models: ["gpt-test"], modelAllowlist: [], capabilities: [], permitsSensitiveData: true,
@@ -669,7 +668,6 @@ describe("WorkbenchBrowser", () => {
     const initial = await api.getSecurityBrowserWorkspace("project-1");
     let snapshot: Awaited<ReturnType<ApiClient["getSecurityBrowserWorkspace"]>> = { ...initial, sessions: [{ ...initial.sessions[0], interceptionEnabled: true }] };
     api.getSecurityBrowserWorkspace = vi.fn(async () => snapshot);
-    api.getSecurityBrowserAssessments = vi.fn(async () => ({ assessments: [], steps: [], profiles: [], engines: [], candidates: [], validationGrants: [] }));
     const update = vi.fn(async (_session: SecurityBrowserSession, request: Parameters<ApiClient["updateSecurityBrowserCapture"]>[1]) => {
       const current = snapshot.sessions[0];
       const changed: SecurityBrowserSession = { ...current, captureMode: request.captureMode, proxyEnabled: request.proxyEnabled,
@@ -724,7 +722,6 @@ describe("WorkbenchBrowser", () => {
       ...initial.sessions[0], proxyEnabled: true, proxyTrustAcknowledged: true,
     }] };
     api.getSecurityBrowserWorkspace = vi.fn(async () => snapshot);
-    api.getSecurityBrowserAssessments = vi.fn(async () => ({ assessments: [], steps: [], profiles: [], engines: [], candidates: [], validationGrants: [] }));
     const update = vi.fn(async (_session: SecurityBrowserSession, request: Parameters<ApiClient["updateSecurityBrowserCapture"]>[1]) => {
       const current = snapshot.sessions[0];
       const changed: SecurityBrowserSession = { ...current, captureMode: request.captureMode, proxyEnabled: request.proxyEnabled,
