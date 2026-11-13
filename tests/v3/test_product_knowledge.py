@@ -1078,6 +1078,8 @@ def test_browser_harness_guidance_retains_tools_without_attack_recipes(monkeypat
         if row["source_path"] == "docs/design/nebula-settings-assistant.md"
     )
     assert "Active testing" not in guidance
-    assert "Network actions and credential grants remain operator-controlled" in guidance
+    assert (
+        "Network actions and credential grants remain operator-controlled" in guidance
+    )
     assert 'allowed_risk_classes=["passive"]' in guidance
     assert "Other risk classes and credential grants are refused" in guidance
