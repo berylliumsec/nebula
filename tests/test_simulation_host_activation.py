@@ -57,7 +57,7 @@ def test_degraded_worker_snapshot_requires_explicit_acceptance() -> None:
 def test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_api_db(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    commit, api_version = "b" * 40, "c" * 40
+    commit, api_version = "b" * 40, "a" * 40
     package_version = "3.0.0-beta.3+80d43d956ba75c35"
     process_birth = "linux:36155290-b5d2-43ea-9ee9-94c8b3220809:240197513"
     monkeypatch.setattr(
