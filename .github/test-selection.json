@@ -10,7 +10,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 14,
+    "python": 16,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -27,11 +27,12 @@
     "tests/test_simulation_host_activation.py::test_failed_host_activation_can_journal_code_only_rollback",
     "tests/test_simulation_host_activation.py::test_staged_promotion_journals_host_intent_before_callback",
     "tests/test_simulation_host_activation.py::test_host_rollback_retry_returns_the_recorded_success",
-    "tests/test_simulation_host_activation.py::test_interrupted_host_rollback_replays_exact_journaled_target"
+    "tests/test_simulation_host_activation.py::test_interrupted_host_rollback_replays_exact_journaled_target",
+    "tests/test_simulation_host_activation.py::test_interrupted_rollback_restoration_replays_original_host"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "b0edb096b13abd5d8af2cda91e75356171336aa305bfcd76751713bb2df05c83"
+  "change_digest": "75c0146023c04edd609722b2c1195e6c4bb741d850317fa5de3ec6bcc0661e22"
 }

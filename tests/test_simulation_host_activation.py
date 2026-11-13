@@ -62,6 +62,12 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         )
     unowned = _status()
     unowned["projects"][0].update(runtime_id=None, runtime_version=None)
+    with pytest.raises(RuntimeError, match="fencing token"):
+        changed_unowned = deployer.host_status_snapshot(_status())
+        changed_unowned["projects"]["child-project"]["fencing_token"] += 1
+        deployer.require_preserved_workers(
+            deployer.host_status_snapshot(unowned), changed_unowned
+        )
     with pytest.raises(RuntimeError, match="outside the exact admitted release"):
         deployer.require_preserved_workers(
             deployer.host_status_snapshot(unowned), deployer.host_status_snapshot(_status())
@@ -69,6 +75,7 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
     candidate = "c" * 40
     admitted_status = _status(runtime_id="new-worker")
     admitted_status["projects"][0]["runtime_version"] = candidate
+    admitted_status["projects"][0]["fencing_token"] += 1
     admitted_status["resident_versions"].append(candidate)
     assert deployer.require_preserved_workers(
         deployer.host_status_snapshot(unowned),
@@ -76,10 +83,19 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         admitted_version=candidate,
     ) == {"retained": 0}
     unexpected_status = _status(runtime_id="new-worker")
+    unexpected_status["projects"][0]["runtime_version"] = candidate
     with pytest.raises(RuntimeError, match="outside the exact admitted release"):
         deployer.require_preserved_workers(
             deployer.host_status_snapshot(unowned),
             deployer.host_status_snapshot(unexpected_status),
+            admitted_version=candidate,
+        )
+    stale_fence = _status(runtime_id="new-worker")
+    stale_fence["projects"][0]["runtime_version"] = candidate
+    with pytest.raises(RuntimeError, match="outside the exact admitted release"):
+        deployer.require_preserved_workers(
+            deployer.host_status_snapshot(unowned),
+            deployer.host_status_snapshot(stale_fence),
             admitted_version=candidate,
         )
 
@@ -471,3 +487,65 @@ def test_interrupted_host_rollback_replays_exact_journaled_target(
     assert result["operation_id"] == "rollback-op"
     assert result["version"] == previous
     assert record["host_activation"]["rollback"]["state"] == "complete"
+
+
+@pytest.mark.parametrize("nested", [True, False])
+def test_interrupted_rollback_restoration_replays_original_host(
+    nested: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous, current, api_version = "a" * 40, "b" * 40, "c" * 40
+    restore = {
+        "operation_id": "rollback-op:restore-current",
+        "restore_of": "rollback-op",
+        "state": "rolling_back" if nested else "service_started",
+        "version": current,
+        "previous_version": previous,
+        "expected_api_version": api_version,
+        "prior_status": {"api_version": api_version},
+        "code_only": True,
+    }
+    rollback = (
+        {
+            "operation_id": "rollback-op",
+            "state": "restoring_current_host",
+            "version": previous,
+            "restore_operation": restore,
+        }
+        if nested
+        else restore
+    )
+    record = {
+        "deployment_mode": "supervisor",
+        "host_active": current,
+        "host_activation": {
+            "state": "complete",
+            "version": current,
+            "previous_version": previous,
+            "rollback": rollback,
+        },
+    }
+    switched: list[str] = []
+
+    def switch(version: str, **kwargs: object) -> dict[str, str]:
+        switched.append(version)
+        assert version == current
+        assert kwargs["journal"] is restore
+        return {"version": current, "health_commit": current}
+
+    monkeypatch.setattr(deployer, "state", lambda: record)
+    monkeypatch.setattr(deployer, "current_release_version", lambda: previous)
+    monkeypatch.setattr(
+        deployer,
+        "runtime_release",
+        lambda _version: (tmp_path / current, "d" * 64),
+    )
+    monkeypatch.setattr(deployer, "_switch_supervisor_host", switch)
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "state.json")
+
+    result = deployer.rollback_host()
+
+    assert switched == [current]
+    assert result["status"] == "host_current_restored_after_failed_rollback"
+    assert result["operation_id"] == restore["operation_id"]
+    assert result["version"] == current
+    assert record["host_active"] == current

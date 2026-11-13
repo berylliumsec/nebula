@@ -1554,7 +1554,7 @@ def host_status_snapshot(status: dict[str, Any]) -> dict[str, Any]:
             not isinstance(project_id, str)
             or not project_id
             or project_id in owners
-            or (runtime_id is not None and not isinstance(runtime_id, str))
+            or (runtime_id is not None and (not isinstance(runtime_id, str) or not runtime_id))
             or (runtime_version is not None and not isinstance(runtime_version, str))
             or type(fencing_token) is not int
             or fencing_token < 0
@@ -1588,10 +1588,15 @@ def require_preserved_workers(
         current = current_projects[project_id]
         if previous["runtime_id"] is None:
             if current["runtime_id"] is None:
+                if current["fencing_token"] != previous["fencing_token"]:
+                    raise RuntimeError(
+                        f"Host restart changed the fencing token for unowned project {project_id}"
+                    )
                 continue
             if (
                 admitted_version is None
                 or current["runtime_version"] != admitted_version
+                or current["fencing_token"] <= previous["fencing_token"]
             ):
                 raise RuntimeError(
                     f"Host restart assigned an unowned project outside the exact admitted release: {project_id}"
@@ -2156,6 +2161,72 @@ def rollback_host() -> dict[str, Any]:
     ):
         raise RuntimeError("No verified supervisor host activation can be rolled back")
     prior_rollback = journal.get("rollback")
+    restore_operation = None
+    restore_parent = None
+    if isinstance(prior_rollback, dict):
+        nested_restore = prior_rollback.get("restore_operation")
+        if (
+            prior_rollback.get("state") in {"restoring_current_host", "needs_attention"}
+            and isinstance(nested_restore, dict)
+        ):
+            restore_operation = nested_restore
+            restore_parent = prior_rollback
+        elif (
+            isinstance(prior_rollback.get("restore_of"), str)
+            and prior_rollback.get("operation_id")
+            == prior_rollback.get("restore_of") + ":restore-current"
+        ):
+            restore_operation = prior_rollback
+    if (
+        isinstance(restore_operation, dict)
+        and restore_operation.get("state")
+        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        and restore_operation.get("code_only") is True
+        and restore_operation.get("version") == journal.get("version")
+        and isinstance(restore_operation.get("operation_id"), str)
+        and isinstance(restore_operation.get("restore_of"), str)
+    ):
+        restored_version = restore_operation["version"]
+        expected_api_version = restore_operation.get("expected_api_version")
+        prior_status = restore_operation.get("prior_status")
+        selected = current_release_version()
+        if (
+            not isinstance(expected_api_version, str)
+            or not isinstance(prior_status, dict)
+            or prior_status.get("api_version") != expected_api_version
+            or selected not in {restored_version, journal.get("previous_version")}
+        ):
+            raise RuntimeError("Interrupted rollback restoration journal is invalid")
+        release, _ = runtime_release(restored_version)
+        readback = _switch_supervisor_host(
+            restored_version,
+            release=release,
+            expected_api_version=expected_api_version,
+            prior_status=prior_status,
+            journal=restore_operation,
+            journal_container=journal,
+            record=record,
+        )
+        restore_operation["state"] = "complete"
+        restore_operation["readback"] = readback
+        if restore_parent is not None:
+            restore_parent["state"] = "failed_current_restored"
+            restore_parent["restored_readback"] = readback
+            restore_parent["restore_operation"] = restore_operation
+            journal["rollback"] = restore_parent
+        else:
+            journal["rollback"] = restore_operation
+        journal["state"] = "complete"
+        record["host_active"] = restored_version
+        _save_host_activation(record, journal)
+        return {
+            "status": "host_current_restored_after_failed_rollback",
+            "operation_id": restore_operation["operation_id"],
+            "version": restored_version,
+            "previous_version": journal["previous_version"],
+            "code_only": True,
+            **readback,
+        }
     if (
         isinstance(prior_rollback, dict)
         and prior_rollback.get("state")
@@ -2299,19 +2370,22 @@ def rollback_host() -> dict[str, Any]:
     except Exception as error:
         operation["state"] = "restoring_current_host"
         operation["rollback_error"] = str(error)[:1000]
+        current_release, _ = runtime_release(current_version)
+        restore = {
+            "operation_id": operation["operation_id"] + ":restore-current",
+            "restore_of": operation["operation_id"],
+            "state": "rolling_back",
+            "version": current_version,
+            "previous_version": previous_version,
+            "expected_api_version": before["api_version"],
+            "prior_status": before,
+            "code_only": True,
+            "rollback_error": operation["rollback_error"],
+        }
+        operation["restore_operation"] = restore
         journal["rollback"] = operation
         _save_host_activation(record, journal)
         try:
-            current_release, _ = runtime_release(current_version)
-            restore = {
-                "operation_id": operation["operation_id"] + ":restore-current",
-                "state": "restoring_current_host",
-                "version": current_version,
-                "previous_version": previous_version,
-                "expected_api_version": before["api_version"],
-                "prior_status": before,
-                "code_only": True,
-            }
             restored = _switch_supervisor_host(
                 current_version,
                 release=current_release,
