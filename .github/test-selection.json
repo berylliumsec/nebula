@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Review host activation identity binding between package version, hash-bound runtime manifest, exact release symlink, and authenticated commit health.",
+  "reason": "Review host activation identity binding between package version, exact release symlink, authenticated commit health, and wrapped Core process ancestry.",
   "exclusions": "CI runs only the exact focused Python cases selected below across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
   "python_versions": [
     "3.11",
@@ -10,7 +10,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 17,
+    "python": 18,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -29,11 +29,12 @@
     "tests/test_simulation_host_activation.py::test_host_rollback_retry_returns_the_recorded_success",
     "tests/test_simulation_host_activation.py::test_interrupted_host_rollback_replays_exact_journaled_target",
     "tests/test_simulation_host_activation.py::test_interrupted_rollback_restoration_replays_original_host",
-    "tests/test_simulation_host_activation.py::test_package_version_discovery_binds_to_release_and_authenticated_health"
+    "tests/test_simulation_host_activation.py::test_package_version_discovery_binds_to_release_and_authenticated_health",
+    "tests/test_simulation_host_activation.py::test_host_process_identity_accepts_verified_onefile_child"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "e8b7d3b48aa6fcc6661e1512d043465250504be43f5d4091a39aa6d39095b0f0"
+  "change_digest": "835adef8c31f4e5629c6a01c9b4c23aa277ba5978fabb69bc134214a091f17f7"
 }

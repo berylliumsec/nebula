@@ -151,6 +151,9 @@ def test_package_version_discovery_binds_to_release_and_authenticated_health(
     monkeypatch.setattr(
         deployer, "supervisor_service_identity", lambda: {"main_pid": 434411}
     )
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
+    )
     health = {"status": "ok", "commit": commit, "recovery_version": commit}
     status = {
         "protocol": "nebula.runtime/v1",
@@ -177,6 +180,71 @@ def test_package_version_discovery_binds_to_release_and_authenticated_health(
     deployer.atomic_json(bundle_manifest_path, {"version": "tampered-package"})
     with pytest.raises(RuntimeError, match="not hash-bound"):
         deployer.runtime_package_version(commit)
+
+
+def test_host_process_identity_accepts_verified_onefile_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    version = "b" * 40
+    release = tmp_path / version
+    executable = release / "dist/nebula-core"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"immutable runtime executable")
+    deployer.atomic_json(
+        release / "simulation-acceptance.json",
+        {"core_sha256": deployer.sha256(executable)},
+    )
+    monkeypatch.setattr(
+        deployer, "runtime_release", lambda _version: (release, "d" * 64)
+    )
+
+    def snapshot(
+        pid: int,
+        parent_pid: int,
+        birth: str,
+        process_executable: Path,
+    ) -> dict:
+        return {
+            "pid": pid,
+            "parent_pid": parent_pid,
+            "process_birth": birth,
+            "effective_uid": deployer.os.getuid(),
+            "executable": process_executable,
+        }
+
+    processes = {
+        434314: snapshot(434314, 1113, "main-birth", executable),
+        434411: snapshot(434411, 434314, "core-birth", executable),
+        1113: snapshot(1113, 1, "ancestor-birth", tmp_path / "systemd"),
+        1: snapshot(1, 0, "init-birth", tmp_path / "init"),
+    }
+    monkeypatch.setattr(deployer, "linux_process_snapshot", processes.__getitem__)
+    unit = {
+        "main_pid": 434314,
+        "main_process_birth": "main-birth",
+        "exec_start": "mercury-run /srv/apple-sim/nebula/current/dist/nebula-core",
+    }
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: unit)
+    service = dict(unit)
+    runtime = {"pid": 434411, "process_birth": "core-birth"}
+
+    deployer.require_runtime_process_in_service(service, runtime, version)
+
+    processes[434411]["parent_pid"] = 1113
+    with pytest.raises(RuntimeError, match="not a unit MainPID descendant"):
+        deployer.require_runtime_process_in_service(service, runtime, version)
+    processes[434411]["parent_pid"] = 434314
+    runtime["process_birth"] = "reused-pid"
+    with pytest.raises(RuntimeError, match="birth identity changed"):
+        deployer.require_runtime_process_in_service(service, runtime, version)
+    runtime["process_birth"] = "core-birth"
+    processes[434411]["executable"] = release / "different-core"
+    with pytest.raises(RuntimeError, match="does not match the accepted onefile executable"):
+        deployer.require_runtime_process_in_service(service, runtime, version)
+    processes[434411]["executable"] = executable
+    processes[434314]["executable"] = release / "different-parent"
+    with pytest.raises(RuntimeError, match="does not match the accepted onefile executable"):
+        deployer.require_runtime_process_in_service(service, runtime, version)
 
 
 def test_host_readback_rejects_unverified_owner_release() -> None:
@@ -505,6 +573,9 @@ def test_host_rollback_retry_returns_the_recorded_success(
         deployer,
         "supervisor_service_identity",
         lambda: {"main_pid": 123},
+    )
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
     )
     monkeypatch.setattr(deployer, "current_release_version", lambda: previous)
     monkeypatch.setattr(

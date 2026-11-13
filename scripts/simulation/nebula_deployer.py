@@ -1481,6 +1481,120 @@ def linux_process_birth(pid: int) -> str | None:
         ) from error
 
 
+def linux_process_snapshot(pid: int) -> dict[str, Any] | None:
+    """Return race-resistant identity details for one live Linux process."""
+    if type(pid) is not int or pid < 1:
+        raise ValueError("a positive Core process identity is required")
+    try:
+        stat_fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if not stat_fields or stat_fields[0] == "Z":
+            return None
+        parent_pid = int(stat_fields[1])
+        start_time = stat_fields[19]
+        status = Path(f"/proc/{pid}/status").read_text()
+        uid_line = next(line for line in status.splitlines() if line.startswith("Uid:"))
+        effective_uid = int(uid_line.split()[2])
+        executable = Path(f"/proc/{pid}/exe").resolve(strict=True)
+        if parent_pid < 0 or not start_time.isdigit():
+            raise ValueError("process parent or start time is invalid")
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return {
+            "pid": pid,
+            "parent_pid": parent_pid,
+            "process_birth": f"linux:{boot_id}:{start_time}",
+            "effective_uid": effective_uid,
+            "executable": executable,
+        }
+    except FileNotFoundError:
+        return None
+    except (OSError, IndexError, StopIteration, TypeError, ValueError) as error:
+        raise RuntimeError(
+            "Core process ancestry identity could not be verified"
+        ) from error
+
+
+def require_runtime_process_in_service(
+    service_identity: dict[str, Any], runtime_identity: dict[str, Any], version: str
+) -> None:
+    """Bind the discovered Core executable to the active unit's process tree."""
+    main_pid = service_identity.get("main_pid")
+    main_birth = service_identity.get("main_process_birth")
+    runtime_pid = runtime_identity.get("pid")
+    runtime_birth = runtime_identity.get("process_birth")
+    if (
+        type(main_pid) is not int
+        or type(runtime_pid) is not int
+        or not isinstance(main_birth, str)
+        or not isinstance(runtime_birth, str)
+    ):
+        raise RuntimeError("Supervisor process identities are incomplete")
+
+    release, _ = runtime_release(version)
+    accepted_executable = release / "dist/nebula-core"
+    receipt = json.loads((release / "simulation-acceptance.json").read_text())
+    expected_digest = receipt.get("core_sha256")
+    if (
+        accepted_executable.is_symlink()
+        or not isinstance(expected_digest, str)
+        or not SHA256.fullmatch(expected_digest)
+        or sha256(accepted_executable) != expected_digest
+    ):
+        raise RuntimeError("Accepted supervisor executable is not hash-bound")
+    accepted_executable = accepted_executable.resolve(strict=True)
+
+    chain: dict[int, dict[str, Any]] = {}
+    current_pid = runtime_pid
+    for _ in range(64):
+        if current_pid in chain:
+            raise RuntimeError(
+                "Discovered Core process is not a unit MainPID descendant"
+            )
+        process = linux_process_snapshot(current_pid)
+        if process is None:
+            raise RuntimeError("Supervisor process ancestry contains a stale PID")
+        if process["effective_uid"] != os.getuid():
+            raise RuntimeError("Supervisor process ancestry crosses a user boundary")
+        chain[current_pid] = process
+        if current_pid == runtime_pid and process["process_birth"] != runtime_birth:
+            raise RuntimeError("Discovered Core process birth identity changed")
+        if current_pid == main_pid:
+            if process["process_birth"] != main_birth:
+                raise RuntimeError("Supervisor MainPID birth identity changed")
+            break
+        if process["parent_pid"] == 0:
+            raise RuntimeError(
+                "Discovered Core process is not a unit MainPID descendant"
+            )
+        current_pid = process["parent_pid"]
+    else:
+        raise RuntimeError("Discovered Core process is not a unit MainPID descendant")
+
+    for pid in {runtime_pid, main_pid}:
+        executable = chain[pid]["executable"]
+        if executable != accepted_executable or sha256(executable) != expected_digest:
+            raise RuntimeError(
+                "Supervisor process does not match the accepted onefile executable"
+            )
+
+    # Re-read every link in the chain to reject PID reuse or reparenting during
+    # validation, and re-read systemd's identity to bind the ancestry to the
+    # still-active unit.
+    for pid, previous in chain.items():
+        current = linux_process_snapshot(pid)
+        if current is None or any(
+            current[key] != previous[key]
+            for key in ("process_birth", "parent_pid", "effective_uid", "executable")
+        ):
+            raise RuntimeError("Supervisor process ancestry changed during validation")
+    latest_service = supervisor_service_identity()
+    if (
+        latest_service.get("main_pid") != main_pid
+        or latest_service.get("main_process_birth") != main_birth
+        or latest_service.get("exec_start") != service_identity.get("exec_start")
+    ):
+        raise RuntimeError("Supervisor unit identity changed during validation")
+
+
 def supervisor_service_configuration() -> dict[str, Any]:
     if unit_state(EDGE) != "active":
         raise RuntimeError("The HTTPS edge must be active before host activation")
@@ -1545,7 +1659,14 @@ def supervisor_service_identity() -> dict[str, Any]:
         raise RuntimeError("Supervisor service MainPID is invalid") from error
     if main_pid_value < 1:
         raise RuntimeError("Supervisor service has no live MainPID")
-    return {**configuration, "main_pid": main_pid_value}
+    main_birth = linux_process_birth(main_pid_value)
+    if main_birth is None:
+        raise RuntimeError("Supervisor service MainPID is not a live process")
+    return {
+        **configuration,
+        "main_pid": main_pid_value,
+        "main_process_birth": main_birth,
+    }
 
 
 def host_status_snapshot(status: dict[str, Any]) -> dict[str, Any]:
@@ -1753,10 +1874,7 @@ def wait_supervisor_host_ready(
                 time.sleep(2)
                 continue
             service_identity = supervisor_service_identity()
-            if service_identity["main_pid"] != identity["pid"]:
-                raise RuntimeError(
-                    "systemd MainPID differs from the activated runtime identity"
-                )
+            require_runtime_process_in_service(service_identity, identity, version)
             health, status = read_supervisor_health()
             if health.get("status") != "ok":
                 last_problem = "host health is not ready"
@@ -2063,12 +2181,9 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
     prior_host = host_connection()
     if prior_host is None:
         raise RuntimeError("Current supervisor process identity is unavailable")
-    if service_identity["main_pid"] != prior_host["pid"]:
-        raise RuntimeError(
-            "systemd MainPID differs from the authenticated runtime process identity"
-        )
     previous_release = current_release_version()
     previous_version = previous_release
+    require_runtime_process_in_service(service_identity, prior_host, previous_version)
     if prior_host["package_version"] != runtime_package_version(previous_version):
         raise RuntimeError(
             "Running supervisor package identity differs from the current release manifest"
@@ -2324,11 +2439,13 @@ def rollback_host() -> dict[str, Any]:
             or identity is None
             or identity.get("package_version")
             != runtime_package_version(rolled_back_version)
-            or service_identity["main_pid"] != identity.get("pid")
         ):
             raise RuntimeError(
                 "Completed host rollback no longer matches current process identity"
             )
+        require_runtime_process_in_service(
+            service_identity, identity, rolled_back_version
+        )
         health, status = read_supervisor_health()
         snapshot = host_status_snapshot(status)
         if (
@@ -2369,9 +2486,11 @@ def rollback_host() -> dict[str, Any]:
         or current_identity.get("package_version")
         != runtime_package_version(current_version)
         or current_release_version() != current_version
-        or service_identity["main_pid"] != current_identity.get("pid")
     ):
         raise RuntimeError("Current supervisor does not match its recorded activation")
+    require_runtime_process_in_service(
+        service_identity, current_identity, current_version
+    )
     health, status = read_supervisor_health()
     if health.get("status") != "ok" or health.get("commit") != current_version:
         raise RuntimeError(
