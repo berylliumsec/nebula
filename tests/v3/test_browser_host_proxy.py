@@ -10,7 +10,8 @@ from urllib.parse import urlsplit
 from nebula.v3.browser_host_proxy import BrowserHostProxy
 
 
-async def test_proxy_authentication_scope_and_header_isolation():
+@pytest.mark.parametrize("async_authorization", [False, True])
+async def test_proxy_authentication_scope_and_header_isolation(async_authorization):
     async def exercise():
         received = []
 
@@ -30,7 +31,11 @@ async def test_proxy_authentication_scope_and_header_isolation():
             if not url.startswith(origin + "/"):
                 raise ValueError("outside scope")
 
-        proxy = BrowserHostProxy(authorize)
+        async def authorize_async(url):
+            await asyncio.sleep(0)
+            authorize(url)
+
+        proxy = BrowserHostProxy(authorize_async if async_authorization else authorize)
         config = await proxy.start()
         port = urlsplit(config["server"]).port
         authorization = base64.b64encode(
@@ -70,7 +75,10 @@ async def test_proxy_authentication_scope_and_header_isolation():
     (await exercise())
 
 
-async def test_tunnel_rechecks_revocation_and_closes_active_connections():
+@pytest.mark.parametrize("async_authorization", [False, True])
+async def test_tunnel_rechecks_revocation_and_closes_active_connections(
+    async_authorization,
+):
     async def exercise():
         revoked = False
         destinations = []
@@ -92,7 +100,11 @@ async def test_tunnel_rechecks_revocation_and_closes_active_connections():
             if revoked or url != f"https://127.0.0.1:{target_port}/":
                 raise ValueError("scope revoked")
 
-        proxy = BrowserHostProxy(authorize)
+        async def authorize_async(url):
+            await asyncio.sleep(0)
+            authorize(url)
+
+        proxy = BrowserHostProxy(authorize_async if async_authorization else authorize)
         config = await proxy.start()
         credentials = base64.b64encode(f"nebula:{config['password']}".encode()).decode()
         reader, writer = await asyncio.open_connection(

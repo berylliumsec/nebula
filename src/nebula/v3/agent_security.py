@@ -13,7 +13,6 @@ from weakref import WeakKeyDictionary
 from .browser_host import ManagedBrowserHost
 from .browserd import BrowserdSecurityRequest, BrowserdSecurityResponse
 from .browser_research import (
-    AttackStateRequest,
     BrowserResearchService,
     CrawlStateRequest,
     RepeaterStateRequest,
@@ -22,7 +21,6 @@ from .browser_security import BrowserSecurityService
 from .diagnostics import record_caught_exception
 from .domain import (
     BrowserIdentity,
-    BrowserAttack,
     BrowserCrawlJob,
     BrowserInterceptItem,
     BrowserRepeaterTab,
@@ -182,7 +180,7 @@ class AgentSecuritySessions:
             (await self.security._scope(project_id)),
             request.url,
             "agent_security.request",
-            RiskClass.ACTIVE_SCAN,
+            RiskClass.NETWORK_ACTION,
             native_scope_authority=True,
         )
         adapter = await self.host.adapter()
@@ -217,23 +215,6 @@ class AgentSecuritySessions:
                     # A dead private bridge cannot keep its proxy or Chromium
                     # context alive. Close the whole security host fail-closed.
                     await self.host.close()
-                for attack in await self.store.find_entities(
-                    BrowserAttack,
-                    {"session_id": session.id},
-                    engagement_id=project_id,
-                ):
-                    if attack.state in {"queued", "running", "paused"}:
-                        (
-                            await self.research.transition_attack(
-                                attack.id,
-                                AttackStateRequest(
-                                    expected_revision=attack.revision,
-                                    action="cancel",
-                                    actor_id="core",
-                                    error=reason[:3000],
-                                ),
-                            )
-                        )
                 for crawl in await self.store.find_entities(
                     BrowserCrawlJob,
                     {"session_id": session.id},

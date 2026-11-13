@@ -109,7 +109,7 @@ class RecordingBroker:
                     engagement_id=invocation.engagement_id,
                     run_id=invocation.run_id,
                     task_id=invocation.task_id,
-                    risk_class=RiskClass.ACTIVE_SCAN,
+                    risk_class=RiskClass.NETWORK_ACTION,
                     exact_request={
                         "tool_name": invocation.tool_name,
                         "arguments": invocation.arguments,
@@ -422,7 +422,7 @@ async def test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval(
         role=SpecialistRole.NETWORK_SERVICE,
         title="Scan approved service",
         instructions="Perform only the approved operation",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
     )
 
     class BatchPausingSpecialist:
@@ -441,7 +441,7 @@ async def test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval(
                         engagement_id=context.engagement_id,
                         run_id=context.run_id,
                         task_id=context.task.id,
-                        risk_class=RiskClass.ACTIVE_SCAN,
+                        risk_class=RiskClass.NETWORK_ACTION,
                         exact_request={
                             "tool_name": "nmap.tcp",
                             "arguments": {"ports": [443]},
@@ -679,7 +679,7 @@ async def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_pa
             task_id="scan",
             tool_name="nmap.tcp",
             status=ToolCallStatus.WAITING_APPROVAL,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             arguments={"ports": [443]},
             idempotency_key="task:scan:turn:1:call:0",
         )
@@ -692,7 +692,7 @@ async def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_pa
             task_id="scan",
             tool_call_id=call.id,
             status=ApprovalStatus.APPROVED,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             exact_request={"tool_name": "nmap.tcp", "arguments": {"ports": [443]}},
             policy_rationale="active scanning requires operator approval",
             requested_by="network-specialist",

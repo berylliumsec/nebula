@@ -48,7 +48,7 @@ filesystem/network sandbox denial.
 
 ## Project-scoped autonomous browser control
 
-Web application assessments may opt into the existing Mission/AgentRun lifecycle
+Operator-directed browser tasks may opt into the existing Mission/AgentRun lifecycle
 with a `browser_autonomy` request. Core creates a durable lease pinned to one
 BrowserSession, identity, target subset, Project scope revision, allowed risk
 classes, credential references, and command/request/body budgets. Browser and

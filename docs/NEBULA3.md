@@ -490,14 +490,14 @@ and oversized bodies remain metadata-only. Authenticated HTTP/HTTPS CONNECT and
 SOCKS5 chaining is supported through protected credential references, strict TLS
 validation, and URLs without embedded userinfo.
 
-The existing mission lifecycle can start a Project-scoped autonomous web test.
+The existing mission lifecycle can start a Project-scoped operator-directed browser automation.
 Core persists a short-lived BrowserAutomationLease pinned to the current scope
 revision, identity, target subset, risk classes, credential references, and
 command/request/body budgets. `browser.*` and `proxy.*` tools enqueue durable
 idempotent commands; a desktop-only shell worker claims them for the paired
 session and returns bounded receipts. Mobile/LAN views may monitor and stop a
 run, but never claim native commands. Autonomous defaults are PASSIVE,
-ACTIVE_SCAN, and CREDENTIAL_USE. Exploitation, persistence, destructive actions,
+NETWORK_ACTION, and CREDENTIAL_USE. High-impact actions, persistent changes, destructive changes,
 and scope changes require a separate durable step-up grant. There is no arbitrary
 JavaScript tool or cookie/storage/password/token read; credential use accepts a
 vault reference only and resolves it ephemerally for bounded fill actions.

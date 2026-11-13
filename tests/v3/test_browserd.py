@@ -35,7 +35,7 @@ def settings(tmp_path, *, headless: bool = False) -> BrowserdSettings:
 def action(token: str = "action-1", *, url: str = "https://app.example.test/"):
     return BrowserEngineAction(
         action_token=token,
-        assessment_id="assessment-1",
+        automation_id="assessment-1",
         session_id="session-1",
         identity_id="identity-1",
         tab_id="tab-1",
@@ -137,9 +137,9 @@ class FakeBrowserdManager:
         )
 
     async def lifecycle(
-        self, assessment_id: str, state: str
+        self, automation_id: str, state: str
     ) -> BrowserdLifecycleReceipt:
-        return BrowserdLifecycleReceipt(assessment_id=assessment_id, state=state)
+        return BrowserdLifecycleReceipt(automation_id=automation_id, state=state)
 
 
 async def test_browserd_api_is_authenticated_and_exposes_normalized_receipts(tmp_path):
@@ -165,10 +165,10 @@ async def test_browserd_api_is_authenticated_and_exposes_normalized_receipts(tmp
         assert receipt.status_code == 200
         assert receipt.json()["action_token"] == "action-1"
         stopped = await client.post(
-            "/v1/assessments/assessment-1/stop", headers=headers, json={}
+            "/v1/automation/assessment-1/stop", headers=headers, json={}
         )
         assert stopped.json() == {
-            "assessment_id": "assessment-1",
+            "automation_id": "assessment-1",
             "state": "stopped",
         }
     assert manager.started is True

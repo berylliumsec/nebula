@@ -23,7 +23,7 @@ from .domain import (
 )
 
 
-BROWSER_ENGINE_CONTRACT_VERSION = "1"
+BROWSER_ENGINE_CONTRACT_VERSION = "2"
 
 
 class BrowserEngineUnavailableError(RuntimeError):
@@ -32,7 +32,7 @@ class BrowserEngineUnavailableError(RuntimeError):
 
 class BrowserEngineAction(NebulaModel):
     action_token: str = Field(min_length=1, max_length=300)
-    assessment_id: str = Field(min_length=1, max_length=200)
+    automation_id: str = Field(min_length=1, max_length=200)
     session_id: str = Field(min_length=1, max_length=200)
     identity_id: str = Field(min_length=1, max_length=200)
     tab_id: str = Field(min_length=1, max_length=200)
@@ -68,7 +68,7 @@ class BrowserEngineReceipt(NebulaModel):
 
 
 class BrowserEngineAdapter(ABC):
-    """Conformance boundary implemented by managed Chromium and scanners."""
+    """Conformance boundary implemented by managed browser runtimes."""
 
     contract_version = BROWSER_ENGINE_CONTRACT_VERSION
 
@@ -85,15 +85,15 @@ class BrowserEngineAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def pause(self, assessment_id: str) -> None:
+    async def pause(self, automation_id: str) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    async def resume(self, assessment_id: str) -> None:
+    async def resume(self, automation_id: str) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    async def stop(self, assessment_id: str) -> None:
+    async def stop(self, automation_id: str) -> None:
         raise NotImplementedError
 
 
@@ -252,25 +252,25 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
                 ),
             )
 
-    async def _lifecycle(self, assessment_id: str, action: str) -> None:
+    async def _lifecycle(self, automation_id: str, action: str) -> None:
         response = await self._request(
             "POST",
-            f"/v1/assessments/{quote(assessment_id, safe='')}/{action}",
-            {"assessment_id": assessment_id},
+            f"/v1/automation/{quote(automation_id, safe='')}/{action}",
+            {"automation_id": automation_id},
         )
         if response.status_code >= 400:
             raise BrowserEngineUnavailableError(
-                f"Managed Chromium could not {action} the assessment. Use emergency stop if it remains active."
+                f"Managed Chromium could not {action} the automation. Use emergency stop if it remains active."
             )
 
-    async def pause(self, assessment_id: str) -> None:
-        await self._lifecycle(assessment_id, "pause")
+    async def pause(self, automation_id: str) -> None:
+        await self._lifecycle(automation_id, "pause")
 
-    async def resume(self, assessment_id: str) -> None:
-        await self._lifecycle(assessment_id, "resume")
+    async def resume(self, automation_id: str) -> None:
+        await self._lifecycle(automation_id, "resume")
 
-    async def stop(self, assessment_id: str) -> None:
-        await self._lifecycle(assessment_id, "stop")
+    async def stop(self, automation_id: str) -> None:
+        await self._lifecycle(automation_id, "stop")
 
 
 class VisibleElectronAdapter(LocalBrowserdAdapter):
@@ -334,19 +334,6 @@ class BrowserEngineRegistry:
                         "on this desktop. Manual legacy browsing remains usable."
                     ),
                     recovery_action="Prepare the managed browser runtime, then retry preflight.",
-                )
-            )
-        if not any(receipt.adapter == "zap" for receipt in receipts):
-            receipts.append(
-                BrowserEngineCapability(
-                    adapter="zap",
-                    display_name="OWASP ZAP scanner",
-                    state=BrowserEngineState.UNAVAILABLE,
-                    unavailability_reason=(
-                        "The digest-pinned scanner runtime has not been prepared. "
-                        "Manual browsing remains usable without scanning."
-                    ),
-                    recovery_action="Prepare the scanner runtime or choose Explore.",
                 )
             )
         receipts.append(

@@ -333,11 +333,11 @@ class CompanionBroker:
                 result = await self.service.propose(
                     self.session_id, request, chat_turn_id=invocation.chat_turn_id
                 )
-                if (await self.approval_policy()) == AutomationApprovalPolicy.NEVER:
-                    result = await self.service.decide(
-                        self.session_id, result.id, "approve"
-                    )
                 try:
+                    if (await self.approval_policy()) == AutomationApprovalPolicy.NEVER:
+                        result = await self.service.decide(
+                            self.session_id, result.id, "approve"
+                        )
                     while result.status in {"pending", "running"}:
                         if result.status == "pending" and (
                             result.expires_at <= datetime.now(timezone.utc)

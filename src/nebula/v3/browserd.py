@@ -185,7 +185,7 @@ class BrowserdSecurityResponse(NebulaModel):
 
 
 class BrowserdLifecycleReceipt(BaseModel):
-    assessment_id: str
+    automation_id: str
     state: str
 
 
@@ -296,7 +296,7 @@ class BrowserdManager:
         self._contexts: dict[str, Any] = {}
         self._tabs: dict[tuple[str, str], Any] = {}
         self._companion_protected_values: dict[str, list[SecretStr]] = {}
-        self._assessment_states: dict[str, str] = {}
+        self._automation_states: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._ledger = ActionLedger(settings.profile_root / "browserd-actions.sqlite3")
         self._capability: BrowserEngineCapability | None = None
@@ -461,7 +461,7 @@ class BrowserdManager:
             )
         finally:
             # APIRequestContext otherwise retains every response until the
-            # identity closes, which is unbounded across Intruder requests.
+            # identity closes, which may span many browser requests.
             await response.dispose()
 
     async def readiness(self) -> BrowserEngineCapability:
@@ -646,14 +646,14 @@ class BrowserdManager:
         prior = await self._ledger.claim(action)
         if prior is not None:
             return prior
-        if self._assessment_states.get(action.assessment_id) in {"paused", "stopped"}:
+        if self._automation_states.get(action.automation_id) in {"paused", "stopped"}:
             return await self._ledger.finish(
                 BrowserEngineReceipt(
                     action_token=action.action_token,
                     state="cancelled",
-                    failure_code="assessment_not_running",
-                    operator_message="The assessment is paused or stopped.",
-                    recovery_action="Resume the assessment or create a new action.",
+                    failure_code="automation_not_running",
+                    operator_message="The automation is paused or stopped.",
+                    recovery_action="Resume the automation or create a new action.",
                 )
             )
         page: Any | None = None
@@ -782,12 +782,12 @@ class BrowserdManager:
         return await self._ledger.finish(receipt)
 
     async def lifecycle(
-        self, assessment_id: str, state: str
+        self, automation_id: str, state: str
     ) -> BrowserdLifecycleReceipt:
-        if not _OPAQUE_ID.fullmatch(assessment_id):
-            raise ValueError("assessment id is invalid")
-        self._assessment_states[assessment_id] = state
-        return BrowserdLifecycleReceipt(assessment_id=assessment_id, state=state)
+        if not _OPAQUE_ID.fullmatch(automation_id):
+            raise ValueError("automation id is invalid")
+        self._automation_states[automation_id] = state
+        return BrowserdLifecycleReceipt(automation_id=automation_id, state=state)
 
     async def page_for_screencast(self, identity_id: str, tab_id: str) -> Any:
         receipt = await self.ensure_identity(identity_id)
@@ -871,15 +871,15 @@ def create_browserd_app(
             return await runtime.security_request(request)
 
     @app.post(
-        "/v1/assessments/{assessment_id}/{action}",
+        "/v1/automation/{automation_id}/{action}",
         response_model=BrowserdLifecycleReceipt,
         dependencies=[Depends(require_auth)],
     )
-    async def lifecycle(assessment_id: str, action: str) -> BrowserdLifecycleReceipt:
+    async def lifecycle(automation_id: str, action: str) -> BrowserdLifecycleReceipt:
         if action not in {"pause", "resume", "stop"}:
             raise HTTPException(status_code=404, detail="unknown lifecycle action")
         states = {"pause": "paused", "resume": "running", "stop": "stopped"}
-        return await runtime.lifecycle(assessment_id, states[action])
+        return await runtime.lifecycle(automation_id, states[action])
 
     @app.post("/v1/companion/{identity_id}", dependencies=[Depends(require_auth)])
     async def companion(

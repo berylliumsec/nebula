@@ -145,7 +145,7 @@ export function OverviewPage() {
           </dl>
           {priorityFinding ? (
             <div className="priority-finding">
-              <span className="risk-badge exploit">{priorityFinding.cveIds[0] ?? priorityFinding.severity}</span>
+              <span className="risk-badge high_impact">{priorityFinding.cveIds[0] ?? priorityFinding.severity}</span>
               <strong>{priorityFinding.title}</strong>
               <p>{priorityFinding.evidenceCount} evidence record{priorityFinding.evidenceCount === 1 ? "" : "s"} · {priorityFinding.status.replace("_", " ")}</p>
               <Link to="/findings">Review finding <ArrowUpRight size={14} /></Link>

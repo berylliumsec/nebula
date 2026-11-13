@@ -515,7 +515,7 @@ async def _callback_wait(tmp_path, manager, store, engagement):
             chat_turn_id=turn.id,
             tool_name="run_command",
             status=ToolCallStatus.RUNNING,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             arguments={"command": "wait-forever", "background": True},
             started_at=utc_now(),
         )
@@ -783,7 +783,7 @@ async def test_approved_call_whose_turn_ended_is_settled_without_running(tmp_pat
                 chat_turn_id=owner.id,
                 tool_name="session/request_permission",
                 status=ToolCallStatus.APPROVED,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 metadata=metadata,
             )
         )

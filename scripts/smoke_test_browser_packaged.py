@@ -353,7 +353,10 @@ async def smoke(
                                 prefix + f"/element/{identifier}/click", json={}
                             )
                             if response.is_error:
-                                if response.json().get("value", {}).get("error") == "element not interactable":
+                                if (
+                                    response.json().get("value", {}).get("error")
+                                    == "element not interactable"
+                                ):
                                     fallback = await execute(
                                         "const e=document.querySelector(arguments[0]);if(!e||!e.getClientRects().length)return false;e.click();return true;",
                                         selector,
@@ -575,6 +578,7 @@ async def smoke(
                                 flush=True,
                             )
                         if research_suite:
+
                             async def fill(selector: str, value: str) -> None:
                                 filled = await execute(
                                     "const e=document.querySelector(arguments[0]);if(!e)return false;const setter=Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(e,arguments[1]);e.dispatchEvent(new Event('input',{bubbles:true}));return e.value===arguments[1];",
@@ -622,7 +626,9 @@ async def smoke(
                                     selector,
                                 )
                                 if not submitted:
-                                    raise RuntimeError("Browser address form was unavailable.")
+                                    raise RuntimeError(
+                                        "Browser address form was unavailable."
+                                    )
 
                             await submit_address(target_url + "initial")
                             await wait_for(
@@ -636,7 +642,9 @@ async def smoke(
                             await execute(
                                 "document.documentElement.style.zoom='0.5';return getComputedStyle(document.documentElement).zoom;"
                             )
-                            await click('button[aria-label="Security research workbench"]')
+                            await click(
+                                'button[aria-label="Security research workbench"]'
+                            )
                             await wait_for(
                                 "return Boolean(document.querySelector('nav[aria-label=\"Security Browser tools\"]'));"
                             )
@@ -684,9 +692,7 @@ async def smoke(
                                 "return document.body.innerText.includes('Interception enabled. In-scope requests now pause durably');",
                                 120,
                             )
-                            await click_button(
-                                "Intercept", "data-validation-intercept"
-                            )
+                            await click_button("Intercept", "data-validation-intercept")
                             if resume_recovery_only:
                                 await submit_address(target_url + "resume-pending")
                                 await wait_for(
@@ -784,9 +790,7 @@ async def smoke(
                                 "return document.body.innerText.includes('Paused requests (0)') && document.querySelector('#browser-address')?.value.includes('/resume-pending') && !document.querySelector('.browser-toolbar button[aria-label=\"Reload\"]')?.disabled;",
                                 120,
                             )
-                            await click_button(
-                                "Repeater", "data-validation-repeater"
-                            )
+                            await click_button("Repeater", "data-validation-repeater")
                             await wait_for(
                                 "return Boolean(document.querySelector('#browser-repeater-heading'));"
                             )
@@ -805,65 +809,6 @@ async def smoke(
                                 await wait_for(
                                     "return Boolean(document.querySelector('.browser-result-body pre'));"
                                 )
-                            await click_button(
-                                "Automate Intruder",
-                                "data-validation-intruder",
-                                exact=False,
-                            )
-                            await wait_for(
-                                "return Boolean(document.querySelector('#browser-intruder-heading'));"
-                            )
-                            await fill(
-                                '.browser-suite-form label:nth-of-type(1) input',
-                                "Live bounded attack",
-                            )
-                            await fill(
-                                '.browser-suite-form label:nth-of-type(4) input', "id"
-                            )
-                            await fill(
-                                '.browser-suite-form label:nth-of-type(5) input',
-                                target_url + "intruder?id=§id§",
-                            )
-                            await fill(
-                                '.browser-suite-form label:nth-of-type(8) textarea',
-                                "one\ntwo\nthree\nfour\nfive\nsix",
-                            )
-                            await click_button(
-                                "Save attack draft",
-                                "data-validation-save-attack",
-                            )
-                            await wait_for(
-                                "return document.body.innerText.includes('Intruder attack saved as a draft');"
-                            )
-                            await click_button(
-                                "Queue on desktop", "data-validation-queue-attack"
-                            )
-                            await wait_for(
-                                "return Boolean([...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Pause'));",
-                                120,
-                            )
-                            await click_button("Pause", "data-validation-pause-attack")
-                            await wait_for(
-                                "return Boolean([...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Resume'));",
-                                120,
-                            )
-                            await click_button("Resume", "data-validation-resume-attack")
-                            await wait_for(
-                                "return Boolean([...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Cancel'));",
-                                120,
-                            )
-                            await click_button("Cancel", "data-validation-cancel-attack")
-                            await wait_for(
-                                "return Boolean([...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Retry remaining'));",
-                                120,
-                            )
-                            await click_button(
-                                "Retry remaining", "data-validation-retry-attack"
-                            )
-                            await wait_for(
-                                "return Boolean([...document.querySelectorAll('.browser-action-status')].find(e=>e.textContent.trim()==='complete')) && document.body.innerText.includes('Results (6)');",
-                                180,
-                            )
                             await click_button(
                                 "Pause requests",
                                 "data-validation-enable-before-reload",
@@ -899,7 +844,9 @@ async def smoke(
                                 "document.documentElement.style.zoom='0.5';return true;"
                             )
                             await submit_address(target_url + "reconnect")
-                            await click('button[aria-label="Security research workbench"]')
+                            await click(
+                                'button[aria-label="Security research workbench"]'
+                            )
                             await click_button(
                                 "Intercept", "data-validation-intercept-reload"
                             )
@@ -930,17 +877,8 @@ async def smoke(
                                 "return document.body.innerText.includes('forward-original') && document.body.innerText.includes('Result history (1)');",
                                 120,
                             )
-                            await click_button(
-                                "Automate Intruder",
-                                "data-validation-intruder-reload",
-                                exact=False,
-                            )
-                            await wait_for(
-                                "return document.body.innerText.includes('Live bounded attack') && document.body.innerText.includes('Results (6)');",
-                                120,
-                            )
                             print(
-                                "Packaged desktop: live Intercept, Repeater, Intruder, and durable reload controls passed",
+                                "Packaged desktop: live Intercept, Repeater, and durable reload controls passed",
                                 flush=True,
                             )
                     finally:
@@ -999,7 +937,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--research-suite",
         action="store_true",
-        help="Exercise live native Intercept, Repeater, Intruder, and reload controls",
+        help="Exercise live native Intercept, Repeater, and reload controls",
     )
     parser.add_argument(
         "--resume-recovery-only",

@@ -11,7 +11,6 @@ import {
 import type {
   EngagementScopePolicy,
   SecurityBrowserAutomationStatus,
-  SecurityBrowserAttack,
   SecurityBrowserCrawlJob,
   SecurityBrowserCommand,
   SecurityBrowserRepeaterTab,
@@ -39,82 +38,7 @@ type Receipt = {
 
 type ResearchEntry =
   | { kind: "repeater"; projectId: string; session: SecurityBrowserSession; tab: SecurityBrowserRepeaterTab }
-  | { kind: "attack"; projectId: string; session: SecurityBrowserSession; attack: SecurityBrowserAttack; sequence: number; payloads: string[] }
   | { kind: "crawl"; projectId: string; session: SecurityBrowserSession; crawl: SecurityBrowserCrawlJob; url: string; depth: number; scope: EngagementScopePolicy };
-
-const CURATED_PAYLOADS: Record<string, string[]> = {
-  booleans: ["true", "false", "1", "0", "null"],
-  boundary_numbers: ["-1", "0", "1", "2147483647", "2147483648"],
-  path_boundaries: [".", "..", "../", "%2e%2e%2f"],
-  header_boundaries: ["", "0", "null", "undefined"],
-};
-
-function payloadValues(payloadSet: Record<string, unknown>): string[] {
-  if (payloadSet.kind === "list" && Array.isArray(payloadSet.values)) {
-    return payloadSet.values.filter((value): value is string => typeof value === "string");
-  }
-  if (payloadSet.kind === "curated" && typeof payloadSet.name === "string") {
-    return CURATED_PAYLOADS[payloadSet.name] ?? [];
-  }
-  return [];
-}
-
-function transformPayload(value: string, transforms: string[]): string {
-  return transforms.reduce((current, transform) => {
-    if (transform === "url_encode") return encodeURIComponent(current);
-    if (transform === "url_decode") { try { return decodeURIComponent(current); } catch { /* diagnostic-expected: malformed input remains unchanged for operator inspection. */ return current; } }
-    if (transform === "base64_encode") return btoa(unescape(encodeURIComponent(current)));
-    if (transform === "base64_decode") { try { return decodeURIComponent(escape(atob(current))); } catch { /* diagnostic-expected: malformed input remains unchanged for operator inspection. */ return current; } }
-    if (transform === "hex_encode") return Array.from(new TextEncoder().encode(current), (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (transform === "hex_decode") { try { return new TextDecoder().decode(Uint8Array.from(current.match(/.{1,2}/g) ?? [], (item) => Number.parseInt(item, 16))); } catch { /* diagnostic-expected: malformed input remains unchanged for operator inspection. */ return current; } }
-    if (transform === "html_encode") return current.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
-    if (transform === "html_decode") { const element = document.createElement("textarea"); element.innerHTML = current; return element.value; }
-    if (transform === "lowercase") return current.toLowerCase();
-    if (transform === "uppercase") return current.toUpperCase();
-    return current;
-  }, value);
-}
-
-function attackPayloads(attack: SecurityBrowserAttack, sequence: number): Record<string, string> | undefined {
-  const sets = attack.payloadSets.map(payloadValues);
-  if (!sets.length || sets.some((values) => !values.length)) return undefined;
-  const result: Record<string, string> = {};
-  if (attack.strategy === "battering_ram") {
-    const value = sets[0][sequence];
-    if (value === undefined) return undefined;
-    for (const position of attack.positions) result[position] = transformPayload(value, attack.transforms);
-    return result;
-  }
-  if (attack.strategy === "sniper") {
-    const values = sets[0];
-    const positionIndex = Math.floor(sequence / values.length);
-    const value = values[sequence % values.length];
-    if (!attack.positions[positionIndex] || value === undefined) return undefined;
-    for (const position of attack.positions) result[position] = "";
-    result[attack.positions[positionIndex]] = transformPayload(value, attack.transforms);
-    return result;
-  }
-  if (attack.strategy === "pitchfork") {
-    if (sequence >= Math.min(...sets.map((values) => values.length))) return undefined;
-    attack.positions.forEach((position, index) => { result[position] = transformPayload(sets[index][sequence], attack.transforms); });
-    return result;
-  }
-  let remainder = sequence;
-  for (let index = sets.length - 1; index >= 0; index -= 1) {
-    const values = sets[index];
-    const value = values[remainder % values.length];
-    remainder = Math.floor(remainder / values.length);
-    result[attack.positions[index]] = transformPayload(value, attack.transforms);
-  }
-  return remainder > 0 ? undefined : result;
-}
-
-function substitute(template: string, payloads: Record<string, string>): string {
-  return Object.entries(payloads).reduce(
-    (value, [position, payload]) => value.split(`§${position}§`).join(payload),
-    template,
-  );
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -161,7 +85,6 @@ export function BrowserAutomationWorker() {
   const appliedProxyConfigs = useRef(new Map<string, string>());
   const observedLeaseStates = useRef(new Map<string, string>());
   const researchPending = useRef(new Map<string, ResearchEntry>());
-  const researchNextAt = useRef(new Map<string, number>());
   const resolvedIntercepts = useRef(new Set<string>());
   const apiRef = useRef(api);
   const engagementsRef = useRef(engagements);
@@ -337,21 +260,6 @@ export function BrowserAutomationWorker() {
             responseBodyArtifactId: artifactId,
             error: actionError,
           });
-          return;
-        }
-        if (entry.kind === "attack") {
-          await currentApi.recordSecurityBrowserAttackResult(entry.attack, {
-            sequence: entry.sequence,
-            payloads: entry.payloads,
-            statusCode: typeof result.status === "number" ? result.status : undefined,
-            responseBytes: typeof result.responseBytes === "number" ? result.responseBytes : undefined,
-            durationMs: typeof result.durationMs === "number" ? result.durationMs : undefined,
-            error: actionError,
-          });
-          researchNextAt.current.set(
-            entry.attack.id,
-            Date.now() + Math.ceil(1_000 / entry.attack.requestsPerSecond),
-          );
           return;
         }
         if (actionError) {
@@ -622,45 +530,6 @@ export function BrowserAutomationWorker() {
                 void logCaughtDiagnostic("interface.security_browser.repeater_failure_persist_failed", "A failed Repeater request could not save its durable terminal state.", transitionError, "browser-automation-worker");
               });
               void logCaughtDiagnostic("interface.security_browser.repeater_execution_failed", "A queued Repeater request could not execute.", caught, "browser-automation-worker");
-            }
-          }
-          for (const durableAttack of research.attacks) {
-            if (researchSessionBusy(durableAttack.sessionId)) continue;
-            if ((researchNextAt.current.get(durableAttack.id) ?? 0) > Date.now()) continue;
-            const session = sessions.find((item) => item.id === durableAttack.sessionId);
-            if (!session || session.deviceOwner !== deviceId) continue;
-            const nativeTab = session.tabs.find((item) => item.id === session.activeTabId) ?? session.tabs[0];
-            if (!nativeTab?.url) continue;
-            let attack = durableAttack;
-            try {
-              if (attack.state === "queued") attack = await currentApi.transitionSecurityBrowserAttack(attack, "start", "desktop-browser-worker");
-              if (attack.state !== "running" || attack.requestCount >= attack.maxRequests) continue;
-              const replacements = attackPayloads(attack, attack.requestCount);
-              if (!replacements) {
-                await currentApi.transitionSecurityBrowserAttack(attack, "complete", "desktop-browser-worker");
-                continue;
-              }
-              const payloads = attack.positions.map((position) => replacements[position]);
-              const actionId = `research-attack-${attack.id}-${attack.requestCount}`;
-              researchPending.current.set(actionId, { kind: "attack", projectId: engagement.id, session, attack, sequence: attack.requestCount, payloads });
-              await workbenchBrowser.executeAction(nativeTab.id, engagement.id, {
-                actionId,
-                kind: "research_request",
-                locator: {},
-                arguments: {
-                  method: attack.method,
-                  url: substitute(attack.urlTemplate, replacements),
-                  headers: Object.fromEntries(attack.headersTemplate.map(([name, value]) => [name, substitute(value, replacements)])),
-                  body: substitute(attack.bodyTemplate, replacements),
-                },
-                pageUrl: nativeTab.url,
-              });
-            } catch (caught) {
-              researchPending.current.forEach((entry, id) => { if (entry.kind === "attack" && entry.attack.id === attack.id) researchPending.current.delete(id); });
-              await currentApi.transitionSecurityBrowserAttack(attack, "fail", "desktop-browser-worker", errorMessage(caught)).catch((transitionError) => {
-                void logCaughtDiagnostic("interface.security_browser.attack_failure_persist_failed", "A failed Intruder request could not save its durable terminal state.", transitionError, "browser-automation-worker");
-              });
-              void logCaughtDiagnostic("interface.security_browser.attack_execution_failed", "A bounded Intruder request could not execute.", caught, "browser-automation-worker");
             }
           }
           if (scope) for (const durableCrawl of research.crawlJobs) {

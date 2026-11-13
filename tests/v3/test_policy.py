@@ -39,14 +39,14 @@ def test_active_hostname_requires_pinned_dns_and_rejects_mixed_answers():
     engine = PolicyEngine()
     request = PolicyRequest(
         tool_name="scan.tcp",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
         network_access=True,
         target="https://app.example.test/health",
         resolved_ips=["10.40.2.3"],
     )
     approved_target = engine.evaluate(_scope(), request, now=NOW)
     assert approved_target.effect == PolicyEffect.ALLOW
-    assert approved_target.rule == "in_scope_active_scan"
+    assert approved_target.rule == "in_scope_network_action"
     assert approved_target.normalized_target == "app.example.test"
 
     missing_dns = engine.evaluate(
@@ -69,7 +69,7 @@ def test_an_approval_reason_cannot_override_an_out_of_scope_target():
         _scope(),
         PolicyRequest(
             tool_name="scan.and.export",
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             network_access=True,
             target="203.0.113.80",
             port=443,
@@ -136,7 +136,7 @@ def test_active_scans_run_without_grants_but_cannot_expand_scope():
     policy = _scope()
     matching = PolicyRequest(
         tool_name="scan.tcp",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
         network_access=True,
         target="10.40.2.3",
         port=443,
@@ -144,7 +144,7 @@ def test_active_scans_run_without_grants_but_cannot_expand_scope():
 
     decision = PolicyEngine().evaluate(policy, matching, now=NOW)
     assert decision.effect == PolicyEffect.ALLOW
-    assert decision.rule == "in_scope_active_scan"
+    assert decision.rule == "in_scope_network_action"
     assert decision.matched_grant_index is None
 
     other_tool = PolicyEngine().evaluate(
@@ -162,9 +162,9 @@ def test_active_scans_run_without_grants_but_cannot_expand_scope():
     "risk",
     [
         RiskClass.CREDENTIAL_USE,
-        RiskClass.EXPLOITATION,
-        RiskClass.PERSISTENCE,
-        RiskClass.DESTRUCTIVE,
+        RiskClass.HIGH_IMPACT_ACTION,
+        RiskClass.PERSISTENT_CHANGE,
+        RiskClass.DESTRUCTIVE_CHANGE,
         RiskClass.SCOPE_CHANGE,
     ],
 )
@@ -240,7 +240,7 @@ def test_bypass_overrides_nebula_scope_and_approval_but_not_local_only_validatio
 def test_allowed_public_domain_dns_does_not_require_a_matching_cidr():
     request = PolicyRequest(
         tool_name="scan.tcp",
-        risk_class=RiskClass.ACTIVE_SCAN,
+        risk_class=RiskClass.NETWORK_ACTION,
         network_access=True,
         target="app.example.test",
         port=443,
@@ -292,3 +292,61 @@ def test_time_local_only_prohibited_action_and_workspace_boundaries(tmp_path):
     workspace.mkdir()
     assert path_is_within_workspace(workspace / "evidence" / "scan.txt", workspace)
     assert not path_is_within_workspace(workspace / ".." / "secrets", workspace)
+
+
+@pytest.mark.parametrize(
+    "legacy", ["active_scan", "exploitation", "persistence", "destructive"]
+)
+def test_legacy_risk_names_are_rejected(legacy):
+    with pytest.raises(ValueError):
+        RiskClass(legacy)
+
+
+@pytest.mark.parametrize(
+    "risk",
+    [
+        RiskClass.HIGH_IMPACT_ACTION,
+        RiskClass.PERSISTENT_CHANGE,
+        RiskClass.DESTRUCTIVE_CHANGE,
+    ],
+)
+def test_neutral_high_risk_names_keep_approval_and_scope(risk):
+    policy = ScopePolicy(engagement_id="project", allowed_cidrs=["10.0.0.0/24"])
+    engine = PolicyEngine()
+    allowed = engine.evaluate(
+        policy,
+        PolicyRequest(
+            tool_name="custom.action",
+            risk_class=risk,
+            network_access=True,
+            target="http://10.0.0.10/",
+        ),
+    )
+    assert allowed.effect == PolicyEffect.REQUIRE_APPROVAL
+    denied = engine.evaluate(
+        policy,
+        PolicyRequest(
+            tool_name="custom.action",
+            risk_class=risk,
+            network_access=True,
+            target="http://192.0.2.10/",
+        ),
+    )
+    assert denied.effect == PolicyEffect.DENY
+
+
+def test_external_tool_routing_uses_declared_effects():
+    from nebula.v3.agent_tooling import role_for_tool
+    from nebula.v3.orchestration import SpecialistRole
+    from nebula.v3.tools import ToolSpec
+
+    for name in ("custom.inspect", "nuclei.inspect", "searchsploit.inspect"):
+        spec = ToolSpec(
+            name=name,
+            description="Operator supplied tool",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            risk_class=RiskClass.LOCAL_READ,
+            filesystem_access="read",
+        )
+        assert role_for_tool(name, spec) == SpecialistRole.CODE_ANALYSIS

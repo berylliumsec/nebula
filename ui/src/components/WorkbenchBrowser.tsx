@@ -34,8 +34,8 @@ import { BrowserResearchSuite, type BrowserResearchToolView, type RepeaterDraftS
 import { SecurityBrowserWorkspacePanel } from "./SecurityBrowserWorkspacePanel";
 import { waitForBrowserInterceptListener } from "./browserInterceptReadiness";
 
-type ResearchView = "target" | "traffic" | "intercepts" | "repeater" | "automate" | "analyze" | "actions" | "identities" | "session";
-const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "automate", "analyze", "actions", "identities", "session"]);
+type ResearchView = "target" | "traffic" | "intercepts" | "repeater" | "analyze" | "actions" | "identities" | "session";
+const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "analyze", "actions", "identities", "session"]);
 
 /** Number("") is 0, so an emptied budget field must stay empty and fail validation instead. */
 function integerBudget(value: string): number {
@@ -43,7 +43,6 @@ function integerBudget(value: string): number {
 }
 
 function normalizedResearchView(value: string | null): ResearchView {
-  if (value === "intruder") return "automate";
   if (value === "utilities") return "analyze";
   return value && RESEARCH_VIEWS.has(value as ResearchView) ? value as ResearchView : "traffic";
 }
@@ -217,7 +216,8 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const [workspaceError, setWorkspaceError] = useState<string>();
   const [nativeScopeSignals, setNativeScopeSignals] = useState<Record<string, string | null>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
-  const [researchOpen, setResearchOpen] = useState(false);
+  const [retiredResearchView] = useState(() => searchParams.has("assessment") || searchParams.has("candidate") || ["intruder", "automate"].includes(searchParams.get("tool") ?? searchParams.get("browserTool") ?? ""));
+  const [researchOpen, setResearchOpen] = useState(retiredResearchView);
   const [researchPanelWidth, setResearchPanelWidth] = useState<number>();
   const browserRootRef = useRef<HTMLDivElement>(null);
   const [browserPanelWidth, setBrowserPanelWidth] = useState(0);
@@ -279,7 +279,7 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const [automationRuntimeKey, setAutomationRuntimeKey] = useState("");
   const [automationModel, setAutomationModel] = useState("");
   const [automationTarget, setAutomationTarget] = useState("");
-  const [automationRisks, setAutomationRisks] = useState<string[]>(["passive", "active_scan", "credential_use"]);
+  const [automationRisks, setAutomationRisks] = useState<string[]>(["passive", "network_action", "credential_use"]);
   const [automationCredentialRefs, setAutomationCredentialRefs] = useState("");
   const [automationDuration, setAutomationDuration] = useState("30");
   const [automationMaxCommands, setAutomationMaxCommands] = useState("100");
@@ -671,8 +671,8 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
     try {
       const run = await api.createMission({
         engagementId: projectId,
-        name: "Autonomous browser assessment",
-        objective: `Run a bounded web application assessment for ${target}`,
+        name: "Browser automation",
+        objective: `Work with the browser at ${target} using the operator’s instructions`,
         backend: runtime.kind === "harness" ? "harness" : "native",
         providerId: runtime.kind === "provider" ? runtime.id : undefined,
         harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
@@ -1821,30 +1821,24 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
   const transportControls = <InterceptionTransport enabled={interceptionActive} available={!!(desktop && capabilities?.interceptionProxy && activeSession?.proxyEnabled)} desktop={desktop} scopeReady={scopeReady} nativeReady={!!activeTab?.created} pending={interceptionUpdating} onToggle={() => void setInterceptionEnabled(!interceptionActive)} onSetup={() => { setResearchView("session"); setResearchOpen(true); }} />;
 
   const researchPanel = researchOpen ? <SecurityBrowserWorkspacePanel
-    api={api}
     compact={compactResearch}
+    retiredView={retiredResearchView}
     desktop={desktop}
-    projectId={projectId}
-    identity={activeIdentity}
-    session={activeSession}
-    targetOptions={automationTargetOptions}
     onClose={() => setResearchOpen(false)}
     onWidthChange={setResearchPanelWidth}
     transportControls={transportControls}
-    manualTools={["traffic", "intercepts", "repeater", "actions", "identities", "session"].includes(researchView)}
     toolNavigation={<nav aria-label="Security Browser tools">
       <button type="button" className={researchView === "target" ? "active" : ""} onClick={() => setResearchView("target")}>Target</button>
       <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Traffic <span>{sessionTraffic.length}</span></button>
       <button type="button" className={researchView === "intercepts" ? "active" : ""} onClick={() => setResearchView("intercepts")}>Intercept</button>
       <button type="button" className={researchView === "repeater" ? "active" : ""} onClick={() => setResearchView("repeater")}>Repeater</button>
-      <button type="button" className={researchView === "automate" ? "active" : ""} onClick={() => setResearchView("automate")}>Automate <small>Intruder</small></button>
       <button type="button" className={researchView === "analyze" ? "active" : ""} onClick={() => setResearchView("analyze")}>Analyze</button>
       <button type="button" className={researchView === "actions" ? "active" : ""} onClick={() => setResearchView("actions")}><Sparkles size={14} /> Actions <span>{workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0}</span></button>
       <button type="button" className={researchView === "identities" ? "active" : ""} onClick={() => setResearchView("identities")}><UserRound size={14} /> Identities <span>{workspace?.identities.length ?? 0}</span></button>
       <button type="button" className={researchView === "session" ? "active" : ""} onClick={() => setResearchView("session")}><History size={14} /> Session</button>
     </nav>}
   >
-    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : (["target", "intercepts", "repeater"] as const).includes(researchView as "target" | "intercepts" | "repeater") || researchView === "automate" || researchView === "analyze" ? <BrowserResearchSuite draftStore={repeaterDraftStore.current} onOpenRepeater={() => setResearchView("repeater")} api={api} desktop={desktop} identity={activeIdentity} operatorId={operatorId} projectId={projectId} session={activeSession} providers={automationProviders} harnesses={automationHarnesses} view={(researchView === "automate" ? "intruder" : researchView === "analyze" ? "utilities" : researchView) as BrowserResearchToolView} /> : researchView === "traffic" ? <div className="browser-traffic-workbench">
+    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : (["target", "intercepts", "repeater"] as const).includes(researchView as "target" | "intercepts" | "repeater") || researchView === "analyze" ? <BrowserResearchSuite draftStore={repeaterDraftStore.current} onOpenRepeater={() => setResearchView("repeater")} api={api} desktop={desktop} identity={activeIdentity} operatorId={operatorId} projectId={projectId} session={activeSession} view={(researchView === "analyze" ? "utilities" : researchView) as BrowserResearchToolView} /> : researchView === "traffic" ? <div className="browser-traffic-workbench">
       <div className="browser-research-toolbar"><span>Metadata and redacted headers</span><button type="button" disabled={selectedExchangeIds.length !== 2} onClick={() => setSelectedExchangeIds([])}><GitCompareArrows size={13} /> {selectedExchangeIds.length === 2 ? "Clear comparison" : "Select two to compare"}</button></div>
       {comparison && <div className="browser-exchange-diff"><strong>Authorization response diff</strong><span>Status: {comparison.status}</span><span>Bytes: {comparison.bytes}</span><span>{comparison.changedHeaders.length ? `${comparison.changedHeaders.length} response headers changed: ${comparison.changedHeaders.join(", ")}` : "Response headers are identical."}</span></div>}
       {sessionTraffic.length ? <ol className="browser-traffic-list">{[...sessionTraffic].reverse().map((exchange) => <li key={exchange.id} className={selectedExchangeIds.includes(exchange.id) ? "selected" : ""}>
@@ -1902,10 +1896,10 @@ export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, a
             <label>Target subset<select value={automationTarget} onChange={(event) => setAutomationTarget(event.target.value)} required><option value="">Choose an authorized target</option>{automationTargetOptions.map((target) => <option value={target} key={target}>{target}</option>)}</select></label>
             <label>Investigation runtime<select value={automationRuntimeKey} onChange={(event) => setAutomationRuntimeKey(event.target.value)} required><option value="">Choose an enabled provider or harness</option>{automationRuntimes.map((runtime) => <option key={runtime.key} value={runtime.key}>{aiRuntimeLabel(runtime)}</option>)}</select></label>
             <label>Model<select value={automationModel} onChange={(event) => setAutomationModel(event.target.value)} required disabled={!selectedAutomationRuntime}><option value="">Choose a verified model</option>{selectedAutomationRuntime?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
-            <fieldset><legend>Allowed risk classes</legend>{[["passive", "Passive observation"], ["active_scan", "Active scan and replay"], ["credential_use", "Credential use by reference"]].map(([value, label]) => <label key={value}><input type="checkbox" checked={automationRisks.includes(value)} onChange={(event) => setAutomationRisks((current) => event.target.checked ? [...current, value] : current.filter((item) => item !== value))} /><span>{label}</span></label>)}</fieldset>
+            <fieldset><legend>Allowed risk classes</legend>{[["passive", "Passive observation"], ["network_action", "Network actions and replay"], ["credential_use", "Credential use by reference"]].map(([value, label]) => <label key={value}><input type="checkbox" checked={automationRisks.includes(value)} onChange={(event) => setAutomationRisks((current) => event.target.checked ? [...current, value] : current.filter((item) => item !== value))} /><span>{label}</span></label>)}</fieldset>
             {automationRisks.includes("credential_use") && <label>Credential references<input value={automationCredentialRefs} placeholder="vault:reference-1, session:reference-2" onChange={(event) => setAutomationCredentialRefs(event.target.value)} /><small>References only. Never paste a password, cookie, token, or API key.</small></label>}
             <div className="resource-form-grid"><label>Duration (minutes)<input type="number" min={1} max={60} value={automationDuration} onChange={(event) => setAutomationDuration(event.target.value)} /></label><label>Tool-call budget<input type="number" min={1} max={100} value={automationMaxCommands} onChange={(event) => setAutomationMaxCommands(event.target.value)} /></label><label>Request budget<input type="number" min={1} max={1000000} value={automationMaxRequests} onChange={(event) => setAutomationMaxRequests(event.target.value)} /></label></div>
-            <p>Exploitation, persistence, destructive actions, and scope changes require a separate durable step-up grant and are not enabled by this form.</p>
+            <p>High-impact actions, persistent changes, destructive changes, and scope changes require a separate durable step-up grant and are not enabled by this form.</p>
             <button className="button primary" type="submit" disabled={automationBusy || !automationRuntimeKey || !automationModel || !automationTarget || !automationRisks.length}>{automationBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} {automationBusy ? "Starting…" : "Approve and start run"}</button>
           </form>}
         </>}

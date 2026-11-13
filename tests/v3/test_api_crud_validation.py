@@ -754,7 +754,7 @@ async def test_approval_decision_uses_active_operator_attribution(api):
         Approval(
             engagement_id=engagement.id,
             run_id=run.id,
-            risk_class=RiskClass.ACTIVE_SCAN,
+            risk_class=RiskClass.NETWORK_ACTION,
             exact_request={"tool_name": "scan", "arguments": {}},
             policy_rationale="active operation",
             requested_by="agent",
@@ -867,7 +867,7 @@ async def test_finding_patch_starts_from_the_projected_relation_arrays(api):
 
 def _grant(granted_by: str) -> dict:
     return {
-        "risk_classes": ["active_scan"],
+        "risk_classes": ["network_action"],
         "targets": ["127.0.0.1/32"],
         "expires_at": "2099-01-01T00:00:00Z",
         "granted_by": granted_by,
@@ -1007,7 +1007,7 @@ async def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(a
     ).json()
     url = f"/api/v1/engagements/{project['id']}/scope"
     scan = _scope_grant(
-        risk_classes=["active_scan", "passive"],
+        risk_classes=["network_action", "passive"],
         targets=["10.0.0.0/24", "example.com"],
     )
     browse = _scope_grant(risk_classes=["passive"], targets=["app.example.com"])
@@ -1033,7 +1033,7 @@ async def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(a
     }
     renewed = {**echoed_browse, "expires_at": "2100-01-01T00:00:00Z"}
     added = _scope_grant(
-        risk_classes=["active_scan"],
+        risk_classes=["network_action"],
         targets=["10.0.1.0/24"],
         granted_by=alice,
         granted_at="2000-01-01T00:00:00Z",
@@ -1079,7 +1079,7 @@ async def test_project_scope_refuses_a_new_grant_that_has_already_expired(api):
         json={
             "grants": [
                 _scope_grant(
-                    risk_classes=["active_scan"],
+                    risk_classes=["network_action"],
                     targets=["10.0.0.0/24"],
                     granted_at="2000-01-01T00:00:00Z",
                     expires_at="2001-01-01T00:00:00Z",
@@ -1105,7 +1105,7 @@ async def test_generic_scope_saves_keep_unchanged_grants_and_credit_the_saver(ap
     ).json()
     scope_id = project["scope_policy_id"]
     url = f"/api/v1/scope-policies/{scope_id}"
-    scan = _scope_grant(risk_classes=["active_scan"], targets=["10.0.0.0/24"])
+    scan = _scope_grant(risk_classes=["network_action"], targets=["10.0.0.0/24"])
     granted = await client.patch(
         url, headers=_auth(), json={"changes": {"grants": [scan]}}
     )

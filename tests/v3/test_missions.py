@@ -989,7 +989,7 @@ async def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
                 run_id=run_id,
                 tool_name="nmap.connect_scan",
                 status=ToolCallStatus.WAITING_APPROVAL,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
             )
         )
 
@@ -1670,7 +1670,7 @@ async def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
                 run_id=run.id,
                 tool_name=name,
                 status=ToolCallStatus.RUNNING,
-                risk_class=RiskClass.ACTIVE_SCAN,
+                risk_class=RiskClass.NETWORK_ACTION,
                 started_at=utc_now(),
             )
         )

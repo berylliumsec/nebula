@@ -23,7 +23,7 @@ const transportMethods = new Map([
   ["connection_auth", new Set(["getToken", "health", "setupStatus"])],
   ["request_continuity", new Set(["initializeContinuity", "getContinuityScope", "getPendingRequests", "reconcilePendingRequests", "subscribeContinuity", "dismissCompletedRequest"])],
   ["ui_projection", new Set(["resolveResourceActions", "resolveResource", "listResourceRelations"])],
-  ["browser_worker_protocol", new Set(["claimSecurityBrowserCommand", "createSecurityBrowserIntercept", "finishSecurityBrowserCommand", "getEngagementScope", "getSecurityBrowserAutomation", "getSecurityBrowserResearch", "getSecurityBrowserWorkspace", "recordSecurityBrowserAttackResult", "recordSecurityBrowserRepeaterResult", "recordSecurityBrowserSiteNode", "transitionSecurityBrowserAttack", "transitionSecurityBrowserCrawl", "transitionSecurityBrowserRepeaterTab", "uploadEvidence", "uploadSecurityBrowserBodyArtifact", "recordSecurityBrowserTraffic", "recordSecurityBrowserWebSocketFrame"])],
+  ["browser_worker_protocol", new Set(["claimSecurityBrowserCommand", "createSecurityBrowserIntercept", "finishSecurityBrowserCommand", "getEngagementScope", "getSecurityBrowserAutomation", "getSecurityBrowserResearch", "getSecurityBrowserWorkspace", "recordSecurityBrowserRepeaterResult", "recordSecurityBrowserSiteNode", "transitionSecurityBrowserCrawl", "transitionSecurityBrowserRepeaterTab", "uploadEvidence", "uploadSecurityBrowserBodyArtifact", "recordSecurityBrowserTraffic", "recordSecurityBrowserWebSocketFrame"])],
 ]);
 
 function transportCallIsAllowed(kind, key) {

@@ -14,7 +14,6 @@ from nebula.v3.api import create_app
 from nebula.v3.database import EntityRow, SearchDocumentRow
 from nebula.v3.domain import (
     Asset,
-    BrowserAssessment,
     BrowserSession,
     BrowserTabState,
     ChatSession,
@@ -118,19 +117,7 @@ async def test_search_projection_excludes_secrets_outputs_and_url_queries(tmp_pa
         title="Explicit note",
         body="operator saved durable note",
     )
-    assessment = BrowserAssessment(
-        engagement_id=project.id,
-        name="Portal review",
-        objective="Map authenticated account behavior",
-        session_id="session",
-        identity_ids=["identity"],
-        primary_identity_id="identity",
-        target_urls=["https://example.test/app?token=ASSESSMENT_SECRET#private"],
-        scope_policy_id="scope",
-        scope_policy_revision=1,
-        created_by="operator",
-    )
-    (await store.create_many([command, browser, note, assessment]))
+    (await store.create_many([command, browser, note]))
     async with store.database.session() as session:
         documents = {
             row.id: row for row in (await session.scalars(select(SearchDocumentRow)))
@@ -140,13 +127,6 @@ async def test_search_projection_excludes_secrets_outputs_and_url_queries(tmp_pa
     assert "SECRET_OUTPUT" not in command_text
     assert "SECRET_QUERY" not in browser_text
     assert "token=" not in browser_text
-    assessment_text = (
-        f"{documents[assessment.id].label} {documents[assessment.id].description} "
-        f"{documents[assessment.id].content}"
-    )
-    assert "ASSESSMENT_SECRET" not in assessment_text
-    assert "token=" not in assessment_text
-    assert documents[assessment.id].resource_kind == "browser_assessment"
     browser_tab = next(
         row for row in documents.values() if row.resource_kind == "browser_tab"
     )

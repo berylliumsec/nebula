@@ -196,9 +196,9 @@ class PolicyEngine:
 
     _always_approve = {
         RiskClass.CREDENTIAL_USE,
-        RiskClass.EXPLOITATION,
-        RiskClass.PERSISTENCE,
-        RiskClass.DESTRUCTIVE,
+        RiskClass.HIGH_IMPACT_ACTION,
+        RiskClass.PERSISTENT_CHANGE,
+        RiskClass.DESTRUCTIVE_CHANGE,
         RiskClass.SCOPE_CHANGE,
     }
 
@@ -297,11 +297,11 @@ class PolicyEngine:
                 normalized_target=target.host if target else None,
             )
 
-        if request.risk_class == RiskClass.ACTIVE_SCAN:
+        if request.risk_class == RiskClass.NETWORK_ACTION:
             return PolicyDecision(
                 effect=PolicyEffect.ALLOW,
-                reason="active scan is inside the engagement scope and execution window",
-                rule="in_scope_active_scan",
+                reason="network action is inside the engagement scope and execution window",
+                rule="in_scope_network_action",
                 normalized_target=target.host if target else None,
             )
 

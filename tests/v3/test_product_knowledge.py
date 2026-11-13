@@ -1059,3 +1059,12 @@ def test_product_search_explains_concurrent_butler_subagents(monkeypatch):
         and "disabled switch remains off" in str(item["text"])
         for item in matches
     )
+
+
+def test_browser_harness_guidance_retains_tools_without_attack_recipes(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Browser tools operator contract Repeater crawling traffic evidence"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "Repeater" in text and "evidence" in text.lower()

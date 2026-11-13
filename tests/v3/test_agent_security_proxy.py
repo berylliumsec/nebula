@@ -89,7 +89,7 @@ async def test_agent_proxy_scopes_captures_and_intercepts_without_visible_browse
                 (await security._scope(project.id)),
                 url,
                 "agent_security.proxy",
-                RiskClass.ACTIVE_SCAN,
+                RiskClass.NETWORK_ACTION,
                 native_scope_authority=True,
             )
 

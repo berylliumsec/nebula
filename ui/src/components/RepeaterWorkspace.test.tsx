@@ -10,7 +10,7 @@ import { InterceptionTransport } from "./InterceptionTransport";
 const session = { id: "s1", activeTabId: "t1", tabs: [{ id: "t1", url: "https://example.test/" }] } as SecurityBrowserSession;
 const identity = { id: "i1", name: "Personal" } as SecurityBrowserIdentity;
 const tabs = ["First", "Second"].map((name, i) => ({ id: `r${i}`, sessionId: "s1", identityId: "i1", revision: 1, name, method: "GET", url: `https://example.test/${i}`, headers: [], bodyTemplate: "", state: "ready" }));
-const workspace = { siteNodes: [], crawlJobs: [], intercepts: [], attacks: [], attackResults: [], tokenAnalyses: [], repeaterTabs: tabs, repeaterResults: [{ id: "result", tabId: "r0", sequence: 0, statusCode: 200, durationMs: 12, responseBytes: 4, responseHeaders: [["Content-Type", "text/plain"]], createdAt: "2026-09-12T12:00:00Z" }] };
+const workspace = { siteNodes: [], crawlJobs: [], intercepts: [], tokenAnalyses: [], repeaterTabs: tabs, repeaterResults: [{ id: "result", tabId: "r0", sequence: 0, statusCode: 200, durationMs: 12, responseBytes: 4, responseHeaders: [["Content-Type", "text/plain"]], createdAt: "2026-09-12T12:00:00Z" }] };
 function client() { return { getSecurityBrowserResearch: vi.fn().mockResolvedValue(workspace), updateSecurityBrowserRepeaterTab: vi.fn().mockRejectedValue(new Error("Save failed; try again")) } as unknown as ApiClient; }
 function element(api: ApiClient, store: RepeaterDraftStore = new Map(), selectedSession = session) {
   return <MemoryRouter><DialogProvider><BrowserResearchSuite api={api} desktop={false} identity={identity} operatorId="operator" projectId="p1" session={selectedSession} view="repeater" draftStore={store} /></DialogProvider></MemoryRouter>;

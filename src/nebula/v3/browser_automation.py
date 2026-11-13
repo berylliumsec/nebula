@@ -53,37 +53,35 @@ OPEN_COMMAND_STATUSES = (
 
 DEFAULT_AUTONOMOUS_RISKS = (
     RiskClass.PASSIVE,
-    RiskClass.ACTIVE_SCAN,
+    RiskClass.NETWORK_ACTION,
     RiskClass.CREDENTIAL_USE,
 )
 HIGH_RISK_CLASSES = frozenset(
     {
-        RiskClass.EXPLOITATION,
-        RiskClass.PERSISTENCE,
-        RiskClass.DESTRUCTIVE,
+        RiskClass.HIGH_IMPACT_ACTION,
+        RiskClass.PERSISTENT_CHANGE,
+        RiskClass.DESTRUCTIVE_CHANGE,
         RiskClass.SCOPE_CHANGE,
     }
 )
 
 COMMAND_RISK: dict[str, RiskClass] = {
     "browser.observe": RiskClass.PASSIVE,
-    "browser.navigate": RiskClass.ACTIVE_SCAN,
-    "browser.control": RiskClass.ACTIVE_SCAN,
-    "browser.interact": RiskClass.ACTIVE_SCAN,
+    "browser.navigate": RiskClass.NETWORK_ACTION,
+    "browser.control": RiskClass.NETWORK_ACTION,
+    "browser.interact": RiskClass.NETWORK_ACTION,
     "browser.extract": RiskClass.PASSIVE,
-    "browser.replay": RiskClass.ACTIVE_SCAN,
+    "browser.replay": RiskClass.NETWORK_ACTION,
     "browser.capture_evidence": RiskClass.PASSIVE,
     "proxy.observe": RiskClass.PASSIVE,
-    "proxy.configure": RiskClass.ACTIVE_SCAN,
-    "proxy.add_rule": RiskClass.ACTIVE_SCAN,
-    "proxy.remove_rule": RiskClass.ACTIVE_SCAN,
-    "proxy.replay": RiskClass.ACTIVE_SCAN,
-    "proxy.emergency_stop": RiskClass.ACTIVE_SCAN,
+    "proxy.configure": RiskClass.NETWORK_ACTION,
+    "proxy.add_rule": RiskClass.NETWORK_ACTION,
+    "proxy.remove_rule": RiskClass.NETWORK_ACTION,
+    "proxy.replay": RiskClass.NETWORK_ACTION,
+    "proxy.emergency_stop": RiskClass.NETWORK_ACTION,
     "target.observe": RiskClass.PASSIVE,
-    "target.crawl": RiskClass.ACTIVE_SCAN,
-    "repeater.create": RiskClass.ACTIVE_SCAN,
-    "intruder.create": RiskClass.ACTIVE_SCAN,
-    "intruder.control": RiskClass.ACTIVE_SCAN,
+    "target.crawl": RiskClass.NETWORK_ACTION,
+    "repeater.create": RiskClass.NETWORK_ACTION,
     "analysis.decode": RiskClass.PASSIVE,
     "analysis.compare": RiskClass.PASSIVE,
     "analysis.tokens": RiskClass.PASSIVE,
@@ -768,9 +766,9 @@ class BrowserAutomationService:
         self, lease_id: str, request: BrowserProxyRuleRequest, actor_id: str
     ) -> BrowserProxyRule:
         lease = await self._active_lease(lease_id)
-        if RiskClass.ACTIVE_SCAN not in lease.allowed_risk_classes:
+        if RiskClass.NETWORK_ACTION not in lease.allowed_risk_classes:
             raise BrowserAutomationRequestError(
-                "proxy mutation requires active-scan authorization"
+                "proxy mutation requires network-action authorization"
             )
         self._reject_secret_values({"match": request.match, "action": request.action})
         replacement = request.action.get("body") or request.action.get("value")
