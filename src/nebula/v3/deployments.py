@@ -832,7 +832,9 @@ class DeploymentCoordinator:
                             ("chat.accept/v1", "chat.resume/v1")
                         ),
                     ),
-                    RuntimeCommandRow.state.in_("queued", "running", "uncertain"),
+                    RuntimeCommandRow.state.in_(
+                        ("queued", "running", "uncertain")
+                    ),
                 )
                 .limit(1)
             )
