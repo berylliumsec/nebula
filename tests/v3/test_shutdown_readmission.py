@@ -221,6 +221,66 @@ async def core(tmp_path, location):
         await value.close()
 
 
+async def test_actual_fresh_core_starts_first_chat_in_admitted_project_worker(core):
+    # Regression: the first chat of a new project is written by its execution
+    # worker. A retirement guard that mutated host coordination state made it
+    # fail with HTTP 500 on every fresh Core.
+    project = (
+        await completed_response(
+            core.client,
+            await core.client.post(
+                "/api/v1/engagements",
+                json={"name": "Fresh chat start project", "metadata": {}},
+                headers={"Idempotency-Key": "fresh-project"},
+            ),
+        )
+    ).json()
+    provider = (
+        await completed_response(
+            core.client,
+            await core.client.post(
+                "/api/v1/providers",
+                json={
+                    "name": "Inert fresh-chat provider",
+                    "provider_type": "vllm",
+                    "is_local": True,
+                    "model_allowlist": ["model-a"],
+                },
+                headers={"Idempotency-Key": "fresh-provider"},
+            ),
+        )
+    ).json()
+    response = await completed_response(
+        core.client,
+        await core.client.post(
+            "/api/v1/chat/completions",
+            json={
+                "engagement_id": project["id"],
+                "provider_id": provider["id"],
+                "model": "model-a",
+                "include_knowledge": False,
+                "stream": True,
+                "messages": [{"role": "user", "content": "First synthetic chat"}],
+            },
+            headers={"Idempotency-Key": "fresh-first-chat"},
+        ),
+    )
+    assert response.status_code == 200
+    assert "event: done" in response.text and '"delta":"First "' in response.text
+    sessions = await core.store.list_entities(ChatSession, engagement_id=project["id"])
+    assert len(sessions) == 1 and "archived_at" not in sessions[0].metadata
+    turns = await core.store.list_entities(ChatTurn, engagement_id=project["id"])
+    assert [(turn.session_id, turn.status) for turn in turns] == [
+        (sessions[0].id, "complete")
+    ]
+    async with core.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, project["id"])
+        assert owner is not None and owner.runtime_id is not None
+        assert not owner.retirement_requested
+        worker = await session.get(RuntimeProcessRow, owner.runtime_id)
+        assert worker is not None and worker.role == "execution"
+
+
 async def test_actual_core_shutdown_reopen_readmits_existing_project_and_preserves_pauses(
     core,
 ):

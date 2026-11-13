@@ -6,6 +6,7 @@ from typing import AsyncIterator
 
 from .diagnostics import record_caught_exception
 from .async_utils import call_async, finish_cleanup
+from .execution_scope import execution_scoped
 from .query_predicates import visible_harness_chat_title
 
 import asyncio
@@ -390,12 +391,26 @@ class StoreTransaction:
     async def _guard_project_chat_start(self, engagement_id: str | None) -> None:
         """Serialize a new open chat against project worker retirement.
 
-        The ownership-row UPDATE is in the same transaction as the chat write.
-        It makes a concurrent retirement either observe the committed session,
-        or commit its hold first and cause this chat start to be rejected.
+        The ownership row is locked in the same transaction as the chat write.
+        A concurrent retirement either observes the committed session, or
+        commits its hold first and causes this chat start to be rejected.
         Projects without an ownership row remain unaffected.
         """
         if not engagement_id:
+            return
+        if execution_scoped(await self.session.connection()):
+            # Execution workers cannot write host coordination state. Their
+            # transaction began holding this owned row, so reading the hold is
+            # serialized with retirement exactly as the host's UPDATE is.
+            retiring = await self.session.scalar(
+                select(ProjectOwnershipRow.retirement_requested)
+                .where(ProjectOwnershipRow.project_id == engagement_id)
+                .with_for_update()
+            )
+            if retiring:
+                raise ConflictError(
+                    "The project worker is closing; retry chat creation after retirement."
+                )
             return
         result = await self.session.execute(
             update(ProjectOwnershipRow)

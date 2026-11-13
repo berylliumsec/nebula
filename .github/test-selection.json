@@ -1,28 +1,31 @@
 {
-  "reviewed_by": "Codex",
-  "reason": "Verify the recovery bundle version against its hash-bound package manifest rather than the outer Core commit, and safely retry the exact failed activation journal after proving the previous host is healthy.",
-  "exclusions": "CI runs only three focused Python cases across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
-  "python_versions": [
-    "3.11",
-    "3.12",
-    "3.13"
-  ],
+  "reviewed_by": "Claude Code",
+  "reason": "First chat start on a fresh Core failed with HTTP 500: the open-chat retirement guard added in #987 issued a no-op UPDATE on project_ownership, which ExecutionSQLScope forbids in execution workers. Execution-scoped transactions now read the retirement hold under the ownership lock their transaction already holds; host/API stores keep the UPDATE. Selection covers execution-worker chat create/unarchive, the retirement hold and its serialization on both dialects, a fresh real Core first chat, the host guard, and the existing worker chat-acceptance and handoff cases that were red on main because of this defect.",
+  "exclusions": "No UI, native, or frontend code changed, so no frontend, native, or Playwright tests. PostgreSQL parametrizations run because test_shutdown_readmission.py is selected. The longer real-Core shutdown/reopen case is not selected; the new fresh-Core case covers its first-chat step. No live or staging Core mutation, database backup, or deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 3,
+    "python": 28,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_host_activation.py::test_package_version_discovery_binds_to_release_and_authenticated_health",
-    "tests/test_simulation_host_activation.py::test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_api_db",
-    "tests/test_simulation_host_activation.py::test_needs_attention_activation_retries_only_from_verified_previous_host"
+    "tests/v3/test_execution_scope.py::test_execution_worker_starts_and_reopens_owned_chats_without_host_writes",
+    "tests/v3/test_execution_scope.py::test_execution_worker_chat_starts_honor_project_retirement_hold",
+    "tests/v3/test_execution_scope.py::test_retirement_waits_for_an_uncommitted_execution_chat_start",
+    "tests/v3/test_shutdown_readmission.py::test_actual_fresh_core_starts_first_chat_in_admitted_project_worker",
+    "tests/v3/test_runtime_chat_acceptance.py::test_binding_commits_with_new_turn_and_user_message",
+    "tests/v3/test_runtime_chat_acceptance.py::test_rebinding_rolls_back_the_second_session_turn_and_message",
+    "tests/v3/test_runtime_chat_acceptance.py::test_unclaimed_or_wrong_transport_cannot_publish_a_binding",
+    "tests/v3/test_runtime_chat_acceptance.py::test_binding_is_immutable_and_stale_tasks_cannot_create_one",
+    "tests/v3/test_project_handoff_admission.py::test_queued_producer_moves_without_cancel_pause_or_a_second_turn",
+    "tests/v3/test_handoff_participants.py::test_received_callback_moves_existing_turn_without_replaying_command",
+    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "3d289143a1f1dd2034d6bb35141200836e4613e5abde5e5cb2910d63e61bd4f1"
+  "change_digest": "d8f978ed3d0116ce714805fe5a9499c75fca24d72bfc73ea07079db3b9b74652"
 }
