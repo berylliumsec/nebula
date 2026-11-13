@@ -187,8 +187,8 @@ class RuntimeDelivery:
 
         try:
             body = json.loads(intent.body()) if intent.body() else {}
-        # diagnostic-expected: malformed bodies cannot establish a chat-start intent.
         except (ValueError, UnicodeError, RecursionError):
+            # diagnostic-expected: malformed bodies cannot establish a chat-start intent.
             body = None
 
         if intent.path == "/api/v1/chat/completions":
