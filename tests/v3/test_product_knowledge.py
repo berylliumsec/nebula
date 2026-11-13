@@ -1068,3 +1068,18 @@ def test_browser_harness_guidance_retains_tools_without_attack_recipes(monkeypat
     )
     text = "\n".join(str(item["text"]) for item in matches)
     assert "Repeater" in text and "evidence" in text.lower()
+
+    from nebula.v3.product_knowledge import packaged_product_passages
+
+    _, passages = packaged_product_passages()
+    guidance = " ".join(
+        " ".join(str(row["text"]).split())
+        for row in passages
+        if row["source_path"] == "docs/design/nebula-settings-assistant.md"
+    )
+    assert "Active testing" not in guidance
+    assert (
+        "Network actions and credential grants remain operator-controlled" in guidance
+    )
+    assert 'allowed_risk_classes=["passive"]' in guidance
+    assert "Other risk classes and credential grants are refused" in guidance

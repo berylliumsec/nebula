@@ -136,7 +136,7 @@ Settings assistant and the complete destination catalog.
 | Store or download project Evidence | Interactive Butler pages selected-project evidence metadata, reads an exact record and revision, and prepares an upload or original-file download. The requesting browser chooses the file, title, type and project links, checks the file hash, and reports a stored result only after Core detail and list agree. Original download requires confirmation and byte-for-byte SHA-256 verification. Cancellation transfers nothing; an uncertain upload requires inspecting Evidence before another attempt. Butler receives no original bytes, and scheduled Butler has no device-file action | Core evidence and artifact store; requesting browser owns local file selection, confirmation and download | Butler tool, Core API, component and production LAN browser |
 | Brief recent agent work | Butler resolves a named Assistant, pages saved activity for the requested number of hours, includes delegated agents, and cites the source chat and record for claims about progress or repeated attempts | Core transcript, turn ledgers, harness activity, subagent lineage and goal reports | Tool unit, real Core and browser |
 | Start or guide work | A new chat or mission uses an enabled listed runtime; an existing chat receives a durable queued follow-up or live harness steer; a mission uses the existing start or steer path | Core chat queue, harness and mission services | Tool unit and real Core |
-| Start a scoped browser mission | Interactive Butler pages active security browser sessions with `nebula.work.browser_sessions`, then starts a selected-project mission with an exact session, target URLs, the passive risk class and lease limits. Active testing and credential grants remain operator-controlled. Core checks the same scope and session policy as the Browser form. Butler reads the saved mission ID and status; completion and findings require later mission inspection | Core browser session, scope policy, automation lease and mission; URL selects Browser or Missions | Butler tool, Core API and production LAN browser |
+| Start a scoped browser mission | Interactive Butler pages active security browser sessions with `nebula.work.browser_sessions`, then starts a selected-project mission with an exact session, target URLs, the passive risk class and lease limits. Network actions and credential grants remain operator-controlled. Core checks the same scope and session policy as the Browser form. Butler reads the saved mission ID and status; completion and findings require later mission inspection | Core browser session, scope policy, automation lease and mission; URL selects Browser or Missions | Butler tool, Core API and production LAN browser |
 | Interrupt work | An exact selected chat turn or mission is stopped through its existing Core lifecycle and read back | Core turn or run | Tool unit and real Core |
 | Ask for a task plan | The chat's Assistant settings asks any provider or harness agent to share a plan on future turns, or Butler records one exact one-task request with the target revision and reason. Normal tools remain available, and the activity view shows whether a plan was shared | Core assistant config, directive, and task plan | Tool unit, component, browser and real Core |
 | Hand off a previously planning-blocked goal | Butler reads a paused harness goal and uses a revision-checked action after Core verifies that its latest failed turn was never admitted and ran zero tools. Core links one provider draft to the paused source; the new planning preference is advisory | Core goal, turn, queue, approval, provider, and handoff records | Core unit, component, real Core and browser |
@@ -795,9 +795,9 @@ controls.
 
 Delegated browser inspection accepts only `allowed_risk_classes=["passive"]`
 and an empty credential grant list. Other risk classes and credential grants
-are refused before mission creation. Active testing stays in the visible
-operator-controlled Browser; a passive mission receipt does not claim an
-assessment result.
+are refused before mission creation. Network actions stay in the visible
+operator-controlled Browser; a passive mission receipt does not establish an
+independently verified finding.
 
 
 Nonsecret provider, Assistant harness and MCP edits preserve authentication,

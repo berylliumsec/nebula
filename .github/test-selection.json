@@ -1,27 +1,26 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Final harness sweep: replace inert Nmap approval examples with browser navigation and the current network_action risk. Verify the demo contract, local approval-fixture lifecycle, retained passive output parsing and bundled guidance digest.",
-  "exclusions": "No full suites. Changes are inert demo data, usage-recording fixtures and documentation; no runtime controls, layout, API, authentication, persistence or execution behavior changed. No new live Core or device-matrix claim: the usage recording was not re-recorded. Native and Playwright execution are not applicable to this fixture-only cleanup. No deployment.",
+  "reason": "Agent guidance sweep: neutralize residual active-testing wording in indexed settings help and attack terminology in a historical acceptance document. Rebuild bundled help and verify preserved browser capabilities, passive delegation boundaries, source digest and isolated Chroma synchronization.",
+  "exclusions": "Documentation and generated product-help data only; no runtime prompt logic, tool registrations, UI controls, APIs, permission semantics or deployment changed. No frontend/native/Playwright tests or live-provider/device runs apply. Exactly three product-knowledge tests, including disposable Chroma, are selected; no full suites.",
   "python_versions": [
     "3.11"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 2,
-    "frontend": 2,
+    "python": 3,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_web_search.py::test_nmap_observations_still_work_after_the_union_change",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
+    "tests/v3/test_product_knowledge.py::test_browser_harness_guidance_retains_tools_without_attack_recipes",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [
-    "ui/src/data/demo.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "37f4e1fe6118590ef1bc9dcf80abd69bb29e8ff7fd84e93c0715cff6ef4330c1"
+  "change_digest": "70b53093f3d9487623dd78331a3f819691fc2dd6818166ff0a5afc6807c266a0"
 }
