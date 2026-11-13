@@ -34,17 +34,30 @@ one-snapshot count. Record the exception and resolve it after recovery is
 verified.
 
 `nebula_deployer.py prepare` runs its reviewed local test selection by default.
-For a deliberate CI-backed preparation, pass `--ci-run-id <run-id>`. The
-deployer accepts only a successful push run from the active `.github/workflows/ci.yml`
-for the exact `main` candidate whose first parent is the live release baseline.
-It verifies the run's selection artifact SHA-256, independently validates the
-committed selection against that exact diff, and requires the selected CI jobs
-to have completed successfully. This mode skips local test collection and test
-execution only; dependency setup, lint/diagnostic checks, builds, release hashes,
-and existing staging/promotion guards still run. It fails closed when the CI
-selection contains Playwright entries because the push CI workflow does not run
-those entries. A run from a pull request, workflow dispatch, a different
-baseline, or a multi-commit first-parent range is not accepted.
+For a deliberate CI-backed preparation, pass `--ci-run-id <run-id>` once for a
+one-commit candidate. For a candidate containing multiple first-parent commits
+after the live release, repeat the option once per commit, oldest to newest,
+such as `prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
+requires exactly one distinct successful `main` push run from the active
+`.github/workflows/ci.yml` for every commit in the complete
+live-baseline-to-head chain. Each run must match that exact commit and its first
+parent. The deployer verifies each run's selection artifact SHA-256, validates
+the committed selection against that commit's diff, and requires all selected
+jobs to have completed successfully. The immutable acceptance record retains
+the ordered per-commit receipts and selected-job conclusions; the reviewed
+selection union must cover the entire first-parent range. Missing, repeated,
+reordered, or mismatched runs fail closed. This mode skips local test collection
+and test execution only; dependency setup, lint/diagnostic checks, builds,
+release hashes, and existing staging/promotion guards still run. It fails closed
+when a per-commit CI selection contains Playwright entries because the push CI
+workflow does not run those entries. Runs from pull requests or workflow
+dispatches are not accepted.
+
+CI-only acceptance also requires the workflow files, local action definitions,
+and `scripts/test_selection.py` to match the original live baseline for every
+commit in the chain. This prevents a candidate from changing the checks or the
+validator used to accept itself. Readback compares the stored ordered receipt
+commits with the release's actual Git first-parent chain.
 
 After the one-time coordinated transition to the supervisor architecture, run
 `python3 -m nebula_deployer adopt-supervisor`. Adoption requires an authenticated

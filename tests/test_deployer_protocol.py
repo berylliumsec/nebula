@@ -183,6 +183,8 @@ def test_ci_acceptance_matches_exact_run_and_selection(monkeypatch, tmp_path):
     monkeypatch.setattr(deployer, "github_bytes", lambda *_args, **_kwargs: archive)
 
     def fake_run(*args, **_kwargs):
+        if "diff" in args:
+            return ""
         if "rev-parse" in args:
             return OLD
         if "show" in args:
@@ -205,6 +207,158 @@ def test_ci_acceptance_matches_exact_run_and_selection(monkeypatch, tmp_path):
         "security": "success",
         "selection": "success",
     }
+
+
+def _ci_run_receipt(run_id, commit, baseline):
+    return {
+        "source": "github-actions-ci",
+        "run_id": run_id,
+        "run_url": f"https://github.com/berylliumsec/nebula/actions/runs/{run_id}",
+        "run_attempt": 1,
+        "workflow_path": ".github/workflows/ci.yml",
+        "commit": commit,
+        "baseline": baseline,
+        "selection_change_digest": "c" * 64,
+        "selection_plan_sha256": "d" * 64,
+        "artifact_sha256": "e" * 64,
+        "selected_jobs": {"selection": "success", "security": "success"},
+    }
+
+
+def test_ci_acceptance_chain_binds_each_commit_to_exact_run(monkeypatch, tmp_path):
+    middle = "c" * 40
+    commits = [middle, NEW]
+    receipts = [
+        _ci_run_receipt(98765, middle, OLD),
+        _ci_run_receipt(98766, NEW, middle),
+    ]
+    calls = []
+    monkeypatch.setattr(
+        deployer,
+        "first_parent_commits",
+        lambda _directory, *, previous, sha: commits,
+    )
+
+    def verify(run_id, *, previous, sha, directory, trusted_baseline):
+        calls.append((run_id, previous, sha, directory, trusted_baseline))
+        return receipts[len(calls) - 1]
+
+    monkeypatch.setattr(deployer, "verify_ci_acceptance", verify)
+    accepted = deployer.verify_ci_acceptance_chain(
+        ["98765", "98766"], previous=OLD, sha=NEW, directory=tmp_path
+    )
+
+    assert calls == [
+        ("98765", OLD, middle, tmp_path, OLD),
+        ("98766", middle, NEW, tmp_path, OLD),
+    ]
+    assert accepted == {
+        "source": "github-actions-ci-chain",
+        "baseline": OLD,
+        "commit": NEW,
+        "receipts": receipts,
+    }
+
+
+def test_ci_acceptance_chain_rejects_missing_extra_and_duplicate_runs(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        deployer,
+        "first_parent_commits",
+        lambda *_args, **_kwargs: ["c" * 40, NEW],
+    )
+    monkeypatch.setattr(
+        deployer,
+        "verify_ci_acceptance",
+        lambda *_args, **_kwargs: pytest.fail("invalid run list reached verification"),
+    )
+    for run_ids in (["98765"], ["98765", "98766", "98767"], ["98765", "98765"]):
+        with pytest.raises(RuntimeError):
+            deployer.verify_ci_acceptance_chain(
+                run_ids, previous=OLD, sha=NEW, directory=tmp_path
+            )
+
+
+def test_ci_acceptance_chain_rejects_reordered_or_gap_receipts(
+    monkeypatch, tmp_path
+):
+    middle = "c" * 40
+    monkeypatch.setattr(
+        deployer,
+        "first_parent_commits",
+        lambda *_args, **_kwargs: [middle, NEW],
+    )
+    monkeypatch.setattr(
+        deployer,
+        "verify_ci_acceptance",
+        lambda run_id, **kwargs: _ci_run_receipt(
+            int(run_id), NEW if run_id == "98765" else middle, kwargs["previous"]
+        ),
+    )
+    with pytest.raises(RuntimeError, match="chain position"):
+        deployer.verify_ci_acceptance_chain(
+            ["98765", "98766"], previous=OLD, sha=NEW, directory=tmp_path
+        )
+
+    def broken_chain(*_args, **_kwargs):
+        raise RuntimeError("CI acceptance first-parent chain has a gap")
+
+    monkeypatch.setattr(deployer, "first_parent_commits", broken_chain)
+    with pytest.raises(RuntimeError, match="first-parent chain has a gap"):
+        deployer.verify_ci_acceptance_chain(
+            ["98765", "98766"], previous=OLD, sha=NEW, directory=tmp_path
+        )
+
+
+def test_ci_acceptance_chain_receipt_readback_rejects_tampering():
+    middle = "c" * 40
+    valid = {
+        "source": "github-actions-ci-chain",
+        "baseline": OLD,
+        "commit": NEW,
+        "receipts": [
+            _ci_run_receipt(98765, middle, OLD),
+            _ci_run_receipt(98766, NEW, middle),
+        ],
+    }
+    deployer.validate_ci_acceptance_record(
+        valid, previous=OLD, sha=NEW, expected_commits=[middle, NEW]
+    )
+    with pytest.raises(RuntimeError, match="acceptance record is invalid"):
+        deployer.validate_ci_acceptance_record(
+            valid, previous=OLD, sha=NEW, expected_commits=[NEW]
+        )
+
+    broken = {
+        **valid,
+        "receipts": [valid["receipts"][0], {**valid["receipts"][1], "baseline": OLD}],
+    }
+    with pytest.raises(RuntimeError, match="acceptance record is invalid"):
+        deployer.validate_ci_acceptance_record(broken, previous=OLD, sha=NEW)
+
+
+def test_ci_acceptance_rejects_modified_trusted_workflow_or_validator(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_run(*args, **_kwargs):
+        calls.append(args)
+        if "diff" in args:
+            raise RuntimeError("git diff found changed trusted inputs")
+        pytest.fail(f"unexpected command: {args!r}")
+
+    monkeypatch.setattr(deployer, "run", fake_run)
+    with pytest.raises(RuntimeError, match="changes to trusted workflows"):
+        deployer.verify_ci_trust_inputs(
+            tmp_path, trusted_baseline=OLD, sha=NEW
+        )
+
+    diff_args = next(args for args in calls if "diff" in args)
+    assert ".github/workflows" in diff_args
+    assert ".github/actions" in diff_args
+    assert "scripts/test_selection.py" in diff_args
 
 
 def test_selected_ci_jobs_reject_playwright_not_run_on_push():

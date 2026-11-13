@@ -165,3 +165,13 @@ def test_compatibility_requires_review_of_exact_migration_tree(tmp_path, monkeyp
     )
     with pytest.raises(ValueError, match="review runtime-compatibility"):
         runtime_bundle.load_compatibility()
+
+
+def test_compatibility_reviews_chat_scoped_admission_schema():
+    compatibility = runtime_bundle.load_compatibility()
+
+    assert compatibility["migration_head"] == "0048_chat_scoped_admission"
+    assert compatibility["schema_family"] == 5
+    assert compatibility["schema_min"] == 5
+    assert compatibility["schema_max"] == 5
+    assert compatibility["additive_migrations"] is True
