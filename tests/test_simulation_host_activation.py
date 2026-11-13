@@ -62,7 +62,7 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         )
     unowned = _status()
     unowned["projects"][0].update(runtime_id=None, runtime_version=None)
-    with pytest.raises(RuntimeError, match="changed the existing execution owner"):
+    with pytest.raises(RuntimeError, match="outside the exact admitted release"):
         deployer.require_preserved_workers(
             deployer.host_status_snapshot(unowned), deployer.host_status_snapshot(_status())
         )
