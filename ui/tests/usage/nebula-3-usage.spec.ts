@@ -173,18 +173,18 @@ test("07 review and approve a bounded mission action", async ({ page, core }) =>
   const project = await createScenarioProject(core, "Mission Review");
   await installMissionAdapter(page, project.id);
   await openProject(page, core, project, "/?view=missions");
-  await expect(page.getByText("Northstar test API verification", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Northstar page review", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Mission paused for review", { exact: true })).toBeVisible();
   await beat(page);
 
   await page.getByRole("button", { name: "Review" }).click();
   const activity = page.getByLabel("Activity inspector");
   await activity.getByRole("tab", { name: /Approvals/ }).click();
-  await expect(activity.getByText("nmap.service_detection")).toBeVisible();
+  await expect(activity.getByText("browser.navigate")).toBeVisible();
   await activity.getByRole("button", { name: "Review exact request" }).click();
-  const review = page.getByRole("dialog", { name: "Review nmap.service_detection" });
-  await expect(review).toContainText("api.northstar.test:443");
-  await expect(review).toContainText("version_intensity");
+  const review = page.getByRole("dialog", { name: "Review browser.navigate" });
+  await expect(review).toContainText("https://api.northstar.test/");
+  await expect(review).toContainText("tab_id");
   await beat(page, 1_000);
   await review.getByRole("button", { name: "Approve once" }).click();
   await expect(activity.getByText("No pending approvals")).toBeVisible();

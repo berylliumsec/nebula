@@ -103,11 +103,11 @@ export async function installMissionAdapter(page: Page, projectId: string): Prom
     ...entity,
     id: runId,
     engagement_id: projectId,
-    objective: "Confirm externally visible services on the authorized test API without leaving project scope.",
+    objective: "Open the authorized project page without leaving project scope.",
     status: "waiting_approval",
     backend: "native",
     started_at: "2026-07-18T14:05:00Z",
-    metadata: { name: "Northstar test API verification", completed_tasks: 3, total_tasks: 5, spent_usd: 0.18 },
+    metadata: { name: "Northstar page review", completed_tasks: 3, total_tasks: 5, spent_usd: 0.18 },
   };
   const approval = {
     ...entity,
@@ -116,26 +116,23 @@ export async function installMissionAdapter(page: Page, projectId: string): Prom
     engagement_id: projectId,
     origin: "mission",
     status: "pending",
-    risk_class: "active_scan",
-    requested_by: "Network analyst",
-    target: "api.northstar.test:443",
-    policy_rationale: "Confirm the TLS service on the one authorized test endpoint.",
-    expected_effects: ["Sends a bounded service-detection request to TCP 443", "Stores the output in the mission ledger"],
+    risk_class: "network_action",
+    requested_by: "Browser assistant",
+    target: "https://api.northstar.test/",
+    policy_rationale: "Open the selected project page.",
+    expected_effects: ["Navigates the selected browser to one in-scope URL", "Stores the output in the mission ledger"],
     requested_at: "2026-07-18T14:14:30Z",
     exact_request: {
-      tool_name: "nmap.service_detection",
-      arguments: { target: "api.northstar.test", ports: [443], version_intensity: 2 },
-      argv: ["nmap", "-sV", "--version-intensity", "2", "-p", "443", "api.northstar.test"],
-      argument_editing: true,
-      image: "ghcr.io/nebula/security-tools@sha256:approved-test-fixture",
-      runtime_digest: "sha256:approved-test-fixture",
+      tool_name: "browser.navigate",
+      arguments: { tab_id: "usage-tab", url: "https://api.northstar.test/" },
+      argument_editing: false,
     },
   };
   const events = [
     { sequence: 41, id: "usage-event-41", kind: "run.started", run_id: runId, actor: "Supervisor", occurred_at: "2026-07-18T14:05:00Z", summary: "Mission plan accepted with five bounded tasks", payload: {} },
     { sequence: 42, id: "usage-event-42", kind: "task.turn_completed", run_id: runId, actor: "Scope planner", occurred_at: "2026-07-18T14:07:00Z", summary: "Scope restricted to api.northstar.test", payload: {} },
-    { sequence: 43, id: "usage-event-43", kind: "tool.completed", run_id: runId, actor: "Recon specialist", occurred_at: "2026-07-18T14:10:00Z", summary: "Passive DNS review completed", payload: {} },
-    { sequence: 44, id: "usage-event-44", kind: "approval.requested", run_id: runId, actor: "Network analyst", occurred_at: "2026-07-18T14:14:30Z", summary: "Service detection on TCP 443 is waiting for operator approval", payload: { approval_id: approval.id } },
+    { sequence: 43, id: "usage-event-43", kind: "tool.completed", run_id: runId, actor: "Discovery specialist", occurred_at: "2026-07-18T14:10:00Z", summary: "Passive DNS review completed", payload: {} },
+    { sequence: 44, id: "usage-event-44", kind: "approval.requested", run_id: runId, actor: "Browser assistant", occurred_at: "2026-07-18T14:14:30Z", summary: "Browser navigation is waiting for operator approval", payload: { approval_id: approval.id } },
   ];
   await installEventSocket(page, events);
   await page.route("**/api/v1/**", async (route) => {
