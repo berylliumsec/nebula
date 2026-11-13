@@ -541,11 +541,13 @@ class RuntimeCoordination:
             host = await session.get(DeploymentHostRow, "host")
             ownership = await session.get(ProjectOwnershipRow, lease.project_id)
             held = (
-                handoff is not None
-                and handoff.admission_held
-                and handoff.phase != "verified"
-            ) or (host is not None and host.shutdown_requested) or (
-                ownership is not None and ownership.retirement_requested
+                (
+                    handoff is not None
+                    and handoff.admission_held
+                    and handoff.phase != "verified"
+                )
+                or (host is not None and host.shutdown_requested)
+                or (ownership is not None and ownership.retirement_requested)
             )
             # Retirement is a project-wide quiescence boundary. Unlike host
             # shutdown and handoff, it cannot leave the control lane running:

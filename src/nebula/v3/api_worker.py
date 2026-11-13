@@ -413,16 +413,12 @@ def create_api_worker(
         chat_acceptance = False
         chat_resume = False
         chat_start = delivery.is_chat_start_intent(intent)
-        if (
-            intent.method == "POST"
-            and re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path)
+        if intent.method == "POST" and re.fullmatch(
+            r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path
         ):
             if chat_start and chat_resume_for is not None:
                 chat_resume = await chat_resume_for(project_id)
-        if (
-            intent.method == "POST"
-            and intent.path == "/api/v1/chat/completions"
-        ):
+        if intent.method == "POST" and intent.path == "/api/v1/chat/completions":
             try:
                 chat_body = json.loads(intent.body())
                 requested = (

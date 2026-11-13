@@ -759,9 +759,7 @@ class DeploymentCoordinator:
                 and owner.fencing_token == lease.fencing_token
                 and owner.retirement_requested
             )
-            if not project_retirement and (
-                host is None or not host.shutdown_requested
-            ):
+            if not project_retirement and (host is None or not host.shutdown_requested):
                 raise CoordinationConflict(
                     "Hold host or project admission before quiescing a project"
                 )
@@ -775,9 +773,7 @@ class DeploymentCoordinator:
             if project_retirement and await self._project_has_pending_chat_start(
                 session, lease.project_id
             ):
-                raise CoordinationConflict(
-                    "A chat start is pending for this project"
-                )
+                raise CoordinationConflict("A chat start is pending for this project")
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             if handoff is not None and handoff.phase != HandoffPhase.VERIFIED:
                 raise CoordinationConflict(
@@ -810,9 +806,7 @@ class DeploymentCoordinator:
                 .where(
                     EntityRow.engagement_id == project_id,
                     EntityRow.kind == "chat_sessions",
-                    EntityRow.payload["metadata"]["archived_at"]
-                    .as_string()
-                    .is_(None),
+                    EntityRow.payload["metadata"]["archived_at"].as_string().is_(None),
                 )
                 .limit(1)
             )
@@ -832,9 +826,7 @@ class DeploymentCoordinator:
                             ("chat.accept/v1", "chat.resume/v1")
                         ),
                     ),
-                    RuntimeCommandRow.state.in_(
-                        ("queued", "running", "uncertain")
-                    ),
+                    RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
                 )
                 .limit(1)
             )
@@ -970,8 +962,7 @@ class DeploymentCoordinator:
                 and owner.retirement_requested
             )
             if (
-                not project_retirement
-                and (host is None or not host.shutdown_requested)
+                not project_retirement and (host is None or not host.shutdown_requested)
             ) or checkpoint.get("project_id") != lease.project_id:
                 raise CoordinationConflict(
                     "Quiesced project proof does not match held admission"

@@ -114,8 +114,7 @@ class RuntimeAutoAdmission:
                     select(EntityRow.id)
                     .where(
                         EntityRow.kind == "chat_sessions",
-                        EntityRow.engagement_id
-                        == ProjectOwnershipRow.project_id,
+                        EntityRow.engagement_id == ProjectOwnershipRow.project_id,
                         EntityRow.payload["metadata"]["archived_at"]
                         .as_string()
                         .is_(None),
@@ -153,26 +152,20 @@ class RuntimeAutoAdmission:
                 pending_chat_start = (
                     select(RuntimeCommandRow.id)
                     .where(
-                        RuntimeCommandRow.project_id
-                        == ProjectOwnershipRow.project_id,
+                        RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
                         RuntimeCommandRow.chat_start.is_(True),
-                        RuntimeCommandRow.state.in_(
-                            ("queued", "running", "uncertain")
-                        ),
+                        RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
                     )
                     .exists()
                 )
                 legacy_chat_start = (
                     select(RuntimeCommandRow.id)
                     .where(
-                        RuntimeCommandRow.project_id
-                        == ProjectOwnershipRow.project_id,
+                        RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
                         RuntimeCommandRow.name.in_(
                             ("chat.accept/v1", "chat.resume/v1")
                         ),
-                        RuntimeCommandRow.state.in_(
-                            ("queued", "running", "uncertain")
-                        ),
+                        RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
                     )
                     .exists()
                 )
@@ -227,9 +220,7 @@ class RuntimeAutoAdmission:
                             .limit(8)
                         )
                     )
-                self._retirement_cursor = (
-                    idle_owners[-1][0] if idle_owners else None
-                )
+                self._retirement_cursor = idle_owners[-1][0] if idle_owners else None
                 api_id = host.api_runtime_id
             if api_id is None and self._blocked.get("api") != signature:
                 try:
@@ -566,9 +557,7 @@ class RuntimeAutoAdmission:
                 .where(
                     EntityRow.kind == "chat_sessions",
                     EntityRow.engagement_id == ProjectOwnershipRow.project_id,
-                    EntityRow.payload["metadata"]["archived_at"]
-                    .as_string()
-                    .is_(None),
+                    EntityRow.payload["metadata"]["archived_at"].as_string().is_(None),
                 )
                 .exists()
             )
@@ -577,9 +566,7 @@ class RuntimeAutoAdmission:
                 .where(
                     RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
                     RuntimeCommandRow.chat_start.is_(True),
-                    RuntimeCommandRow.state.in_(
-                        ("queued", "running", "uncertain")
-                    ),
+                    RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
                 )
                 .exists()
             )
@@ -587,12 +574,8 @@ class RuntimeAutoAdmission:
                 select(RuntimeCommandRow.id)
                 .where(
                     RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
-                    RuntimeCommandRow.name.in_(
-                        ("chat.accept/v1", "chat.resume/v1")
-                    ),
-                    RuntimeCommandRow.state.in_(
-                        ("queued", "running", "uncertain")
-                    ),
+                    RuntimeCommandRow.name.in_(("chat.accept/v1", "chat.resume/v1")),
+                    RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
                 )
                 .exists()
             )

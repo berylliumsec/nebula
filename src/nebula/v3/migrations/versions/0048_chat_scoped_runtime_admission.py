@@ -28,11 +28,11 @@ def upgrade():
         )
     op.add_column(
         "runtime_commands",
-        sa.Column("chat_start", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "chat_start", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
     )
-    op.execute(
-        sa.text("UPDATE project_ownership SET admission_requested = false")
-    )
+    op.execute(sa.text("UPDATE project_ownership SET admission_requested = false"))
 
 
 def downgrade():

@@ -859,7 +859,9 @@ async def test_legacy_queued_goal_creates_admit_their_exact_five_projects(batch)
     assert prepared == []
     async with batch.database.session() as session:
         for child in children:
-            (await session.get(ProjectOwnershipRow, child.id)).retirement_requested = False
+            (
+                await session.get(ProjectOwnershipRow, child.id)
+            ).retirement_requested = False
     await automatic.reconcile()
     async with batch.database.session() as session:
         for index, child in enumerate(children):
@@ -877,7 +879,9 @@ async def test_legacy_queued_goal_creates_admit_their_exact_five_projects(batch)
 async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child(
     batch,
 ):
-    parent = await batch.store.create(Engagement(id="parent-chat-project", name="Parent"))
+    parent = await batch.store.create(
+        Engagement(id="parent-chat-project", name="Parent")
+    )
     children = [
         await batch.store.create(
             Engagement(

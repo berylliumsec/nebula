@@ -579,9 +579,7 @@ class RuntimeProcessHost:
                 await finish_cleanup(failed_start())
                 raise
 
-    async def reconcile_idle_project_retirements(
-        self, *, limit: int = 8
-    ) -> list[str]:
+    async def reconcile_idle_project_retirements(self, *, limit: int = 8) -> list[str]:
         """Finish bounded idle-project retirements interrupted after quiescence."""
         if not 1 <= limit <= 32:
             raise ValueError("idle-project retirement limit is outside its bound")
@@ -627,12 +625,9 @@ class RuntimeProcessHost:
                     continue
                 seen.add(runtime_id)
                 owner = await session.get(ProjectOwnershipRow, project_id)
-                if (
-                    owner is not None
-                    and (
-                        owner.fencing_token < fencing_token
-                        or owner.runtime_id == runtime_id
-                    )
+                if owner is not None and (
+                    owner.fencing_token < fencing_token
+                    or owner.runtime_id == runtime_id
                 ):
                     continue
                 process = await session.get(RuntimeProcessRow, runtime_id)
@@ -726,9 +721,7 @@ class RuntimeProcessHost:
         finally:
             await client.close()
         if status.get("quiesce_blockers"):
-            await self.coordinator.abort_project_retirement(
-                lease, worker_status=status
-            )
+            await self.coordinator.abort_project_retirement(lease, worker_status=status)
             return False
         if (
             status.get("runtime_id") != runtime_id
@@ -741,10 +734,15 @@ class RuntimeProcessHost:
             )
         async with self.coordinator.database.session() as session:
             current = await session.get(ProjectOwnershipRow, project_id)
-            if current is None or (current.runtime_id, current.fencing_token) != (
-                None,
-                lease.fencing_token,
-            ) or current.retirement_requested:
+            if (
+                current is None
+                or (current.runtime_id, current.fencing_token)
+                != (
+                    None,
+                    lease.fencing_token,
+                )
+                or current.retirement_requested
+            ):
                 raise CoordinationConflict(
                     "Project ownership release did not persist after quiescence"
                 )
@@ -752,10 +750,8 @@ class RuntimeProcessHost:
                 select(DeploymentReceiptRow)
                 .where(
                     DeploymentReceiptRow.action == "project.quiesced",
-                    DeploymentReceiptRow.result["project_id"].as_string()
-                    == project_id,
-                    DeploymentReceiptRow.result["runtime_id"].as_string()
-                    == runtime_id,
+                    DeploymentReceiptRow.result["project_id"].as_string() == project_id,
+                    DeploymentReceiptRow.result["runtime_id"].as_string() == runtime_id,
                     DeploymentReceiptRow.result["fencing_token"].as_integer()
                     == lease.fencing_token,
                     DeploymentReceiptRow.result["reason"].as_string()

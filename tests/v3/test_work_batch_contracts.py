@@ -158,9 +158,7 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
         migrate(engine, "0047_runtime_work_batches")
         migrate(engine, "0048_chat_scoped_admission")
         inspector = inspect(engine)
-        migrated_commands = Table(
-            "runtime_commands", MetaData(), autoload_with=engine
-        )
+        migrated_commands = Table("runtime_commands", MetaData(), autoload_with=engine)
         chat_start_column = next(
             column
             for column in inspector.get_columns("runtime_commands")
@@ -169,11 +167,15 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
         assert chat_start_column["nullable"] is False
         assert chat_start_column["default"] is not None
         with engine.connect() as connection:
-            legacy_command = connection.execute(
-                select(migrated_commands).where(
-                    migrated_commands.c.id == "prior-command"
+            legacy_command = (
+                connection.execute(
+                    select(migrated_commands).where(
+                        migrated_commands.c.id == "prior-command"
+                    )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
         assert legacy_command["chat_start"] is False
         table = RuntimeWorkBatchProjectRow.__table__
         assert inspector.get_pk_constraint(table.name)["constrained_columns"] == [

@@ -248,7 +248,9 @@ class RuntimeDelivery:
         if chat_acceptance and chat_resume:
             raise ValueError("A request has one chat transport")
         if chat_start and not self.is_chat_start_intent(intent):
-            raise ValueError("Chat admission requires a valid chat start or resume intent")
+            raise ValueError(
+                "Chat admission requires a valid chat start or resume intent"
+            )
         if chat_resume and (
             intent.method != "POST"
             or not re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path)
