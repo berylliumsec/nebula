@@ -100,7 +100,7 @@ def command_specs(
             version="1",
             description=(
                 "Run a Bash command in the session-scoped pinned automation container. "
-                "Use ordinary PATH binaries such as rg, python3, git, curl, or nmap."
+                "Use ordinary PATH binaries such as rg, python3, git, or curl."
                 + inventory_prompt
             ),
             input_schema={

@@ -51,6 +51,18 @@ vi.mock("../state/WorkspaceContext", () => ({
 }));
 
 describe("mission activity", () => {
+  it("uses neutral discovery language in the preview mission", () => {
+    workspace.previewMode = true;
+    try {
+      render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+      expect(screen.getByRole("heading", { name: "Project security review" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Discovery specialist" })).toBeVisible();
+      expect(screen.queryByText(/attack surface|recon specialist/i)).toBeNull();
+    } finally {
+      workspace.previewMode = false;
+    }
+  });
+
   it("formats mission Markdown and copies fenced commands exactly", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

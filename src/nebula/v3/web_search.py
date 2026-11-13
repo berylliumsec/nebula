@@ -808,7 +808,7 @@ class WebSearchTool(ToolPlugin):
             return self._failure(
                 started,
                 f"refused: the query names {disclosed!r}, an in-scope target. "
-                "Sending it would disclose the engagement's attack surface to "
+                "Sending it would disclose the project's in-scope targets to "
                 "upstream search engines. An operator can allow this with "
                 '"Allow queries naming in-scope targets" in Project > Policy.',
             )

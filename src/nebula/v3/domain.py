@@ -698,7 +698,7 @@ class ScopePolicy(Entity):
     # research. Ignored while local_only is set. Never used against a target.
     web_search: bool = False
     # Opt-in: permit search queries that name an in-scope host, IP or CIDR.
-    # Disclosing the client's attack surface to upstream engines is the
+    # Disclosing the client's scoped targets to upstream engines is the
     # operator's call, not the model's.
     web_search_discloses_scope: bool = False
     # Sourced tools the operator keeps in every request's function list, by

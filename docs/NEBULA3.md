@@ -532,7 +532,7 @@ derived image config keeps APT usable despite the empty runtime capability set.
 Tools that require raw-packet or network-administration capabilities remain
 limited by design. The derived workstation removes Nmap's packaged file
 capabilities so it can start under the terminal's empty capability set and use
-its unprivileged connect-scan modes instead of failing during executable
+its unprivileged networking modes instead of failing during executable
 startup.
 
 Workbench presents active Project terminals as persistent browser-style tabs.
