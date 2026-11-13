@@ -1,26 +1,36 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Agent guidance sweep: neutralize residual active-testing wording in indexed settings help and attack terminology in a historical acceptance document. Rebuild bundled help and verify preserved browser capabilities, passive delegation boundaries, source digest and isolated Chroma synchronization.",
-  "exclusions": "Documentation and generated product-help data only; no runtime prompt logic, tool registrations, UI controls, APIs, permission semantics or deployment changed. No frontend/native/Playwright tests or live-provider/device runs apply. Exactly three product-knowledge tests, including disposable Chroma, are selected; no full suites.",
+  "reason": "Review simulation supervisor activation recovery, exact host version health, fenced owner continuity including the transactional idle-quiescence outcome, idempotent code-only rollback, callback intent journaling, and serial project handoff.",
+  "exclusions": "CI runs only the exact focused Python cases selected below across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
   "python_versions": [
-    "3.11"
+    "3.11",
+    "3.12",
+    "3.13"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 3,
+    "python": 11,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_product_knowledge.py::test_browser_harness_guidance_retains_tools_without_attack_recipes",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/test_staged_deployer.py::test_host_activation_runs_after_migration_and_before_api_promotion",
+    "tests/test_staged_deployer.py::test_projects_move_serially_and_retire_each_source_before_next_target",
+    "tests/test_staged_deployer.py::test_verified_no_chat_target_can_be_retired_before_source_release",
+    "tests/test_staged_deployer.py::test_shared_source_stops_before_preparing_another_target",
+    "tests/test_simulation_host_activation.py::test_host_activation_requires_exact_existing_worker_ownership",
+    "tests/test_simulation_host_activation.py::test_host_readback_accepts_only_fenced_idle_project_release",
+    "tests/test_simulation_host_activation.py::test_host_activation_switches_only_current_code_and_records_readback",
+    "tests/test_simulation_host_activation.py::test_interrupted_activation_restarts_selected_release_without_discovery",
+    "tests/test_simulation_host_activation.py::test_failed_host_activation_can_journal_code_only_rollback",
+    "tests/test_simulation_host_activation.py::test_staged_promotion_journals_host_intent_before_callback",
+    "tests/test_simulation_host_activation.py::test_host_rollback_retry_returns_the_recorded_success"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "70b53093f3d9487623dd78331a3f819691fc2dd6818166ff0a5afc6807c266a0"
+  "change_digest": ""
 }

@@ -37,6 +37,7 @@ def _status(*, runtime_id: str = "worker-1", fencing_token: int = 7) -> dict:
                 "runtime_id": runtime_id,
                 "runtime_version": "b" * 40,
                 "fencing_token": fencing_token,
+                "admission_held": False,
             }
         ],
     }
@@ -49,7 +50,7 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         deployer.require_preserved_workers(
             before, deployer.host_status_snapshot(_status())
         )
-        == 1
+        == {"retained": 1, "verified_idle_releases": []}
     )
     with pytest.raises(RuntimeError, match="changed the existing execution owner"):
         deployer.require_preserved_workers(
@@ -59,6 +60,23 @@ def test_host_activation_requires_exact_existing_worker_ownership() -> None:
         deployer.require_preserved_workers(
             before, deployer.host_status_snapshot(_status(fencing_token=8))
         )
+
+
+def test_host_readback_accepts_only_fenced_idle_project_release() -> None:
+    before = deployer.host_status_snapshot(_status())
+    after_status = _status()
+    after_status["resident_versions"] = []
+    after_status["projects"][0].update(runtime_id=None, runtime_version=None)
+
+    after = deployer.host_status_snapshot(after_status)
+
+    assert deployer.require_preserved_workers(before, after) == {
+        "retained": 0,
+        "verified_idle_releases": ["child-project"],
+    }
+    after["projects"]["child-project"]["fencing_token"] += 1
+    with pytest.raises(RuntimeError, match="changed the existing execution owner"):
+        deployer.require_preserved_workers(before, after)
 
 
 def test_host_activation_switches_only_current_code_and_records_readback(
@@ -111,6 +129,103 @@ def test_host_activation_switches_only_current_code_and_records_readback(
     assert journal["state"] == "complete"
     assert journal["readback"] == readback
     assert record["host_activation"] is journal
+
+
+def test_interrupted_activation_restarts_selected_release_without_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = "a" * 40
+    version = "b" * 40
+    api_version = "c" * 40
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    release = releases / version
+    release.mkdir()
+    (release / "nebula-runtime.json").write_text(
+        '{"version": "' + version + '"}'
+    )
+    current = tmp_path / "current"
+    current.symlink_to(release)
+    monkeypatch.setattr(deployer, "RELEASES", releases)
+    monkeypatch.setattr(deployer, "CURRENT", current)
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(
+        deployer,
+        "runtime_release",
+        lambda _version: (release, "d" * 64),
+    )
+    monkeypatch.setattr(
+        deployer, "require_stage_migration_receipts", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(deployer, "host_connection", lambda **_kwargs: None)
+    monkeypatch.setattr(deployer, "current_release_version", lambda: version)
+    monkeypatch.setattr(
+        deployer, "supervisor_service_configuration", lambda: {"kill_mode": "process"}
+    )
+    unit = {"state": "inactive"}
+    monkeypatch.setattr(deployer, "unit_state", lambda _name: unit["state"])
+    monkeypatch.setattr(
+        deployer,
+        "service",
+        lambda action: unit.update(state="active" if action == "start" else "inactive"),
+    )
+    monkeypatch.setattr(
+        deployer,
+        "wait_supervisor_host_ready",
+        lambda target, **_kwargs: {
+            "version": target,
+            "health_commit": target,
+            "recovery_version": target,
+            "api_version": api_version,
+            "retained_project_owners": 1,
+            "verified_idle_project_releases": [],
+        },
+    )
+    prior_status = deployer.host_status_snapshot(
+        {
+            "protocol": "nebula.runtime/v1",
+            "health": "ready",
+            "api_version": api_version,
+            "resident_versions": [previous],
+            "projects": [
+                {
+                    "project_id": "child-project",
+                    "runtime_id": "worker-1",
+                    "runtime_version": previous,
+                    "fencing_token": 7,
+                    "admission_held": False,
+                }
+            ],
+        }
+    )
+    record = {
+        "deployment_mode": "supervisor",
+        "pending": version,
+        "active": api_version,
+        "runtime_deployment": {
+            "action": "promote",
+            "version": version,
+            "host_activation": {
+                "version": version,
+                "operation_id": "activation-op",
+                "state": "requested",
+            },
+        },
+        "host_activation": {
+            "operation_id": "activation-op",
+            "state": "prepared",
+            "version": version,
+            "previous_version": previous,
+            "prior_status": prior_status,
+        },
+    }
+
+    result = deployer.activate_supervisor_host(record, version)
+
+    assert result["operation_id"] == "activation-op"
+    assert record["host_activation"]["state"] == "complete"
+    assert record["host_active"] == version
+    assert unit["state"] == "active"
 
 
 def test_failed_host_activation_can_journal_code_only_rollback(
@@ -223,3 +338,66 @@ def test_staged_promotion_journals_host_intent_before_callback() -> None:
     assert journal["host_activation"]["result"]["operation_id"] == (
         journal["id"] + ":host-activation"
     )
+
+
+def test_host_rollback_retry_returns_the_recorded_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = "a" * 40
+    current = "b" * 40
+    api_version = "c" * 40
+    saved_readback = {
+        "version": previous,
+        "health_commit": previous,
+        "api_version": api_version,
+    }
+    record = {
+        "deployment_mode": "supervisor",
+        "host_active": previous,
+        "host_activation": {
+            "state": "rolled_back",
+            "version": current,
+            "previous_version": previous,
+            "rollback": {
+                "state": "complete",
+                "operation_id": "rollback-op",
+                "version": previous,
+                "previous_version": current,
+                "expected_api_version": api_version,
+                "readback": saved_readback,
+            },
+        },
+    }
+    monkeypatch.setattr(deployer, "state", lambda: record)
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **_kwargs: {"version": previous, "pid": 123},
+    )
+    monkeypatch.setattr(
+        deployer,
+        "supervisor_service_identity",
+        lambda: {"main_pid": 123},
+    )
+    monkeypatch.setattr(deployer, "current_release_version", lambda: previous)
+    monkeypatch.setattr(
+        deployer,
+        "read_supervisor_health",
+        lambda: (
+            {"status": "ok", "commit": previous, "recovery_version": previous},
+            {
+                "protocol": "nebula.runtime/v1",
+                "health": "ready",
+                "api_version": api_version,
+                "resident_versions": [],
+                "projects": [],
+            },
+        ),
+    )
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "state.json")
+
+    result = deployer.rollback_host()
+
+    assert result["status"] == "host_rolled_back"
+    assert result["operation_id"] == "rollback-op"
+    assert result["version"] == previous
