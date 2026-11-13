@@ -62,10 +62,16 @@ commits with the release's actual Git first-parent chain.
 After the one-time coordinated transition to the supervisor architecture, run
 `python3 -m nebula_deployer adopt-supervisor`. Adoption requires an authenticated
 supervisor deployment status; it does not replace the running architecture.
-Later `promote` operations submit durable stage, migration, API promotion and
-project handoff operations while keeping ingress available. The accepted runtime
-manifest hashes every executable/UI asset and uses the build's reviewed
-compatibility metadata, including its migration-tree digest.
+Later `promote` operations submit durable stage and migration operations, activate
+the accepted foreground supervisor, then prepare/promote the API while keeping
+ingress available. Execution migration is serial: prepare one target, hand off
+one project, verify its new owner and fencing token from fresh status, retire the
+now-ownerless source, and confirm that retirement before preparing another
+target. The foreground supervisor may retire a verified target for a project
+with no open chat. Pinned projects remain on their source runtime; uncertain
+handoffs remain journaled and stop further target preparation until reconciled.
+The accepted runtime manifest hashes every executable/UI asset and uses the
+build's reviewed compatibility metadata, including its migration-tree digest.
 
 Supervisor-mode `rollback` selects compatible retained code and preserves the
 current database and files. It never restores a snapshot or stops pinned work.
