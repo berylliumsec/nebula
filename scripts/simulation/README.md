@@ -33,6 +33,19 @@ Do not delete that state during an unverified recovery just to meet the normal
 one-snapshot count. Record the exception and resolve it after recovery is
 verified.
 
+`nebula_deployer.py prepare` runs its reviewed local test selection by default.
+For a deliberate CI-backed preparation, pass `--ci-run-id <run-id>`. The
+deployer accepts only a successful push run from the active `.github/workflows/ci.yml`
+for the exact `main` candidate whose first parent is the live release baseline.
+It verifies the run's selection artifact SHA-256, independently validates the
+committed selection against that exact diff, and requires the selected CI jobs
+to have completed successfully. This mode skips local test collection and test
+execution only; dependency setup, lint/diagnostic checks, builds, release hashes,
+and existing staging/promotion guards still run. It fails closed when the CI
+selection contains Playwright entries because the push CI workflow does not run
+those entries. A run from a pull request, workflow dispatch, a different
+baseline, or a multi-commit first-parent range is not accepted.
+
 After the one-time coordinated transition to the supervisor architecture, run
 `python3 -m nebula_deployer adopt-supervisor`. Adoption requires an authenticated
 supervisor deployment status; it does not replace the running architecture.

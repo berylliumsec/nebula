@@ -12,6 +12,7 @@ import argparse
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -24,8 +25,9 @@ import subprocess
 import sys
 import tarfile
 import time
+import zipfile
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from urllib.error import HTTPError
 
 from nebula_deploy_gate import CoreClient, blockers, service_token
@@ -62,6 +64,11 @@ PATH = "/home/simulation/.cargo/bin:/home/simulation/.local/bin:/usr/local/bin:/
 SERVICE = "nebula-core.service"
 EDGE = "nebula-lan-tls.service"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+GITHUB_REPOSITORY = "berylliumsec/nebula"
+GITHUB_API = "https://api.github.com"
+CI_ARTIFACT_LIMIT = 1024 * 1024
+CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class _LegacyAttempt:
@@ -420,6 +427,345 @@ def selected_plan(
     return plan, entries
 
 
+class _StripAuthorizationRedirect(HTTPRedirectHandler):
+    """Do not forward GitHub credentials to the artifact blob host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.startswith("https://"):
+            raise RuntimeError("GitHub artifact redirect must use HTTPS")
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            redirected.remove_header("Authorization")
+            redirected.remove_header("authorization")
+        return redirected
+
+
+def github_token() -> str:
+    """Read the deployer's existing repository credential without logging it."""
+    result = subprocess.run(
+        ["git", "credential", "fill"],
+        cwd=REPO,
+        env={**os.environ, "PATH": PATH, "GIT_TERMINAL_PROMPT": "0"},
+        input="protocol=https\nhost=github.com\npath=berylliumsec/nebula.git\n\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode:
+        raise RuntimeError("The pinned GitHub credential helper is unavailable")
+    values = dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
+    token = values.get("password", "")
+    if not token or values.get("host") != "github.com":
+        raise RuntimeError("The pinned GitHub credential helper returned no token")
+    return token
+
+
+def github_bytes(url: str, *, limit: int) -> bytes:
+    if not url.startswith(GITHUB_API + "/"):
+        raise RuntimeError("CI evidence URL is outside the pinned GitHub API")
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token()}",
+            "User-Agent": "NebulaSimulationDeployer",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    opener = build_opener(_StripAuthorizationRedirect())
+    try:
+        with opener.open(request, timeout=60) as response:
+            content = response.read(limit + 1)
+    except (HTTPError, OSError) as error:
+        raise RuntimeError("GitHub CI evidence could not be read") from error
+    if len(content) > limit:
+        raise RuntimeError("GitHub CI evidence exceeds its size bound")
+    return content
+
+
+def github_json(path: str) -> dict[str, Any]:
+    if path.startswith("/") or ".." in Path(path).parts:
+        raise RuntimeError("GitHub API path is invalid")
+    raw = github_bytes(
+        f"{GITHUB_API}/repos/{GITHUB_REPOSITORY}/{path}", limit=8 * 1024**2
+    )
+    try:
+        value = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("GitHub API returned invalid JSON") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("GitHub API returned an unexpected response")
+    return value
+
+
+def ci_selection_artifact(
+    run_id: int, artifact: dict[str, Any]
+) -> tuple[dict[str, Any], str]:
+    workflow_run = artifact.get("workflow_run")
+    if isinstance(workflow_run, dict) and workflow_run.get("id") != run_id:
+        raise RuntimeError("GitHub selection artifact belongs to another run")
+    digest = artifact.get("digest")
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise RuntimeError("GitHub selection artifact has no SHA-256 digest")
+    expected_digest = digest.removeprefix("sha256:")
+    if not SHA256.fullmatch(expected_digest):
+        raise RuntimeError("GitHub selection artifact digest is malformed")
+    size = artifact.get("size_in_bytes")
+    if (
+        artifact.get("expired") is not False
+        or type(size) is not int
+        or size < 1
+        or size > CI_ARTIFACT_LIMIT
+    ):
+        raise RuntimeError("GitHub selection artifact is expired or exceeds its bound")
+    artifact_id = artifact.get("id")
+    if type(artifact_id) is not int or artifact_id < 1:
+        raise RuntimeError("GitHub selection artifact identity is invalid")
+    archive = github_bytes(
+        f"{GITHUB_API}/repos/{GITHUB_REPOSITORY}/actions/artifacts/{artifact_id}/zip",
+        limit=CI_ARTIFACT_LIMIT,
+    )
+    if len(archive) != size:
+        raise RuntimeError("GitHub selection artifact size does not match its metadata")
+    if hashlib.sha256(archive).hexdigest() != expected_digest:
+        raise RuntimeError("GitHub selection artifact SHA-256 does not match")
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            entries = [item for item in bundle.infolist() if not item.is_dir()]
+            if (
+                len(entries) != 1
+                or entries[0].filename != "test-selection-receipt.json"
+            ):
+                raise RuntimeError(
+                    "CI artifact contents do not match the selection receipt contract"
+                )
+            mode = entries[0].external_attr >> 16
+            if stat.S_ISLNK(mode) or entries[0].file_size > CI_ARTIFACT_LIMIT:
+                raise RuntimeError("CI selection receipt has an unsafe type or size")
+            raw = bundle.read(entries[0])
+        receipt = json.loads(raw)
+    except (
+        OSError,
+        RuntimeError,
+        NotImplementedError,
+        zipfile.BadZipFile,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise RuntimeError(
+            "GitHub selection artifact is not a valid receipt archive"
+        ) from error
+    if not isinstance(receipt, dict):
+        raise RuntimeError("CI selection receipt must be a JSON object")
+    return receipt, expected_digest
+
+
+def complete_ci_artifact_listing(response: dict[str, Any]) -> list[dict[str, Any]]:
+    artifacts = response.get("artifacts")
+    total = response.get("total_count")
+    if (
+        not isinstance(artifacts, list)
+        or type(total) is not int
+        or total != len(artifacts)
+        or any(not isinstance(item, dict) for item in artifacts)
+    ):
+        raise RuntimeError("GitHub CI artifact listing is incomplete or malformed")
+    return artifacts
+
+
+def selected_ci_jobs(plan: dict[str, Any]) -> set[str]:
+    if plan.get("playwright"):
+        raise RuntimeError(
+            "The push CI workflow does not execute selected Playwright entries"
+        )
+    required = {"selection", "security"}
+    python_tests = plan.get("python", [])
+    if python_tests:
+        versions = plan.get("python_versions", ["3.12"])
+        required.update(f"python ({version})" for version in versions)
+    checks = plan.get("checks", [])
+    if plan.get("frontend") or "frontend-audit" in checks:
+        required.add("frontend")
+    if plan.get("native") or "desktop-ui-build" in checks:
+        required.add("desktop-macos")
+    if any(item.startswith("tests/test_terminal_") for item in python_tests):
+        required.add("terminal-client")
+    migration_prefixes = (
+        "tests/v3/test_migrations.py",
+        "tests/v3/test_database_migration",
+        "tests/v3/test_postgresql_core.py",
+        "tests/test_simulation_postgres_backup.py",
+    )
+    if any(item.startswith(migration_prefixes) for item in python_tests) or any(
+        item.startswith(
+            "tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata"
+        )
+        for item in python_tests
+    ):
+        required.add("database-migrations")
+    if any("tests/v3/test_report_cpu_activation.py" in item for item in python_tests):
+        required.add("cpu-workers-frozen-linux")
+    if any(
+        "tests/v3/test_packaging.py::test_core_archive_requires_native_async_database_runtime"
+        in item
+        for item in python_tests
+    ):
+        required.add("async-runtime-frozen-linux")
+    if any(
+        "tests/v3/test_packaged_runtime_continuity.py::test_real_packaged_windows_preserve_held_turn_and_draft_through_code_rollback"
+        in item
+        for item in python_tests
+    ):
+        required.add("native-runtime-continuity-linux")
+    return required
+
+
+def require_ci_jobs(jobs: list[dict[str, Any]], required: set[str]) -> dict[str, str]:
+    conclusions: dict[str, list[tuple[str | None, str | None]]] = {}
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get("name"), str):
+            continue
+        conclusions.setdefault(job["name"], []).append(
+            (job.get("status"), job.get("conclusion"))
+        )
+    missing = sorted(
+        name
+        for name in required
+        if not conclusions.get(name)
+        or any(
+            status != "completed" or conclusion != "success"
+            for status, conclusion in conclusions[name]
+        )
+    )
+    if missing:
+        raise RuntimeError(f"CI selected jobs did not succeed: {', '.join(missing)}")
+    return {name: "success" for name in sorted(required)}
+
+
+def verify_ci_acceptance(
+    run_id: str, *, previous: str, sha: str, directory: Path
+) -> dict[str, Any]:
+    if not CI_RUN_ID.fullmatch(run_id):
+        raise RuntimeError("CI run id must be a positive decimal identifier")
+    first_parent = run(
+        "git", "-C", str(directory), "rev-parse", f"{sha}^1", capture=True
+    )
+    if first_parent != previous:
+        raise RuntimeError(
+            "CI acceptance requires the live baseline as the candidate first parent"
+        )
+    run_info = github_json(f"actions/runs/{run_id}")
+    repository = run_info.get("repository")
+    if not isinstance(repository, dict):
+        repository = {}
+    if (
+        run_info.get("head_sha") != sha
+        or run_info.get("head_branch") != "main"
+        or run_info.get("event") != "push"
+        or run_info.get("status") != "completed"
+        or run_info.get("conclusion") != "success"
+        or str(repository.get("full_name", "")).lower() != GITHUB_REPOSITORY
+        or type(run_info.get("run_attempt")) is not int
+        or run_info.get("run_attempt") < 1
+        or run_info.get("html_url")
+        != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+    ):
+        raise RuntimeError(
+            "CI run is not a successful push of the exact main candidate"
+        )
+    workflow_id = run_info.get("workflow_id")
+    if type(workflow_id) is not int or workflow_id < 1:
+        raise RuntimeError("CI run has no valid workflow identity")
+    workflow = github_json(f"actions/workflows/{workflow_id}")
+    if (
+        workflow.get("path") != ".github/workflows/ci.yml"
+        or workflow.get("state") != "active"
+    ):
+        raise RuntimeError("CI run did not use the active pinned CI workflow")
+
+    artifacts = github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
+    artifact_rows = complete_ci_artifact_listing(artifacts)
+    artifact_matches = [
+        item
+        for item in artifact_rows
+        if isinstance(item, dict)
+        if item.get("name") == "test-selection-receipt"
+    ]
+    if len(artifact_matches) != 1:
+        raise RuntimeError("CI run must contain exactly one selection receipt artifact")
+    selection, artifact_digest = ci_selection_artifact(int(run_id), artifact_matches[0])
+    committed = json.loads(
+        run(
+            "git",
+            "-C",
+            str(directory),
+            "show",
+            f"{sha}:.github/test-selection.json",
+            capture=True,
+        )
+    )
+    if selection != committed:
+        raise RuntimeError(
+            "CI selection receipt differs from the candidate's committed plan"
+        )
+    validated = json.loads(
+        run(
+            "/usr/bin/python3",
+            "scripts/test_selection.py",
+            "--baseline",
+            previous,
+            "--candidate",
+            sha,
+            "--plan",
+            ".github/test-selection.json",
+            cwd=directory,
+            capture=True,
+        )
+    )
+    if validated.get("coverage_review_required"):
+        raise RuntimeError("Candidate selection plan fails independent validation")
+    digest = validated.get("change_digest")
+    if not isinstance(digest, str) or selection.get("change_digest") != digest:
+        raise RuntimeError(
+            "CI selection digest does not bind the live-baseline source diff"
+        )
+
+    jobs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        result = github_json(f"actions/runs/{run_id}/jobs?per_page=100&page={page}")
+        current = result.get("jobs")
+        if not isinstance(current, list):
+            raise RuntimeError("GitHub CI jobs response is malformed")
+        jobs.extend(current)
+        if len(current) < 100:
+            break
+        page += 1
+        if page > 20:
+            raise RuntimeError("GitHub CI job list exceeds its bound")
+    required_jobs = selected_ci_jobs(selection)
+    selected_conclusions = require_ci_jobs(jobs, required_jobs)
+    return {
+        "source": "github-actions-ci",
+        "run_id": int(run_id),
+        "run_url": run_info.get("html_url"),
+        "run_attempt": run_info.get("run_attempt"),
+        "workflow_path": workflow["path"],
+        "commit": sha,
+        "baseline": previous,
+        "selection_change_digest": digest,
+        "selection_plan_sha256": hashlib.sha256(
+            json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "artifact_sha256": artifact_digest,
+        "selected_jobs": selected_conclusions,
+    }
+
+
 def browser_args(entry: dict[str, Any]) -> list[str]:
     test_match, project, shard = (
         entry.get(key) for key in ("test_match", "project", "shard")
@@ -502,81 +848,116 @@ def copy_canonical_runtime_bundle(directory: Path, staging: Path) -> None:
     shutil.copytree(source, destination)
 
 
-def prepare() -> dict[str, Any]:
+def prepare(*, ci_run_id: str | None = None) -> dict[str, Any]:
     git_source()
     previous = baseline()
     run("git", "-C", str(REPO), "fetch", "--no-tags", "origin", "main")
     sha = run("git", "-C", str(REPO), "rev-parse", "origin/main", capture=True)
     if sha == previous:
+        if ci_run_id is not None:
+            raise RuntimeError("CI-backed preparation requires a new main candidate")
         return {"status": "current", "commit": sha}
     if not SHA.fullmatch(sha):
         raise RuntimeError("origin/main is not an exact commit")
     run("git", "-C", str(REPO), "merge-base", "--is-ancestor", previous, sha)
     if (RELEASES / sha).is_dir():
-        receipt = json.loads(
-            (verified_release(sha) / "simulation-acceptance.json").read_text()
-        )
+        release = verified_release(sha)
+        receipt = json.loads((release / "simulation-acceptance.json").read_text())
         if receipt.get("previous") != previous:
             raise RuntimeError(
                 "accepted candidate was reviewed against a different live commit"
             )
+        if ci_run_id is not None:
+            accepted_ci = verify_ci_acceptance(
+                ci_run_id, previous=previous, sha=sha, directory=candidate(sha)
+            )
+            if receipt.get("ci_acceptance") != accepted_ci:
+                raise RuntimeError(
+                    "immutable release was not accepted by the requested CI run"
+                )
         current_state = state()
         current_state["pending"] = sha
         atomic_json(STATE, current_state)
         return receipt
     directory = candidate(sha)
+    ci_acceptance = (
+        verify_ci_acceptance(ci_run_id, previous=previous, sha=sha, directory=directory)
+        if ci_run_id is not None
+        else None
+    )
     plan, entries = selected_plan(directory, previous)
+    if ci_acceptance is not None:
+        reviewed = plan.get("reviewed_commits", [])
+        if (
+            len(reviewed) != 1
+            or reviewed[0].get("commit") != sha
+            or reviewed[0].get("baseline") != previous
+            or reviewed[0].get("change_digest")
+            != ci_acceptance["selection_change_digest"]
+        ):
+            raise RuntimeError(
+                "deployer test selection differs from the accepted CI selection"
+            )
     run(POETRY, "check", cwd=directory)
     run(POETRY, "install", "--with", "dev", "--no-interaction", cwd=directory)
     run("npm", "--prefix", "ui", "ci", "--no-audit", "--no-fund", cwd=directory)
     collected = 0
-    for target in plan["python"]:
-        listed = run(
-            POETRY,
-            "run",
-            "pytest",
-            "--collect-only",
-            "-q",
-            target,
-            cwd=directory,
-            capture=True,
-        )
-        match = re.search(r"(\d+) tests? collected", listed)
-        if match is None:
-            raise RuntimeError("selected Python target collected no tests")
-        collected += int(match.group(1))
-    if collected != plan["expected_tests"]["python"]:
-        raise RuntimeError("Python collection disagrees with the reviewed test count")
-    if plan["frontend"]:
-        listed_frontend = run(
-            str(directory / "ui/node_modules/.bin/vitest"),
-            "list",
-            *plan["frontend"],
-            cwd=directory,
-            capture=True,
-        )
-        frontend_count = sum(
-            line.startswith("ui/src/") for line in listed_frontend.splitlines()
-        )
+    if ci_acceptance is None:
+        for target in plan["python"]:
+            listed = run(
+                POETRY,
+                "run",
+                "pytest",
+                "--collect-only",
+                "-q",
+                target,
+                cwd=directory,
+                capture=True,
+            )
+            match = re.search(r"(\d+) tests? collected", listed)
+            if match is None:
+                raise RuntimeError("selected Python target collected no tests")
+            collected += int(match.group(1))
+        if collected != plan["expected_tests"]["python"]:
+            raise RuntimeError(
+                "Python collection disagrees with the reviewed test count"
+            )
+        if plan["frontend"]:
+            listed_frontend = run(
+                str(directory / "ui/node_modules/.bin/vitest"),
+                "list",
+                *plan["frontend"],
+                cwd=directory,
+                capture=True,
+            )
+            frontend_count = sum(
+                line.startswith("ui/src/") for line in listed_frontend.splitlines()
+            )
+        else:
+            frontend_count = 0
     else:
-        frontend_count = 0
-    if frontend_count != plan["expected_tests"]["frontend"]:
-        raise RuntimeError("frontend collection disagrees with the reviewed test count")
-    for target in plan["python"]:
-        run(POETRY, "run", "pytest", "-q", target, cwd=directory)
-    for target in plan["frontend"]:
-        run(
-            "npm",
-            "--prefix",
-            "ui",
-            "test",
-            "--",
-            target.removeprefix("ui/"),
-            cwd=directory,
-        )
+        collected = plan["expected_tests"]["python"]
+        frontend_count = plan["expected_tests"]["frontend"]
+    if ci_acceptance is None:
+        if frontend_count != plan["expected_tests"]["frontend"]:
+            raise RuntimeError(
+                "frontend collection disagrees with the reviewed test count"
+            )
+        for target in plan["python"]:
+            run(POETRY, "run", "pytest", "-q", target, cwd=directory)
+        for target in plan["frontend"]:
+            run(
+                "npm",
+                "--prefix",
+                "ui",
+                "test",
+                "--",
+                target.removeprefix("ui/"),
+                cwd=directory,
+            )
     # Native selections are exact Rust test names; a Linux host must not claim
     # to have run macOS-only cases. Keep that candidate pending for review.
-    if plan["native"]:
+    if plan["native"] and ci_acceptance is None:
         raise RuntimeError("selected native tests need an approved macOS runner")
     run("npm", "--prefix", "ui", "run", "lint", "--if-present", cwd=directory)
     run("npm", "--prefix", "ui", "run", "audit:diagnostics", cwd=directory)
@@ -607,13 +988,15 @@ def prepare() -> dict[str, Any]:
         cwd=directory,
         capture=True,
     )
-    test_python = run(
-        POETRY, "env", "info", "--executable", cwd=directory, capture=True
-    )
-    if not Path(test_python).is_file() or not os.access(test_python, os.X_OK):
-        raise RuntimeError(
-            "selected browser tests require the candidate Python interpreter"
+    test_python = ""
+    if ci_acceptance is None and entries:
+        test_python = run(
+            POETRY, "env", "info", "--executable", cwd=directory, capture=True
         )
+        if not Path(test_python).is_file() or not os.access(test_python, os.X_OK):
+            raise RuntimeError(
+                "selected browser tests require the candidate Python interpreter"
+            )
     browser_env = {
         "NEBULA_TEST_PYTHON": test_python,
         "NEBULA_TEST_CORE_BIN": str(directory / "dist/nebula-core"),
@@ -624,40 +1007,45 @@ def prepare() -> dict[str, Any]:
         "NEBULA_UI_TEST_COMMAND": "npm run preview -- --host 0.0.0.0 --port 1420",
     }
     listed = 0
-    for entry in entries:
-        args = browser_args(entry)
-        result = run(
-            "npm",
-            "--prefix",
-            "ui",
-            "run",
-            "test:e2e",
-            "--",
-            *args,
-            "--list",
-            cwd=directory,
-            env=browser_env,
-            capture=True,
-        )
-        match = re.search(r"Total: (\d+) tests? in", result)
-        if match is None or int(match.group(1)) < 1:
-            raise RuntimeError("selected browser entry collected no tests")
-        listed += int(match.group(1))
-    if listed != plan["expected_tests"]["playwright"]:
-        raise RuntimeError("browser collection disagrees with the reviewed test count")
-    for entry in entries:
-        run(
-            "npm",
-            "--prefix",
-            "ui",
-            "run",
-            "test:e2e",
-            "--",
-            *browser_args(entry),
-            cwd=directory,
-            env=browser_env,
-            timeout=600,
-        )
+    if ci_acceptance is None:
+        for entry in entries:
+            args = browser_args(entry)
+            result = run(
+                "npm",
+                "--prefix",
+                "ui",
+                "run",
+                "test:e2e",
+                "--",
+                *args,
+                "--list",
+                cwd=directory,
+                env=browser_env,
+                capture=True,
+            )
+            match = re.search(r"Total: (\d+) tests? in", result)
+            if match is None or int(match.group(1)) < 1:
+                raise RuntimeError("selected browser entry collected no tests")
+            listed += int(match.group(1))
+        if listed != plan["expected_tests"]["playwright"]:
+            raise RuntimeError(
+                "browser collection disagrees with the reviewed test count"
+            )
+        for entry in entries:
+            run(
+                "npm",
+                "--prefix",
+                "ui",
+                "run",
+                "test:e2e",
+                "--",
+                *browser_args(entry),
+                cwd=directory,
+                env=browser_env,
+                timeout=600,
+            )
+    else:
+        listed = plan["expected_tests"]["playwright"]
     if commit_at(directory) != sha:
         raise RuntimeError("candidate source changed during preparation")
     run("git", "-C", str(directory), "diff", "--quiet")
@@ -731,6 +1119,8 @@ def prepare() -> dict[str, Any]:
         "status": "accepted_candidate",
         "runtime_manifest_sha256": runtime_digest,
     }
+    if ci_acceptance is not None:
+        receipt["ci_acceptance"] = ci_acceptance
     atomic_json(staging / "simulation-acceptance.json", receipt)
     os.replace(staging, release)
     for path in release.rglob("*"):
@@ -755,9 +1145,34 @@ def verified_release(sha: str) -> Path:
     for relative, field in (
         ("dist/nebula-core", "core_sha256"),
         ("ui/dist/web-build.json", "web_manifest_sha256"),
+        (".github/test-selection.json", "test_selection_sha256"),
+        ("build/simulation-test-selection.json", "cumulative_selection_sha256"),
     ):
-        if sha256(release / relative) != receipt.get(field):
+        expected = receipt.get(field)
+        if expected is not None and sha256(release / relative) != expected:
             raise RuntimeError(f"release {relative} changed after acceptance")
+    ci = receipt.get("ci_acceptance")
+    if ci is not None:
+        if (
+            not isinstance(ci, dict)
+            or ci.get("source") != "github-actions-ci"
+            or ci.get("commit") != sha
+            or ci.get("baseline") != receipt.get("previous")
+            or type(ci.get("run_id")) is not int
+            or ci.get("run_id") < 1
+            or type(ci.get("run_attempt")) is not int
+            or ci.get("run_attempt") < 1
+            or ci.get("run_url")
+            != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{ci.get('run_id')}"
+            or not SHA256.fullmatch(str(ci.get("artifact_sha256", "")))
+            or not SHA256.fullmatch(str(ci.get("selection_change_digest", "")))
+            or not SHA256.fullmatch(str(ci.get("selection_plan_sha256", "")))
+            or ci.get("workflow_path") != ".github/workflows/ci.yml"
+            or not isinstance(ci.get("selected_jobs"), dict)
+            or not ci["selected_jobs"]
+            or any(value != "success" for value in ci["selected_jobs"].values())
+        ):
+            raise RuntimeError("release CI acceptance record is invalid")
     return release
 
 
@@ -1269,13 +1684,24 @@ def main() -> int:
             "status",
         ),
     )
+    parser.add_argument(
+        "--ci-run-id",
+        help=(
+            "accept selected checks from one successful exact-main CI push run; "
+            "local selected tests remain the default"
+        ),
+    )
     args = parser.parse_args()
     checked_host()
+    if args.ci_run_id is not None and args.action != "prepare":
+        raise RuntimeError("--ci-run-id is supported only with prepare")
     with (ROOT / ".deploy.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = (
             {"status": "state", **state()}
             if args.action == "status"
+            else prepare(ci_run_id=args.ci_run_id)
+            if args.action == "prepare"
             else globals()[args.action.replace("-", "_")]()
         )
     print(json.dumps(result, sort_keys=True))

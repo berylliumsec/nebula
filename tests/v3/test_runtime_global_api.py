@@ -211,7 +211,7 @@ async def test_shutdown_fence_blocks_new_global_effect_but_keeps_receipt(global_
     assert await global_api.store.count(Engagement) == 1
 
 
-async def test_first_project_reference_records_only_new_admission_demand(global_api):
+async def test_project_reference_does_not_request_chat_admission(global_api):
     from nebula.v3.runtime_delivery import HttpIntent
 
     project = await global_api.store.create(Engagement(name="First use"))
@@ -225,4 +225,56 @@ async def test_first_project_reference_records_only_new_admission_demand(global_
     assert await global_api.routing.project_for(intent) == project.id
     async with global_api.database.session() as session:
         row = await session.get(ProjectOwnershipRow, project.id)
-        assert row.runtime_id is None and row.fencing_token == 0
+        assert (
+            row.runtime_id,
+            row.fencing_token,
+            row.admission_requested,
+        ) == (None, 0, False)
+
+
+async def test_actual_chat_request_marks_only_its_command_for_admission(global_api):
+    project = await global_api.store.create(Engagement(name="Chat start"))
+    response = await global_api.client.post(
+        "/api/v1/chat/completions",
+        headers={**AUTH, "Idempotency-Key": "first-chat"},
+        json={
+            "engagement_id": project.id,
+            "provider_id": "synthetic-provider",
+            "model": "synthetic-model",
+            "messages": [{"role": "user", "content": "Start this project chat"}],
+            "stream": True,
+            "include_knowledge": False,
+        },
+    )
+    assert response.status_code == 202
+    command_id = response.headers["x-nebula-command-id"]
+    async with global_api.database.session() as session:
+        command = await session.get(RuntimeCommandRow, command_id)
+        owner = await session.get(ProjectOwnershipRow, project.id)
+        assert command.chat_start is True
+        assert command.state == "queued"
+        assert owner.runtime_id is None and owner.admission_requested is False
+
+
+async def test_goal_conversation_creation_marks_exact_project_chat_start(global_api):
+    project = await global_api.store.create(Engagement(name="Goal chat start"))
+    response = await global_api.client.post(
+        "/api/v1/chat/goal-conversations",
+        headers={**AUTH, "Idempotency-Key": "first-goal-chat"},
+        json={
+            "engagement_id": project.id,
+            "backend": "provider",
+            "provider_id": "synthetic-provider",
+            "model": "synthetic-model",
+            "objective": "Start this project's research conversation",
+            "completion_criteria": ["The goal conversation is created"],
+        },
+    )
+    assert response.status_code == 202
+    command_id = response.headers["x-nebula-command-id"]
+    async with global_api.database.session() as session:
+        command = await session.get(RuntimeCommandRow, command_id)
+        owner = await session.get(ProjectOwnershipRow, project.id)
+        assert command.name == "http.invoke/v1"
+        assert command.chat_start is True
+        assert owner.runtime_id is None and owner.admission_requested is False

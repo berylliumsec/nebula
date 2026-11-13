@@ -88,6 +88,8 @@ class RuntimeRouting:
 
     async def _demand(self, project_id: str):
         if self.request_admission and project_id != GLOBAL_EXECUTION_PROJECT:
+            # Keep a stable fencing counter for project references, but leave
+            # worker demand to chat-start/open-chat reconciliation.
             async with self.coordination._write() as session:
                 await self.coordination._ensure_project(session, project_id)
 
@@ -209,6 +211,10 @@ class RuntimeRouting:
         await self._demand(project)
         async with self.coordination.database.session() as session:
             owner = await session.get(ProjectOwnershipRow, project)
+            if owner is not None and owner.retirement_requested:
+                raise RuntimeIpcError(
+                    "The project worker is closing; retry after a chat is opened"
+                )
             now = await self.coordination._clock_ms(session)
             if owner is None or owner.lease_expires_at_ms <= now:
                 raise RuntimeIpcError("The project has no live execution owner")

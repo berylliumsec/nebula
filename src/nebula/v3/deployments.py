@@ -585,10 +585,15 @@ class DeploymentCoordinator:
                 raise CoordinationConflict("; ".join(blockers[:20]))
             return {"revision": host.revision, "ready": True, "blockers": []}
 
-    async def _shutdown_blockers(self, session, project_id=None):
+    async def _shutdown_blockers(
+        self, session, project_id=None, *, allow_queued_commands=False
+    ):
         blockers = []
+        command_states = (
+            ("running", "uncertain") if allow_queued_commands else _UNFINISHED
+        )
         for model, predicate, label in (
-            (RuntimeCommandRow, RuntimeCommandRow.state.in_(_UNFINISHED), "Command"),
+            (RuntimeCommandRow, RuntimeCommandRow.state.in_(command_states), "Command"),
             (RuntimeResourceRow, RuntimeResourceRow.state != "closed", "Resource"),
             (
                 RuntimeCapacityReservationRow,
@@ -742,14 +747,45 @@ class DeploymentCoordinator:
                 with_for_update={"read": True},
                 populate_existing=True,
             )
-            if host is None or not host.shutdown_requested:
+            owner = await session.get(
+                ProjectOwnershipRow,
+                lease.project_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            project_retirement = bool(
+                owner is not None
+                and owner.runtime_id == lease.runtime_id
+                and owner.fencing_token == lease.fencing_token
+                and owner.retirement_requested
+            )
+            if not project_retirement and (host is None or not host.shutdown_requested):
                 raise CoordinationConflict(
-                    "Hold host admission before quiescing a project"
+                    "Hold host or project admission before quiescing a project"
                 )
             await self.coordination._check(session, lease, lock=True)
+            if project_retirement and await self._project_has_open_chat(
+                session, lease.project_id
+            ):
+                raise CoordinationConflict(
+                    "An open chat still requires this project's worker"
+                )
+            if project_retirement and await self._project_has_pending_chat_start(
+                session, lease.project_id
+            ):
+                raise CoordinationConflict("A chat start is pending for this project")
+            handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            if handoff is not None and handoff.phase != HandoffPhase.VERIFIED:
+                raise CoordinationConflict(
+                    "Resolve the project's existing handoff before quiescence"
+                )
             blockers = [
                 *local_blockers,
-                *await self._shutdown_blockers(session, lease.project_id),
+                *await self._shutdown_blockers(
+                    session,
+                    lease.project_id,
+                    allow_queued_commands=project_retirement,
+                ),
             ]
             if blockers:
                 raise CoordinationConflict("; ".join(blockers[:20]))
@@ -761,6 +797,144 @@ class DeploymentCoordinator:
             }
             await self.coordination._check(session, lease, lock=False)
             return result
+
+    @staticmethod
+    async def _project_has_open_chat(session, project_id: str) -> bool:
+        return (
+            await session.scalar(
+                select(EntityRow.id)
+                .where(
+                    EntityRow.engagement_id == project_id,
+                    EntityRow.kind == "chat_sessions",
+                    EntityRow.payload["metadata"]["archived_at"].as_string().is_(None),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    @staticmethod
+    async def _project_has_pending_chat_start(session, project_id: str) -> bool:
+        return (
+            await session.scalar(
+                select(RuntimeCommandRow.id)
+                .where(
+                    RuntimeCommandRow.project_id == project_id,
+                    or_(
+                        RuntimeCommandRow.chat_start.is_(True),
+                        RuntimeCommandRow.name.in_(
+                            ("chat.accept/v1", "chat.resume/v1")
+                        ),
+                    ),
+                    RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    async def request_project_retirement(self, lease: ProjectLease) -> bool:
+        """Fence one idle project's admission before its controller quiesces.
+
+        A false result means an open chat or a pending chat start still needs the
+        owner. Other unresolved project work raises a blocker and leaves the
+        ownership grant unchanged.
+        """
+        async with self.coordination._write() as session:
+            owner = await session.get(
+                ProjectOwnershipRow,
+                lease.project_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if owner is None or (owner.runtime_id, owner.fencing_token) != (
+                lease.runtime_id,
+                lease.fencing_token,
+            ):
+                raise CoordinationConflict(
+                    "Only the exact current project owner can request retirement"
+                )
+            await self.coordination._check(session, lease, lock=False)
+            if not owner.retirement_requested:
+                if await self._project_has_open_chat(session, lease.project_id):
+                    return False
+                if await self._project_has_pending_chat_start(
+                    session, lease.project_id
+                ):
+                    return False
+                host = await session.get(DeploymentHostRow, "host")
+                if host is not None and host.shutdown_requested:
+                    raise CoordinationConflict(
+                        "Host shutdown already holds project admission"
+                    )
+                blockers = await self._shutdown_blockers(
+                    session, lease.project_id, allow_queued_commands=True
+                )
+                if blockers:
+                    raise CoordinationConflict("; ".join(blockers[:20]))
+                owner.retirement_requested = True
+                owner.admission_requested = False
+            handoff = await session.get(ProjectHandoffRow, lease.project_id)
+            if handoff is not None and handoff.phase != HandoffPhase.VERIFIED:
+                raise CoordinationConflict(
+                    "Resolve the project's existing handoff before retirement"
+                )
+            await self.coordination._check(session, lease, lock=False)
+            await self._receipt(
+                session,
+                "project.retirement_requested",
+                {
+                    "project_id": lease.project_id,
+                    "runtime_id": lease.runtime_id,
+                    "fencing_token": lease.fencing_token,
+                },
+            )
+            return True
+
+    async def abort_project_retirement(
+        self, lease: ProjectLease, *, worker_status: dict
+    ) -> None:
+        """Release a hold only after the worker refuses before cleanup."""
+        blockers = worker_status.get("quiesce_blockers")
+        if (
+            worker_status.get("runtime_id") != lease.runtime_id
+            or worker_status.get("state") != "ready"
+            or not isinstance(blockers, list)
+            or not blockers
+            or worker_status.get("quiesce_checkpoint") is not None
+        ):
+            raise CoordinationConflict(
+                "Only a signed ready-worker quiescence refusal can abort retirement"
+            )
+        async with self.coordination._write() as session:
+            owner = await session.get(
+                ProjectOwnershipRow,
+                lease.project_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                owner is None
+                or (owner.runtime_id, owner.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+                or not owner.retirement_requested
+            ):
+                raise CoordinationConflict(
+                    "The exact project retirement hold is no longer active"
+                )
+            await self.coordination._check(session, lease, lock=False)
+            owner.retirement_requested = False
+            owner.admission_requested = False
+            await self._receipt(
+                session,
+                "project.retirement_aborted",
+                {
+                    "project_id": lease.project_id,
+                    "runtime_id": lease.runtime_id,
+                    "fencing_token": lease.fencing_token,
+                    "blockers": [str(item)[:400] for item in blockers[:20]],
+                },
+            )
 
     async def release_quiesced_project(
         self, lease: ProjectLease, *, checkpoint: dict
@@ -781,16 +955,24 @@ class DeploymentCoordinator:
                 and owner.fencing_token == lease.fencing_token
             ):
                 return
+            project_retirement = bool(
+                owner is not None
+                and owner.runtime_id == lease.runtime_id
+                and owner.fencing_token == lease.fencing_token
+                and owner.retirement_requested
+            )
             if (
-                host is None
-                or not host.shutdown_requested
-                or checkpoint.get("project_id") != lease.project_id
-            ):
+                not project_retirement and (host is None or not host.shutdown_requested)
+            ) or checkpoint.get("project_id") != lease.project_id:
                 raise CoordinationConflict(
                     "Quiesced project proof does not match held admission"
                 )
             await self.coordination._check(session, lease, lock=False)
-            if await self._shutdown_blockers(session, lease.project_id):
+            if await self._shutdown_blockers(
+                session,
+                lease.project_id,
+                allow_queued_commands=project_retirement,
+            ):
                 raise CoordinationConflict(
                     "Project acquired work while quiescing; retain its owner"
                 )
@@ -804,6 +986,9 @@ class DeploymentCoordinator:
             owner = await session.get(ProjectOwnershipRow, lease.project_id)
             assert owner is not None
             owner.runtime_id, owner.lease_expires_at_ms = None, 0
+            if project_retirement:
+                owner.retirement_requested = False
+                owner.admission_requested = False
             await self._receipt(
                 session,
                 "project.quiesced",
@@ -811,6 +996,9 @@ class DeploymentCoordinator:
                     "project_id": lease.project_id,
                     "runtime_id": lease.runtime_id,
                     "fencing_token": lease.fencing_token,
+                    "reason": (
+                        "idle_chat_project" if project_retirement else "host_shutdown"
+                    ),
                 },
             )
 

@@ -31,6 +31,7 @@ from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import (
+    ChatSession,
     Engagement,
     PairedDeviceSession,
     ScopePolicy,
@@ -689,7 +690,7 @@ async def test_new_host_loop_resumes_saved_sql_only_batch_without_browser(batch)
         await database.dispose()
 
 
-async def test_metadata_batch_and_admission_loop_never_prepare_until_actual_get(batch):
+async def test_metadata_batch_and_project_reads_never_admit_workers(batch):
     await batch.coordinator.stage(
         manifest("supported", features=[WORK_BATCH_FEATURE]),
         Path("/synthetic/releases/supported"),
@@ -741,10 +742,295 @@ async def test_metadata_batch_and_admission_loop_never_prepare_until_actual_get(
             }
         )
     await automatic.reconcile()
-    assert len(calls) == 1
+    assert calls == []
     async with batch.database.session() as session:
-        assert (await session.get(ProjectOwnershipRow, "one")).runtime_id == calls[0]
+        assert (await session.get(ProjectOwnershipRow, "one")).runtime_id is None
         assert (await session.get(ProjectOwnershipRow, "two")).runtime_id is None
+
+
+async def test_open_chat_created_without_routing_gets_its_exact_project_worker(batch):
+    project = await batch.store.create(Engagement(name="Direct chat project"))
+    await batch.store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Created directly by Core",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+
+    prepared = []
+
+    async def prepare(_version):
+        runtime_id = f"direct-chat-worker-{len(prepared)}"
+        prepared.append(runtime_id)
+        await runtime(batch, runtime_id)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        return await batch.coordination.claim_project(project_id, runtime_id)
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+
+    async with batch.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, project.id)
+        assert owner.runtime_id == prepared[0]
+    assert len(prepared) == 1
+
+
+async def test_legacy_queued_goal_creates_admit_their_exact_five_projects(batch):
+    children = [
+        await batch.store.create(Engagement(name=f"Legacy goal lane {index}"))
+        for index in range(5)
+    ]
+    for child in children:
+        intent = HttpIntent.capture(
+            "POST",
+            "/api/v1/chat/goal-conversations",
+            b"",
+            [(b"content-type", b"application/json")],
+            json.dumps(
+                {
+                    "engagement_id": child.id,
+                    "objective": f"Start lane for {child.id}",
+                    "completion_criteria": ["The lane conversation is created"],
+                }
+            ).encode(),
+        )
+        receipt = await batch.delivery.accept(
+            intent,
+            project_id=child.id,
+            actor_id="operator",
+            idempotency_key=f"legacy-goal-create-{child.id}",
+        )
+        async with batch.database.session() as session:
+            command = await session.get(RuntimeCommandRow, receipt.command_id)
+            assert command.chat_start is False
+            owner = await session.get(ProjectOwnershipRow, child.id)
+            owner.retirement_requested = True
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+
+    prepared = []
+
+    async def prepare(_version):
+        runtime_id = f"legacy-goal-worker-{len(prepared)}"
+        prepared.append(runtime_id)
+        await runtime(batch, runtime_id)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        return await batch.coordination.claim_project(project_id, runtime_id)
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            host=batch.host,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        held_commands = list(
+            await session.scalars(
+                select(RuntimeCommandRow).where(
+                    RuntimeCommandRow.project_id.in_([child.id for child in children])
+                )
+            )
+        )
+        assert len(held_commands) == 5
+        assert all(not command.chat_start for command in held_commands)
+    assert prepared == []
+    async with batch.database.session() as session:
+        for child in children:
+            (
+                await session.get(ProjectOwnershipRow, child.id)
+            ).retirement_requested = False
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        for index, child in enumerate(children):
+            owner = await session.get(ProjectOwnershipRow, child.id)
+            command = await session.scalar(
+                select(RuntimeCommandRow).where(
+                    RuntimeCommandRow.project_id == child.id
+                )
+            )
+            assert owner.runtime_id == prepared[index]
+            assert command.chat_start is True
+    assert len(prepared) == 5
+
+
+async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child(
+    batch,
+):
+    parent = await batch.store.create(
+        Engagement(id="parent-chat-project", name="Parent")
+    )
+    children = [
+        await batch.store.create(
+            Engagement(
+                id=f"child-chat-project-{index}",
+                name=f"Child {index}",
+                parent_engagement_id=parent.id,
+            )
+        )
+        for index in range(5)
+    ]
+    await batch.store.create(
+        ChatSession(
+            engagement_id=parent.id,
+            title="Parent conversation",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    for child in children:
+        await batch.store.create(
+            ChatSession(
+                engagement_id=child.id,
+                title="Archived child history",
+                provider_profile_id="synthetic-provider",
+                model="synthetic-model",
+                metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+            )
+        )
+    async with batch.database.session() as session:
+        session.add_all(
+            [
+                ProjectOwnershipRow(
+                    project_id=project_id,
+                    runtime_id=None,
+                    fencing_token=0,
+                    lease_expires_at_ms=0,
+                    command_sequence=0,
+                    admission_requested=False,
+                )
+                for project_id in (parent.id, *(child.id for child in children))
+            ]
+        )
+        host = await session.get(DeploymentHostRow, "host")
+        if host is None:
+            host = DeploymentHostRow(
+                key="host",
+                revision=1,
+                target_version="supported",
+                shutdown_requested=False,
+                detail="Synthetic admission fixture",
+            )
+            session.add(host)
+        host.api_runtime_id = "synthetic-api"
+
+    calls = []
+
+    async def prepare(_version):
+        identity = f"chat-worker-{len(calls)}"
+        calls.append(identity)
+        await runtime(batch, identity)
+        return SimpleNamespace(runtime_id=identity)
+
+    async def attach(project_id, runtime_id):
+        return await batch.coordination.claim_project(project_id, runtime_id)
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        parent_owner = await session.get(ProjectOwnershipRow, parent.id)
+        assert parent_owner.runtime_id == calls[0]
+        for child in children:
+            child_owner = await session.get(ProjectOwnershipRow, child.id)
+            assert child_owner.runtime_id is None
+    assert len(calls) == 1
+
+    for child in children:
+        await batch.coordination.submit(
+            project_id=child.id,
+            actor_id="operator",
+            idempotency_key=f"child-chat-start-{child.id}",
+            name="http.invoke/v1",
+            payload={"format": 1, "request_reference": "synthetic-chat"},
+            chat_start=True,
+        )
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        for index, child in enumerate(children, start=1):
+            child_owner = await session.get(ProjectOwnershipRow, child.id)
+            assert child_owner.runtime_id == calls[index]
+    assert len(calls) == 6
+
+
+async def test_auto_admission_retires_worker_after_exact_project_chat_archives(batch):
+    await runtime(batch, "open-chat-worker")
+    lease = await batch.coordination.claim_project("one", "open-chat-worker")
+    chat = await batch.store.create(
+        ChatSession(
+            engagement_id="one",
+            title="Conversation to close",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+
+    retired = []
+    reconciled = []
+
+    async def retire_idle_project(project_id):
+        retired.append(project_id)
+        return True
+
+    async def reconcile_idle_project_retirements():
+        reconciled.append(True)
+        return []
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            host=SimpleNamespace(
+                retire_idle_project=retire_idle_project,
+                reconcile_idle_project_retirements=reconcile_idle_project_retirements,
+            ),
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+    assert retired == []
+
+    await batch.store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {"archived_at": "2026-11-13T00:00:00+00:00"}},
+        expected_revision=chat.revision,
+    )
+    await automatic.reconcile()
+    assert reconciled and retired == ["one"]
+    assert lease.runtime_id == "open-chat-worker"
 
 
 async def test_revoked_actor_cannot_apply_and_receipt_lookup_stays_actor_scoped(batch):

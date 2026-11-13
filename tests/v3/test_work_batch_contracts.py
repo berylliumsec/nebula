@@ -41,6 +41,47 @@ pytestmark = pytest.mark.anyio
 STATES = ("waiting", "barrier", "complete", "failed")
 
 
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        (
+            "/api/v1/chat/goal-conversations",
+            {"engagement_id": "project", "objective": "Start a goal chat"},
+        ),
+        (
+            "/api/v1/chat/control-assistant/session",
+            {"engagement_id": "project", "backend": "provider"},
+        ),
+        (
+            "/api/v1/chat/temporary-sessions",
+            {"engagement_id": "project", "backend": "provider"},
+        ),
+        (
+            "/api/v1/chat/sessions/existing-chat/fork",
+            {"through_message_id": "message"},
+        ),
+        ("/api/v1/runs/completed-run/discuss", {}),
+        (
+            "/api/v1/executions/execution/chat-attachments",
+            {"backend_kind": "provider"},
+        ),
+    ],
+)
+def test_session_creation_routes_are_explicit_chat_start_intents(path, body):
+    import json
+
+    from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
+
+    intent = HttpIntent.capture(
+        "POST",
+        path,
+        b"",
+        [(b"content-type", b"application/json")],
+        json.dumps(body).encode(),
+    )
+    assert RuntimeDelivery.is_chat_start_intent(intent)
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
@@ -92,7 +133,7 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
                     actor_id="synthetic",
                     idempotency_key="prior",
                     sequence=1,
-                    name="chat.submit",
+                    name="http.invoke/v1",
                     lane="work",
                     payload={"content": "keep"},
                     payload_hash="a" * 64,
@@ -115,8 +156,27 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
                 connection.execute(select(ownership)).mappings().one()
             )
         migrate(engine, "0047_runtime_work_batches")
-        migrate(engine, "0047_runtime_work_batches")
+        migrate(engine, "0048_chat_scoped_admission")
         inspector = inspect(engine)
+        migrated_commands = Table("runtime_commands", MetaData(), autoload_with=engine)
+        chat_start_column = next(
+            column
+            for column in inspector.get_columns("runtime_commands")
+            if column["name"] == "chat_start"
+        )
+        assert chat_start_column["nullable"] is False
+        assert chat_start_column["default"] is not None
+        with engine.connect() as connection:
+            legacy_command = (
+                connection.execute(
+                    select(migrated_commands).where(
+                        migrated_commands.c.id == "prior-command"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        assert legacy_command["chat_start"] is False
         table = RuntimeWorkBatchProjectRow.__table__
         assert inspector.get_pk_constraint(table.name)["constrained_columns"] == [
             "batch_id",
@@ -156,7 +216,7 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
             current_owner = (
                 connection.execute(select(migrated_ownership)).mappings().one()
             )
-            assert current_owner["admission_requested"] is True
+            assert current_owner["admission_requested"] is False
             assert all(
                 current_owner[key] == value for key, value in previous_owner.items()
             )
@@ -442,8 +502,11 @@ async def test_execution_scope_cannot_read_or_write_another_project_batch(
         )
 
 
-@pytest.mark.parametrize("demand", ["read-routing", "legacy-normal-command"])
-async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
+@pytest.mark.parametrize(
+    "demand",
+    ["read-routing", "legacy-normal-command", "chat-start", "legacy-typed-chat"],
+)
+async def test_project_admission_requires_an_exact_chat_start(
     admission, tmp_path, demand
 ):
     value = admission
@@ -500,10 +563,8 @@ async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
         async with database.session() as session:
             assert (
                 await session.get(ProjectOwnershipRow, "one")
-            ).admission_requested is True
-    else:
-        # An old API may persist ordinary work without knowing the new demand
-        # flag. The queue itself must still admit its project, unlike a barrier.
+            ).admission_requested is False
+    elif demand in {"legacy-normal-command", "chat-start", "legacy-typed-chat"}:
         async with database.session() as session:
             session.add(
                 RuntimeCommandRow(
@@ -512,12 +573,17 @@ async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
                     actor_id="synthetic",
                     idempotency_key="ordinary-request",
                     sequence=2,
-                    name="http.invoke/v1",
+                    name=(
+                        "chat.accept/v1"
+                        if demand == "legacy-typed-chat"
+                        else "http.invoke/v1"
+                    ),
                     lane="work",
                     payload={"format": 1, "request_reference": "synthetic-unexecuted"},
                     payload_hash="b" * 64,
                     accepted_at_ms=2,
                     state="queued",
+                    chat_start=demand == "chat-start",
                 )
             )
             (await session.get(ProjectOwnershipRow, "one")).command_sequence = 2
@@ -526,10 +592,13 @@ async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
                 await session.get(ProjectOwnershipRow, "one")
             ).admission_requested is False
     await value.automatic.reconcile()
-    assert len(value.calls) == 1 and set(value.leases) == {"one"}
-    assert value.leases["one"].fencing_token == 8
+    should_admit = demand in {"chat-start", "legacy-typed-chat"}
+    assert len(value.calls) == int(should_admit)
+    assert set(value.leases) == ({"one"} if should_admit else set())
+    if should_admit:
+        assert value.leases["one"].fencing_token == 8
     await value.automatic.reconcile()
-    assert len(value.calls) == 1
+    assert len(value.calls) == int(should_admit)
     async with database.session() as session:
         assert (
             await session.get(RuntimeCommandRow, "metadata-barrier")

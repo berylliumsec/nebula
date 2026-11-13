@@ -1,9 +1,13 @@
 """Live protocol evidence prevents accidental offline supervisor rollback."""
 
 import importlib.util
+import hashlib
+import io
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import zipfile
 from urllib.error import HTTPError
 
 import pytest
@@ -95,3 +99,166 @@ def test_legacy_discovery_requires_unsupported_route_and_exact_health(monkeypatc
     with pytest.raises(RuntimeError, match="exact legacy"):
         deployer.require_legacy_protocol(record, expected_version=NEW)
     assert not effects
+
+
+def _ci_plan(**overrides):
+    plan = {
+        "change_digest": "c" * 64,
+        "reviewed_by": "Codex",
+        "reason": "Focused deployer acceptance coverage.",
+        "exclusions": "No local test execution during deployment.",
+        "python_browser": False,
+        "python_node": False,
+        "python_versions": ["3.12"],
+        "checks": [],
+        "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 0},
+        "python": [
+            "tests/test_deployer_protocol.py::test_ci_acceptance_matches_exact_run_and_selection"
+        ],
+        "frontend": [],
+        "native": [],
+        "playwright": [],
+    }
+    plan.update(overrides)
+    return plan
+
+
+def _selection_zip(selection):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("test-selection-receipt.json", json.dumps(selection))
+    return output.getvalue()
+
+
+def test_ci_acceptance_matches_exact_run_and_selection(monkeypatch, tmp_path):
+    selection = _ci_plan()
+    archive = _selection_zip(selection)
+    digest = hashlib.sha256(archive).hexdigest()
+    run_info = {
+        "head_sha": NEW,
+        "head_branch": "main",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "repository": {"full_name": "berylliumsec/nebula"},
+        "workflow_id": 27,
+        "run_attempt": 1,
+        "html_url": "https://github.com/berylliumsec/nebula/actions/runs/98765",
+    }
+    responses = {
+        "actions/runs/98765": run_info,
+        "actions/workflows/27": {
+            "path": ".github/workflows/ci.yml",
+            "state": "active",
+        },
+        "actions/runs/98765/artifacts?per_page=100": {
+            "total_count": 1,
+            "artifacts": [
+                {
+                    "id": 41,
+                    "name": "test-selection-receipt",
+                    "expired": False,
+                    "size_in_bytes": len(archive),
+                    "digest": f"sha256:{digest}",
+                }
+            ],
+        },
+        "actions/runs/98765/jobs?per_page=100&page=1": {
+            "jobs": [
+                {"name": "selection", "status": "completed", "conclusion": "success"},
+                {"name": "security", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "python (3.12)",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        deployer,
+        "github_json",
+        lambda path: responses[path],
+    )
+    monkeypatch.setattr(deployer, "github_bytes", lambda *_args, **_kwargs: archive)
+
+    def fake_run(*args, **_kwargs):
+        if "rev-parse" in args:
+            return OLD
+        if "show" in args:
+            return json.dumps(selection)
+        if any(argument.endswith("test_selection.py") for argument in args):
+            return json.dumps(selection)
+        pytest.fail(f"unexpected command in CI acceptance verifier: {args!r}")
+
+    monkeypatch.setattr(deployer, "run", fake_run)
+
+    receipt = deployer.verify_ci_acceptance(
+        "98765", previous=OLD, sha=NEW, directory=tmp_path
+    )
+    assert receipt["source"] == "github-actions-ci"
+    assert receipt["run_id"] == 98765
+    assert receipt["baseline"] == OLD
+    assert receipt["selection_change_digest"] == "c" * 64
+    assert receipt["selected_jobs"] == {
+        "python (3.12)": "success",
+        "security": "success",
+        "selection": "success",
+    }
+
+
+def test_selected_ci_jobs_reject_playwright_not_run_on_push():
+    plan = _ci_plan()
+    assert deployer.selected_ci_jobs(plan) == {
+        "selection",
+        "security",
+        "python (3.12)",
+    }
+    with pytest.raises(RuntimeError, match="does not execute selected Playwright"):
+        deployer.selected_ci_jobs(_ci_plan(playwright=["assistant.spec.ts"]))
+
+
+def test_ci_acceptance_rejects_incomplete_artifact_listing():
+    with pytest.raises(RuntimeError, match="artifact listing is incomplete"):
+        deployer.complete_ci_artifact_listing(
+            {"total_count": 101, "artifacts": [{"name": "test-selection-receipt"}]}
+        )
+
+
+def test_ci_acceptance_rejects_pull_request_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(deployer, "run", lambda *args, **_kwargs: OLD)
+    monkeypatch.setattr(
+        deployer,
+        "github_json",
+        lambda _path: {
+            "head_sha": NEW,
+            "head_branch": "main",
+            "event": "pull_request",
+            "status": "completed",
+            "conclusion": "success",
+            "repository": {"full_name": "berylliumsec/nebula"},
+            "run_attempt": 1,
+            "html_url": "https://github.com/berylliumsec/nebula/actions/runs/98765",
+        },
+    )
+    with pytest.raises(
+        RuntimeError, match="successful push of the exact main candidate"
+    ):
+        deployer.verify_ci_acceptance(
+            "98765", previous=OLD, sha=NEW, directory=tmp_path
+        )
+
+
+def test_ci_acceptance_rejects_a_failed_selected_job():
+    with pytest.raises(RuntimeError, match="python \(3.12\)"):
+        deployer.require_ci_jobs(
+            [
+                {"name": "selection", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "python (3.12)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ],
+            {"selection", "python (3.12)"},
+        )

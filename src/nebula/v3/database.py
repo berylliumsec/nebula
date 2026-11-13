@@ -123,7 +123,10 @@ class ProjectOwnershipRow(Base):
 
     project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
     admission_requested: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    retirement_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     runtime_id: Mapped[str | None] = mapped_column(
         ForeignKey("runtime_instances.id"), nullable=True
@@ -289,6 +292,9 @@ class RuntimeCommandRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     expected_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chat_start: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     accepted_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     state: Mapped[str] = mapped_column(String(20), nullable=False)
     runtime_id: Mapped[str | None] = mapped_column(String(200), nullable=True)

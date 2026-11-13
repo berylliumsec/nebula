@@ -225,15 +225,10 @@ class RuntimeCoordination:
                 "fencing_token": 0,
                 "lease_expires_at_ms": 0,
                 "command_sequence": 0,
+                "admission_requested": False,
+                "retirement_requested": False,
             },
             ["project_id"],
-        )
-        # Ordinary routing/command admission is explicit demand. SQL-only batch
-        # participants can retain a counter without preparing an idle worker.
-        await session.execute(
-            update(ProjectOwnershipRow)
-            .where(ProjectOwnershipRow.project_id == project_id)
-            .values(admission_requested=True)
         )
 
     async def _live_execution(
@@ -275,15 +270,31 @@ class RuntimeCoordination:
                     "the host is draining for coordinated shutdown"
                 )
             await self._ensure_project(session, project_id)
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            if owner is not None and owner.retirement_requested:
+                raise CoordinationConflict(
+                    "the project worker is closing; retry chat admission after retirement"
+                )
             # UPDATE is a row lock on PostgreSQL and a writer lock on SQLite.
             # Read the clock after waiting for the lock, not before it.
             await session.execute(
                 update(ProjectOwnershipRow)
                 .where(
                     ProjectOwnershipRow.project_id == project_id,
+                    ProjectOwnershipRow.retirement_requested.is_(False),
                 )
                 .values(command_sequence=ProjectOwnershipRow.command_sequence)
             )
+            still_admitting = await session.scalar(
+                select(ProjectOwnershipRow.project_id).where(
+                    ProjectOwnershipRow.project_id == project_id,
+                    ProjectOwnershipRow.retirement_requested.is_(False),
+                )
+            )
+            if still_admitting is None:
+                raise CoordinationConflict(
+                    "the project worker is closing; retry chat admission after retirement"
+                )
             now = await self._clock_ms(session)
             now = await self._live_execution(session, runtime_id, now)
             from .runtime_context_requirements import require_runtime_context
@@ -355,6 +366,7 @@ class RuntimeCoordination:
         payload: dict[str, Any],
         expected_revision: int | None = None,
         lane: Literal["work", "control"] = "work",
+        chat_start: bool = False,
     ) -> CommandReceipt:
         for label, value in (
             ("project_id", project_id),
@@ -365,6 +377,8 @@ class RuntimeCoordination:
         _identifier(name, "name", 100)
         if lane not in {"work", "control"}:
             raise ValueError("unknown command lane")
+        if type(chat_start) is not bool:
+            raise ValueError("chat_start must be a boolean")
         if expected_revision is not None and (
             type(expected_revision) is not int or expected_revision < 1
         ):
@@ -423,14 +437,24 @@ class RuntimeCoordination:
                     "the host is draining for coordinated shutdown"
                 )
             await self._ensure_project(session, project_id)
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            if owner is not None and owner.retirement_requested:
+                raise CoordinationConflict(
+                    "the project worker is closing; retry the request after retirement"
+                )
             sequence = await session.scalar(
                 update(ProjectOwnershipRow)
                 .where(
                     ProjectOwnershipRow.project_id == project_id,
+                    ProjectOwnershipRow.retirement_requested.is_(False),
                 )
                 .values(command_sequence=ProjectOwnershipRow.command_sequence + 1)
                 .returning(ProjectOwnershipRow.command_sequence)
             )
+            if sequence is None:
+                raise CoordinationConflict(
+                    "the project worker is closing; retry the request after retirement"
+                )
             await self._insert_absent(
                 session,
                 RuntimeCommandRow,
@@ -447,6 +471,7 @@ class RuntimeCoordination:
                     "expected_revision": expected_revision,
                     "accepted_at_ms": await self._clock_ms(session),
                     "state": "queued",
+                    "chat_start": chat_start,
                     "runtime_id": None,
                     "fencing_token": None,
                     "result": None,
@@ -466,6 +491,46 @@ class RuntimeCoordination:
                 )
             return _receipt(row)
 
+    async def mark_queued_chat_start(
+        self,
+        *,
+        project_id: str,
+        command_id: str,
+        actor_id: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Promote one authenticated legacy HTTP command after vault inspection."""
+        async with self._write() as session:
+            await self._ensure_project(session, project_id)
+            held = await session.execute(
+                update(ProjectOwnershipRow)
+                .where(
+                    ProjectOwnershipRow.project_id == project_id,
+                    ProjectOwnershipRow.retirement_requested.is_(False),
+                )
+                .values(command_sequence=ProjectOwnershipRow.command_sequence)
+            )
+            if held.rowcount != 1:
+                return False
+            row = await session.get(
+                RuntimeCommandRow,
+                command_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.project_id != project_id
+                or row.actor_id != actor_id
+                or row.name != "http.invoke/v1"
+                or row.state != "queued"
+                or row.chat_start
+                or row.payload != payload
+            ):
+                return False
+            row.chat_start = True
+            return True
+
     async def claim_next(
         self, lease: ProjectLease, *, lane: Literal["work", "control"] | None = None
     ) -> ClaimedCommand | None:
@@ -474,11 +539,22 @@ class RuntimeCoordination:
                 raise ValueError("unknown command lane")
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             host = await session.get(DeploymentHostRow, "host")
+            ownership = await session.get(ProjectOwnershipRow, lease.project_id)
             held = (
-                handoff is not None
-                and handoff.admission_held
-                and handoff.phase != "verified"
-            ) or (host is not None and host.shutdown_requested)
+                (
+                    handoff is not None
+                    and handoff.admission_held
+                    and handoff.phase != "verified"
+                )
+                or (host is not None and host.shutdown_requested)
+                or (ownership is not None and ownership.retirement_requested)
+            )
+            # Retirement is a project-wide quiescence boundary. Unlike host
+            # shutdown and handoff, it cannot leave the control lane running:
+            # even an untouched queued control command could start after the
+            # worker's quiescence checkpoint and before its owner is released.
+            if ownership is not None and ownership.retirement_requested:
+                return None
             # Control delivery has its own ordered lane. Stop, approvals and
             # input decisions cannot sit behind uncertain work or a handoff.
             selected_lane = "control" if held and lane is None else lane
