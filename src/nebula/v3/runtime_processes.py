@@ -646,6 +646,7 @@ class RuntimeProcessHost:
                 client = await self.rpc(runtime_id)
                 try:
                     status = await client.call("execution.status/v1", {}, timeout=5)
+                # diagnostic-expected: an unreachable process remains an unverified retirement candidate.
                 except (httpx.HTTPError, OSError, RuntimeIpcError):
                     continue
                 finally:
