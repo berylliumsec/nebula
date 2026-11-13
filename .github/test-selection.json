@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Review simulation supervisor activation recovery, exact host version health, strict execution owner continuity, interrupted code-only rollback recovery, callback intent journaling, and serial project handoff.",
+  "reason": "Review host activation identity binding between package version, hash-bound runtime manifest, exact release symlink, and authenticated commit health.",
   "exclusions": "CI runs only the exact focused Python cases selected below across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
   "python_versions": [
     "3.11",
@@ -10,7 +10,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 16,
+    "python": 17,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -28,11 +28,12 @@
     "tests/test_simulation_host_activation.py::test_staged_promotion_journals_host_intent_before_callback",
     "tests/test_simulation_host_activation.py::test_host_rollback_retry_returns_the_recorded_success",
     "tests/test_simulation_host_activation.py::test_interrupted_host_rollback_replays_exact_journaled_target",
-    "tests/test_simulation_host_activation.py::test_interrupted_rollback_restoration_replays_original_host"
+    "tests/test_simulation_host_activation.py::test_interrupted_rollback_restoration_replays_original_host",
+    "tests/test_simulation_host_activation.py::test_package_version_discovery_binds_to_release_and_authenticated_health"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "88bbf186853dfe4e701f2509a1ce085631049dde6c0f7a6b84289026bffc2a6c"
+  "change_digest": "e8b7d3b48aa6fcc6661e1512d043465250504be43f5d4091a39aa6d39095b0f0"
 }

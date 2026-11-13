@@ -1404,6 +1404,7 @@ def host_connection(*, allow_stale: bool = False) -> dict[str, Any] | None:
             payload = json.load(stream)
     finally:
         os.close(descriptor)
+    package_version = payload.get("version") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
         or payload.get("protocol") != "nebula-desktop-runtime-v1"
@@ -1411,7 +1412,10 @@ def host_connection(*, allow_stale: bool = False) -> dict[str, Any] | None:
         or type(payload.get("pid")) is not int
         or payload["pid"] < 1
         or not isinstance(payload.get("process_birth"), str)
-        or not SHA.fullmatch(str(payload.get("version", "")))
+        or not isinstance(package_version, str)
+        or not package_version
+        or len(package_version) > 128
+        or any(ord(character) < 33 for character in package_version)
     ):
         raise RuntimeError("Core runtime discovery identity is invalid")
     endpoint = payload.get("endpoint")
@@ -1431,7 +1435,33 @@ def host_connection(*, allow_stale: bool = False) -> dict[str, Any] | None:
         if allow_stale:
             return None
         raise RuntimeError("Core runtime discovery names a stale process")
-    return payload
+    return {**payload, "package_version": package_version}
+
+
+def runtime_package_version(commit: str) -> str:
+    """Read the package version from the hash-bound bundle for an exact release."""
+    release, _ = runtime_release(commit)
+    outer_manifest = json.loads((release / "nebula-runtime.json").read_text())
+    relative = "dist/nebula-runtime/nebula-runtime.json"
+    files = outer_manifest.get("files")
+    expected = files.get(relative) if isinstance(files, dict) else None
+    bundle_manifest_path = release / relative
+    if (
+        not isinstance(expected, str)
+        or not SHA256.fullmatch(expected)
+        or sha256(bundle_manifest_path) != expected
+    ):
+        raise RuntimeError("Accepted release runtime manifest is not hash-bound")
+    bundle_manifest = json.loads(bundle_manifest_path.read_text())
+    package_version = bundle_manifest.get("version")
+    if (
+        not isinstance(package_version, str)
+        or not package_version
+        or len(package_version) > 128
+        or any(ord(character) < 33 for character in package_version)
+    ):
+        raise RuntimeError("Accepted release package version is invalid")
+    return package_version
 
 
 def linux_process_birth(pid: int) -> str | None:
@@ -1703,6 +1733,7 @@ def wait_supervisor_host_ready(
     prior_status: dict[str, Any] | None,
     timeout: int = 480,
 ) -> dict[str, Any]:
+    expected_package_version = runtime_package_version(version)
     deadline = time.monotonic() + timeout
     last_problem = "supervisor did not publish its accepted host identity"
     while time.monotonic() < deadline:
@@ -1712,7 +1743,10 @@ def wait_supervisor_host_ready(
                 time.sleep(2)
                 continue
             identity = host_connection(allow_stale=True)
-            if identity is None or identity.get("version") != version:
+            if (
+                identity is None
+                or identity.get("package_version") != expected_package_version
+            ):
                 last_problem = (
                     "runtime discovery does not name the requested host release"
                 )
@@ -1839,6 +1873,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
     manifest = json.loads((release / "nebula-runtime.json").read_text())
     if manifest.get("version") != version:
         raise RuntimeError("Accepted host runtime manifest has a different version")
+    expected_package_version = runtime_package_version(version)
     operations = require_stage_migration_receipts(
         record, version=version, manifest_sha256=manifest_sha256
     )
@@ -1868,7 +1903,7 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
             if (
                 current_release_version() != version
                 or connection is None
-                or connection.get("version") != version
+                or connection.get("package_version") != expected_package_version
             ):
                 raise RuntimeError(
                     "Completed host activation no longer matches current process identity"
@@ -1908,11 +1943,12 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                 raise RuntimeError("Interrupted host activation journal is incomplete")
             selected = current_release_version()
             identity = host_connection(allow_stale=True)
+            previous_package_version = runtime_package_version(previous)
             if selected == version:
                 if (
                     unit_state(SERVICE) == "active"
                     and identity is not None
-                    and identity.get("version") == version
+                    and identity.get("package_version") == expected_package_version
                 ):
                     try:
                         readback = wait_supervisor_host_ready(
@@ -1991,7 +2027,8 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                     **readback,
                 }
             if selected != previous or (
-                identity is not None and identity.get("version") != previous
+                identity is not None
+                and identity.get("package_version") != previous_package_version
             ):
                 raise RuntimeError(
                     "Interrupted host activation has an unexpected current release or process"
@@ -2030,11 +2067,11 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
         raise RuntimeError(
             "systemd MainPID differs from the authenticated runtime process identity"
         )
-    previous_version = prior_host["version"]
     previous_release = current_release_version()
-    if previous_version != previous_release:
+    previous_version = previous_release
+    if prior_host["package_version"] != runtime_package_version(previous_version):
         raise RuntimeError(
-            "Running supervisor identity differs from the current release symlink"
+            "Running supervisor package identity differs from the current release manifest"
         )
     if previous_version == version:
         raise RuntimeError("Pending host release is already the active supervisor")
@@ -2092,7 +2129,8 @@ def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, 
                 current_release_version() == previous_version
                 and unit_state(SERVICE) == "active"
                 and current_identity is not None
-                and current_identity.get("version") == previous_version
+                and current_identity.get("package_version")
+                == runtime_package_version(previous_version)
             ):
                 rollback_readback = wait_supervisor_host_ready(
                     previous_version,
@@ -2284,7 +2322,8 @@ def rollback_host() -> dict[str, Any]:
         if (
             current_release_version() != rolled_back_version
             or identity is None
-            or identity.get("version") != rolled_back_version
+            or identity.get("package_version")
+            != runtime_package_version(rolled_back_version)
             or service_identity["main_pid"] != identity.get("pid")
         ):
             raise RuntimeError(
@@ -2327,7 +2366,8 @@ def rollback_host() -> dict[str, Any]:
     current_identity = host_connection()
     if (
         current_identity is None
-        or current_identity.get("version") != current_version
+        or current_identity.get("package_version")
+        != runtime_package_version(current_version)
         or current_release_version() != current_version
         or service_identity["main_pid"] != current_identity.get("pid")
     ):
