@@ -616,3 +616,213 @@ async def test_closing_a_viewer_does_not_cancel_an_upstream_owned_task():
         assert not producer.done()
         done.set()
         assert await producer == "finished independently"
+
+
+def _endpoint_fleet(app, key, transports=None):
+    """A proxy routing /p/<n>/... to synthetic runtime endpoint n."""
+
+    async def select(scope):
+        return HttpUpstream(f"unix:///fixture-{scope['path'].split('/')[2]}.sock", key)
+
+    def transport(endpoint):
+        if transports is not None and endpoint in transports:
+            return transports[endpoint]
+        return httpx.ASGITransport(app=PrivateRuntimeHttp(app, key))
+
+    return RuntimeHttpProxy(select, transport_factory=transport)
+
+
+async def test_reads_reach_more_runtime_endpoints_than_the_channel_budget():
+    """Every project worker stays readable; idle channels are evicted, not kept."""
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+
+    @app.get("/p/{project}/read")
+    async def read(project: str):
+        return {"project": project}
+
+    proxy = _endpoint_fleet(app, key)
+    seen: list[httpx.AsyncClient] = []
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+    ) as viewer:
+        for project in [*range(12), *reversed(range(12))]:
+            response = await viewer.get(f"/p/{project}/read")
+            assert response.status_code == 200, project
+            assert response.json() == {"project": str(project)}
+            seen.extend(
+                client for client in proxy.clients.values() if client not in seen
+            )
+            assert len({key for key, _control in proxy.clients}) <= 8
+    held = list(proxy.clients.values())
+    assert len(seen) > len(held)
+    assert all(client.is_closed for client in seen if client not in held)
+    assert proxy.active == {}
+    await proxy.close()
+
+
+async def test_busy_runtime_endpoints_are_kept_and_a_full_budget_is_reported(
+    monkeypatch,
+):
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+    entered, release = asyncio.Semaphore(0), asyncio.Event()
+
+    @app.get("/p/{project}/hold")
+    async def hold(project: str):
+        entered.release()
+        await release.wait()
+        return {"held": project}
+
+    @app.get("/p/{project}/read")
+    async def read(project: str):
+        return {"project": project}
+
+    recorded = []
+    monkeypatch.setattr(
+        "nebula.v3.runtime_http.record_diagnostic",
+        lambda *args, **fields: recorded.append((args, fields)),
+    )
+    proxy = _endpoint_fleet(app, key)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+    ) as viewer:
+        held = [
+            asyncio.create_task(viewer.get(f"/p/{project}/hold"))
+            for project in range(8)
+        ]
+        for _ in held:
+            await asyncio.wait_for(entered.acquire(), timeout=5)
+        refused = await viewer.get("/p/8/read")
+        assert refused.status_code == 503
+        assert [args[2] for args, _fields in recorded] == [
+            "api.runtime.endpoint_budget_occupied"
+        ]
+        release.set()
+        assert [(await task).json() for task in held] == [
+            {"held": str(project)} for project in range(8)
+        ]
+        assert (await viewer.get("/p/8/read")).json() == {"project": "8"}
+    assert proxy.active == {}
+    await proxy.close()
+
+
+async def test_failed_forward_releases_its_channel_reservation():
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+
+    @app.get("/p/{project}/read")
+    async def read(project: str):
+        return {"project": project}
+
+    class Unreachable(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise httpx.ConnectError("synthetic runtime transport loss")
+
+    proxy = _endpoint_fleet(app, key, {"unix:///fixture-0.sock": Unreachable()})
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+    ) as viewer:
+        assert (await viewer.get("/p/0/read")).status_code == 503
+        assert proxy.active == {}
+        for project in range(1, 10):
+            assert (await viewer.get(f"/p/{project}/read")).status_code == 200
+    assert "unix:///fixture-0.sock" not in {key for key, _control in proxy.clients}
+    await proxy.close()
+
+
+async def test_busy_least_recent_endpoint_is_skipped_for_an_idle_one():
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    @app.get("/p/{project}/hold")
+    async def hold(project: str):
+        entered.set()
+        await release.wait()
+        return {"held": project}
+
+    @app.get("/p/{project}/read")
+    async def read(project: str):
+        return {"project": project}
+
+    proxy = _endpoint_fleet(app, key)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+    ) as viewer:
+        held = asyncio.create_task(viewer.get("/p/0/hold"))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        for project in range(1, 9):
+            assert (await viewer.get(f"/p/{project}/read")).status_code == 200
+        endpoints = {key for key, _control in proxy.clients}
+        assert "unix:///fixture-0.sock" in endpoints
+        assert "unix:///fixture-1.sock" not in endpoints
+        release.set()
+        assert (await held).json() == {"held": "0"}
+    assert proxy.active == {}
+    await proxy.close()
+
+
+async def test_viewer_websockets_do_not_consume_the_pooled_client_budget():
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+
+    @app.get("/p/{project}/read")
+    async def read(project: str):
+        return {"project": project}
+
+    proxy = _endpoint_fleet(app, key)
+    viewers = [asyncio.create_task(asyncio.Event().wait()) for _ in range(8)]
+    try:
+        for index, task in enumerate(viewers):
+            proxy.websocket_tasks[task] = f"unix:///viewer-{index}.sock"
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+        ) as viewer:
+            for project in range(12):
+                response = await viewer.get(f"/p/{project}/read")
+                assert response.status_code == 200, project
+    finally:
+        for task in viewers:
+            task.cancel()
+        await asyncio.gather(*viewers, return_exceptions=True)
+        proxy.websocket_tasks.clear()
+        await proxy.close()
+
+
+async def test_retirement_during_eviction_returns_a_reconnect_response(monkeypatch):
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+
+    @app.get("/p/{project}/read")
+    async def read(project: str):
+        return {"project": project}
+
+    proxy = _endpoint_fleet(app, key)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+    ) as viewer:
+        for project in range(8):
+            assert (await viewer.get(f"/p/{project}/read")).status_code == 200
+        oldest = next(
+            client
+            for (endpoint, _control), client in proxy.clients.items()
+            if endpoint == "unix:///fixture-0.sock"
+        )
+        original, closing, release = oldest.aclose, asyncio.Event(), asyncio.Event()
+
+        async def slow_close():
+            closing.set()
+            await release.wait()
+            await original()
+
+        monkeypatch.setattr(oldest, "aclose", slow_close)
+        pending = asyncio.create_task(viewer.get("/p/8/read"))
+        await asyncio.wait_for(closing.wait(), timeout=5)
+        await proxy.discard_endpoint("unix:///fixture-8.sock")
+        release.set()
+        response = await asyncio.wait_for(pending, timeout=5)
+        assert response.status_code == 503
+        assert response.json()["detail"].startswith("The runtime connection")
+    assert proxy.active == {}
+    await proxy.close()
