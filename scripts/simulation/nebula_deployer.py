@@ -27,7 +27,9 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from uuid import uuid4
 from typing import Any
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from urllib.error import HTTPError
 
@@ -1367,6 +1369,1065 @@ def service(action: str) -> None:
     run("systemctl", "--user", action, SERVICE, timeout=180)
 
 
+def host_connection(*, allow_stale: bool = False) -> dict[str, Any] | None:
+    """Read the authenticated runtime's private, process-qualified identity."""
+    directory = DATA / "runtime"
+    path = directory / "connection.json"
+    if directory.is_symlink():
+        raise RuntimeError("Core runtime discovery directory cannot be a symlink")
+    try:
+        details = directory.stat()
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISDIR(details.st_mode)
+        or details.st_uid != os.getuid()
+        or details.st_mode & 0o077
+    ):
+        raise RuntimeError("Core runtime discovery directory is not private")
+    if path.is_symlink():
+        raise RuntimeError("Core runtime discovery cannot be a symlink")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.getuid()
+            or details.st_mode & 0o077
+            or details.st_size > 65_536
+        ):
+            raise RuntimeError("Core runtime discovery file is not private")
+        with os.fdopen(descriptor, "r", encoding="utf-8", closefd=False) as stream:
+            payload = json.load(stream)
+    finally:
+        os.close(descriptor)
+    if (
+        not isinstance(payload, dict)
+        or payload.get("protocol") != "nebula-desktop-runtime-v1"
+        or payload.get("data_root") != str(DATA.resolve())
+        or type(payload.get("pid")) is not int
+        or payload["pid"] < 1
+        or not isinstance(payload.get("process_birth"), str)
+        or not SHA.fullmatch(str(payload.get("version", "")))
+    ):
+        raise RuntimeError("Core runtime discovery identity is invalid")
+    endpoint = payload.get("endpoint")
+    parsed = urlsplit(endpoint) if isinstance(endpoint, str) else None
+    if (
+        parsed is None
+        or parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.path != "/api/v1"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("Core runtime discovery endpoint is invalid")
+    if linux_process_birth(payload["pid"]) != payload["process_birth"]:
+        if allow_stale:
+            return None
+        raise RuntimeError("Core runtime discovery names a stale process")
+    return payload
+
+
+def linux_process_birth(pid: int) -> str | None:
+    if type(pid) is not int or pid < 1:
+        raise ValueError("a positive Core process identity is required")
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if fields[0] == "Z":
+            return None
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return f"linux:{boot}:{fields[19]}"
+    except FileNotFoundError:
+        return None
+    except (OSError, IndexError) as error:
+        raise RuntimeError(
+            "Core process birth identity could not be verified"
+        ) from error
+
+
+def supervisor_service_configuration() -> dict[str, Any]:
+    if unit_state(EDGE) != "active":
+        raise RuntimeError("The HTTPS edge must be active before host activation")
+    command = run(
+        "systemctl",
+        "--user",
+        "show",
+        SERVICE,
+        "-p",
+        "ExecStart",
+        "--value",
+        capture=True,
+    )
+    if str(CURRENT / "dist/nebula-core") not in command:
+        raise RuntimeError(
+            "The supervisor service does not execute the guarded current release"
+        )
+    kill_mode = run(
+        "systemctl",
+        "--user",
+        "show",
+        SERVICE,
+        "-p",
+        "KillMode",
+        "--value",
+        capture=True,
+    )
+    exit_type = run(
+        "systemctl",
+        "--user",
+        "show",
+        SERVICE,
+        "-p",
+        "ExitType",
+        "--value",
+        capture=True,
+    )
+    if kill_mode != "process" or exit_type != "main":
+        raise RuntimeError(
+            "Host activation requires KillMode=process and ExitType=main to preserve workers"
+        )
+    return {"exec_start": command, "kill_mode": kill_mode, "exit_type": exit_type}
+
+
+def supervisor_service_identity() -> dict[str, Any]:
+    if unit_state(SERVICE) != "active":
+        raise RuntimeError("The supervisor Core service must be active")
+    configuration = supervisor_service_configuration()
+    main_pid = run(
+        "systemctl",
+        "--user",
+        "show",
+        SERVICE,
+        "-p",
+        "MainPID",
+        "--value",
+        capture=True,
+    )
+    try:
+        main_pid_value = int(main_pid)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("Supervisor service MainPID is invalid") from error
+    if main_pid_value < 1:
+        raise RuntimeError("Supervisor service has no live MainPID")
+    return {**configuration, "main_pid": main_pid_value}
+
+
+def host_status_snapshot(status: dict[str, Any]) -> dict[str, Any]:
+    if (
+        not isinstance(status, dict)
+        or status.get("protocol") != "nebula.runtime/v1"
+        or status.get("health") != "ready"
+        or not isinstance(status.get("api_version"), str)
+        or not SHA.fullmatch(status["api_version"])
+    ):
+        raise RuntimeError(
+            "A ready supervisor API status is required for host activation"
+        )
+    residents = status.get("resident_versions")
+    projects = status.get("projects")
+    if (
+        not isinstance(residents, list)
+        or any(
+            not isinstance(version, str) or not SHA.fullmatch(version)
+            for version in residents
+        )
+        or len(residents) > 16
+        or not isinstance(projects, list)
+        or len(projects) > 10_000
+    ):
+        raise RuntimeError("Supervisor worker inventory is invalid")
+    owners: dict[str, dict[str, Any]] = {}
+    for project in projects:
+        if not isinstance(project, dict):
+            raise RuntimeError("Supervisor project inventory is invalid")
+        project_id = project.get("project_id")
+        runtime_id = project.get("runtime_id")
+        runtime_version = project.get("runtime_version")
+        fencing_token = project.get("fencing_token")
+        if (
+            not isinstance(project_id, str)
+            or not project_id
+            or project_id in owners
+            or (runtime_id is not None and (not isinstance(runtime_id, str) or not runtime_id))
+            or (runtime_version is not None and not isinstance(runtime_version, str))
+            or type(fencing_token) is not int
+            or fencing_token < 0
+        ):
+            raise RuntimeError("Supervisor project owner identity is invalid")
+        owners[project_id] = {
+            "runtime_id": runtime_id,
+            "runtime_version": runtime_version,
+            "fencing_token": fencing_token,
+        }
+    return {
+        "api_version": status["api_version"],
+        "resident_versions": sorted(set(residents)),
+        "projects": owners,
+    }
+
+
+def require_preserved_workers(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    admitted_version: str | None = None,
+) -> dict[str, Any]:
+    previous_projects = before["projects"]
+    current_projects = after["projects"]
+    missing = sorted(set(previous_projects) - set(current_projects))
+    if missing:
+        raise RuntimeError("Host restart removed existing project records")
+    retained = 0
+    for project_id, previous in previous_projects.items():
+        current = current_projects[project_id]
+        if previous["runtime_id"] is None:
+            if current["runtime_id"] is None:
+                if current["fencing_token"] != previous["fencing_token"]:
+                    raise RuntimeError(
+                        f"Host restart changed the fencing token for unowned project {project_id}"
+                    )
+                continue
+            if (
+                admitted_version is None
+                or current["runtime_version"] != admitted_version
+                or current["fencing_token"] <= previous["fencing_token"]
+            ):
+                raise RuntimeError(
+                    f"Host restart assigned an unowned project outside the exact admitted release: {project_id}"
+                )
+            continue
+        if (
+            current["runtime_id"] != previous["runtime_id"]
+            or current["runtime_version"] != previous["runtime_version"]
+            or current["fencing_token"] != previous["fencing_token"]
+        ):
+            raise RuntimeError(
+                f"Host restart changed the existing execution owner for project {project_id}"
+            )
+        if previous["runtime_id"] is not None:
+            retained += 1
+    previous_residents = set(before["resident_versions"])
+    current_residents = set(after["resident_versions"])
+    if (
+        not previous_residents <= current_residents
+        or current_residents - previous_residents
+        - ({admitted_version} if admitted_version is not None else set())
+    ):
+        raise RuntimeError("Host restart changed resident execution versions unexpectedly")
+    return {"retained": retained}
+
+
+def require_stage_migration_receipts(
+    record: dict[str, Any], *, version: str, manifest_sha256: str
+) -> dict[str, Any]:
+    journal = record.get("runtime_deployment")
+    steps = journal.get("steps") if isinstance(journal, dict) else None
+    if (
+        not isinstance(journal, dict)
+        or journal.get("action") not in {"promote", "rollback"}
+        or journal.get("version") != version
+        or not isinstance(steps, dict)
+    ):
+        raise RuntimeError(
+            "Host activation requires the exact durable deployment journal"
+        )
+    stage, migrate = steps.get("stage"), steps.get("migrate")
+    if (
+        not isinstance(stage, dict)
+        or stage.get("action") != "stage"
+        or not isinstance(stage.get("parameters"), dict)
+        or stage["parameters"].get("manifest_sha256") != manifest_sha256
+        or not isinstance(stage.get("receipt"), dict)
+        or stage["receipt"].get("state") != "succeeded"
+        or (
+            journal.get("action") == "promote"
+            and (
+                not isinstance(migrate, dict)
+                or migrate.get("action") != "migrate"
+                or not isinstance(migrate.get("parameters"), dict)
+                or migrate["parameters"].get("version") != version
+                or not isinstance(migrate.get("receipt"), dict)
+                or migrate["receipt"].get("state") != "succeeded"
+            )
+        )
+    ):
+        raise RuntimeError(
+            "Host activation requires verified stage and additive-migration receipts"
+        )
+    return {
+        "deployment_id": journal.get("id"),
+        "stage_operation_id": stage.get("operation_id"),
+        "migration_operation_id": migrate.get("operation_id"),
+    }
+
+
+def require_host_schema_compatibility(
+    manifest: dict[str, Any], health: dict[str, Any]
+) -> None:
+    schema = health.get("schema_version")
+    schema_family = manifest.get("schema_family")
+    minimum = manifest.get("schema_min")
+    maximum = manifest.get("schema_max")
+    if (
+        type(schema) is not int
+        or type(schema_family) is not int
+        or type(minimum) is not int
+        or type(maximum) is not int
+        or schema_family != schema
+        or not minimum <= schema <= maximum
+    ):
+        raise RuntimeError(
+            "Host release compatibility does not cover the live database schema"
+        )
+
+
+def read_supervisor_health() -> tuple[dict[str, Any], dict[str, Any]]:
+    client = api()
+    health = client.get("health")
+    status = client.get("deployment/status")
+    if not isinstance(health, dict) or not isinstance(status, dict):
+        raise RuntimeError("Supervisor health readback is malformed")
+    return health, status
+
+
+def wait_supervisor_host_ready(
+    version: str,
+    *,
+    expected_api_version: str,
+    prior_status: dict[str, Any] | None,
+    timeout: int = 480,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last_problem = "supervisor did not publish its accepted host identity"
+    while time.monotonic() < deadline:
+        try:
+            if unit_state(SERVICE) != "active":
+                last_problem = "supervisor service is not active"
+                time.sleep(2)
+                continue
+            identity = host_connection(allow_stale=True)
+            if identity is None or identity.get("version") != version:
+                last_problem = (
+                    "runtime discovery does not name the requested host release"
+                )
+                time.sleep(2)
+                continue
+            service_identity = supervisor_service_identity()
+            if service_identity["main_pid"] != identity["pid"]:
+                raise RuntimeError(
+                    "systemd MainPID differs from the activated runtime identity"
+                )
+            health, status = read_supervisor_health()
+            if health.get("status") != "ok":
+                last_problem = "host health is not ready"
+                time.sleep(2)
+                continue
+            if (
+                health.get("commit") != version
+                or health.get("recovery_version") != version
+            ):
+                raise RuntimeError(
+                    "Host health does not report the exact accepted release"
+                )
+            snapshot = host_status_snapshot(status)
+            if snapshot["api_version"] != expected_api_version:
+                raise RuntimeError(
+                    "Host activation unexpectedly changed the API release"
+                )
+            continuity = (
+                require_preserved_workers(
+                    prior_status, snapshot, admitted_version=version
+                )
+                if prior_status is not None
+                else {"retained": 0}
+            )
+            return {
+                "version": version,
+                "health_commit": health["commit"],
+                "recovery_version": health["recovery_version"],
+                "api_version": snapshot["api_version"],
+                "resident_versions": snapshot["resident_versions"],
+                "retained_project_owners": continuity["retained"],
+                "runtime_pid": identity["pid"],
+                "runtime_process_birth": identity["process_birth"],
+            }
+        except (OSError, ValueError, HTTPError) as error:
+            last_problem = str(error)[:300]
+            time.sleep(2)
+    raise RuntimeError(
+        f"Supervisor host {version} did not become ready within {timeout}s: {last_problem}"
+    )
+
+
+def current_release_version() -> str:
+    if not CURRENT.is_symlink():
+        raise RuntimeError("Current supervisor release is not an immutable symlink")
+    release = CURRENT.resolve(strict=True)
+    if release.parent != RELEASES or not SHA.fullmatch(release.name):
+        raise RuntimeError(
+            "Current supervisor release points outside immutable releases"
+        )
+    return release.name
+
+
+def _save_host_activation(record: dict[str, Any], journal: dict[str, Any]) -> None:
+    record["host_activation"] = journal
+    atomic_json(STATE, record)
+
+
+def _switch_supervisor_host(
+    version: str,
+    *,
+    release: Path,
+    expected_api_version: str,
+    prior_status: dict[str, Any],
+    journal: dict[str, Any],
+    journal_container: dict[str, Any] | None = None,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    def persist() -> None:
+        if journal_container is None:
+            _save_host_activation(record, journal)
+        else:
+            journal_container["rollback"] = journal
+            _save_host_activation(record, journal_container)
+
+    if release.parent != RELEASES or release.name != version or release.is_symlink():
+        raise RuntimeError("Host activation target is not the exact immutable release")
+    if unit_state(SERVICE) != "inactive":
+        service("stop")
+    require_stopped()
+    if current_release_version() != version:
+        switch_to(release)
+    journal["state"] = "service_stopped_release_selected"
+    journal["current_release"] = str(release)
+    persist()
+    service("start")
+    journal["state"] = "service_started"
+    persist()
+    readback = wait_supervisor_host_ready(
+        version,
+        expected_api_version=expected_api_version,
+        prior_status=prior_status,
+    )
+    journal["state"] = "complete"
+    journal["readback"] = readback
+    record["host_active"] = version
+    persist()
+    return readback
+
+
+def activate_supervisor_host(record: dict[str, Any], version: str) -> dict[str, Any]:
+    """Restart only the foreground supervisor from an accepted staged release."""
+    if record.get("deployment_mode") != "supervisor":
+        raise RuntimeError("Host activation requires supervisor deployment mode")
+    deployment = record.get("runtime_deployment")
+    action = deployment.get("action") if isinstance(deployment, dict) else None
+    valid_pending = action == "promote" and record.get("pending") == version
+    valid_rollback = action == "rollback" and record.get("previous") == version
+    if not (valid_pending or valid_rollback) or not SHA.fullmatch(version):
+        raise RuntimeError(
+            "Host activation must target the exact pending candidate or recorded code rollback"
+        )
+    release, manifest_sha256 = runtime_release(version)
+    manifest = json.loads((release / "nebula-runtime.json").read_text())
+    if manifest.get("version") != version:
+        raise RuntimeError("Accepted host runtime manifest has a different version")
+    operations = require_stage_migration_receipts(
+        record, version=version, manifest_sha256=manifest_sha256
+    )
+    deployment_activation = deployment.get("host_activation")
+    requested_operation_id = (
+        deployment_activation.get("operation_id")
+        if isinstance(deployment_activation, dict)
+        and deployment_activation.get("version") == version
+        and deployment_activation.get("state") in {"requested", "complete"}
+        else None
+    )
+    existing = record.get("host_activation")
+    if isinstance(existing, dict) and existing.get("version") == version:
+        if (
+            requested_operation_id is not None
+            and existing.get("operation_id") != requested_operation_id
+        ):
+            raise RuntimeError(
+                "Staged deployment and durable host activation operation IDs differ"
+            )
+        if existing.get("state") == "needs_attention":
+            raise RuntimeError(
+                "Host activation needs explicit reconciliation before retry"
+            )
+        if existing.get("state") == "complete":
+            connection = host_connection(allow_stale=True)
+            if (
+                current_release_version() != version
+                or connection is None
+                or connection.get("version") != version
+            ):
+                raise RuntimeError(
+                    "Completed host activation no longer matches current process identity"
+                )
+            prior = existing.get("prior_status")
+            if not isinstance(prior, dict):
+                raise RuntimeError("Host activation lost its pre-restart readback")
+            wait_supervisor_host_ready(
+                version,
+                expected_api_version=prior["api_version"],
+                prior_status=None,
+            )
+            readback = existing.get("readback")
+            if not isinstance(readback, dict) or readback.get("health_commit") != version:
+                raise RuntimeError("Completed host activation lost its verified readback")
+            return {
+                "operation_id": existing["operation_id"],
+                "status": "host_activated",
+                "version": version,
+                "previous_version": existing["previous_version"],
+                **readback,
+            }
+        if existing.get("state") in {
+            "prepared",
+            "service_stopped_release_selected",
+            "service_started",
+        }:
+            prior = existing.get("prior_status")
+            previous = existing.get("previous_version")
+            operation_id = existing.get("operation_id")
+            if (
+                not isinstance(prior, dict)
+                or not isinstance(prior.get("api_version"), str)
+                or not isinstance(previous, str)
+                or not isinstance(operation_id, str)
+            ):
+                raise RuntimeError("Interrupted host activation journal is incomplete")
+            selected = current_release_version()
+            identity = host_connection(allow_stale=True)
+            if selected == version:
+                if (
+                    unit_state(SERVICE) == "active"
+                    and identity is not None
+                    and identity.get("version") == version
+                ):
+                    try:
+                        readback = wait_supervisor_host_ready(
+                            version,
+                            expected_api_version=prior["api_version"],
+                            prior_status=prior,
+                        )
+                    except Exception as error:
+                        existing["readback_error"] = str(error)[:1000]
+                        _save_host_activation(record, existing)
+                    else:
+                        existing["state"] = "complete"
+                        existing["readback"] = readback
+                        record["host_active"] = version
+                        _save_host_activation(record, existing)
+                        return {
+                            "operation_id": operation_id,
+                            "status": "host_activated",
+                            "version": version,
+                            "previous_version": previous,
+                            **readback,
+                        }
+                supervisor_service_configuration()
+                try:
+                    readback = _switch_supervisor_host(
+                        version,
+                        release=release,
+                        expected_api_version=prior["api_version"],
+                        prior_status=prior,
+                        journal=existing,
+                        record=record,
+                    )
+                except Exception as error:
+                    existing["state"] = "rolling_back"
+                    existing["activation_error"] = str(error)[:1000]
+                    _save_host_activation(record, existing)
+                    try:
+                        old_release, _ = runtime_release(previous)
+                        rollback_operation = {
+                            "operation_id": operation_id + ":rollback",
+                            "state": "rolling_back",
+                            "version": previous,
+                            "previous_version": version,
+                            "expected_api_version": prior["api_version"],
+                            "prior_status": prior,
+                            "code_only": True,
+                        }
+                        rollback_readback = _switch_supervisor_host(
+                            previous,
+                            release=old_release,
+                            expected_api_version=prior["api_version"],
+                            prior_status=prior,
+                            journal=rollback_operation,
+                            journal_container=existing,
+                            record=record,
+                        )
+                    except Exception as rollback_error:
+                        existing["state"] = "needs_attention"
+                        existing["rollback_error"] = str(rollback_error)[:1000]
+                        _save_host_activation(record, existing)
+                        raise RuntimeError(
+                            "Interrupted host activation failed and code-only rollback could not be verified"
+                        ) from rollback_error
+                    existing["state"] = "rolled_back"
+                    existing["rollback_readback"] = rollback_readback
+                    record["host_active"] = previous
+                    _save_host_activation(record, existing)
+                    raise RuntimeError(
+                        f"Interrupted host activation failed; restored {previous} without restoring database or files: {error}"
+                    ) from error
+                return {
+                    "operation_id": operation_id,
+                    "status": "host_activated",
+                    "version": version,
+                    "previous_version": previous,
+                    **readback,
+                }
+            if selected != previous or (
+                identity is not None and identity.get("version") != previous
+            ):
+                raise RuntimeError(
+                    "Interrupted host activation has an unexpected current release or process"
+                )
+            if unit_state(SERVICE) == "active":
+                health, status = read_supervisor_health()
+                if (
+                    health.get("status") != "ok"
+                    or health.get("commit") != previous
+                    or host_status_snapshot(status)["api_version"]
+                    != prior["api_version"]
+                ):
+                    raise RuntimeError(
+                        "Previous supervisor does not match the interrupted activation journal"
+                    )
+            readback = _switch_supervisor_host(
+                version,
+                release=release,
+                expected_api_version=prior["api_version"],
+                prior_status=prior,
+                journal=existing,
+                record=record,
+            )
+            return {
+                "operation_id": operation_id,
+                "status": "host_activated",
+                "version": version,
+                "previous_version": previous,
+                **readback,
+            }
+    service_identity = supervisor_service_identity()
+    prior_host = host_connection()
+    if prior_host is None:
+        raise RuntimeError("Current supervisor process identity is unavailable")
+    if service_identity["main_pid"] != prior_host["pid"]:
+        raise RuntimeError(
+            "systemd MainPID differs from the authenticated runtime process identity"
+        )
+    previous_version = prior_host["version"]
+    previous_release = current_release_version()
+    if previous_version != previous_release:
+        raise RuntimeError(
+            "Running supervisor identity differs from the current release symlink"
+        )
+    if previous_version == version:
+        raise RuntimeError("Pending host release is already the active supervisor")
+    health, status = read_supervisor_health()
+    if health.get("status") != "ok" or health.get("commit") != previous_version:
+        raise RuntimeError(
+            "Current supervisor health does not match its process identity"
+        )
+    require_host_schema_compatibility(manifest, health)
+    prior_status = host_status_snapshot(status)
+    if prior_status["api_version"] != record.get("active"):
+        raise RuntimeError(
+            "Deployer state differs from the current supervisor API version"
+        )
+    if version not in status.get("staged_versions", []):
+        raise RuntimeError("Pending host release has not been staged by the supervisor")
+    if prior_status["api_version"] == version:
+        raise RuntimeError("Host activation must precede API promotion")
+    if current_release_version() != previous_version:
+        raise RuntimeError("Current release changed during host activation preflight")
+    journal = {
+        "operation_id": requested_operation_id or uuid4().hex,
+        "state": "prepared",
+        "version": version,
+        "previous_version": previous_version,
+        "previous_release": str(previous_release),
+        "manifest_sha256": manifest_sha256,
+        "expected_api_version": prior_status["api_version"],
+        "prior_status": prior_status,
+        "prior_process": {
+            "pid": prior_host["pid"],
+            "process_birth": prior_host["process_birth"],
+        },
+        "prior_service": service_identity,
+        "operations": operations,
+    }
+    _save_host_activation(record, journal)
+    try:
+        readback = _switch_supervisor_host(
+            version,
+            release=release,
+            expected_api_version=prior_status["api_version"],
+            prior_status=prior_status,
+            journal=journal,
+            record=record,
+        )
+    except Exception as error:
+        journal["state"] = "rolling_back"
+        journal["activation_error"] = str(error)[:1000]
+        _save_host_activation(record, journal)
+        try:
+            old_release, _ = runtime_release(previous_version)
+            current_identity = host_connection()
+            if (
+                current_release_version() == previous_version
+                and unit_state(SERVICE) == "active"
+                and current_identity is not None
+                and current_identity.get("version") == previous_version
+            ):
+                rollback_readback = wait_supervisor_host_ready(
+                    previous_version,
+                    expected_api_version=prior_status["api_version"],
+                    prior_status=prior_status,
+                )
+            else:
+                rollback_operation = {
+                    "operation_id": journal["operation_id"] + ":rollback",
+                    "state": "rolling_back",
+                    "version": previous_version,
+                    "previous_version": version,
+                    "expected_api_version": prior_status["api_version"],
+                    "prior_status": prior_status,
+                    "code_only": True,
+                }
+                rollback_readback = _switch_supervisor_host(
+                    previous_version,
+                    release=old_release,
+                    expected_api_version=prior_status["api_version"],
+                    prior_status=prior_status,
+                    journal=rollback_operation,
+                    journal_container=journal,
+                    record=record,
+                )
+        except Exception as rollback_error:
+            journal["state"] = "needs_attention"
+            journal["rollback_error"] = str(rollback_error)[:1000]
+            _save_host_activation(record, journal)
+            raise RuntimeError(
+                "Host activation failed and code-only rollback could not be verified; preserve current database and worker state"
+            ) from rollback_error
+        journal["state"] = "rolled_back"
+        journal["rollback_readback"] = rollback_readback
+        record["host_active"] = previous_version
+        _save_host_activation(record, journal)
+        raise RuntimeError(
+            f"Host activation failed; restored supervisor code to {previous_version} without restoring database or files: {error}"
+        ) from error
+    return {
+        "operation_id": journal["operation_id"],
+        "status": "host_activated",
+        "version": version,
+        "previous_version": previous_version,
+        **readback,
+    }
+
+
+def activate_host() -> dict[str, Any]:
+    record = state()
+    pending = record.get("pending")
+    if not isinstance(pending, str):
+        raise RuntimeError(
+            "No accepted pending candidate is available for host activation"
+        )
+    return activate_supervisor_host(record, pending)
+
+
+def rollback_host() -> dict[str, Any]:
+    record = state()
+    journal = record.get("host_activation")
+    if (
+        record.get("deployment_mode") != "supervisor"
+        or not isinstance(journal, dict)
+        or not isinstance(journal.get("previous_version"), str)
+    ):
+        raise RuntimeError("No verified supervisor host activation can be rolled back")
+    prior_rollback = journal.get("rollback")
+    restore_operation = None
+    restore_parent = None
+    if isinstance(prior_rollback, dict):
+        nested_restore = prior_rollback.get("restore_operation")
+        if (
+            prior_rollback.get("state") in {"restoring_current_host", "needs_attention"}
+            and isinstance(nested_restore, dict)
+        ):
+            restore_operation = nested_restore
+            restore_parent = prior_rollback
+        elif (
+            isinstance(prior_rollback.get("restore_of"), str)
+            and prior_rollback.get("operation_id")
+            == prior_rollback.get("restore_of") + ":restore-current"
+        ):
+            restore_operation = prior_rollback
+    if (
+        isinstance(restore_operation, dict)
+        and restore_operation.get("state")
+        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        and restore_operation.get("code_only") is True
+        and restore_operation.get("version") == journal.get("version")
+        and isinstance(restore_operation.get("operation_id"), str)
+        and isinstance(restore_operation.get("restore_of"), str)
+    ):
+        restored_version = restore_operation["version"]
+        expected_api_version = restore_operation.get("expected_api_version")
+        prior_status = restore_operation.get("prior_status")
+        selected = current_release_version()
+        if (
+            not isinstance(expected_api_version, str)
+            or not isinstance(prior_status, dict)
+            or prior_status.get("api_version") != expected_api_version
+            or selected not in {restored_version, journal.get("previous_version")}
+        ):
+            raise RuntimeError("Interrupted rollback restoration journal is invalid")
+        release, _ = runtime_release(restored_version)
+        readback = _switch_supervisor_host(
+            restored_version,
+            release=release,
+            expected_api_version=expected_api_version,
+            prior_status=prior_status,
+            journal=restore_operation,
+            journal_container=journal,
+            record=record,
+        )
+        restore_operation["state"] = "complete"
+        restore_operation["readback"] = readback
+        if restore_parent is not None:
+            restore_parent["state"] = "failed_current_restored"
+            restore_parent["restored_readback"] = readback
+            restore_parent["restore_operation"] = restore_operation
+            journal["rollback"] = restore_parent
+        else:
+            journal["rollback"] = restore_operation
+        journal["state"] = "complete"
+        record["host_active"] = restored_version
+        _save_host_activation(record, journal)
+        return {
+            "status": "host_current_restored_after_failed_rollback",
+            "operation_id": restore_operation["operation_id"],
+            "version": restored_version,
+            "previous_version": journal["previous_version"],
+            "code_only": True,
+            **readback,
+        }
+    if (
+        isinstance(prior_rollback, dict)
+        and prior_rollback.get("state")
+        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        and prior_rollback.get("code_only") is True
+        and prior_rollback.get("version") == journal.get("previous_version")
+        and isinstance(prior_rollback.get("operation_id"), str)
+    ):
+        rolled_back_version = prior_rollback["version"]
+        original_version = journal.get("version")
+        expected_api_version = prior_rollback.get("expected_api_version")
+        prior_status = prior_rollback.get("prior_status")
+        selected = current_release_version()
+        if (
+            not isinstance(original_version, str)
+            or not isinstance(expected_api_version, str)
+            or not isinstance(prior_status, dict)
+            or prior_status.get("api_version") != expected_api_version
+            or selected not in {rolled_back_version, original_version}
+        ):
+            raise RuntimeError("Interrupted host rollback journal or selected release is invalid")
+        release, _ = runtime_release(rolled_back_version)
+        readback = _switch_supervisor_host(
+            rolled_back_version,
+            release=release,
+            expected_api_version=expected_api_version,
+            prior_status=prior_status,
+            journal=prior_rollback,
+            journal_container=journal,
+            record=record,
+        )
+        prior_rollback["state"] = "complete"
+        prior_rollback["readback"] = readback
+        journal["rollback"] = prior_rollback
+        journal["state"] = "rolled_back"
+        record["host_active"] = rolled_back_version
+        _save_host_activation(record, journal)
+        return {
+            "status": "host_rolled_back",
+            "operation_id": prior_rollback["operation_id"],
+            "version": rolled_back_version,
+            "previous_version": original_version,
+            "code_only": True,
+            **readback,
+        }
+    if (
+        isinstance(prior_rollback, dict)
+        and prior_rollback.get("state") == "complete"
+        and journal.get("state") in {"complete", "rolled_back"}
+        and record.get("host_active") == prior_rollback.get("version")
+    ):
+        rolled_back_version = prior_rollback["version"]
+        identity = host_connection(allow_stale=True)
+        service_identity = supervisor_service_identity()
+        if (
+            current_release_version() != rolled_back_version
+            or identity is None
+            or identity.get("version") != rolled_back_version
+            or service_identity["main_pid"] != identity.get("pid")
+        ):
+            raise RuntimeError(
+                "Completed host rollback no longer matches current process identity"
+            )
+        health, status = read_supervisor_health()
+        snapshot = host_status_snapshot(status)
+        if (
+            health.get("status") != "ok"
+            or health.get("commit") != rolled_back_version
+            or health.get("recovery_version") != rolled_back_version
+            or snapshot["api_version"]
+            != prior_rollback.get("expected_api_version")
+        ):
+            raise RuntimeError("Completed host rollback readback is no longer current")
+        if journal.get("state") != "rolled_back":
+            journal["state"] = "rolled_back"
+            _save_host_activation(record, journal)
+        saved_readback = prior_rollback.get("readback")
+        if not isinstance(saved_readback, dict):
+            raise RuntimeError("Completed host rollback lost its readback receipt")
+        return {
+            "status": "host_rolled_back",
+            "operation_id": prior_rollback["operation_id"],
+            "version": rolled_back_version,
+            "previous_version": prior_rollback["previous_version"],
+            "code_only": True,
+            **saved_readback,
+        }
+    if (
+        journal.get("state") != "complete"
+        or journal.get("version") != record.get("host_active")
+    ):
+        raise RuntimeError("No verified supervisor host activation can be rolled back")
+    current_version = journal["version"]
+    previous_version = journal["previous_version"]
+    release, _ = runtime_release(previous_version)
+    manifest = json.loads((release / "nebula-runtime.json").read_text())
+    service_identity = supervisor_service_identity()
+    current_identity = host_connection()
+    if (
+        current_identity is None
+        or current_identity.get("version") != current_version
+        or current_release_version() != current_version
+        or service_identity["main_pid"] != current_identity.get("pid")
+    ):
+        raise RuntimeError("Current supervisor does not match its recorded activation")
+    health, status = read_supervisor_health()
+    if health.get("status") != "ok" or health.get("commit") != current_version:
+        raise RuntimeError(
+            "Current supervisor health is not verified for code rollback"
+        )
+    require_host_schema_compatibility(manifest, health)
+    before = host_status_snapshot(status)
+    operation_id = uuid4().hex
+    operation = {
+        "operation_id": operation_id,
+        "state": "rolling_back",
+        "version": previous_version,
+        "previous_version": current_version,
+        "previous_release": str(CURRENT.resolve(strict=True)),
+        "expected_api_version": before["api_version"],
+        "prior_status": before,
+        "prior_process": {
+            "pid": current_identity["pid"],
+            "process_birth": current_identity["process_birth"],
+        },
+        "prior_service": service_identity,
+        "code_only": True,
+    }
+    journal["rollback"] = operation
+    _save_host_activation(record, journal)
+    try:
+        readback = _switch_supervisor_host(
+            previous_version,
+            release=release,
+            expected_api_version=before["api_version"],
+            prior_status=before,
+            journal=operation,
+            journal_container=journal,
+            record=record,
+        )
+    except Exception as error:
+        operation["state"] = "restoring_current_host"
+        operation["rollback_error"] = str(error)[:1000]
+        current_release, _ = runtime_release(current_version)
+        restore = {
+            "operation_id": operation["operation_id"] + ":restore-current",
+            "restore_of": operation["operation_id"],
+            "state": "rolling_back",
+            "version": current_version,
+            "previous_version": previous_version,
+            "expected_api_version": before["api_version"],
+            "prior_status": before,
+            "code_only": True,
+            "rollback_error": operation["rollback_error"],
+        }
+        operation["restore_operation"] = restore
+        journal["rollback"] = operation
+        _save_host_activation(record, journal)
+        try:
+            restored = _switch_supervisor_host(
+                current_version,
+                release=current_release,
+                expected_api_version=before["api_version"],
+                prior_status=before,
+                journal=restore,
+                journal_container=journal,
+                record=record,
+            )
+        except Exception as restore_error:
+            operation["state"] = "needs_attention"
+            operation["restore_error"] = str(restore_error)[:1000]
+            journal["rollback"] = operation
+            _save_host_activation(record, journal)
+            raise RuntimeError(
+                "Code-only host rollback failed and restoring current code could not be verified; database and worker state were preserved"
+            ) from restore_error
+        operation["state"] = "failed_current_restored"
+        operation["restored_readback"] = restored
+        journal["rollback"] = operation
+        journal["state"] = "complete"
+        record["host_active"] = current_version
+        _save_host_activation(record, journal)
+        raise RuntimeError(
+            f"Code-only host rollback failed; restored {current_version} without changing database or worker state: {error}"
+        ) from error
+    operation["state"] = "complete"
+    operation["readback"] = readback
+    journal["state"] = "rolled_back"
+    journal["rollback"] = operation
+    record["host_active"] = previous_version
+    _save_host_activation(record, journal)
+    return {
+        "status": "host_rolled_back",
+        "operation_id": operation["operation_id"],
+        "version": previous_version,
+        "previous_version": current_version,
+        "code_only": True,
+        **readback,
+    }
+
+
 def edge(action: str) -> None:
     if action not in {"start", "stop"}:
         raise ValueError("unsupported edge action")
@@ -1780,6 +2841,7 @@ def staged_deployer(record: dict) -> StagedDeployer:
         post=deployment_post,
         save=lambda value: atomic_json(STATE, value),
         verify=runtime_release,
+        activate_host=lambda version: activate_supervisor_host(record, version),
     )
 
 
@@ -1858,6 +2920,8 @@ def main() -> int:
             "prepare",
             "promote",
             "rollback",
+            "activate-host",
+            "rollback-host",
             "offline-rollback",
             "adopt-supervisor",
             "bootstrap",

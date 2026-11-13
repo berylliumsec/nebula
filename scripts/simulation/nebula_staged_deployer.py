@@ -16,6 +16,7 @@ class StagedDeployer:
         post: Callable,
         save: Callable,
         verify: Callable,
+        activate_host: Callable[[str], dict] | None = None,
     ):
         self.record, self.get, self.post, self.save, self.verify = (
             record,
@@ -24,6 +25,7 @@ class StagedDeployer:
             save,
             verify,
         )
+        self.activate_host = activate_host
 
     def _journal(self, action: str, version: str) -> dict:
         journal = self.record.get("runtime_deployment")
@@ -110,6 +112,44 @@ class StagedDeployer:
                 "migrate",
                 {"version": version, "expected_revision": self._status()["revision"]},
             )
+        if self.activate_host is not None:
+            activation_entry = journal.get("host_activation")
+            if (
+                not isinstance(activation_entry, dict)
+                or activation_entry.get("version") != version
+            ):
+                prior_activation = self.record.get("host_activation")
+                operation_id = (
+                    prior_activation.get("operation_id")
+                    if isinstance(prior_activation, dict)
+                    and prior_activation.get("version") == version
+                    and isinstance(prior_activation.get("operation_id"), str)
+                    else journal["id"] + ":host-activation"
+                )
+                activation_entry = {
+                    "version": version,
+                    "operation_id": operation_id,
+                    "state": "requested",
+                }
+                journal["host_activation"] = activation_entry
+                self.save(self.record)
+            elif activation_entry.get("state") not in {"requested", "complete"}:
+                raise RuntimeError("Host activation journal needs reconciliation")
+            activation = self.activate_host(version)
+            if (
+                not isinstance(activation, dict)
+                or activation.get("status") != "host_activated"
+                or activation.get("version") != version
+                or activation.get("health_commit") != version
+                or activation.get("operation_id")
+                != activation_entry.get("operation_id")
+            ):
+                raise RuntimeError(
+                    "Host activation omitted its version-pinned verified readback"
+                )
+            activation_entry["state"] = "complete"
+            activation_entry["result"] = activation
+            self.save(self.record)
         api = self._operation(journal, "api", "prepare_api", {"version": version})
         self._operation(
             journal,
@@ -161,79 +201,378 @@ class StagedDeployer:
             raise RuntimeError(
                 "Deployment project inventory exceeds its reviewed bound"
             )
-        for project in projects:
+        sources = journal.setdefault("source_runtime_ids", [])
+        source_by_project = journal.setdefault("source_runtime_by_project", {})
+        source_fence_by_project = journal.setdefault("source_fencing_by_project", {})
+        target_by_project = journal.setdefault("target_runtime_by_project", {})
+        pinned = []
+
+        def project_rows(value):
+            return value.get("projects", [])
+
+        def owner_ids(value):
+            return {
+                item.get("runtime_id")
+                for item in project_rows(value)
+                if item.get("runtime_id")
+            }
+
+        def verified_target(project, target_id, expected_fence):
             if (
-                not project.get("runtime_id")
-                or project.get("runtime_version") == version
+                project is None
+                or project.get("phase") != "verified"
+                or project.get("target_version") != version
+                or project.get("fencing_token", 0) <= expected_fence
             ):
-                continue
-            project_id = project["project_id"]
-            sources = journal.setdefault("source_runtime_ids", [])
-            if project["runtime_id"] not in sources:
-                sources.append(project["runtime_id"])
-                self.save(self.record)
-            project_key = hashlib.sha256(project_id.encode()).hexdigest()
-            worker = self._operation(
-                journal,
-                "worker/" + project_key,
-                "prepare_execution",
-                {"version": version},
+                return False
+            return (
+                project.get("runtime_id") == target_id
+                and project.get("runtime_version") == version
+            ) or (
+                project.get("runtime_id") is None
+                and project.get("runtime_version") is None
             )
-            self._operation(
-                journal,
-                "handoff/" + project_key,
-                "handoff",
-                {
-                    "project_id": project_id,
-                    "target_runtime_id": worker["runtime_id"],
-                },
-            )
-        status = self._status()
-        pending, pinned = [], []
-        for project in status.get("projects", []):
-            if (
-                not project.get("runtime_id")
-                or project.get("runtime_version") == version
-            ):
-                continue
-            if project.get("blockers") and not project.get("admission_held", True):
-                pinned.append(project)
-            else:
-                pending.append(project)
-        self.record["active"] = version
-        if pending:
+
+        def waiting(value, pending, pinned_rows):
+            self.record["active"] = version
+            journal["waiting_for_handoffs"] = {
+                "pending": pending,
+                "pinned": pinned_rows,
+            }
             self.save(self.record)
             return {
                 "status": "waiting_for_handoffs",
                 "commit": version,
                 "pending": pending,
-                "pinned": pinned,
+                "pinned": pinned_rows,
+                "deployment": value,
             }
-        owners = {project.get("runtime_id") for project in status.get("projects", [])}
-        cleanup = []
-        for runtime_id in journal.get("source_runtime_ids", []):
-            if runtime_id in owners:
-                continue
+
+        def retire_ownerless(runtime_id, value):
+            if runtime_id in owner_ids(value):
+                return None, value
             key = hashlib.sha256(runtime_id.encode()).hexdigest()
+            result = self._operation(
+                journal, "retire/" + key, "retire", {"runtime_id": runtime_id}
+            )
+            if result.get("runtime_id") != runtime_id:
+                raise RuntimeError("Retirement receipt named a different runtime")
+            fresh = self._status()
+            if runtime_id in owner_ids(fresh):
+                raise RuntimeError(
+                    "The retired runtime still owns a project in fresh deployment status"
+                )
+            return result, fresh
+
+        # Resolve transfers that completed before an interrupted deployer turn.
+        # A verified owner transfer is the only point at which its exact old
+        # runtime can be retired safely.
+        for project_id, source_id in list(source_by_project.items()):
+            status = self._status()
+            project = next(
+                (
+                    row
+                    for row in project_rows(status)
+                    if row.get("project_id") == project_id
+                ),
+                None,
+            )
+            target_id = target_by_project.get(project_id)
+            if project is None or target_id is None:
+                continue
+            expected_fence = source_fence_by_project.get(project_id)
+            if expected_fence is None:
+                return waiting(
+                    status,
+                    [
+                        {
+                            "project_id": project_id,
+                            "detail": "Missing journaled source fence",
+                        }
+                    ],
+                    pinned,
+                )
+            source_id = source_by_project[project_id]
+            if project.get("runtime_id") == source_id:
+                continue
+            if project.get("runtime_id") not in (target_id, None):
+                return waiting(
+                    status,
+                    [
+                        {
+                            **project,
+                            "detail": "Project owner changed during handoff reconciliation",
+                        }
+                    ],
+                    pinned,
+                )
+            if not verified_target(project, target_id, expected_fence):
+                return waiting(
+                    status,
+                    [
+                        {
+                            **project,
+                            "detail": "Target ownership is not yet durably verified; source retained",
+                        }
+                    ],
+                    pinned,
+                )
+            if source_id not in owner_ids(status):
+                try:
+                    _, status = retire_ownerless(source_id, status)
+                except (RuntimeError, OSError) as error:
+                    return waiting(
+                        status,
+                        [{"runtime_id": source_id, "detail": str(error)[:1000]}],
+                        pinned,
+                    )
+            else:
+                return waiting(
+                    status,
+                    [
+                        {
+                            "project_id": project_id,
+                            "runtime_id": source_id,
+                            "detail": "Source still owns another project; retain it and reconcile before preparing another target",
+                        }
+                    ],
+                    pinned,
+                )
+
+        # Move one project at a time. The next target is not prepared until the
+        # current source has become ownerless, retired, and disappeared from
+        # fresh ownership status.
+        for original in projects:
+            project_id = original.get("project_id")
+            if not project_id:
+                continue
+            status = self._status()
+            project = next(
+                (
+                    row
+                    for row in project_rows(status)
+                    if row.get("project_id") == project_id
+                ),
+                None,
+            )
+            if project is None or not project.get("runtime_id"):
+                continue
+            if project.get("runtime_version") == version:
+                if project.get("phase") not in (None, "verified"):
+                    return waiting(
+                        status,
+                        [
+                            {
+                                **project,
+                                "detail": "Target handoff is still in progress; source retained",
+                            }
+                        ],
+                        pinned,
+                    )
+                continue
+
+            if project.get("blockers") and not project.get("admission_held", True):
+                pinned.append(project)
+                continue
+            # Another in-flight handoff owns the project's transition. Do not
+            # prepare a competing target or change its immutable operation.
+            if project.get("phase") not in (None, "verified"):
+                return waiting(
+                    status,
+                    [
+                        {
+                            **project,
+                            "detail": "A different or unfinished handoff must be reconciled first",
+                        }
+                    ],
+                    pinned,
+                )
+
+            source_id = project["runtime_id"]
+            source_projects = [
+                row
+                for row in project_rows(status)
+                if row.get("runtime_id") == source_id
+            ]
+            if len(source_projects) > 1:
+                pinned.append(
+                    {
+                        **project,
+                        "deployment_blocker": "Source runtime serves multiple projects and cannot be retired after one handoff",
+                    }
+                )
+                continue
+            saved_source = source_by_project.get(project_id)
+            if saved_source and saved_source != source_id:
+                return waiting(
+                    status,
+                    [
+                        {
+                            **project,
+                            "detail": "Project owner changed since this deployment journaled its source",
+                        }
+                    ],
+                    pinned,
+                )
+            if not saved_source:
+                source_by_project[project_id] = source_id
+                source_fence_by_project[project_id] = project.get("fencing_token", 0)
+                if source_id not in sources:
+                    sources.append(source_id)
+                self.save(self.record)
+
+            project_key = hashlib.sha256(project_id.encode()).hexdigest()
+            target_id = target_by_project.get(project_id)
             try:
+                if target_id is None:
+                    worker = self._operation(
+                        journal,
+                        "worker/" + project_key,
+                        "prepare_execution",
+                        {"version": version},
+                    )
+                    target_id = worker.get("runtime_id")
+                    if not target_id:
+                        raise RuntimeError("Prepared execution omitted its runtime ID")
+                    target_by_project[project_id] = target_id
+                    self.save(self.record)
                 self._operation(
-                    journal, "retire/" + key, "retire", {"runtime_id": runtime_id}
+                    journal,
+                    "handoff/" + project_key,
+                    "handoff",
+                    {"project_id": project_id, "target_runtime_id": target_id},
                 )
             except (RuntimeError, OSError) as error:
-                cleanup.append({"runtime_id": runtime_id, "detail": str(error)[:1000]})
+                step = journal["steps"].get("handoff/" + project_key, {})
+                receipt = step.get("receipt", {})
+                status = self._status()
+                current = next(
+                    (
+                        row
+                        for row in project_rows(status)
+                        if row.get("project_id") == project_id
+                    ),
+                    None,
+                )
+                expected_fence = source_fence_by_project[project_id]
+                if target_id and verified_target(current, target_id, expected_fence):
+                    journal.setdefault("reconciled_handoffs", {})[project_id] = {
+                        "operation_id": step.get("operation_id"),
+                        "runtime_id": target_id,
+                        "fencing_token": current["fencing_token"],
+                        "source_runtime_id": source_id,
+                    }
+                    self.save(self.record)
+                else:
+                    if receipt.get("state") != "failed":
+                        return waiting(
+                            status,
+                            [{"project_id": project_id, "detail": str(error)[:1000]}],
+                            pinned,
+                        )
+
+                    # A definite failed operation leaves no transferred owner.
+                    # A prepared target is retired only after fresh status proves
+                    # no project owns it; otherwise preserve it and stop.
+                    if target_id and target_id not in owner_ids(status):
+                        target_key = hashlib.sha256(target_id.encode()).hexdigest()
+                        try:
+                            retired = self._operation(
+                                journal,
+                                "retire-unused-target/" + target_key,
+                                "retire",
+                                {"runtime_id": target_id},
+                            )
+                            if retired.get("runtime_id") != target_id:
+                                raise RuntimeError(
+                                    "Unused-target retirement named a different runtime"
+                                )
+                            status = self._status()
+                            if target_id in owner_ids(status):
+                                raise RuntimeError(
+                                    "Unused target acquired a project before retirement was verified"
+                                )
+                        except (RuntimeError, OSError) as retire_error:
+                            return waiting(
+                                status,
+                                [
+                                    {
+                                        "project_id": project_id,
+                                        "runtime_id": target_id,
+                                        "detail": str(retire_error)[:1000],
+                                    }
+                                ],
+                                pinned,
+                            )
+                    pinned.append({**project, "deployment_blocker": str(error)[:1000]})
+                    continue
+
+            status = self._status()
+            transferred = next(
+                (
+                    row
+                    for row in project_rows(status)
+                    if row.get("project_id") == project_id
+                ),
+                None,
+            )
+            expected_fence = source_fence_by_project[project_id]
+            if not verified_target(transferred, target_id, expected_fence):
+                return waiting(
+                    status,
+                    [
+                        {
+                            **(transferred or {"project_id": project_id}),
+                            "detail": "Waiting for verified target ownership and a newer fencing token",
+                        }
+                    ],
+                    pinned,
+                )
+
+            if source_id in owner_ids(status):
+                return waiting(
+                    status,
+                    [
+                        {
+                            "project_id": project_id,
+                            "runtime_id": source_id,
+                            "detail": "Source runtime still owns a project; retain it before preparing another target",
+                        }
+                    ],
+                    pinned,
+                )
+            try:
+                _, status = retire_ownerless(source_id, status)
+            except (RuntimeError, OSError) as error:
+                return waiting(
+                    status,
+                    [
+                        {
+                            "project_id": project_id,
+                            "runtime_id": source_id,
+                            "detail": str(error)[:1000],
+                        }
+                    ],
+                    pinned,
+                )
+
+        status = self._status()
+        remaining = [
+            project
+            for project in project_rows(status)
+            if project.get("runtime_id") and project.get("runtime_version") != version
+        ]
+        self.record["active"] = version
+        if remaining or pinned:
+            return waiting(status, remaining, pinned)
+
         journal["state"] = "complete"
-        journal["cleanup_blockers"] = cleanup
+        journal.pop("waiting_for_handoffs", None)
         self.record.update(
             previous=journal.get("previous"), pending=None, promoting=None
         )
         self.save(self.record)
         return {
-            "status": "promoted_cleanup_incomplete"
-            if cleanup
-            else "promoted_with_pinned_projects"
-            if pinned
-            else "promoted",
+            "status": "promoted",
             "commit": version,
-            "pinned": pinned,
-            "cleanup_blockers": cleanup,
         }
