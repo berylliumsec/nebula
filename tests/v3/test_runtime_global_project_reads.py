@@ -7,6 +7,8 @@ from nebula.v3.database import ProjectOwnershipRow, RuntimeCommandRow
 from nebula.v3.domain import (
     ChatMessage,
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     WorkItem,
     WorkUpdate,
@@ -50,6 +52,15 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
         )
     )
     await reads.store.create(
+        ChatTurn(
+            engagement_id=child.id,
+            session_id=chat.id,
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.INTERRUPTED,
+        )
+    )
+    await reads.store.create(
         ChatMessage(
             engagement_id=child.id,
             session_id=chat.id,
@@ -59,9 +70,7 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
         )
     )
 
-    work = await reads.client.get(
-        f"/api/v1/engagements/{child.id}/work", headers=AUTH
-    )
+    work = await reads.client.get(f"/api/v1/engagements/{child.id}/work", headers=AUTH)
     assert work.status_code == 200, work.text
     assert [item["id"] for item in work.json()] == [child_item.id]
 
@@ -94,6 +103,23 @@ async def test_ownerless_child_work_and_chat_reads_stay_project_scoped(reads):
         headers={**AUTH, "If-None-Match": activity.headers["etag"]},
     )
     assert unchanged.status_code == 304
+
+    for _ in range(2):
+        await reads.store.create(
+            ChatTurn(
+                engagement_id=child.id,
+                session_id=chat.id,
+                provider_profile_id="provider",
+                model="model",
+                status=ChatTurnStatus.QUEUED,
+            )
+        )
+    duplicate_turns = await reads.client.get(
+        "/api/v1/chat/session-activity",
+        params={"engagement_id": child.id},
+        headers=AUTH,
+    )
+    assert duplicate_turns.status_code == 409
 
     search = await reads.client.get(
         f"/api/v1/chat/projects/{child.id}/search",

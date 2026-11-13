@@ -147,7 +147,15 @@ def mount_global_project_reads(
             headers = await pending_engagement_turn_headers(
                 database, engagement_id, statuses=_UNFINISHED_TURN_STATUSES
             )
-        pending = {header.session_id: header for header in headers}
+        pending = {}
+        for header in headers:
+            if header.status == ChatTurnStatus.INTERRUPTED.value and not (
+                header.recovery_required or header.automatic_retry_pending
+            ):
+                continue
+            if header.session_id in pending:
+                raise HTTPException(409, "chat session has multiple active turns")
+            pending[header.session_id] = header
         sessions: list[ChatSession] = []
         offset = 0
         while page := await store.list_entities(
@@ -178,11 +186,7 @@ def mount_global_project_reads(
                 {
                     "session_id": session.id,
                     "state": (
-                        "idle"
-                        if turn is None
-                        else "waiting"
-                        if waiting
-                        else "working"
+                        "idle" if turn is None else "waiting" if waiting else "working"
                     ),
                     "turn_id": turn.id if turn else None,
                 }
@@ -216,11 +220,15 @@ def mount_global_project_reads(
                     visible_chat.id == EntityRow.chat_session_id,
                     and_(
                         func.coalesce(
-                            visible_chat.payload["metadata"]["control_assistant"].as_boolean(),
+                            visible_chat.payload["metadata"][
+                                "control_assistant"
+                            ].as_boolean(),
                             False,
                         ).is_(False),
                         func.coalesce(
-                            visible_chat.payload["metadata"]["temporary_assistant"].as_boolean(),
+                            visible_chat.payload["metadata"][
+                                "temporary_assistant"
+                            ].as_boolean(),
                             False,
                         ).is_(False),
                         func.coalesce(

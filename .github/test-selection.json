@@ -1,13 +1,13 @@
 {
-  "change_digest": "cfb16bd3b88677de91cf81e666c1adac7eb9b0faf54fc0e93a963e5f57a90c35",
+  "change_digest": "f6a0cc6a6a9ab7e6dd897db03d7b152bf6bf4d32b79921df949c07aed5ef558a",
   "reviewed_by": "Codex",
-  "reason": "Project execution workers are now admitted only for an exact project's open chat or accepted chat-start command. Explicit goal-conversation creation is a chat start because it creates a durable ChatSession before the first turn. The selection covers encrypted legacy goal-command recovery, five exact child lanes, direct session creation and retirement serialization, parent-versus-child isolation, close-trigger retirement, all-lane holds, recovery, and migration 0048.",
+  "reason": "Project execution workers are admitted only for an exact project open chat or accepted chat-start command. Explicit goal-conversation creation is a start because it creates a durable ChatSession before the first turn. Cold project-scoped work and chat read views are served from Core SQL, retaining browsing without worker admission. The selection covers vault-backed legacy goal recovery, five exact child lanes, direct session creation and retirement serialization, parent-child isolation, close-trigger retirement, all-lane holds, recovery, ownerless reads, and migration 0048.",
   "exclusions": "No UI, frontend, native, or Playwright code changed. The operator explicitly requested no local tests or LAN test; those gates were not run. CI runs only these focused Python cases, including PostgreSQL migration coverage. No provider traffic, simulation deployment, DB backup, Butler action, or NVMe operation is part of this PR.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 52,
+    "python": 54,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -34,7 +34,9 @@
     "tests/v3/test_runtime_auto_recovery.py::test_expired_owner_with_only_archived_chat_is_not_recovered",
     "tests/v3/test_runtime_auto_recovery.py::test_source_without_positive_os_absence_is_preserved",
     "tests/v3/test_runtime_auto_recovery.py::test_unexpired_dead_owner_is_not_reconciled",
-    "tests/v3/test_runtime_auto_recovery.py::test_recovery_initiation_is_bounded_to_sixteen_projects"
+    "tests/v3/test_runtime_auto_recovery.py::test_recovery_initiation_is_bounded_to_sixteen_projects",
+    "tests/v3/test_runtime_global_project_reads.py::test_ownerless_child_work_and_chat_reads_stay_project_scoped",
+    "tests/v3/test_runtime_global_project_reads.py::test_ownerless_project_chat_search_excludes_other_projects_and_private_chats"
   ],
   "frontend": [],
   "native": [],
