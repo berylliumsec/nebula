@@ -73,6 +73,23 @@ handoffs remain journaled and stop further target preparation until reconciled.
 The accepted runtime manifest hashes every executable/UI asset and uses the
 build's reviewed compatibility metadata, including its migration-tree digest.
 
+Foreground host activation is separately guarded from API and execution worker
+promotion. `activate-host` targets only the exact accepted pending candidate
+after its durable stage and migration receipts are verified. It records a
+stable operation ID before stopping the foreground unit, atomically switches
+`current`, and restarts only `nebula-core.service`. It requires
+`KillMode=process` and `ExitType=main`, then checks the exact host commit and
+recovery asset version while requiring the API release and existing project
+runtime IDs, versions, and fencing tokens to remain unchanged. Old worker
+processes and durable owner state are retained as the new supervisor reconciles
+them. Normal `promote` uses this same guarded activation after migration and
+before API preparation. Interrupted retries read the durable host journal and
+verify live identity without repeating a completed restart. A failed exact
+readback triggers a code-only switch back to the recorded immutable host
+release; no database snapshot or file restore is part of activation or
+`rollback-host`. An unverified rollback remains in `needs_attention` for
+operator reconciliation.
+
 Supervisor-mode `rollback` selects compatible retained code and preserves the
 current database and files. It never restores a snapshot or stops pinned work.
 Projects with unsupported resources keep their current runtime; a third execution

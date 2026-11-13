@@ -113,21 +113,42 @@ class StagedDeployer:
                 {"version": version, "expected_revision": self._status()["revision"]},
             )
         if self.activate_host is not None:
+            activation_entry = journal.get("host_activation")
+            if (
+                not isinstance(activation_entry, dict)
+                or activation_entry.get("version") != version
+            ):
+                prior_activation = self.record.get("host_activation")
+                operation_id = (
+                    prior_activation.get("operation_id")
+                    if isinstance(prior_activation, dict)
+                    and prior_activation.get("version") == version
+                    and isinstance(prior_activation.get("operation_id"), str)
+                    else journal["id"] + ":host-activation"
+                )
+                activation_entry = {
+                    "version": version,
+                    "operation_id": operation_id,
+                    "state": "requested",
+                }
+                journal["host_activation"] = activation_entry
+                self.save(self.record)
+            elif activation_entry.get("state") not in {"requested", "complete"}:
+                raise RuntimeError("Host activation journal needs reconciliation")
             activation = self.activate_host(version)
             if (
                 not isinstance(activation, dict)
                 or activation.get("status") != "host_activated"
                 or activation.get("version") != version
                 or activation.get("health_commit") != version
-                or not activation.get("operation_id")
+                or activation.get("operation_id")
+                != activation_entry.get("operation_id")
             ):
                 raise RuntimeError(
                     "Host activation omitted its version-pinned verified readback"
                 )
-            journal["host_activation"] = {
-                "version": version,
-                "result": activation,
-            }
+            activation_entry["state"] = "complete"
+            activation_entry["result"] = activation
             self.save(self.record)
         api = self._operation(journal, "api", "prepare_api", {"version": version})
         self._operation(
