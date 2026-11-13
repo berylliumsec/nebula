@@ -83,7 +83,7 @@ def test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_ap
         "status": "ok",
         "database": "ok",
         "commit": commit,
-        "recovery_version": commit,
+        "recovery_version": package_version,
     }
     monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (health, status))
     baseline = deployer.host_status_snapshot(status, allow_degraded=True)
@@ -117,6 +117,67 @@ def test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_ap
             allow_degraded_workers=True,
             degraded_baseline=True,
             timeout=0,
+        )
+
+
+def test_needs_attention_activation_retries_only_from_verified_previous_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous, candidate = "b" * 40, "c" * 40
+    package_version = "3.0.0-beta.3+80d43d956ba75c35"
+    prior = deployer.host_status_snapshot(_status())
+    journal = {
+        "state": "needs_attention",
+        "previous_version": previous,
+        "prior_status": prior,
+    }
+    record = {"host_activation": journal}
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "state.json")
+    monkeypatch.setattr(deployer, "current_release_version", lambda: previous)
+    monkeypatch.setattr(deployer, "unit_state", lambda _unit: "active")
+    monkeypatch.setattr(deployer, "runtime_package_version", lambda _version: package_version)
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **_kwargs: {"package_version": package_version, "pid": 123},
+    )
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: {})
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
+    )
+    health = {
+        "status": "ok",
+        "database": "ok",
+        "commit": previous,
+        "recovery_version": package_version,
+    }
+    monkeypatch.setattr(
+        deployer,
+        "read_supervisor_health",
+        lambda: (health, _status()),
+    )
+
+    deployer.reconcile_attention_activation(
+        record, journal, version=candidate, allow_degraded_workers=False
+    )
+
+    assert journal["state"] == "prepared"
+    assert journal["needs_attention_reconciled"] == {
+        "previous_version": previous,
+        "recovery_version": package_version,
+        "retained_project_owners": 1,
+    }
+    assert deployer.json.loads((tmp_path / "state.json").read_text())[
+        "host_activation"
+    ] == journal
+
+    journal["state"] = "needs_attention"
+    monkeypatch.setattr(
+        deployer, "current_release_version", lambda: "d" * 40
+    )
+    with pytest.raises(RuntimeError, match="recorded active previous host"):
+        deployer.reconcile_attention_activation(
+            record, journal, version=candidate, allow_degraded_workers=False
         )
 
 
@@ -235,7 +296,7 @@ def test_package_version_discovery_binds_to_release_and_authenticated_health(
         "status": "ok",
         "database": "ok",
         "commit": commit,
-        "recovery_version": commit,
+        "recovery_version": package_version,
     }
     status = {
         "protocol": "nebula.runtime/v1",
@@ -251,10 +312,17 @@ def test_package_version_discovery_binds_to_release_and_authenticated_health(
     )
 
     assert readback["health_commit"] == commit
+    assert readback["recovery_version"] == package_version
     assert readback["runtime_pid"] == 434411
     assert readback["runtime_process_birth"] == process_birth
     health["commit"] = "a" * 40
-    with pytest.raises(RuntimeError, match="exact accepted release"):
+    with pytest.raises(RuntimeError, match="Core and recovery identities"):
+        deployer.wait_supervisor_host_ready(
+            commit, expected_api_version=api_version, prior_status=None, timeout=1
+        )
+    health["commit"] = commit
+    health["recovery_version"] = "unselected-recovery"
+    with pytest.raises(RuntimeError, match="Core and recovery identities"):
         deployer.wait_supervisor_host_ready(
             commit, expected_api_version=api_version, prior_status=None, timeout=1
         )
@@ -664,7 +732,12 @@ def test_host_rollback_retry_returns_the_recorded_success(
         deployer,
         "read_supervisor_health",
         lambda: (
-            {"status": "ok", "commit": previous, "recovery_version": previous},
+            {
+                "status": "ok",
+                "database": "ok",
+                "commit": previous,
+                "recovery_version": "3.0.0-beta.3+80d43d956ba75c35",
+            },
             {
                 "protocol": "nebula.runtime/v1",
                 "health": "ready",
