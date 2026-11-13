@@ -818,6 +818,8 @@ async def test_legacy_queued_goal_creates_admit_their_exact_five_projects(batch)
         async with batch.database.session() as session:
             command = await session.get(RuntimeCommandRow, receipt.command_id)
             assert command.chat_start is False
+            owner = await session.get(ProjectOwnershipRow, child.id)
+            owner.retirement_requested = True
     async with batch.database.session() as session:
         api_host = await session.get(DeploymentHostRow, "host")
         api_host.api_runtime_id = "synthetic-api"
@@ -844,7 +846,21 @@ async def test_legacy_queued_goal_creates_admit_their_exact_five_projects(batch)
         default_version="supported",
     )
     await automatic.reconcile()
-
+    async with batch.database.session() as session:
+        held_commands = list(
+            await session.scalars(
+                select(RuntimeCommandRow).where(
+                    RuntimeCommandRow.project_id.in_([child.id for child in children])
+                )
+            )
+        )
+        assert len(held_commands) == 5
+        assert all(not command.chat_start for command in held_commands)
+    assert prepared == []
+    async with batch.database.session() as session:
+        for child in children:
+            (await session.get(ProjectOwnershipRow, child.id)).retirement_requested = False
+    await automatic.reconcile()
     async with batch.database.session() as session:
         for index, child in enumerate(children):
             owner = await session.get(ProjectOwnershipRow, child.id)

@@ -1,5 +1,5 @@
 {
-  "change_digest": "01f99cbebfd6782693e2764db44990495c8fff0f2c5cda3c7ef8496209a6e745",
+  "change_digest": "10c7dc422148a78d4fc2b98c5bdf199a169fdad3910523c6f96507e6ccb73967",
   "reviewed_by": "Codex",
   "reason": "Project execution workers are now admitted only for an exact project's open chat or accepted chat-start command. Explicit goal-conversation creation is a chat start because it creates a durable ChatSession before the first turn. The selection covers encrypted legacy goal-command recovery, five exact child lanes, direct session creation and retirement serialization, parent-versus-child isolation, close-trigger retirement, all-lane holds, recovery, and migration 0048.",
   "exclusions": "No UI, frontend, native, or Playwright code changed. The operator explicitly requested no local tests or LAN test; those gates were not run. CI runs only these focused Python cases, including PostgreSQL migration coverage. No provider traffic, simulation deployment, DB backup, Butler action, or NVMe operation is part of this PR.",

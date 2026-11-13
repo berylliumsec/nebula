@@ -133,7 +133,7 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
                     actor_id="synthetic",
                     idempotency_key="prior",
                     sequence=1,
-                    name="chat.submit",
+                    name="http.invoke/v1",
                     lane="work",
                     payload={"content": "keep"},
                     payload_hash="a" * 64,
@@ -158,6 +158,23 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
         migrate(engine, "0047_runtime_work_batches")
         migrate(engine, "0048_chat_scoped_admission")
         inspector = inspect(engine)
+        migrated_commands = Table(
+            "runtime_commands", MetaData(), autoload_with=engine
+        )
+        chat_start_column = next(
+            column
+            for column in inspector.get_columns("runtime_commands")
+            if column["name"] == "chat_start"
+        )
+        assert chat_start_column["nullable"] is False
+        assert chat_start_column["default"] is not None
+        with engine.connect() as connection:
+            legacy_command = connection.execute(
+                select(migrated_commands).where(
+                    migrated_commands.c.id == "prior-command"
+                )
+            ).mappings().one()
+        assert legacy_command["chat_start"] is False
         table = RuntimeWorkBatchProjectRow.__table__
         assert inspector.get_pk_constraint(table.name)["constrained_columns"] == [
             "batch_id",

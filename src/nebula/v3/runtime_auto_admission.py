@@ -43,6 +43,8 @@ class RuntimeAutoAdmission:
         self._legacy_chat_cursor: tuple[str, int, str] | None = None
         self._legacy_chat_scan_complete = False
         self._legacy_chat_vault = None
+        self._legacy_chat_retry: dict[str, tuple[str, str, dict, int]] = {}
+        self._legacy_chat_next_scan_at = 0.0
         self._recovery_blocked: dict[str, tuple[str, int, int]] = {}
         self._recovery_cursor: str | None = None
         self._serial = asyncio.Lock()
@@ -387,8 +389,17 @@ class RuntimeAutoAdmission:
         """Promote queued legacy HTTP requests after authenticating their intent."""
         host = getattr(self.supervisor, "host", None)
         data_root = getattr(host, "data_root", None)
-        if data_root is None or self._legacy_chat_scan_complete:
+        if data_root is None:
             return
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if self._legacy_chat_scan_complete and not self._legacy_chat_retry:
+            if now < self._legacy_chat_next_scan_at:
+                return
+            # New API workers persist chat_start on acceptance. This bounded
+            # rescan also catches a legacy ingress row committed after startup.
+            self._legacy_chat_cursor = None
+            self._legacy_chat_scan_complete = False
         from .runtime_chat_acceptance import HTTP_INVOKE_COMMAND
         from .runtime_delivery import HttpIntent, RuntimeDelivery
         from .runtime_vault import RuntimeVault
@@ -399,7 +410,35 @@ class RuntimeAutoAdmission:
         if self._legacy_chat_vault is None:
             self._legacy_chat_vault = RuntimeVault(vault_root)
         vault = self._legacy_chat_vault
+        candidate_by_id: dict[str, tuple[str, str, dict, int]] = {}
+        scan_exhausted = False
         async with self.supervisor.coordinator.database.session() as session:
+            if self._legacy_chat_retry:
+                retry_rows = await session.scalars(
+                    select(RuntimeCommandRow).where(
+                        RuntimeCommandRow.id.in_(list(self._legacy_chat_retry))
+                    )
+                )
+                current_retries = {row.id: row for row in retry_rows}
+                for command_id, prior in list(self._legacy_chat_retry.items()):
+                    row = current_retries.get(command_id)
+                    if (
+                        row is None
+                        or row.name != HTTP_INVOKE_COMMAND
+                        or row.state != "queued"
+                        or row.chat_start
+                        or (row.project_id, row.actor_id, row.payload)
+                        != (prior[0], prior[1], prior[2])
+                    ):
+                        self._legacy_chat_retry.pop(command_id, None)
+                        continue
+                    candidate_by_id[command_id] = (
+                        row.project_id,
+                        row.actor_id,
+                        row.payload,
+                        row.sequence,
+                    )
+
             query = select(
                 RuntimeCommandRow.id,
                 RuntimeCommandRow.project_id,
@@ -436,19 +475,26 @@ class RuntimeAutoAdmission:
                     ).limit(16)
                 )
             )
-            self._legacy_chat_cursor = (
-                (
+            if candidates:
+                self._legacy_chat_cursor = (
                     candidates[-1].project_id,
                     candidates[-1].sequence,
                     candidates[-1].id,
                 )
-                if candidates
-                else None
-            )
-            self._legacy_chat_scan_complete = not candidates
-        for row in candidates:
+            else:
+                scan_exhausted = True
+            for row in candidates:
+                candidate_by_id[row.id] = (
+                    row.project_id,
+                    row.actor_id,
+                    row.payload,
+                    row.sequence,
+                )
+
+        for command_id, (project_id, actor_id, payload, _sequence) in list(
+            candidate_by_id.items()
+        ):
             try:
-                payload = row.payload
                 if (
                     not isinstance(payload, dict)
                     or set(payload) != {"format", "request_reference"}
@@ -459,24 +505,41 @@ class RuntimeAutoAdmission:
                 raw = await asyncio.to_thread(
                     vault.get,
                     payload["request_reference"],
-                    purpose=RuntimeDelivery._intent_purpose(row.actor_id),
+                    purpose=RuntimeDelivery._intent_purpose(actor_id),
                 )
                 intent = HttpIntent.model_validate_json(raw)
                 if (
                     not RuntimeDelivery.is_chat_start_intent(intent)
                     or intent.path != "/api/v1/chat/goal-conversations"
                 ):
+                    self._legacy_chat_retry.pop(command_id, None)
                     continue
                 request_body = json.loads(intent.body())
-                if request_body.get("engagement_id") != row.project_id:
+                if request_body.get("engagement_id") != project_id:
+                    self._legacy_chat_retry.pop(command_id, None)
                     continue
-                await self.supervisor.coordinator.coordination.mark_queued_chat_start(
-                    project_id=row.project_id,
-                    command_id=row.id,
-                    actor_id=row.actor_id,
+                marked = await self.supervisor.coordinator.coordination.mark_queued_chat_start(
+                    project_id=project_id,
+                    command_id=command_id,
+                    actor_id=actor_id,
                     payload=payload,
                 )
+                if marked:
+                    self._legacy_chat_retry.pop(command_id, None)
+                else:
+                    self._legacy_chat_retry[command_id] = (
+                        project_id,
+                        actor_id,
+                        payload,
+                        _sequence,
+                    )
             except Exception as error:
+                self._legacy_chat_retry[command_id] = (
+                    project_id,
+                    actor_id,
+                    payload,
+                    _sequence,
+                )
                 record_caught_exception(
                     "runtime",
                     "runtime.legacy_chat_start.unavailable",
@@ -484,8 +547,11 @@ class RuntimeAutoAdmission:
                     "could not be verified.",
                     error,
                     stage="admission",
-                    metadata={"entity_id": row.id, "kind": "runtime-command"},
+                    metadata={"entity_id": command_id, "kind": "runtime-command"},
                 )
+        if scan_exhausted and not self._legacy_chat_retry:
+            self._legacy_chat_scan_complete = True
+            self._legacy_chat_next_scan_at = loop.time() + 30.0
 
     async def _recover_expired(self):
         supervisor = self.supervisor
