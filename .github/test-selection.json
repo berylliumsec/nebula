@@ -1,13 +1,13 @@
 {
-  "change_digest": "e41a8410241fc5009bc24ea177f2f5923bd0f98742cdfd64cc6c9bdf4833315d",
+  "change_digest": "0ef11d3f3c0e402dc9536fbc8558db278b031110a9861659740fa0890b29e636",
   "reviewed_by": "Codex",
-  "reason": "Project execution workers are admitted only for an exact project open chat or accepted chat-start command. Explicit goal-conversation creation is a start because it creates a durable ChatSession before the first turn. Cold project-scoped work and chat read views are served from Core SQL, retaining browsing without worker admission. The selection covers vault-backed legacy goal recovery, five exact child lanes, direct session creation and retirement serialization, parent-child isolation, close-trigger retirement, all-lane holds, recovery, ownerless reads, and migration 0048.",
-  "exclusions": "No UI, frontend, native, or Playwright code changed. The operator explicitly requested no local tests or LAN test; those gates were not run. CI runs only these focused Python cases, including PostgreSQL migration coverage. No provider traffic, simulation deployment, DB backup, Butler action, or NVMe operation is part of this PR.",
+  "reason": "Exact-project chat admission and retirement, ownerless SQL read parity, and audited CI-run acceptance for deployment. Selection covers legacy vault-backed goal admission, parent-child isolation, retirement and recovery, ownerless work/chat reads, migration 0048, and CI receipt identity, job selection, and failure rejection.",
+  "exclusions": "No local tests or LAN workflow were run per operator instruction; CI executes the focused selected cases. No DB backups, provider traffic, simulation deployment, Butler action, or NVMe operation is part of this PR. The deployer requires immutable CI acceptance for the exact candidate and selected jobs.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 54,
+    "python": 58,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -36,7 +36,11 @@
     "tests/v3/test_runtime_auto_recovery.py::test_unexpired_dead_owner_is_not_reconciled",
     "tests/v3/test_runtime_auto_recovery.py::test_recovery_initiation_is_bounded_to_sixteen_projects",
     "tests/v3/test_runtime_global_project_reads.py::test_ownerless_child_work_and_chat_reads_stay_project_scoped",
-    "tests/v3/test_runtime_global_project_reads.py::test_ownerless_project_chat_search_excludes_other_projects_and_private_chats"
+    "tests/v3/test_runtime_global_project_reads.py::test_ownerless_project_chat_search_excludes_other_projects_and_private_chats",
+    "tests/test_deployer_protocol.py::test_ci_acceptance_matches_exact_run_and_selection",
+    "tests/test_deployer_protocol.py::test_selected_ci_jobs_reject_playwright_not_run_on_push",
+    "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_pull_request_runs",
+    "tests/test_deployer_protocol.py::test_ci_acceptance_rejects_a_failed_selected_job"
   ],
   "frontend": [],
   "native": [],
