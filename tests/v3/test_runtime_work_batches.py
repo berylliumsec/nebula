@@ -752,13 +752,16 @@ async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_c
     batch,
 ):
     parent = await batch.store.create(Engagement(id="parent-chat-project", name="Parent"))
-    child = await batch.store.create(
-        Engagement(
-            id="child-chat-project",
-            name="Child",
-            parent_engagement_id=parent.id,
+    children = [
+        await batch.store.create(
+            Engagement(
+                id=f"child-chat-project-{index}",
+                name=f"Child {index}",
+                parent_engagement_id=parent.id,
+            )
         )
-    )
+        for index in range(5)
+    ]
     await batch.store.create(
         ChatSession(
             engagement_id=parent.id,
@@ -767,15 +770,16 @@ async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_c
             model="synthetic-model",
         )
     )
-    await batch.store.create(
-        ChatSession(
-            engagement_id=child.id,
-            title="Archived child history",
-            provider_profile_id="synthetic-provider",
-            model="synthetic-model",
-            metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+    for child in children:
+        await batch.store.create(
+            ChatSession(
+                engagement_id=child.id,
+                title="Archived child history",
+                provider_profile_id="synthetic-provider",
+                model="synthetic-model",
+                metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+            )
         )
-    )
     async with batch.database.session() as session:
         session.add_all(
             [
@@ -787,7 +791,7 @@ async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_c
                     command_sequence=0,
                     admission_requested=False,
                 )
-                for project_id in (parent.id, child.id)
+                for project_id in (parent.id, *(child.id for child in children))
             ]
         )
         host = await session.get(DeploymentHostRow, "host")
@@ -825,24 +829,27 @@ async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_c
     await automatic.reconcile()
     async with batch.database.session() as session:
         parent_owner = await session.get(ProjectOwnershipRow, parent.id)
-        child_owner = await session.get(ProjectOwnershipRow, child.id)
         assert parent_owner.runtime_id == calls[0]
-        assert child_owner.runtime_id is None
+        for child in children:
+            child_owner = await session.get(ProjectOwnershipRow, child.id)
+            assert child_owner.runtime_id is None
     assert len(calls) == 1
 
-    await batch.coordination.submit(
-        project_id=child.id,
-        actor_id="operator",
-        idempotency_key="child-chat-start",
-        name="http.invoke/v1",
-        payload={"format": 1, "request_reference": "synthetic-chat"},
-        chat_start=True,
-    )
+    for child in children:
+        await batch.coordination.submit(
+            project_id=child.id,
+            actor_id="operator",
+            idempotency_key=f"child-chat-start-{child.id}",
+            name="http.invoke/v1",
+            payload={"format": 1, "request_reference": "synthetic-chat"},
+            chat_start=True,
+        )
     await automatic.reconcile()
     async with batch.database.session() as session:
-        child_owner = await session.get(ProjectOwnershipRow, child.id)
-        assert child_owner.runtime_id == calls[1]
-    assert len(calls) == 2
+        for index, child in enumerate(children, start=1):
+            child_owner = await session.get(ProjectOwnershipRow, child.id)
+            assert child_owner.runtime_id == calls[index]
+    assert len(calls) == 6
 
 
 async def test_auto_admission_retires_worker_after_exact_project_chat_archives(batch):

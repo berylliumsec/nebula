@@ -1,22 +1,24 @@
 {
-  "change_digest": "b41b528a1c4729915aa4c8b28f3092f71821a23e33fa694a034c00fce76f8f08",
+  "change_digest": "b62d737b2412de74a0acd5ea80ae1f28f6785034d9a7fbb6585f569e1fb58468",
   "reviewed_by": "Codex",
-  "reason": "Project execution workers are now admitted only for an exact project's open chat or accepted chat-start command. The selected Python cases cover first-chat intent recognition, parent-versus-child isolation, chat-close retirement, retirement holds across command lanes, expired-owner recovery, and the additive migration.",
+  "reason": "Project execution workers are now admitted only for an exact project's open chat or accepted chat-start command. Explicit goal-conversation creation is a chat start because it creates a durable ChatSession before the first turn. The selected Python cases cover chat-creation intents, five child lanes, parent-versus-child isolation, chat-close retirement, retirement holds across command lanes, expired-owner recovery, and migration 0048.",
   "exclusions": "No UI, frontend, native, or Playwright code changed. The operator explicitly requested no local tests or LAN test; those gates were not run. CI runs only these focused Python cases, including PostgreSQL migration coverage. No provider traffic, simulation deployment, DB backup, Butler action, or NVMe operation is part of this PR.",
   "python_browser": false,
   "python_node": false,
   "checks": [],
   "expected_tests": {
-    "python": 46,
+    "python": 52,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
     "tests/v3/test_work_batch_contracts.py::test_project_admission_requires_an_exact_chat_start",
+    "tests/v3/test_work_batch_contracts.py::test_session_creation_routes_are_explicit_chat_start_intents",
     "tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata",
     "tests/v3/test_runtime_global_api.py::test_project_reference_does_not_request_chat_admission",
     "tests/v3/test_runtime_global_api.py::test_actual_chat_request_marks_only_its_command_for_admission",
+    "tests/v3/test_runtime_global_api.py::test_goal_conversation_creation_marks_exact_project_chat_start",
     "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
     "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
     "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",

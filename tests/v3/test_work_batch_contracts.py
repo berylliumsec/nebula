@@ -41,6 +41,42 @@ pytestmark = pytest.mark.anyio
 STATES = ("waiting", "barrier", "complete", "failed")
 
 
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        (
+            "/api/v1/chat/goal-conversations",
+            {"engagement_id": "project", "objective": "Start a goal chat"},
+        ),
+        (
+            "/api/v1/chat/control-assistant/session",
+            {"engagement_id": "project", "backend": "provider"},
+        ),
+        (
+            "/api/v1/chat/temporary-sessions",
+            {"engagement_id": "project", "backend": "provider"},
+        ),
+        (
+            "/api/v1/chat/sessions/existing-chat/fork",
+            {"through_message_id": "message"},
+        ),
+    ],
+)
+def test_session_creation_routes_are_explicit_chat_start_intents(path, body):
+    import json
+
+    from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
+
+    intent = HttpIntent.capture(
+        "POST",
+        path,
+        b"",
+        [(b"content-type", b"application/json")],
+        json.dumps(body).encode(),
+    )
+    assert RuntimeDelivery.is_chat_start_intent(intent)
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

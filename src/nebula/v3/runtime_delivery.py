@@ -184,17 +184,42 @@ class RuntimeDelivery:
         """Recognize a real chat submission or explicit resume from its route."""
         if intent.method != "POST":
             return False
+
+        try:
+            body = json.loads(intent.body()) if intent.body() else {}
+        except (ValueError, UnicodeError, RecursionError):
+            body = None
+
         if intent.path == "/api/v1/chat/completions":
-            try:
-                body = json.loads(intent.body())
-            except (ValueError, UnicodeError, RecursionError):
-                return False
             return (
                 isinstance(body, dict)
                 and isinstance(body.get("messages"), list)
                 and bool(body["messages"])
                 and body.get("backend", "provider") in {"provider", "harness"}
             )
+        if intent.path == "/api/v1/chat/goal-conversations":
+            # Goal conversations create a durable ChatSession before the first
+            # turn, so this request itself is the start of an open chat.
+            return (
+                isinstance(body, dict)
+                and isinstance(body.get("engagement_id"), str)
+                and bool(body["engagement_id"])
+                and isinstance(body.get("objective"), str)
+                and bool(body["objective"])
+            )
+        if intent.path in {
+            "/api/v1/chat/control-assistant/session",
+            "/api/v1/chat/temporary-sessions",
+        }:
+            # These routes create (or reserve) an open project chat session.
+            return (
+                isinstance(body, dict)
+                and isinstance(body.get("engagement_id"), str)
+                and bool(body["engagement_id"])
+            )
+        if re.fullmatch(r"/api/v1/chat/sessions/[^/]{1,200}/fork", intent.path):
+            # Forking an archived conversation starts a new exact-project chat.
+            return True
         if re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path):
             return intent.body() in (b"", b"{}")
         return False
