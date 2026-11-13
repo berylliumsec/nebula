@@ -1,4 +1,4 @@
-"""First-use project admission and cold API recovery under the stable host."""
+"""Chat-scoped project admission and cold API recovery under the stable host."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from .database import (
     DeploymentHostRow,
     DeploymentOperationRow,
     DeploymentReceiptRow,
+    EntityRow,
     MemoryBudgetPolicyRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
@@ -37,6 +38,7 @@ class RuntimeAutoAdmission:
         self.task = None
         self._pending: dict[str, str] = {}
         self._blocked: dict[str, tuple[int, int | None]] = {}
+        self._retirement_cursor: str | None = None
         self._recovery_blocked: dict[str, tuple[str, int, int]] = {}
         self._recovery_cursor: str | None = None
         self._serial = asyncio.Lock()
@@ -78,6 +80,7 @@ class RuntimeAutoAdmission:
                 if host is None or host.shutdown_requested:
                     return
                 policy = await session.get(MemoryBudgetPolicyRow, "host")
+                now_ms = await supervisor.coordinator.coordination._clock_ms(session)
                 signature = (host.revision, policy.revision if policy else None)
                 version = host.target_version or self.default_version
                 promotion = await session.scalar(
@@ -100,6 +103,44 @@ class RuntimeAutoAdmission:
                     if promotion
                     else self.default_version
                 )
+                open_chat = (
+                    select(EntityRow.id)
+                    .where(
+                        EntityRow.kind == "chat_sessions",
+                        EntityRow.engagement_id
+                        == ProjectOwnershipRow.project_id,
+                        EntityRow.payload["metadata"]["archived_at"]
+                        .as_string()
+                        .is_(None),
+                    )
+                    .exists()
+                )
+                pending_chat_start = (
+                    select(RuntimeCommandRow.id)
+                    .where(
+                        RuntimeCommandRow.project_id
+                        == ProjectOwnershipRow.project_id,
+                        RuntimeCommandRow.chat_start.is_(True),
+                        RuntimeCommandRow.state.in_(
+                            ("queued", "running", "uncertain")
+                        ),
+                    )
+                    .exists()
+                )
+                legacy_chat_start = (
+                    select(RuntimeCommandRow.id)
+                    .where(
+                        RuntimeCommandRow.project_id
+                        == ProjectOwnershipRow.project_id,
+                        RuntimeCommandRow.name.in_(
+                            ("chat.accept/v1", "chat.resume/v1")
+                        ),
+                        RuntimeCommandRow.state.in_(
+                            ("queued", "running", "uncertain")
+                        ),
+                    )
+                    .exists()
+                )
                 demands = list(
                     await session.scalars(
                         select(ProjectOwnershipRow)
@@ -108,22 +149,51 @@ class RuntimeAutoAdmission:
                         # expired or uncertain owners still have a runtime ID.
                         .where(
                             ProjectOwnershipRow.runtime_id.is_(None),
-                            or_(
-                                ProjectOwnershipRow.admission_requested.is_(True),
-                                select(RuntimeCommandRow.id)
-                                .where(
-                                    RuntimeCommandRow.project_id
-                                    == ProjectOwnershipRow.project_id,
-                                    RuntimeCommandRow.name != "work.batch.barrier/v1",
-                                    RuntimeCommandRow.state.in_(
-                                        ("queued", "running", "uncertain")
-                                    ),
-                                )
-                                .exists(),
-                            ),
+                            or_(open_chat, pending_chat_start, legacy_chat_start),
                         )
                         .limit(16)
                     )
+                )
+                idle_query = select(
+                    ProjectOwnershipRow.project_id,
+                    ProjectOwnershipRow.runtime_id,
+                ).where(
+                    ProjectOwnershipRow.runtime_id.is_not(None),
+                    ProjectOwnershipRow.lease_expires_at_ms > now_ms,
+                    ~open_chat,
+                    ~pending_chat_start,
+                    ~legacy_chat_start,
+                )
+                if self._retirement_cursor is not None:
+                    idle_query = idle_query.where(
+                        ProjectOwnershipRow.project_id > self._retirement_cursor
+                    )
+                idle_owners = list(
+                    await session.execute(
+                        idle_query.order_by(ProjectOwnershipRow.project_id).limit(8)
+                    )
+                )
+                if not idle_owners and self._retirement_cursor is not None:
+                    self._retirement_cursor = None
+                    idle_owners = list(
+                        await session.execute(
+                            select(
+                                ProjectOwnershipRow.project_id,
+                                ProjectOwnershipRow.runtime_id,
+                            )
+                            .where(
+                                ProjectOwnershipRow.runtime_id.is_not(None),
+                                ProjectOwnershipRow.lease_expires_at_ms > now_ms,
+                                ~open_chat,
+                                ~pending_chat_start,
+                                ~legacy_chat_start,
+                            )
+                            .order_by(ProjectOwnershipRow.project_id)
+                            .limit(8)
+                        )
+                    )
+                self._retirement_cursor = (
+                    idle_owners[-1][0] if idle_owners else None
                 )
                 api_id = host.api_runtime_id
             if api_id is None and self._blocked.get("api") != signature:
@@ -145,6 +215,30 @@ class RuntimeAutoAdmission:
                     )
                 return
             await self._recover_expired()
+            runtime_host = getattr(supervisor, "host", None)
+            if runtime_host is not None:
+                reconcile_retirements = getattr(
+                    runtime_host, "reconcile_idle_project_retirements", None
+                )
+                if reconcile_retirements is not None:
+                    await reconcile_retirements()
+                retire_idle = getattr(runtime_host, "retire_idle_project", None)
+                if retire_idle is not None:
+                    for project_id, _runtime_id in idle_owners:
+                        try:
+                            await retire_idle(project_id)
+                        except Exception as error:
+                            record_caught_exception(
+                                "runtime",
+                                "runtime.project_retirement.waiting",
+                                "An execution worker remains assigned until the project has no chat or work blockers.",
+                                error,
+                                stage="admission",
+                                metadata={
+                                    "entity_id": project_id,
+                                    "kind": "project",
+                                },
+                            )
             for demand in demands:
                 if self._blocked.get(demand.project_id) == signature:
                     continue
@@ -264,9 +358,45 @@ class RuntimeAutoAdmission:
                 return
             target_version = host.target_version
             now = await supervisor.coordinator.coordination._clock_ms(session)
+            open_chat = (
+                select(EntityRow.id)
+                .where(
+                    EntityRow.kind == "chat_sessions",
+                    EntityRow.engagement_id == ProjectOwnershipRow.project_id,
+                    EntityRow.payload["metadata"]["archived_at"]
+                    .as_string()
+                    .is_(None),
+                )
+                .exists()
+            )
+            pending_chat_start = (
+                select(RuntimeCommandRow.id)
+                .where(
+                    RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
+                    RuntimeCommandRow.chat_start.is_(True),
+                    RuntimeCommandRow.state.in_(
+                        ("queued", "running", "uncertain")
+                    ),
+                )
+                .exists()
+            )
+            legacy_chat_start = (
+                select(RuntimeCommandRow.id)
+                .where(
+                    RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
+                    RuntimeCommandRow.name.in_(
+                        ("chat.accept/v1", "chat.resume/v1")
+                    ),
+                    RuntimeCommandRow.state.in_(
+                        ("queued", "running", "uncertain")
+                    ),
+                )
+                .exists()
+            )
             query = select(ProjectOwnershipRow).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
                 ProjectOwnershipRow.lease_expires_at_ms <= now,
+                or_(open_chat, pending_chat_start, legacy_chat_start),
             )
             if self._recovery_cursor is not None:
                 query = query.where(

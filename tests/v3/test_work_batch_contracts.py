@@ -115,7 +115,7 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
                 connection.execute(select(ownership)).mappings().one()
             )
         migrate(engine, "0047_runtime_work_batches")
-        migrate(engine, "0047_runtime_work_batches")
+        migrate(engine, "0048_chat_scoped_admission")
         inspector = inspect(engine)
         table = RuntimeWorkBatchProjectRow.__table__
         assert inspector.get_pk_constraint(table.name)["constrained_columns"] == [
@@ -156,7 +156,7 @@ def test_additive_migration_keeps_prior_data_and_enforces_metadata(location):
             current_owner = (
                 connection.execute(select(migrated_ownership)).mappings().one()
             )
-            assert current_owner["admission_requested"] is True
+            assert current_owner["admission_requested"] is False
             assert all(
                 current_owner[key] == value for key, value in previous_owner.items()
             )
@@ -442,8 +442,11 @@ async def test_execution_scope_cannot_read_or_write_another_project_batch(
         )
 
 
-@pytest.mark.parametrize("demand", ["read-routing", "legacy-normal-command"])
-async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
+@pytest.mark.parametrize(
+    "demand",
+    ["read-routing", "legacy-normal-command", "chat-start", "legacy-typed-chat"],
+)
+async def test_project_admission_requires_an_exact_chat_start(
     admission, tmp_path, demand
 ):
     value = admission
@@ -500,10 +503,8 @@ async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
         async with database.session() as session:
             assert (
                 await session.get(ProjectOwnershipRow, "one")
-            ).admission_requested is True
-    else:
-        # An old API may persist ordinary work without knowing the new demand
-        # flag. The queue itself must still admit its project, unlike a barrier.
+            ).admission_requested is False
+    elif demand in {"legacy-normal-command", "chat-start", "legacy-typed-chat"}:
         async with database.session() as session:
             session.add(
                 RuntimeCommandRow(
@@ -512,12 +513,17 @@ async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
                     actor_id="synthetic",
                     idempotency_key="ordinary-request",
                     sequence=2,
-                    name="http.invoke/v1",
+                    name=(
+                        "chat.accept/v1"
+                        if demand == "legacy-typed-chat"
+                        else "http.invoke/v1"
+                    ),
                     lane="work",
                     payload={"format": 1, "request_reference": "synthetic-unexecuted"},
                     payload_hash="b" * 64,
                     accepted_at_ms=2,
                     state="queued",
+                    chat_start=demand == "chat-start",
                 )
             )
             (await session.get(ProjectOwnershipRow, "one")).command_sequence = 2
@@ -526,10 +532,13 @@ async def test_metadata_counter_and_barrier_wait_for_real_execution_demand(
                 await session.get(ProjectOwnershipRow, "one")
             ).admission_requested is False
     await value.automatic.reconcile()
-    assert len(value.calls) == 1 and set(value.leases) == {"one"}
-    assert value.leases["one"].fencing_token == 8
+    should_admit = demand in {"chat-start", "legacy-typed-chat"}
+    assert len(value.calls) == int(should_admit)
+    assert set(value.leases) == ({"one"} if should_admit else set())
+    if should_admit:
+        assert value.leases["one"].fencing_token == 8
     await value.automatic.reconcile()
-    assert len(value.calls) == 1
+    assert len(value.calls) == int(should_admit)
     async with database.session() as session:
         assert (
             await session.get(RuntimeCommandRow, "metadata-barrier")

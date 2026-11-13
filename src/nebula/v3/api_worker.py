@@ -412,16 +412,16 @@ def create_api_worker(
         project_id = await project_for(intent)
         chat_acceptance = False
         chat_resume = False
+        chat_start = delivery.is_chat_start_intent(intent)
         if (
             intent.method == "POST"
             and re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path)
-            and chat_resume_for is not None
         ):
-            chat_resume = await chat_resume_for(project_id)
+            if chat_start and chat_resume_for is not None:
+                chat_resume = await chat_resume_for(project_id)
         if (
             intent.method == "POST"
             and intent.path == "/api/v1/chat/completions"
-            and chat_acceptance_for is not None
         ):
             try:
                 chat_body = json.loads(intent.body())
@@ -433,7 +433,7 @@ def create_api_worker(
             except (ValueError, UnicodeError, RecursionError):
                 # diagnostic-expected: the stream hint is optional; malformed bodies still reach normal request validation.
                 requested = False
-            if requested:
+            if requested and chat_acceptance_for is not None:
                 chat_acceptance = await chat_acceptance_for(project_id)
         receipt = await delivery.accept(
             intent,
@@ -443,6 +443,7 @@ def create_api_worker(
             lane=lane,
             chat_acceptance=chat_acceptance,
             chat_resume=chat_resume,
+            chat_start=chat_start,
         )
         del body, intent
         return await response_view(

@@ -14,6 +14,7 @@ from nebula.v3.database import (
     RuntimeProcessRow,
 )
 from nebula.v3.domain import (
+    ChatSession,
     ChatGoal,
     ChatSchedule,
     ChatTurn,
@@ -117,6 +118,14 @@ async def test_quiesced_and_fresh_projects_readmit_without_resetting_fences(admi
     await quiesce(value, lease)
     await reopen_sql(value)
     for project in ("one", "two"):
+        await value.store.create(
+            ChatSession(
+                engagement_id=project,
+                title="Open readmission chat " + project,
+                provider_profile_id="synthetic-provider",
+                model="synthetic-model",
+            )
+        )
         await value.coordinator.coordination.submit(
             project_id=project,
             actor_id="operator",
@@ -190,7 +199,7 @@ async def test_partial_shutdown_abort_keeps_unknown_worker_until_positive_retire
     stop_worker(value.host, lease.runtime_id)
     await value.coordinator.retired(proof)
     await value.automatic.reconcile()
-    assert value.leases["one"].fencing_token == lease.fencing_token + 1
+    assert not value.calls  # No open chat remains to justify another worker.
 
 
 @pytest.fixture

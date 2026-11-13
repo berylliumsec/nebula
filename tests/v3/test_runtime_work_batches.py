@@ -31,6 +31,7 @@ from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import (
+    ChatSession,
     Engagement,
     PairedDeviceSession,
     ScopePolicy,
@@ -689,7 +690,7 @@ async def test_new_host_loop_resumes_saved_sql_only_batch_without_browser(batch)
         await database.dispose()
 
 
-async def test_metadata_batch_and_admission_loop_never_prepare_until_actual_get(batch):
+async def test_metadata_batch_and_project_reads_never_admit_workers(batch):
     await batch.coordinator.stage(
         manifest("supported", features=[WORK_BATCH_FEATURE]),
         Path("/synthetic/releases/supported"),
@@ -741,10 +742,158 @@ async def test_metadata_batch_and_admission_loop_never_prepare_until_actual_get(
             }
         )
     await automatic.reconcile()
-    assert len(calls) == 1
+    assert calls == []
     async with batch.database.session() as session:
-        assert (await session.get(ProjectOwnershipRow, "one")).runtime_id == calls[0]
+        assert (await session.get(ProjectOwnershipRow, "one")).runtime_id is None
         assert (await session.get(ProjectOwnershipRow, "two")).runtime_id is None
+
+
+async def test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child(
+    batch,
+):
+    parent = await batch.store.create(Engagement(id="parent-chat-project", name="Parent"))
+    child = await batch.store.create(
+        Engagement(
+            id="child-chat-project",
+            name="Child",
+            parent_engagement_id=parent.id,
+        )
+    )
+    await batch.store.create(
+        ChatSession(
+            engagement_id=parent.id,
+            title="Parent conversation",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    await batch.store.create(
+        ChatSession(
+            engagement_id=child.id,
+            title="Archived child history",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+            metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+        )
+    )
+    async with batch.database.session() as session:
+        session.add_all(
+            [
+                ProjectOwnershipRow(
+                    project_id=project_id,
+                    runtime_id=None,
+                    fencing_token=0,
+                    lease_expires_at_ms=0,
+                    command_sequence=0,
+                    admission_requested=False,
+                )
+                for project_id in (parent.id, child.id)
+            ]
+        )
+        host = await session.get(DeploymentHostRow, "host")
+        if host is None:
+            host = DeploymentHostRow(
+                key="host",
+                revision=1,
+                target_version="supported",
+                shutdown_requested=False,
+                detail="Synthetic admission fixture",
+            )
+            session.add(host)
+        host.api_runtime_id = "synthetic-api"
+
+    calls = []
+
+    async def prepare(_version):
+        identity = f"chat-worker-{len(calls)}"
+        calls.append(identity)
+        await runtime(batch, identity)
+        return SimpleNamespace(runtime_id=identity)
+
+    async def attach(project_id, runtime_id):
+        return await batch.coordination.claim_project(project_id, runtime_id)
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        parent_owner = await session.get(ProjectOwnershipRow, parent.id)
+        child_owner = await session.get(ProjectOwnershipRow, child.id)
+        assert parent_owner.runtime_id == calls[0]
+        assert child_owner.runtime_id is None
+    assert len(calls) == 1
+
+    await batch.coordination.submit(
+        project_id=child.id,
+        actor_id="operator",
+        idempotency_key="child-chat-start",
+        name="http.invoke/v1",
+        payload={"format": 1, "request_reference": "synthetic-chat"},
+        chat_start=True,
+    )
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        child_owner = await session.get(ProjectOwnershipRow, child.id)
+        assert child_owner.runtime_id == calls[1]
+    assert len(calls) == 2
+
+
+async def test_auto_admission_retires_worker_after_exact_project_chat_archives(batch):
+    await runtime(batch, "open-chat-worker")
+    lease = await batch.coordination.claim_project("one", "open-chat-worker")
+    chat = await batch.store.create(
+        ChatSession(
+            engagement_id="one",
+            title="Conversation to close",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+
+    retired = []
+    reconciled = []
+
+    async def retire_idle_project(project_id):
+        retired.append(project_id)
+        return True
+
+    async def reconcile_idle_project_retirements():
+        reconciled.append(True)
+        return []
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            host=SimpleNamespace(
+                retire_idle_project=retire_idle_project,
+                reconcile_idle_project_retirements=reconcile_idle_project_retirements,
+            ),
+        ),
+        default_version="supported",
+    )
+    await automatic.reconcile()
+    assert retired == []
+
+    await batch.store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {"archived_at": "2026-11-13T00:00:00+00:00"}},
+        expected_revision=chat.revision,
+    )
+    await automatic.reconcile()
+    assert reconciled and retired == ["one"]
+    assert lease.runtime_id == "open-chat-worker"
 
 
 async def test_revoked_actor_cannot_apply_and_receipt_lookup_stays_actor_scoped(batch):

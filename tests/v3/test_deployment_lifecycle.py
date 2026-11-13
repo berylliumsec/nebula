@@ -11,6 +11,7 @@ import pytest
 
 from nebula.v3.database import (
     Database,
+    RuntimeCommandRow,
     RuntimeResourceRow,
     EntityRow,
     ProjectOwnershipRow,
@@ -181,8 +182,21 @@ async def test_project_retirement_uses_its_own_hold_and_releases_exact_owner(hos
         name="project.inspect",
         payload={},
     )
+    control = await coordinator.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="queued-control-command",
+        name="approval.decision",
+        payload={},
+        lane="control",
+    )
 
     assert await coordinator.request_project_retirement(lease) is True
+    for lane in (None, "work", "control"):
+        assert await coordinator.coordination.claim_next(lease, lane=lane) is None
+    async with coordinator.database.session() as session:
+        queued_control = await session.get(RuntimeCommandRow, control.command_id)
+        assert queued_control is not None and queued_control.state == "queued"
     checkpoint = await coordinator.quiesce_checkpoint(lease, local_blockers=[])
     assert checkpoint["project_id"] == "one"
     await coordinator.release_quiesced_project(lease, checkpoint=checkpoint)

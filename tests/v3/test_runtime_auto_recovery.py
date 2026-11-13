@@ -13,7 +13,7 @@ from nebula.v3.database import (
     RuntimeProcessRow,
     RuntimeRecoveryRow,
 )
-from nebula.v3.domain import Engagement
+from nebula.v3.domain import ChatSession, Engagement
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
 from nebula.v3.runtime_operations import DeploymentOperations, OperationRejected
 from tests.v3.test_deployment_lifecycle import host as host
@@ -84,6 +84,14 @@ class Management:
 async def recovery(host, monkeypatch):
     coordinator, store = host
     clock = [1_000_000]
+    await store.create(
+        ChatSession(
+            engagement_id="one",
+            title="Open recovery fixture",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
 
     async def now(_session):
         return clock[0]
@@ -198,6 +206,26 @@ async def test_expired_positive_dead_owner_initiates_promoted_target_version(rec
         assert owner.runtime_id == "source"
         assert owner.fencing_token == recovery.lease.fencing_token
         assert owner.lease_expires_at_ms == recovery.clock[0] - 1
+
+
+async def test_expired_owner_with_only_archived_chat_is_not_recovered(recovery):
+    (chat,) = await recovery.store.find_entities(
+        ChatSession, {}, engagement_id="one", limit=1
+    )
+    await recovery.store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {"archived_at": "2026-11-13T00:00:00+00:00"}},
+        expected_revision=chat.revision,
+    )
+
+    await recovery.automatic._recover_expired()
+
+    async with recovery.coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert owner.runtime_id == recovery.lease.runtime_id
+        assert owner.fencing_token == recovery.lease.fencing_token
+    assert recovery.management.calls == []
 
 
 async def test_recovery_keeps_source_version_without_a_promoted_target(recovery):
@@ -353,6 +381,14 @@ async def test_recovery_initiation_is_bounded_to_sixteen_projects(recovery):
         project_id = f"batch-{index:02}"
         await recovery.store.create(
             Engagement(id=project_id, name="Synthetic " + project_id)
+        )
+        await recovery.store.create(
+            ChatSession(
+                engagement_id=project_id,
+                title="Open recovery fixture " + project_id,
+                provider_profile_id="synthetic-provider",
+                model="synthetic-model",
+            )
         )
         async with recovery.coordinator.database.session() as session:
             session.add(

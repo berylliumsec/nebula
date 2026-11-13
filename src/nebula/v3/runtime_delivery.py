@@ -179,6 +179,26 @@ class RuntimeDelivery:
     def _frame_purpose(command_id: str, sequence: int) -> str:
         return f"delivery:{command_id}:{sequence}"
 
+    @staticmethod
+    def is_chat_start_intent(intent: HttpIntent) -> bool:
+        """Recognize a real chat submission or explicit resume from its route."""
+        if intent.method != "POST":
+            return False
+        if intent.path == "/api/v1/chat/completions":
+            try:
+                body = json.loads(intent.body())
+            except (ValueError, UnicodeError, RecursionError):
+                return False
+            return (
+                isinstance(body, dict)
+                and isinstance(body.get("messages"), list)
+                and bool(body["messages"])
+                and body.get("backend", "provider") in {"provider", "harness"}
+            )
+        if re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path):
+            return intent.body() in (b"", b"{}")
+        return False
+
     async def accept(
         self,
         intent: HttpIntent,
@@ -190,9 +210,12 @@ class RuntimeDelivery:
         expected_revision: int | None = None,
         chat_acceptance: bool = False,
         chat_resume: bool = False,
+        chat_start: bool = False,
     ) -> CommandReceipt:
         if chat_acceptance and chat_resume:
             raise ValueError("A request has one chat transport")
+        if chat_start and not self.is_chat_start_intent(intent):
+            raise ValueError("Chat admission requires a valid chat start or resume intent")
         if chat_resume and (
             intent.method != "POST"
             or not re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path)
@@ -227,6 +250,7 @@ class RuntimeDelivery:
             payload={"format": 1, "request_reference": reference},
             lane=lane,
             expected_revision=expected_revision,
+            chat_start=chat_start,
         )
 
     async def request(self, command: ClaimedCommand) -> tuple[HttpIntent, str]:
