@@ -1,45 +1,30 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Cold removal of Intruder and guided assessments; preserve browser primitives and neutral risk approval semantics. Focused backend, component, production LAN and knowledge sync coverage. Independent troubleshooting exposed existing async test stubs, graph evidence reads and approval races; focused graph checks and retained companion tests cover their narrow repairs. The real sidecar test exposed unawaited live proxy authorization; four sync/async proxy cases check authentication and revocation.",
-  "exclusions": "No full suites, deployment, physical devices, or external targets. Only two browser UI journeys are enabled across eight required profiles. One real headless capture/stop case uses staged Chromium and a pinned proxy; other Python cases use isolated Core and adapters. Native desktop execution is not claimed. Python 3.12 is selected in CI for mitmproxy 12 compatibility; local Core unit tests use 3.11 and the proxy uses 3.12.",
+  "reason": "Follow-up offensive-content sweep: neutral preview and editor/search copy, generic default command guidance, and removal of the obsolete browser-pentest-audit CI selector. Scope-refusal behavior and explicit selector handling stay covered.",
+  "exclusions": "No full suites. No browser APIs, controls, layout, state transitions, schemas or network execution changed. The altered Agents preview is not enabled by the live Workspace provider; component rendering verifies its copy. No production LAN or native run is required for this copy/metadata-only follow-up; the browser workflow matrix passed in PR #989. No deployment.",
   "python_versions": [
-    "3.12"
+    "3.11"
   ],
-  "python_browser": true,
+  "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 127,
-    "frontend": 52,
+    "python": 10,
+    "frontend": 11,
     "native": 0,
-    "playwright": 16
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_browser_research.py",
-    "tests/v3/test_policy.py",
-    "tests/v3/test_agent_security_tools.py",
-    "tests/v3/test_browser_automation.py",
-    "tests/v3/test_browser_engine.py",
-    "tests/v3/test_browserd.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_application_model.py::test_transaction_persistence_claim_history_and_acceptance",
-    "tests/v3/test_application_model.py::test_project_and_evidence_revision_isolation",
-    "tests/v3/test_product_knowledge.py::test_browser_harness_guidance_retains_tools_without_attack_recipes",
-    "tests/v3/test_agent_security_headless.py::test_real_headless_identity_captures_only_its_own_scoped_request",
-    "tests/v3/test_browser_host_proxy.py"
+    "tests/v3/test_harness_language_sweep.py",
+    "tests/v3/test_web_search.py::test_execute_refuses_a_scope_disclosure_before_any_egress",
+    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans",
+    "tests/test_playwright_impact.py::test_invalid_or_arbitrary_explicit_selection_is_rejected",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
   "frontend": [
-    "ui/src/components/BrowserResearchSuite.test.tsx",
-    "ui/src/components/SecurityBrowserWorkspacePanel.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/SecurityDashboard.test.tsx",
-    "ui/src/components/RepeaterWorkspace.test.tsx"
+    "ui/src/pages/AgentsPage.test.tsx"
   ],
   "native": [],
-  "playwright": [
-    "area:browser-harness"
-  ],
-  "change_digest": "fdb1ee63d1a5e2040d953aac9459c39777456a6f2466307e528b49a545109443",
-  "checks": []
+  "playwright": [],
+  "checks": [],
+  "change_digest": "2eea6bf0cd860fb9edc40ec17e57a4a6ffe57e72b4fe3dcca2f30a400a18ecdf"
 }

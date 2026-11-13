@@ -29,7 +29,7 @@ import { copySelectionText } from "../components/selection/selectionActions";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },
-  { name: "Recon specialist", detail: "Passive discovery and inventory", state: "complete", icon: ScanSearch, tools: "4 read-only tools" },
+  { name: "Discovery specialist", detail: "Passive discovery and inventory", state: "complete", icon: ScanSearch, tools: "4 read-only tools" },
   { name: "Network analyst", detail: "Service and exposure analysis", state: "waiting", icon: Network, tools: "1 approval pending" },
   { name: "Web analyst", detail: "Application and API review", state: "running", icon: Sparkles, tools: "2 bounded tools" },
   { name: "Vulnerability analyst", detail: "Deterministic advisory correlation", state: "queued", icon: GitBranch, tools: "Feed access only" },
@@ -215,7 +215,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
       <section className="mission-hero panel">
         <div>
           <span className="section-kicker"><span className="pulse-dot" /> Mission running</span>
-          <h2>External attack surface review</h2>
+          <h2>Project security review</h2>
           <p>Six specialists · 25 tasks</p>
         </div>
         <div className="mission-hero-progress">
