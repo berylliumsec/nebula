@@ -1,30 +1,27 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Follow-up offensive-content sweep: neutral preview and editor/search copy, generic default command guidance, and removal of the obsolete browser-pentest-audit CI selector. Scope-refusal behavior and explicit selector handling stay covered.",
-  "exclusions": "No full suites. No browser APIs, controls, layout, state transitions, schemas or network execution changed. The altered Agents preview is not enabled by the live Workspace provider; component rendering verifies its copy. No production LAN or native run is required for this copy/metadata-only follow-up; the browser workflow matrix passed in PR #989. No deployment.",
+  "reason": "Final harness sweep: replace inert Nmap approval examples with browser navigation and the current network_action risk. Verify the demo contract, local approval-fixture lifecycle, retained passive output parsing and bundled guidance digest.",
+  "exclusions": "No full suites. Changes are inert demo data, usage-recording fixtures and documentation; no runtime controls, layout, API, authentication, persistence or execution behavior changed. No new live Core or device-matrix claim: the usage recording was not re-recorded. Native and Playwright execution are not applicable to this fixture-only cleanup. No deployment.",
   "python_versions": [
     "3.11"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 10,
-    "frontend": 11,
+    "python": 2,
+    "frontend": 2,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_language_sweep.py",
-    "tests/v3/test_web_search.py::test_execute_refuses_a_scope_disclosure_before_any_egress",
-    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans",
-    "tests/test_playwright_impact.py::test_invalid_or_arbitrary_explicit_selection_is_rejected",
+    "tests/v3/test_web_search.py::test_nmap_observations_still_work_after_the_union_change",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
   "frontend": [
-    "ui/src/pages/AgentsPage.test.tsx"
+    "ui/src/data/demo.test.ts"
   ],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "2eea6bf0cd860fb9edc40ec17e57a4a6ffe57e72b4fe3dcca2f30a400a18ecdf"
+  "change_digest": "37f4e1fe6118590ef1bc9dcf80abd69bb29e8ff7fd84e93c0715cff6ef4330c1"
 }

@@ -25,7 +25,7 @@ same stable filename and removes Playwright's intermediate WebM files.
 | `04-browse-an-authorized-target-in-the-desktop-shell.mp4` | Open the authorized target and its runbook in isolated tabs | Desktop Browser, address normalization, project-isolated tabs |
 | `05-ask-the-local-assistant-with-cited-project-knowledge.mp4` | Ask for remediation priorities grounded in the rules of engagement | Assistant, local provider, knowledge retrieval, citations |
 | `06-capture-and-link-an-analyst-note.mp4` | Record and link a TLS retest plan | Notes, Markdown, asset links |
-| `07-review-and-approve-a-bounded-mission-action.mp4` | Review the exact service-detection request before approval | Missions, event replay, Activity, exact-request approval |
+| `07-review-and-approve-a-bounded-mission-action.mp4` | Review the exact browser-navigation request before approval | Missions, event replay, Activity, exact-request approval |
 | `08-add-and-inspect-an-in-scope-asset.mp4` | Add the authorized API hostname to project scope | Assets, classification, tags, inspector |
 | `09-preserve-immutable-evidence-with-provenance.mp4` | Store a TLS observation and review its recorded hash | Evidence upload, SHA-256, provenance, asset links |
 | `10-ingest-and-inspect-a-cited-knowledge-source.mp4` | Add the rules of engagement for bounded retrieval | Sources, ingestion, citations, retrieval safety |
