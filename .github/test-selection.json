@@ -1,24 +1,23 @@
 {
   "reviewed_by": "Claude",
-  "reason": "_produce_provider_turn's cleanup decided it still owned a failed turn when the turn's execution claim equalled the run's; after _stream_tool_turn had recorded FAILED and released the claim, both were None, so the cleanup rewrote FAILED and, if a 'Finish the answer' retry had already moved the turn to FINALIZING, failed the retry. PreparedChat now records a released claim and the cleanup skips a turn its run gave back. This also removes the flake in test_final_answer_retry_resumes_synthesis_through_admission (revision conflict 11/12). Selected: the throughput suite with the new deterministic regression test and the formerly flaky test, plus stream follow, admission cleanup and reconnection suites that cover the producer's terminal path.",
-  "exclusions": "test_native_hook_turn_ends.py, test_turn_outcome_history.py, test_chat_subagents.py and test_chat_tool_loop.py also exercise this path, but 34 of their cases fail identically on pristine origin/main and with this patch (same failure set; test_chat_tool_loop.py::test_batched_safe_reads_overlap_and_commit_in_provider_order is timing-flaky on both, 2 of 6 runs), so they are not selected. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (scratch Postgres Core on this branch: a final-answer failure retried at once through POST /chat/turns/{id}/resume completes; Stop and normal turns unchanged) is recorded in the PR, not executed by CI.",
+  "reason": "Core follow-up dispatch: ChatQueueService.step now awaits start_provider_turn, harness prepare_chat and start_chat_turn, which #939 made async; the storage alert path awaits ChatQueueService.get/exists/write and harness create_session. test_chat_queue.py covers provider and harness dispatch, sequential draining, model/effort picked after queueing, the reclaimed provider turn, the direct-send race and stuck claims (8 of its 24 tests failed on main from these defects and stale test calls). test_storage_integrations.py covers storage dispatch into the queue and the dashboard's queue status (9 of 11 failed on main because its enroll helper never awaited the request, which also hid the product defect); its new harness-source test covers create_session. The selected harness goal test steps the queue through a reviewed harness follow-up.",
+  "exclusions": "No UI, native or frontend code changed. Playwright area storage-integrations matches storage_integrations.py but is excluded: its real-Core fixture spawns a Core whose provider admission is held by this shared host's CPU pressure gate (load ~40 on 8 CPUs from parallel agents), so it cannot complete here, and real-core.spec.ts is not run on main. assistant-queue-core keeps its queue paused and never dispatches; assistant-queue-reconciliation and chat-provider-queue are mocked. The real-Core dispatch journey was checked instead on scratch Postgres Cores through the same queue API the UI uses (main: follow-up stuck at sending with a never-started turn; this branch: two follow-ups queued during a running response sent in order afterwards and the queue drained). Other suites that import the queue helpers (test_chat_decisions, test_chat_catchup, test_chat_polling_cost, the rest of test_harness_chat_goals) fail identically or only on main at 5ae5b88 for unrelated reasons (un-awaited fork_session in a test, un-awaited AsyncSession.scalar in chat_catchup.py, harness goal runtime switch preconditions).",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 53,
+    "python": 37,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_throughput.py",
-    "tests/v3/test_chat_stream_follow.py",
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_chat_reconnection.py"
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "c91556fb179de878d7d49ca9bb83c9201c2754266a04fd356498cf6c4c69dcf0"
+  "change_digest": "7e1a00a1edadb5fe6c3344d6c6abe11841681aed5b25f5550ed9207d3798ea25"
 }

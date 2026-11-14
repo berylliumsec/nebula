@@ -661,7 +661,7 @@ class ChatQueueService:
                 request.stream = True
                 request._queue_claim = claim
                 prepared = await self.chat.prepare_async(request)
-                self.chat.start_provider_turn(prepared)
+                await self.chat.start_provider_turn(prepared)
             else:
                 context = (
                     "\n\nNebula-selected context:\n"
@@ -675,7 +675,7 @@ class ChatQueueService:
                     if request.context_attachments
                     else ""
                 )
-                _, _, turn = self.harness.prepare_chat(
+                _, _, turn = await self.harness.prepare_chat(
                     engagement_id=request.engagement_id,
                     profile_id=request.harness_profile_id,
                     model=request.model,
@@ -707,7 +707,7 @@ class ChatQueueService:
                     control_assistant=request.control_assistant,
                     queue_claim=claim,
                 )
-                self.harness.start_chat_turn(turn.id)
+                await self.harness.start_chat_turn(turn.id)
         except (
             ConflictError
         ):  # diagnostic-expected: concurrent mutation wins and dispatch is paused
