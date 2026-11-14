@@ -82,6 +82,72 @@ def test_session_creation_routes_are_explicit_chat_start_intents(path, body):
     assert RuntimeDelivery.is_chat_start_intent(intent)
 
 
+@pytest.mark.parametrize(
+    "method,path,body,expected",
+    [
+        # The operator's Unarchive control reopens an exact-project chat.
+        (
+            "PATCH",
+            "/api/v1/chat-sessions/archived-chat",
+            {"archived": False, "expected_revision": 3},
+            True,
+        ),
+        ("PATCH", "/api/v1/chat-sessions/archived-chat", {"archived": False}, True),
+        # Closing, renaming or flagging a chat never demands a worker.
+        (
+            "PATCH",
+            "/api/v1/chat-sessions/open-chat",
+            {"archived": True, "expected_revision": 3},
+            False,
+        ),
+        ("PATCH", "/api/v1/chat-sessions/chat", {"title": "Renamed"}, False),
+        ("PATCH", "/api/v1/chat-sessions/chat", {"pinned": True}, False),
+        ("PATCH", "/api/v1/chat-sessions/chat", {"archived": None}, False),
+        ("PATCH", "/api/v1/chat-sessions/chat", {"archived": 0}, False),
+        ("PATCH", "/api/v1/chat-sessions/chat", {"archived": "false"}, False),
+        ("PATCH", "/api/v1/chat-sessions/chat", [{"archived": False}], False),
+        # Only the chat-session resource itself, not its sub-resources.
+        (
+            "PATCH",
+            "/api/v1/chat-sessions/chat/assistant-config",
+            {"archived": False},
+            False,
+        ),
+        ("PATCH", "/api/v1/engagements/project", {"archived": False}, False),
+        ("PUT", "/api/v1/chat-sessions/chat", {"archived": False}, False),
+        ("DELETE", "/api/v1/chat-sessions/chat", {"archived": False}, False),
+    ],
+)
+def test_only_unarchive_patch_is_a_chat_session_start_intent(
+    method, path, body, expected
+):
+    import json
+
+    from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
+
+    intent = HttpIntent.capture(
+        method,
+        path,
+        b"",
+        [(b"content-type", b"application/json")],
+        json.dumps(body).encode(),
+    )
+    assert RuntimeDelivery.is_chat_start_intent(intent) is expected
+
+
+def test_malformed_unarchive_body_is_not_a_chat_start_intent():
+    from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
+
+    intent = HttpIntent.capture(
+        "PATCH",
+        "/api/v1/chat-sessions/chat",
+        b"",
+        [(b"content-type", b"application/json")],
+        b'{"archived": false',
+    )
+    assert RuntimeDelivery.is_chat_start_intent(intent) is False
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
@@ -506,7 +572,7 @@ async def test_execution_scope_cannot_read_or_write_another_project_batch(
     "demand",
     ["read-routing", "legacy-normal-command", "chat-start", "legacy-typed-chat"],
 )
-async def test_project_admission_requires_an_exact_chat_start(
+async def test_project_admission_requires_a_chat_start_or_queued_project_command(
     admission, tmp_path, demand
 ):
     value = admission
@@ -592,7 +658,13 @@ async def test_project_admission_requires_an_exact_chat_start(
                 await session.get(ProjectOwnershipRow, "one")
             ).admission_requested is False
     await value.automatic.reconcile()
-    should_admit = demand in {"chat-start", "legacy-typed-chat"}
+    # Reads and host-committed barriers never admit a worker. A queued project
+    # command does (#1028), like a chat start: only that worker can run it.
+    should_admit = demand in {
+        "legacy-normal-command",
+        "chat-start",
+        "legacy-typed-chat",
+    }
     assert len(value.calls) == int(should_admit)
     assert set(value.leases) == ({"one"} if should_admit else set())
     if should_admit:
