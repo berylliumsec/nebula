@@ -100,7 +100,9 @@ async def test_existing_read_helpers_only_see_owned_projects(execution):
     assert (await runtime.get(ProviderProfile, "provider")).name == "Inert provider"
 
 
-async def test_execution_worker_can_start_chat_under_lease_and_retirement_hold(execution):
+async def test_execution_worker_can_start_chat_under_lease_and_retirement_hold(
+    execution,
+):
     control, runtime, coordinator, lease = execution
     retirement = DeploymentCoordinator(control.database)
     service = ChatGoalService(runtime)
@@ -115,7 +117,9 @@ async def test_execution_worker_can_start_chat_under_lease_and_retirement_hold(e
         created = await service.create_conversation(body)
 
     assert (await control.get(ChatSession, created.session.id)).engagement_id == "mine"
-    assert (await control.get(ChatGoal, created.goal.id)).session_id == created.session.id
+    assert (
+        await control.get(ChatGoal, created.goal.id)
+    ).session_id == created.session.id
     assert await retirement.request_project_retirement(lease) is False
 
     await control.create(Engagement(id="retiring", name="Retiring"))
