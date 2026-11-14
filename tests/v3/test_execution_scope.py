@@ -12,6 +12,7 @@ from nebula.v3.database import (
     Database,
     EntityRow,
     ProjectOwnershipRow,
+    ProviderTurnQueueRow,
     SearchDocumentRow,
 )
 from nebula.v3.database_pool import PoolSettings
@@ -30,6 +31,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
 from nebula.v3.execution_scope import ExecutionSQLScope, execution_context
+from nebula.v3.provider_scheduler import ProviderScheduler
 from nebula.v3.runtime_coordination import (
     CoordinationConflict,
     LeaseLost,
@@ -492,6 +494,77 @@ async def test_recovery_query_handles_derived_columns_and_keeps_project_scope(
     assert [(item.operation_id, item.engagement_id) for item in pending] == [
         ("live-mine", "mine")
     ]
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+@pytest.mark.parametrize("one_turn", [False, True])
+async def test_worker_settles_only_its_projects_ended_admissions(
+    execution, scoped, one_turn
+):
+    """An execution worker closes admissions of turns that ended while waiting.
+
+    Its recovery pass used to be refused by the execution scope on every run,
+    leaving ended turns queued: they held queue positions and blocked project
+    retirement and Core shutdown.
+    """
+
+    control, runtime, _, lease = execution
+    await control.create(
+        ChatTurn(
+            id="turn-mine-waiting",
+            engagement_id="mine",
+            session_id="chat-mine",
+            model="inert",
+            provider_profile_id="provider",
+        )
+    )
+    async with control.database.session() as session:
+        for turn in ("turn-mine", "turn-other", "turn-mine-waiting"):
+            await session.execute(
+                insert(ProviderTurnQueueRow).values(
+                    turn_id=turn, lane="direct", state="queued"
+                )
+            )
+    for turn in ("turn-mine", "turn-other"):
+        current = await control.get(ChatTurn, turn)
+        await control.update(
+            ChatTurn,
+            turn,
+            {"status": ChatTurnStatus.CANCELLED},
+            expected_revision=current.revision,
+        )
+    retirement = DeploymentCoordinator(control.database)
+    async with control.database.session() as session:
+        assert "Provider turn turn-mine is admitted or queued" in (
+            await retirement._shutdown_blockers(session, "mine")
+        )
+    scheduler = ProviderScheduler(runtime, worker_id="execution")
+
+    async def settle(turn_id):
+        if not scoped:
+            return await scheduler.settle(turn_id)
+        with execution_context(lease):
+            return await scheduler.settle(turn_id)
+
+    assert await settle("turn-other") == []
+    assert await settle("turn-mine" if one_turn else None) == ["turn-mine"]
+    assert await settle(None) == []
+    async with control.database.session() as session:
+        states = dict(
+            (
+                await session.execute(
+                    select(ProviderTurnQueueRow.turn_id, ProviderTurnQueueRow.state)
+                )
+            ).all()
+        )
+        blockers = await retirement._shutdown_blockers(session, "mine")
+    assert states == {
+        "turn-mine": "cancelled",
+        "turn-other": "queued",
+        "turn-mine-waiting": "queued",
+    }
+    assert "Provider turn turn-mine is admitted or queued" not in blockers
+    assert "Provider turn turn-mine-waiting is admitted or queued" in blockers
 
 
 async def test_insert_cannot_escape_to_another_project(execution):
