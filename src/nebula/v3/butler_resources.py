@@ -410,7 +410,7 @@ class OpenRouterCreditObserver:
 
     def _schedule_on_loop(self, provider_id: str) -> None:
         task = create_diagnostic_task(
-            self.refresh(provider_id),
+            self._scheduled_refresh(provider_id),
             feature="butler",
             event_code="butler.openrouter_credit_check_failed",
             failure_message="OpenRouter credits could not be checked; a later use or manual refresh can retry.",
@@ -418,6 +418,22 @@ class OpenRouterCreditObserver:
         )
         self._scheduled.add(task)
         task.add_done_callback(async_done_callback(self._scheduled.discard))
+
+    async def _scheduled_refresh(
+        self, provider_id: str
+    ) -> OpenRouterCreditSnapshot | None:
+        # Every provider's usage and profile writes signal this observer.
+        # Only an OpenRouter profile has account credits to read; the others
+        # have nothing to check, which is not a failure.
+        try:
+            profile = await self.store.get(ProviderProfile, provider_id)
+        except NotFoundError:
+            # diagnostic-expected: the profile may be removed after use was
+            # signaled; there is no configured account left to check.
+            return None
+        if profile.provider_type != "openrouter":
+            return None
+        return await self.refresh(provider_id)
 
     async def refresh(
         self, provider_id: str, *, force: bool = False
