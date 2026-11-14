@@ -65,7 +65,8 @@ def toggle_selection(
 COMMANDS = {
     "draft": "Review a previous submission retained in memory",
     "core": "Switch paired Core",
-    "projects": "Browse or create a project",
+    "projects": "Browse, create or restore a project",
+    "project": "Rename, relink, set mode, VPN, scope and tool follow-up, or archive this project",
     "snapshot": "Read this project's Core-owned summary",
     "board": "Browse this project's Work board and check-ins (read-only)",
     "notes": "Browse and edit this project's saved Notes",
