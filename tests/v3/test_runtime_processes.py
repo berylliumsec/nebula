@@ -351,6 +351,29 @@ async def test_published_worker_survives_cancellation_after_committed_readiness(
         pass
 
 
+async def test_start_whose_readiness_committed_before_a_failure_returns_the_worker(
+    managed, monkeypatch
+):
+    await managed.stage("v1")
+    publish = managed.coordinator.worker_ready
+
+    async def lose_reply(identity):
+        await publish(identity)
+        raise OSError("lost reply after a committed readiness")
+
+    monkeypatch.setattr(managed.coordinator, "worker_ready", lose_reply)
+    # SQL already records this exact live incarnation as ready, so the start
+    # has a known effect: the worker, not an unconfirmed failure.
+    identity = await managed.host.spawn("v1", "execution")
+    assert identity is not None
+    assert same_process(identity.pid, identity.process_birth)
+    status = await managed.coordinator.status()
+    assert status.resident_versions == ["v1"]
+    assert [(row.runtime_id, row.state) for row in status.processes] == [
+        (identity.runtime_id, "ready")
+    ]
+
+
 async def test_refused_third_version_does_not_create_an_orphan_credential(managed):
     for version in ("v1", "v2", "v3"):
         await managed.stage(version)

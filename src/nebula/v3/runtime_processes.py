@@ -741,6 +741,16 @@ class RuntimeProcessHost:
 
                 aborted = await finish_cleanup(failed_start())
                 error = sys.exc_info()[1]
+                if (
+                    not aborted
+                    and isinstance(error, Exception)
+                    and identity is not None
+                    and await self._committed_ready(identity)
+                ):
+                    # Readiness committed before the failure (a deadline that
+                    # expired while the probe closed, or a lost commit reply).
+                    # The worker is started; report it rather than an unknown.
+                    return identity
                 if aborted and isinstance(error, Exception):
                     # The process is confirmed gone and its reservation
                     # retired, so this start had no effect and may be retried.
@@ -755,6 +765,35 @@ class RuntimeProcessHost:
                         f"{reason}; its start was aborted cleanly and nothing was started"
                     ) from error
                 raise
+
+    async def _committed_ready(self, identity: WorkerIdentity) -> bool:
+        """Whether SQL records this exact live incarnation as ready."""
+        try:
+            async with self.coordinator.database.session() as session:
+                row = await session.get(
+                    RuntimeProcessRow, identity.runtime_id, populate_existing=True
+                )
+                if row is None:
+                    return False
+                committed = (
+                    row.state,
+                    row.pid,
+                    row.process_birth,
+                    row.version,
+                    row.role,
+                    row.endpoint,
+                )
+        except Exception:
+            # diagnostic-expected: an unreadable row keeps the original failure; the start stays unconfirmed.
+            return False
+        return committed == (
+            "ready",
+            identity.pid,
+            identity.process_birth,
+            identity.version,
+            identity.role,
+            identity.endpoint,
+        ) and same_process(identity.pid, identity.process_birth)
 
     async def reconcile_idle_project_retirements(self, *, limit: int = 8) -> list[str]:
         """Finish bounded retirements of quiesced workers.

@@ -39,6 +39,7 @@ from .deployment_protocol import (
     DeploymentStatus,
     HandoffPhase,
     MAX_EXECUTION_VERSIONS,
+    ProcessDeploymentStatus,
     ProjectDeploymentStatus,
     ReleaseManifest,
     ResourceSnapshot,
@@ -50,6 +51,7 @@ from .runtime_coordination import (
     DeploymentChanged,
     LEASE_MS,
     LeaseLost,
+    OperationRejected,
     ProjectLease,
     RuntimeCoordination,
     ShutdownBlocked,
@@ -463,8 +465,10 @@ class DeploymentCoordinator:
     async def promote_api(self, runtime_id: str, *, expected_revision: int) -> None:
         async with self.coordination._write() as session:
             host = await self._host(session)
+            # Refusals before any change roll this transaction back: the
+            # receipt is a definite failure that may be asked again.
             if host.revision != expected_revision:
-                raise CoordinationConflict(
+                raise DeploymentChanged(
                     "deployment status changed; read it before promoting"
                 )
             process = await session.get(RuntimeProcessRow, runtime_id)
@@ -477,12 +481,19 @@ class DeploymentCoordinator:
                 or runtime is None
                 or runtime.lease_expires_at_ms <= now
             ):
-                raise CoordinationConflict("candidate API is not ready and healthy")
+                raise OperationRejected("candidate API is not ready and healthy")
             release = await session.get(RuntimeReleaseRow, process.version)
             assert release is not None
-            await self._compatible(
-                session, ReleaseManifest.model_validate(release.manifest), role="api"
-            )
+            try:
+                await self._compatible(
+                    session,
+                    ReleaseManifest.model_validate(release.manifest),
+                    role="api",
+                )
+            except OperationRejected:
+                raise
+            except CoordinationConflict as error:
+                raise OperationRejected(str(error)) from error
             if host.api_runtime_id and host.api_runtime_id != runtime_id:
                 previous = await session.get(RuntimeProcessRow, host.api_runtime_id)
                 if previous is not None:
@@ -531,7 +542,7 @@ class DeploymentCoordinator:
         async with self.coordination._write() as session:
             host = await self._host(session)
             if expected_revision is not None and host.revision != expected_revision:
-                raise CoordinationConflict("deployment changed before migration")
+                raise DeploymentChanged("deployment changed before migration")
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("stage the migration release first")
@@ -564,7 +575,7 @@ class DeploymentCoordinator:
         async with self.coordination._write() as session:
             host = await self._host(session)
             if host.revision != expected_revision:
-                raise CoordinationConflict("deployment changed before code rollback")
+                raise DeploymentChanged("deployment changed before code rollback")
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("rollback code is not retained")
@@ -2463,4 +2474,16 @@ class DeploymentCoordinator:
                 projects=projects,
                 health="degraded" if degraded else "ready" if api else "starting",
                 detail=host.detail,
+                processes=[
+                    ProcessDeploymentStatus(
+                        runtime_id=row.runtime_id,
+                        version=row.version,
+                        role=row.role,
+                        state=row.state,
+                    )
+                    for row in sorted(
+                        processes.values(), key=lambda value: value.runtime_id
+                    )
+                    if row.state in _RESIDENT
+                ],
             )

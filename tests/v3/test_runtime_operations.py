@@ -259,3 +259,141 @@ async def test_uncertain_operation_is_never_asked_again(host):
     assert (await DeploymentOperations(host[0]).execute(**args))["state"] == "uncertain"
     assert (await DeploymentOperations(host[0]).execute(**args))["state"] == "uncertain"
     assert calls == ["prepare_execution"]
+
+
+def _supervisor(coordinator, **host):
+    from types import SimpleNamespace
+
+    from nebula.v3.supervisor import RuntimeSupervisor
+
+    root = RuntimeSupervisor.__new__(RuntimeSupervisor)
+    root.coordinator = coordinator
+    root.host = SimpleNamespace(**host)
+    root.started, root.closed, root._shutdown_committed = True, False, False
+    root._operations = asyncio.Lock()
+    root.worker_admission = None
+    return root
+
+
+async def test_stale_revisions_are_definite_refusals_the_deployer_may_ask_again(
+    host,
+):
+    from nebula.v3.runtime_coordination import DeploymentChanged
+    from tests.v3.test_deployment_lifecycle import worker
+
+    coordinator = host[0]
+    api = await worker(host, "v2", role="api")
+    stale = (await coordinator.status()).revision - 1
+    with pytest.raises(DeploymentChanged):
+        await coordinator.promote_api(api, expected_revision=stale)
+    with pytest.raises(DeploymentChanged):
+        await coordinator.rollback_code("v1", expected_revision=stale)
+    with pytest.raises(DeploymentChanged):
+        await coordinator.migration_preflight("v2", expected_revision=stale)
+
+    async def promote(_action, parameters):
+        await coordinator.promote_api(
+            parameters["runtime_id"], expected_revision=parameters["expected_revision"]
+        )
+        return {}
+
+    receipt = await DeploymentOperations(coordinator).execute(
+        operation_id="deployment:promote-api",
+        actor_id="operator",
+        action="promote_api",
+        parameters={"runtime_id": api, "expected_revision": stale},
+        dispatch=promote,
+    )
+    assert receipt["state"] == "failed"
+    assert receipt["result"]["error_type"] == "DeploymentChanged"
+    status = await coordinator.status()
+    assert status.api_version is None and status.target_execution_version is None
+
+
+async def test_status_lists_every_unretired_process_for_effect_readback(host):
+    from tests.v3.test_deployment_lifecycle import worker
+
+    coordinator = host[0]
+    api = await worker(host, "v1", role="api")
+    execution = await worker(host, "v2")
+    listed = {
+        row.runtime_id: (row.version, row.role, row.state)
+        for row in (await coordinator.status()).processes
+    }
+    assert listed == {
+        api: ("v1", "api", "ready"),
+        execution: ("v2", "execution", "ready"),
+    }
+    host_children = coordinator.test_children
+    host_children[execution].terminate()
+    host_children[execution].wait(timeout=5)
+    identity = await coordinator.begin_retirement(execution)
+    await coordinator.retired(identity)
+    assert [row.runtime_id for row in (await coordinator.status()).processes] == [api]
+
+
+async def test_api_preparation_refused_before_any_start_is_a_definite_failure(host):
+    from nebula.v3.memory_policy import MemoryBudgetError
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    spawned = []
+
+    async def remains_staged(version, role):
+        spawned.append((version, role))
+        return None
+
+    root = _supervisor(host[0], spawn=remains_staged)
+    with pytest.raises(OperationRejected, match="memory reserve"):
+        await root.prepare_api("v2")
+    with pytest.raises(OperationRejected, match="Stage and verify"):
+        await root.prepare_api("missing")
+
+    async def over_budget(_manifest, _role):
+        raise MemoryBudgetError("The memory budget has no room for this worker")
+
+    root.worker_admission = over_budget
+    with pytest.raises(OperationRejected, match="no room"):
+        await root.prepare_api("v2")
+    assert spawned == []
+
+    async def admitted(_manifest, _role):
+        return None
+
+    root.worker_admission = admitted
+    with pytest.raises(OperationRejected, match="remains staged"):
+        await root.prepare_api("v2")
+    assert spawned == [("v2", "api")]
+
+
+async def test_code_rollback_refused_after_its_target_changed_stays_unconfirmed(host):
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    coordinator = host[0]
+
+    async def remains_staged(_version, _role):
+        return None
+
+    async def admitted(_manifest, _role):
+        return None
+
+    root = _supervisor(coordinator, spawn=remains_staged)
+    root.worker_admission = admitted
+    revision = (await coordinator.status()).revision
+
+    async def dispatch(_action, parameters):
+        await root.rollback_code(**parameters)
+        return {}
+
+    receipt = await DeploymentOperations(coordinator).execute(
+        operation_id="deployment:target",
+        actor_id="operator",
+        action="rollback_code",
+        parameters={"version": "v1", "expected_revision": revision},
+        dispatch=dispatch,
+    )
+    # The target moved before API preparation refused, so the receipt must not
+    # claim that nothing happened.
+    assert receipt["state"] == "uncertain"
+    assert (await coordinator.status()).target_execution_version == "v1"
+    with pytest.raises(OperationRejected):
+        await root.prepare_api("v1")

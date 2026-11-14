@@ -2855,7 +2855,11 @@ def require_stage_migration_receipts(
     return {
         "deployment_id": journal.get("id"),
         "stage_operation_id": stage.get("operation_id"),
-        "migration_operation_id": migrate.get("operation_id"),
+        # A code rollback runs no migration: its target already supports the
+        # live schema, and data is never restored.
+        "migration_operation_id": migrate.get("operation_id")
+        if isinstance(migrate, dict)
+        else None,
     }
 
 
@@ -2907,7 +2911,14 @@ def wait_supervisor_host_ready(
     allow_degraded_workers: bool = False,
     degraded_baseline: bool = False,
     timeout: int = 480,
+    promoted_api_version: str | None = None,
 ) -> dict[str, Any]:
+    """Read back the running host; the API stays as it was before the restart.
+
+    ``promoted_api_version`` is set only when reading back a completed
+    activation again: the deployment that activated this host may since have
+    promoted its own API release on it.
+    """
     expected_package_version = runtime_package_version(version)
     deadline = time.monotonic() + timeout
     last_problem = "supervisor did not publish its accepted host identity"
@@ -2946,7 +2957,10 @@ def wait_supervisor_host_ready(
                 status,
                 allow_degraded=(allow_degraded_workers and degraded_baseline),
             )
-            if snapshot["api_version"] != expected_api_version:
+            if snapshot["api_version"] not in {
+                expected_api_version,
+                promoted_api_version,
+            }:
                 raise RuntimeError(
                     "Host activation unexpectedly changed the API release"
                 )
@@ -3107,8 +3121,18 @@ def activate_supervisor_host(
         raise RuntimeError("Host activation requires supervisor deployment mode")
     deployment = record.get("runtime_deployment")
     action = deployment.get("action") if isinstance(deployment, dict) else None
+    superseded = deployment.get("superseded") if action == "rollback" else None
     valid_pending = action == "promote" and record.get("pending") == version
-    valid_rollback = action == "rollback" and record.get("previous") == version
+    valid_rollback = (
+        action == "rollback"
+        and deployment.get("version") == version
+        and (
+            record.get("previous") == version
+            or isinstance(superseded, dict)
+            and superseded.get("action") == "promote"
+            and superseded.get("previous") == version
+        )
+    )
     if not (valid_pending or valid_rollback) or not SHA.fullmatch(version):
         raise RuntimeError(
             "Host activation must target the exact pending candidate or recorded code rollback"
@@ -3164,13 +3188,18 @@ def activate_supervisor_host(
             prior = existing.get("prior_status")
             if not isinstance(prior, dict):
                 raise RuntimeError("Host activation lost its pre-restart readback")
-            wait_supervisor_host_ready(
+            # A resumed deployment reads its activation back after its own
+            # later steps, which promote this release's API on the same host.
+            current = wait_supervisor_host_ready(
                 version,
                 expected_api_version=prior["api_version"],
                 prior_status=None,
                 allow_degraded_workers=allow_degraded_workers,
                 degraded_baseline=isinstance(prior, dict)
                 and prior.get("health") == "degraded",
+                promoted_api_version=version
+                if isinstance(deployment, dict) and deployment.get("version") == version
+                else None,
             )
             readback = existing.get("readback")
             if (
@@ -3186,6 +3215,7 @@ def activate_supervisor_host(
                 "version": version,
                 "previous_version": existing["previous_version"],
                 **readback,
+                "current_readback": current,
             }
         if existing.get("state") in {
             "prepared",
@@ -3329,6 +3359,29 @@ def activate_supervisor_host(
                 "previous_version": previous,
                 **readback,
             }
+    if valid_rollback and current_release_version() == version:
+        # The rollback target is already the selected host: the promotion it
+        # replaces never activated its own host, or that activation restored
+        # this one. Verify the running host; nothing is restarted.
+        _health, status = read_supervisor_health()
+        current_api = status.get("api_version")
+        if not isinstance(current_api, str):
+            raise RuntimeError("A ready supervisor API status is required")
+        readback = wait_supervisor_host_ready(
+            version,
+            expected_api_version=current_api,
+            prior_status=None,
+            allow_degraded_workers=allow_degraded_workers,
+            degraded_baseline=status.get("health") == "degraded",
+        )
+        return {
+            "operation_id": requested_operation_id or uuid4().hex,
+            "status": "host_activated",
+            "version": version,
+            "previous_version": version,
+            "already_active": True,
+            **readback,
+        }
     service_identity = supervisor_service_identity()
     prior_host = host_connection()
     if prior_host is None:
@@ -3362,9 +3415,14 @@ def activate_supervisor_host(
         raise RuntimeError(
             "Deployer state differs from the current supervisor API version"
         )
-    if version not in status.get("staged_versions", []):
+    # A rollback target can still have resident workers when it replaces an
+    # unfinished promotion; resident releases are installed too.
+    if version not in [
+        *status.get("staged_versions", []),
+        *status.get("resident_versions", []),
+    ]:
         raise RuntimeError("Pending host release has not been staged by the supervisor")
-    if prior_status["api_version"] == version:
+    if action == "promote" and prior_status["api_version"] == version:
         raise RuntimeError("Host activation must precede API promotion")
     if current_release_version() != previous_version:
         raise RuntimeError("Current release changed during host activation preflight")
@@ -4238,8 +4296,22 @@ def rollback(*, _legacy_attempt: _LegacyAttempt | None = None) -> dict[str, Any]
     record = state()
     if record.get("deployment_mode") != "supervisor":
         return offline_rollback(_legacy_attempt=_legacy_attempt)
-    previous = record.get("previous")
-    if not isinstance(previous, str):
+    journal = record.get("runtime_deployment")
+    running = (
+        journal
+        if isinstance(journal, dict) and journal.get("state") != "complete"
+        else None
+    )
+    # An unfinished promotion is rolled back to the release it started from;
+    # an unfinished rollback resumes toward its own target.
+    previous = (
+        running.get("previous")
+        if running is not None and running.get("action") == "promote"
+        else running.get("version")
+        if running is not None and running.get("action") == "rollback"
+        else record.get("previous")
+    )
+    if not isinstance(previous, str) or not SHA.fullmatch(previous):
         raise RuntimeError("No retained code rollback target is recorded")
     return staged_deployer(record).rollback(previous)
 

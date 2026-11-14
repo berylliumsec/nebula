@@ -143,6 +143,15 @@ class ProjectDeploymentStatus(NebulaModel):
     admission_held: bool = False
 
 
+class ProcessDeploymentStatus(NebulaModel):
+    """One unretired worker incarnation, owned by a project or not."""
+
+    runtime_id: str
+    version: str
+    role: str
+    state: str
+
+
 class DeploymentStatus(NebulaModel):
     protocol: Literal["nebula.runtime/v1"] = IPC_PROTOCOL
     revision: int
@@ -153,3 +162,6 @@ class DeploymentStatus(NebulaModel):
     projects: list[ProjectDeploymentStatus]
     health: Literal["ready", "degraded", "starting", "staged"]
     detail: str
+    # Lets a deployer read the effect of an unconfirmed start or retirement:
+    # a process absent here is retired.
+    processes: list[ProcessDeploymentStatus] = Field(default_factory=list)
