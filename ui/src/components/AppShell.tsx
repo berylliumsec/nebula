@@ -18,6 +18,7 @@ import { SettingsLens } from "./SettingsLens";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
 import { RuntimeContinuityNotice } from "./RuntimeContinuityNotice";
+import { ProjectRuntimeNotice } from "./ProjectRuntimeNotice";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
 import { useNavigationChords } from "../state/useNavigationChords";
@@ -282,6 +283,7 @@ export function AppShell() {
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><DiagnosticErrorNotice error={coreError ?? "Check the Core connection and retry."} title={authorizationRecovery === "pair" ? "Pair this phone to continue." : "Core is unavailable."} fallback="Check the Core connection and retry." compact /><button className="button primary" type="button" onClick={reconnect}>Retry connection</button><a className="button quiet" href="nebula://settings">App connection</a></div>}
                 {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><strong>Some Core features are unavailable.</strong>{coreError && <small>{coreError}</small>}<button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
+                {workspaceState !== "failed" && <ProjectRuntimeNotice api={api} />}
                 <RuntimeContinuityNotice api={api} />
                 <Outlet />
               </main>
@@ -313,6 +315,7 @@ export function AppShell() {
                 {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}
                 <div className="workspace-notices" role="region" aria-label="Workspace notices" tabIndex={0}>
                 {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
+                {workspaceState !== "failed" && <ProjectRuntimeNotice api={api} />}
                 {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status"><span><strong>Starting Nebula…</strong><small>{runtime?.mode === "desktop_remote" ? "Connecting this UI shell to the selected remote Core." : "Connecting to Nebula Core."}</small></span></div>}
                 {workspaceState === "bootstrapping" && <div className="workspace-state-banner starting" role="status"><span><strong>Preparing your workspace…</strong><small>{setupStatus?.stageDetail ?? "Loading Projects and checking Terminal setup."}</small></span></div>}
                 {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span>{coreError && <button className="button quiet" type="button" onClick={reconnect}>Retry Core</button>}</div>}

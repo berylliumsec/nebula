@@ -176,6 +176,9 @@ body {
 .workspace-state-banner.failed { border-color: color-mix(in srgb, var(--red) 38%, var(--border)); }
 .workspace-state-banner.update { border-color: color-mix(in srgb, var(--blue) 38%, var(--border)); background: color-mix(in srgb, var(--blue-muted) 45%, var(--surface-muted)); }
 .workspace-state-banner.update.failed { border-color: color-mix(in srgb, var(--red) 38%, var(--border)); background: color-mix(in srgb, var(--red) 7%, var(--surface-muted)); }
+.workspace-state-banner.project-runtime-notice { justify-content: flex-start; gap: 10px; }
+.project-runtime-notice > svg { flex: 0 0 auto; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .project-runtime-notice > .spin { animation: none; } }
 .update-banner-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .update-banner-actions .button { white-space: nowrap; }
 
