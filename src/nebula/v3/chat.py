@@ -4470,7 +4470,9 @@ class ChatService:
                 exc,
                 stage="provider-admission",
             )
-            runtime.error = exc
+            # Followers are told once the turn is settled. When settling a
+            # failed response fails too, they still get the response's failure.
+            runtime.error = runtime.error or exc
         finally:
 
             async def cleanup():
@@ -5404,10 +5406,6 @@ class ChatService:
                 # child's question closed while its parent was idle) and
                 # continue its goal; neither may queue behind this finished run.
                 await runtime.admission.release(turn.id)
-            if self.stream_journal is None:
-                async with runtime.condition:
-                    runtime.done = True
-                    runtime.condition.notify_all()
             if turn is not None and (stopped or runtime.error is not None):
                 latest = await self.store.get(ChatTurn, turn.id)
                 if (
@@ -5467,10 +5465,12 @@ class ChatService:
                 )
             if turn is not None:
                 await self._close_provider_journal(turn.id, runtime)
-                if self.stream_journal is not None:
-                    async with runtime.condition:
-                        runtime.done = True
-                        runtime.condition.notify_all()
+            # Followers stop here and their callers read the turn and its goal
+            # next, so both are saved as ended before anyone is told.
+            async with runtime.condition:
+                runtime.done = True
+                runtime.condition.notify_all()
+            if turn is not None:
                 try:
                     await self.subagents.turn_settled(turn.id)
                 except Exception as exc:
@@ -6175,14 +6175,23 @@ class ChatService:
         if session is not None and (
             session.provider_profile_id != profile.id or session.model != selected_model
         ):
-            switch = await self.runtime_switch_preflight(
-                session.id,
+            # This request read the conversation before provider verification
+            # and tool ranking. Core's own naming and precompaction save it in
+            # the meantime, which is not the operator's concern; a runtime
+            # someone selected since then is, and still stops the switch.
+            current = await self.store.get(ChatSession, session.id)
+            if self._runtime_selection(current) != self._runtime_selection(session):
+                raise ChatHistoryConflict(
+                    "conversation changed; reload it before changing provider or model"
+                )
+            switch = await self._review_runtime_switch(
+                current,
                 ChatRuntimeSwitchPreflightRequest(
                     provider_id=profile.id,
                     model=selected_model,
                     tools_enabled=switch_tools_enabled,
                     max_output_tokens=request.max_output_tokens,
-                    expected_session_revision=session.revision,
+                    expected_session_revision=current.revision,
                 ),
             )
             if not switch.compatible:
@@ -16170,6 +16179,39 @@ class ChatService:
             raise ChatHistoryConflict(
                 "conversation changed; reload it before changing provider or model"
             )
+        return await self._review_runtime_switch(
+            session, request, _confirmation_revision=_confirmation_revision
+        )
+
+    @staticmethod
+    def _runtime_selection(session: ChatSession) -> tuple[Any, ...]:
+        """What a provider or model switch replaces, and only that.
+
+        Core saves a conversation on its own (its name, its compacted context,
+        its message count), and each save moves the revision. These are the
+        fields an operator or Butler selects; they tell such a save from a
+        runtime someone else chose.
+        """
+
+        return (
+            session.backend,
+            session.provider_profile_id,
+            session.harness_profile_id,
+            session.harness_session_id,
+            session.model,
+            session.metadata.get("assistant_config"),
+            session.metadata.get("pending_runtime_switch"),
+        )
+
+    async def _review_runtime_switch(
+        self,
+        session: ChatSession,
+        request: ChatRuntimeSwitchPreflightRequest,
+        *,
+        _confirmation_revision: int | None = None,
+    ) -> ChatRuntimeSwitchPreflight:
+        """Review a switch against ``session``, which the caller has just read."""
+
         # Provider turns carry their own runtime. A harness turn can still
         # reattach its vendor session, so a backend change needs an idle chat.
         profile = await self.store.get(ProviderProfile, request.provider_id)
