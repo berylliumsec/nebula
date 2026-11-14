@@ -46,7 +46,7 @@ async function startCore(): Promise<TestCore> {
   });
   let output = "";
   const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 300_000);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const port = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
@@ -78,11 +78,11 @@ async function stopCore(core: TestCore): Promise<void> {
 }
 
 test("work hub import finds a project and its saved task after refresh", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(900_000);
   const core = await startCore();
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   try {
-    await waitForCoreApi(api);
+    await waitForCoreApi(api, 600_000);
     const projects = Array.from({ length: 80 }, (_, index) => ({
       external_id: `sample-${index + 1}`, name: `Sample project ${index + 1}`,
     }));

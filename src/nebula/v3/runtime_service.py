@@ -240,8 +240,7 @@ def stable_listener_config(app, **options) -> uvicorn.Config:
         app,
         log_level="error",
         access_log=False,
-        timeout_graceful_shutdown=STABLE_LISTENER_GRACE_SECONDS,
-        **options,
+        **{"timeout_graceful_shutdown": STABLE_LISTENER_GRACE_SECONDS, **options},
     )
 
 
@@ -381,7 +380,7 @@ async def serve_runtime(
                 port=port,
                 ssl_certfile=str(tls_cert) if tls_cert else None,
                 ssl_keyfile=str(tls_key) if tls_key else None,
-                timeout_graceful_shutdown=relay_stop_bound() if inherited else None,
+                timeout_graceful_shutdown=relay_stop_bound() if inherited else STABLE_LISTENER_GRACE_SECONDS,
             )
         )
         drain = relay_drain(server, supervisor, inherited=inherited)
