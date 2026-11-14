@@ -1532,6 +1532,22 @@ def prune_expired_pairings(pending: dict[str, dict[str, Any]], now: datetime) ->
         del pending[digest]
 
 
+# Services whose stop only cancels or joins tasks inside this process. They
+# reach outside it only through the project's SQL pool, where every
+# transaction rechecks this worker's ownership, so after a quiesced release
+# nothing of theirs can act for the project. Services that own browsers,
+# harnesses, terminals, searches or other child processes are deliberately
+# absent: a failed stop of theirs leaves the project's cleanup unverified.
+IN_PROCESS_SERVICES = frozenset(
+    {
+        "chat.follow-ups",
+        "chat.schedules",
+        "diagnostics.event-loop-monitor",
+        "storage.event-history-prune",
+    }
+)
+
+
 def create_execution_kernel(
     store: NebulaStore | None = None,
     *,
@@ -2536,7 +2552,12 @@ def create_execution_kernel(
             if failures:
                 from .async_utils import ServiceCleanupError
 
-                raise ServiceCleanupError(failures) from failures[0][1]
+                raise ServiceCleanupError(
+                    failures,
+                    contained=all(
+                        name in IN_PROCESS_SERVICES for name, _error in failures
+                    ),
+                ) from failures[0][1]
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):

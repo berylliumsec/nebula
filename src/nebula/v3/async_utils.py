@@ -92,7 +92,13 @@ class ServiceCleanupError(RuntimeError):
     values. The first failure remains the cause for diagnostics.
     """
 
-    def __init__(self, failures: list[tuple[str, BaseException]]):
+    def __init__(
+        self, failures: list[tuple[str, BaseException]], *, contained: bool = False
+    ):
+        self.services = tuple(name for name, _error in failures)
+        # True only when every failed service runs inside this process and
+        # owns no child process or external effect outside SQL.
+        self.contained = contained
         self.components = tuple(
             f"{name} ({type(error).__name__})" for name, error in failures
         )
