@@ -12,7 +12,10 @@ Expiry is computed from database time inside the writing statement, so clock
 skew between the client, the API worker and the host cannot end a lease early
 or keep it alive. PUT by a client-chosen lease ID is idempotent: replaying it
 renews (or, after expiry, recreates) the same lease, so it needs no
-Idempotency-Key. Only the API worker's SQL-global path writes these rows.
+Idempotency-Key. Releasing a lease ends it now instead of deleting it, so the
+host's idle grace runs from the moment the view closed; lapsed rows are pruned
+once no grace can still read them. Only the API worker's SQL-global path
+writes these rows.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from datetime import UTC, datetime
 import re
 from typing import Any
 
-from sqlalchemy import BigInteger, and_, cast, delete, func, select
+from sqlalchemy import BigInteger, and_, cast, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -41,6 +44,9 @@ MIN_VIEW_LEASE_TTL_SECONDS = 30
 MAX_VIEW_LEASE_TTL_SECONDS = 300
 # Open project views one actor (the operator or one paired device) may hold.
 MAX_VIEW_LEASES_PER_ACTOR = 16
+# A lapsed lease is kept as long as the longest idle grace the host allows
+# (runtime_auto_admission.MAX_IDLE_WORKER_GRACE_SECONDS), then pruned.
+VIEW_LEASE_RETAIN_MS = 3600 * 1000
 _LEASE_ID = re.compile(r"[A-Za-z0-9_-]{8,100}")
 
 
@@ -125,6 +131,22 @@ class ProjectViewLeases:
                     429,
                     "Too many project views are open from this device; close one and retry",
                 )
+            # Prune leases no idle grace can read any more, and this actor's
+            # lapsed leases for the project: the new lease supersedes them.
+            await session.execute(
+                delete(ProjectViewLeaseRow).where(
+                    or_(
+                        ProjectViewLeaseRow.expires_at_ms
+                        < clock - VIEW_LEASE_RETAIN_MS,
+                        and_(
+                            ProjectViewLeaseRow.actor_id == actor_id,
+                            ProjectViewLeaseRow.project_id == project_id,
+                            ProjectViewLeaseRow.lease_id != lease_id,
+                            ProjectViewLeaseRow.expires_at_ms <= clock,
+                        ),
+                    )
+                )
+            )
             await self.coordination._ensure_project(session, project_id)
             insert = pg_insert if dialect == "postgresql" else sqlite_insert
             statement = insert(ProjectViewLeaseRow).values(
@@ -162,13 +184,18 @@ class ProjectViewLeases:
         }
 
     async def release(self, actor_id: str, project_id: str, lease_id: str) -> None:
+        """End a lease now. The row stays lapsed so the idle grace runs from here."""
+        clock = database_clock_ms(self.database.engine.dialect.name)
         async with self.coordination._write() as session:
             await session.execute(
-                delete(ProjectViewLeaseRow).where(
+                update(ProjectViewLeaseRow)
+                .where(
                     ProjectViewLeaseRow.actor_id == actor_id,
                     ProjectViewLeaseRow.lease_id == lease_id,
                     ProjectViewLeaseRow.project_id == project_id,
+                    ProjectViewLeaseRow.expires_at_ms > clock,
                 )
+                .values(expires_at_ms=clock)
             )
 
     async def _runtime(self, session, project_id: str) -> dict[str, Any]:

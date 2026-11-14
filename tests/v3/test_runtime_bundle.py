@@ -167,10 +167,12 @@ def test_compatibility_requires_review_of_exact_migration_tree(tmp_path, monkeyp
         runtime_bundle.load_compatibility()
 
 
-def test_compatibility_reviews_chat_scoped_admission_schema():
+def test_compatibility_reviews_project_view_lease_schema():
+    # 0049 only adds project_view_leases and project_admission_holds, so the
+    # schema family is unchanged and an older release can keep serving.
     compatibility = runtime_bundle.load_compatibility()
 
-    assert compatibility["migration_head"] == "0048_chat_scoped_admission"
+    assert compatibility["migration_head"] == "0049_project_view_leases"
     assert compatibility["schema_family"] == 5
     assert compatibility["schema_min"] == 5
     assert compatibility["schema_max"] == 5
