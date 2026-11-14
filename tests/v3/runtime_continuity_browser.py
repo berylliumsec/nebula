@@ -20,7 +20,7 @@ if __package__ in {None, ""}:
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn
 
-from nebula.v3.domain import ChatBookmark, ChatMessage, ChatSession
+from nebula.v3.domain import ChatBookmark, ChatMessage, ChatSession, Observation
 from nebula.v3.release_store import ReleaseStore
 from tests.v3.runtime_continuity_bundle import (
     build_bundle,
@@ -194,6 +194,17 @@ async def serve(root: Path):
                         engagement_id="continuity-project",
                         session_id="continuity-chat",
                         message_id=question.id,
+                    )
+                )
+            if body.get("chatless_note", False):
+                # The fixture's second project has no chat: only an open view
+                # (a view lease) brings up its worker.
+                await fixture.store.create(
+                    Observation(
+                        engagement_id="pinned-project",
+                        observation_type="note",
+                        title="Synthetic chatless project note",
+                        body="Readable only once the project's worker is up.",
                     )
                 )
             scenario_receipt = None

@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from .database import (
     DeploymentHostRow,
@@ -17,6 +17,7 @@ from .database import (
     DeploymentReceiptRow,
     EntityRow,
     MemoryBudgetPolicyRow,
+    ProjectAdmissionHoldRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeCommandRow,
@@ -26,6 +27,7 @@ from .database import (
 from .diagnostics import record_caught_exception
 from .domain import Engagement
 from .runtime_coordination import CoordinationConflict, project_worker_commands
+from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
 
 _RECOVERY_ACTOR = "runtime-auto-recovery"
@@ -228,6 +230,10 @@ class RuntimeAutoAdmission:
                     for project_id, retry in self._admission_retry.items()
                     if retry.signature == signature and now < retry.retry_at
                 ]
+                # An open project view (a live view lease) is demand like an
+                # open chat. Once it lapses the worker keeps its idle grace,
+                # when the host has one, before it retires.
+                viewed = live_view_lease(ProjectOwnershipRow.project_id, now_ms)
                 demand_query = (
                     select(ProjectOwnershipRow, queued_work)
                     # A verified quiescence clears the owner while retaining
@@ -243,6 +249,7 @@ class RuntimeAutoAdmission:
                             pending_chat_start,
                             legacy_chat_start,
                             queued_work,
+                            viewed,
                         ),
                     )
                 )
@@ -276,6 +283,8 @@ class RuntimeAutoAdmission:
                     ~pending_chat_start,
                     ~legacy_chat_start,
                     ~active_work,
+                    # An open project view keeps its worker like an open chat.
+                    ~viewed,
                 ]
                 if self.idle_grace_ms and not short_of_capacity:
                     idle.append(
@@ -287,6 +296,15 @@ class RuntimeAutoAdmission:
                             > now_ms - self.idle_grace_ms,
                         )
                         .exists()
+                    )
+                    # A view that closed within the grace keeps it too: the
+                    # grace runs from the lease's lapse, not from a second timer.
+                    idle.append(
+                        ~live_view_lease(
+                            ProjectOwnershipRow.project_id,
+                            now_ms,
+                            within_ms=self.idle_grace_ms,
+                        )
                     )
                 idle_query = select(
                     ProjectOwnershipRow.project_id,
@@ -419,6 +437,7 @@ class RuntimeAutoAdmission:
                     await supervisor.attach_execution(project.id, runtime_id)
                     self._pending.pop(project.id, None)
                     self._admission_retry.pop(project.id, None)
+                    await self._clear_hold(project.id)
                 except Exception as error:
                     failures = (retry.failures if retry is not None else 0) + 1
                     delay = _ADMISSION_BACKOFF_SECONDS[
@@ -429,6 +448,7 @@ class RuntimeAutoAdmission:
                         failures,
                         asyncio.get_running_loop().time() + delay,
                     )
+                    await self._record_hold(demand.project_id, error, failures)
                     record_caught_exception(
                         "runtime",
                         "runtime.project_admission.waiting",
@@ -443,6 +463,60 @@ class RuntimeAutoAdmission:
                             "attempt": failures,
                         },
                     )
+
+    async def _record_hold(self, project_id: str, error: Exception, attempts: int):
+        """Say why a wanted worker is not starting, so a view waits calmly.
+
+        Only an operator-facing gate (the memory budget) is quoted; any other
+        refusal gets a generic reason. Best effort: admission keeps retrying.
+        """
+        from .memory_policy import MemoryBudgetError
+
+        reason = (
+            str(error)[:1000]
+            if isinstance(error, MemoryBudgetError) and str(error)
+            else "This project's worker could not start yet; Core keeps retrying automatically."
+        )
+        try:
+            async with self.supervisor.coordinator.database.session() as session:
+                now = await self.supervisor.coordinator.coordination._clock_ms(session)
+                row = await session.get(ProjectAdmissionHoldRow, project_id)
+                if row is None:
+                    session.add(
+                        ProjectAdmissionHoldRow(
+                            project_id=project_id,
+                            reason=reason,
+                            attempts=attempts,
+                            updated_at_ms=now,
+                        )
+                    )
+                else:
+                    row.reason, row.attempts, row.updated_at_ms = reason, attempts, now
+        except Exception as failure:
+            record_caught_exception(
+                "runtime",
+                "runtime.project_admission.hold_unrecorded",
+                "A held project start could not record its reason; views show a generic wait.",
+                failure,
+                stage="admission",
+            )
+
+    async def _clear_hold(self, project_id: str) -> None:
+        try:
+            async with self.supervisor.coordinator.database.session() as session:
+                await session.execute(
+                    delete(ProjectAdmissionHoldRow).where(
+                        ProjectAdmissionHoldRow.project_id == project_id
+                    )
+                )
+        except Exception as failure:
+            record_caught_exception(
+                "runtime",
+                "runtime.project_admission.hold_unclear",
+                "A started project's held reason could not be cleared.",
+                failure,
+                stage="admission",
+            )
 
     async def _forget_settled_pending(self) -> None:
         """Drop a prepared worker that can no longer start its project.

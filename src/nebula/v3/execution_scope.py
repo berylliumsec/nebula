@@ -336,6 +336,8 @@ class ExecutionSQLScope:
                 "memory_jobs",
                 "memory_budget_policies",
                 "memory_budget_audit",
+                "project_view_leases",
+                "project_admission_holds",
             }:
                 raise CoordinationConflict(
                     "execution workers cannot mutate host coordination state"

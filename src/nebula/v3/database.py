@@ -136,6 +136,42 @@ class ProjectOwnershipRow(Base):
     command_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
+class ProjectViewLeaseRow(Base):
+    """An open project view is admission demand until its lease lapses.
+
+    A client renews it while the view stays open. Expiry is database time, so
+    the clocks of the API worker, the host and the client never matter. Only
+    the API worker's SQL-global path writes these rows; plain reads never do.
+    """
+
+    __tablename__ = "project_view_leases"
+    __table_args__ = (
+        Index("ix_project_view_lease_project", "project_id", "expires_at_ms"),
+    )
+
+    actor_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    lease_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    renewed_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ProjectAdmissionHoldRow(Base):
+    """Why the host is not starting a project's wanted worker right now.
+
+    The host's admission loop records a refused start (for example the memory
+    budget) and clears it once a worker owns the project, so a view can say
+    why it waits instead of failing every read.
+    """
+
+    __tablename__ = "project_admission_holds"
+
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class RuntimeCapacityPolicyRow(Base):
     __tablename__ = "runtime_capacity_policy"
 
