@@ -1,5 +1,6 @@
 """Disposable real-Core host for application-model browser acceptance."""
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -30,11 +31,7 @@ class FixtureWorkspacePaths:
         return path
 
 
-if __name__ == "__main__":
-    if os.environ.get("NEBULA_TEST_BROWSER_RUNTIME"):
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.environ[
-            "NEBULA_TEST_BROWSER_RUNTIME"
-        ]
+async def main():
     with tempfile.TemporaryDirectory(prefix="nebula-model-acceptance-") as directory:
         root = Path(directory)
         store = NebulaStore(root / "core.db")
@@ -44,7 +41,7 @@ if __name__ == "__main__":
         (linked / "linked-inspection.txt").write_text(
             "Linked folder inspection remains visible."
         )
-        store.create(
+        await store.create(
             Engagement(
                 id="linked-model-regression",
                 name="Linked workspace",
@@ -57,7 +54,7 @@ if __name__ == "__main__":
         from nebula.v3.application_model.persistence import graphs
         from nebula.v3.application_model.service import empty
 
-        legacy_project = store.create(
+        legacy_project = await store.create(
             Engagement(id="legacy-model-regression", name="Legacy model")
         )
         legacy_graph = empty(legacy_project.id)
@@ -110,8 +107,8 @@ if __name__ == "__main__":
                 "value": True,
             },
         }
-        with store.database.engine.begin() as connection:
-            connection.execute(
+        async with store.database.engine.begin() as connection:
+            await connection.execute(
                 insert(graphs).values(
                     project_id=legacy_project.id, revision=1, payload=legacy_graph
                 )
@@ -137,11 +134,11 @@ if __name__ == "__main__":
         )
 
         @app.post("/fixture-site/unused-harness-session/{project_id}")
-        def unused_harness_session(project_id: str):
+        async def unused_harness_session(project_id: str):
             from nebula.v3.domain import HarnessSession
 
-            store.get(Engagement, project_id)
-            return store.create(
+            await store.get(Engagement, project_id)
+            return await store.create(
                 HarnessSession(
                     engagement_id=project_id,
                     harness_profile_id="fixture-only",
@@ -191,8 +188,18 @@ oninput="document.querySelector('output').textContent=this.value">
             return session
 
         app.router.routes.insert(0, app.router.routes.pop())
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19420")),
-        )
+        await uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host="0.0.0.0",
+                port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19420")),
+            )
+        ).serve()
+
+
+if __name__ == "__main__":
+    if os.environ.get("NEBULA_TEST_BROWSER_RUNTIME"):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.environ[
+            "NEBULA_TEST_BROWSER_RUNTIME"
+        ]
+    asyncio.run(main())
