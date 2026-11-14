@@ -138,6 +138,42 @@ returns to the main chat, or closes and discards the current side chat. F3 and
 `/chats` mark pinned, flagged and archived conversations, list pinned ones first
 and archived ones last, and search every conversation in the project.
 
+`/queue` lists the conversation's follow-ups in the order Core will send them,
+numbered, with the queue's paused state. Its menu adds a follow-up (sent after the
+running turn, or held for later when idle), edits one, moves one up, down, first
+or last, removes one, retries a reviewed one as new, pauses, resumes or clears the
+queue, and while a turn runs, **Send one now** stops that turn so the chosen
+follow-up goes next. `/now message` does the same for new text: it stops the
+running turn and sends the message first, as the GUI's Stop and send does.
+`/model` in a saved conversation switches provider models through Core's checked
+runtime switch, also when the conversation was on a harness; a model not yet
+verified for tool use is verified first, and a switch Core defers says it applies
+after the running work. Model, effort, MCP, hook and subagent choices also become
+the project's defaults for new chats, as they do in the GUI, and a new chat starts
+with them. `/mcp` shows each server as always loaded, on demand, excluded next
+turn or not sent; its first row chooses whether selected tool schemas are always
+loaded, and `/mcp exclude` keeps on-demand servers out of the next turn. When a
+turn would share tool or context results with a cloud runtime that permits it,
+the prompt offers **Always allow for** that runtime, saved on the runtime in Core
+until it is turned off in Settings. For a new harness chat, `/settings` offers
+**Resume a harness session** to continue a saved or external harness session.
+`/attachments` can remove every pending attachment at once.
+
+`/goal complete` asks for a completion summary and at least one evidence item
+(one per prompt; a blank entry finishes) and records each as operator
+confirmation, which Core requires before a goal can complete. A goal action that
+meets a newer revision retries once on fresh state. `/goal child` starts a child
+goal while the goal runs and can open its conversation; `/goal children` lists
+child goals and opens one. `/approvals` (F8) also lists subagents' pending
+requests, decided with Allow once or Deny. For the conversation's own request it
+offers Approve, Reject, Stop, **Edit the request, then approve** (provider turns;
+the exact JSON arguments are edited in place) and, for an SSH command, **Always
+allow on** that host, which saves the host's approval setting before approving.
+`/agents` lists the conversation's subagents with status and elapsed time; choose
+one to read its result, open its conversation to read or message it, or stop it,
+or stop all running subagents at once. Subagent and child-goal conversations open
+like any other chat.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -157,10 +193,10 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | `/board` | Read the project's Work board, search tasks, inspect descriptions/check-ins and refresh without changing chat |
 | `/model`, `/settings`, `/mcp` | Select Core models and supported next-turn controls; `/mcp` selects this conversation's probed MCP servers |
 | `/skills`, `$name` | Toggle several skills for the next turn in one picker; `$name message` selects one skill for that message |
-| `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete a Core goal, including budgets and retained skills |
-| `/agents` | Open main conversations or inspect delegated work and its supported stop control |
-| `/approvals`, `/input` | Review an exact action or answer a pending question; secret answers use hidden input |
-| `/queue`, `/schedule` | Manage follow-ups and provider-chat schedules saved and executed by Core |
+| `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete (with evidence) a Core goal, including budgets, retained skills and child goals |
+| `/agents` | Open main or subagent conversations, read a subagent's result, stop one subagent or all |
+| `/approvals`, `/input` | Approve, edit, reject or stop an exact action (including subagents' and SSH always-allow) or answer a pending question; secret answers use hidden input |
+| `/queue`, `/now`, `/schedule` | Add, edit, move, send now, remove, pause, resume or clear Core follow-ups; stop the running turn and send a message next; manage provider-chat schedules |
 | `/attach`, `/attachments` | Upload a client document/image, browse Core files/knowledge, preview exact excerpts, or remove pending attachments |
 | `/status`, `/follow`, `/detach`, `/steer`, `/stop`, `/quit` | Read state, attach/detach output, guide a supported active harness, stop a selected turn, or exit |
 

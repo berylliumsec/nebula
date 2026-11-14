@@ -134,7 +134,7 @@ def test_slash_commands_follow_selected_conversation_state(tmp_path):
     shell._known_busy = True
     shell._pending_kinds = {"approval"}
     busy = shell.available_commands()
-    assert busy[:4] == ["approvals", "status", "follow", "stop"]
+    assert busy[:5] == ["approvals", "status", "follow", "now", "stop"]
     assert "input" not in busy
 
     shell._pending_kinds = {"input"}
@@ -438,6 +438,7 @@ def test_mcp_picker_pages_filters_and_saves_only_selected_project_servers(tmp_pa
         "capabilities": {"tools": []},
     }
     fillers = [{**foreign, "id": f"filler-{number}"} for number in range(497)]
+    remembered = []
 
     def handler(request):
         nonlocal revisions
@@ -448,6 +449,9 @@ def test_mcp_picker_pages_filters_and_saves_only_selected_project_servers(tmp_pa
                 config.update(patch["settings"])
                 revisions += 1
             return response({"revision": revisions, "settings": config})
+        if request.url.path.endswith("engagements/project-a/assistant-defaults"):
+            remembered.append(json.loads(request.content))
+            return response({"mcp_server_ids": ["visible", "second"]})
         if request.url.path.endswith("mcp-servers"):
             assert "engagement_id" not in request.url.params
             offset = int(request.url.params["offset"])
@@ -468,6 +472,8 @@ def test_mcp_picker_pages_filters_and_saves_only_selected_project_servers(tmp_pa
         assert page_calls == [0, 500]
         assert writes == [{"mcp_server_ids": ["visible", "second"]}]
         assert shell.current().config["mcp_server_ids"] == ["visible", "second"]
+        # Like the GUI, the choice becomes the project default for new chats.
+        assert remembered == [{"changes": {"mcp_server_ids": ["visible", "second"]}}]
         await shell.api.close()
 
     asyncio.run(run())
@@ -1272,11 +1278,13 @@ def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
                 content=frame("started", turn_id="selected-turn", sequence=1)
                 + frame("done", message={"content": "Saved answer"}, sequence=2),
             )
+        if path == "/api/v1/chat/sessions/chat-a/subagents":
+            return response({"session_id": "chat-a", "subagents": []})
         pytest.fail(f"Unexpected approval request: {request.method} {path}")
 
     async def run():
         nonlocal decided, pending_id
-        shell = make_shell(tmp_path, handler, ui=UI(choices=["approval-a", "approve"]))
+        shell = make_shell(tmp_path, handler, ui=UI(choices=["main:approval-a", "approve"]))
         shell.current().session["backend"] = (
             "provider" if backend == "harness" else "harness"
         )
@@ -1294,7 +1302,7 @@ def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
         assert shell.current().draft is draft
         decided = False
         pending_id = "newer-turn"
-        shell.ui = UI(choices=["approval-a"])
+        shell.ui = UI(choices=["main:approval-a"])
         with pytest.raises(ClientError, match="pending turn changed"):
             await workflows.approvals(shell, [])
         assert not decided
