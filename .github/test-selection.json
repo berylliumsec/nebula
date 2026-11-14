@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Rolling Core releases: serve adopts an inherited listening socket (LISTEN_FDS or --listen-fd) and probes with SO_REUSEADDR; a stopping supervisor generation drains relayed requests for at most 5 s while deployment operations run shielded and are joined before host authority is released; execution workers resend read-only host observations only when the host provably did not dispatch them (connect failure or the new undispatched 503 marker); the handoff inventory keeps a project finishing while a queued follow-up dispatch is in flight. Selected suites cover the handoff agent contract, listener adoption and the restart probe, the management ledger under request cancellation, IPC client/server, host-service replacement and resend bounds, supervisor lifecycle and bootstrap, and the browser bridge that now rides the resending client.",
-  "exclusions": "test_runtime_host_services.py is selected per test: its product-guidance mirror cases and the API-peer 401/404 case fail identically on clean main (pre-existing) and are excluded. Process-level suites need a pidfd-capable Python with Nebula importable by spawned workers; locally they were run with Python 3.12 on SQLite and PostgreSQL. No UI, native or Playwright cases: no frontend code changed; browser reconnect across a host swap is recorded as unverified. scripts/deploy_rehearsal and the docs are rehearsal tooling and evidence, exercised on a scratch Core (E4-E6 in docs/validation/rolling-core-releases.md), not by CI.",
+  "reason": "Rolling Core releases. serve adopts an inherited listening socket (LISTEN_FDS or --listen-fd), validated before ownership and detached on failure, and probes with SO_REUSEADDR. While a holder keeps the socket, a stopping supervisor closes only relayed exchanges that already answered (after 5 s) and never one awaiting its receipt (up to 30 s); a self-bound listener relays to completion. Deployment operations run shielded, answer 503 with their operation ID if their request is cancelled, and are joined before host authority is released. Workers resend read-only host observations only while the host is being replaced (connect failure or the undispatched 503); peer capacity and peer failures fail at once; queued host-pressure callers share one observation. The handoff inventory keeps a project finishing while a queued follow-up dispatch is in flight. Selected suites cover the handoff agent, listener adoption and drain, the management ledger, IPC, host-service replacement and resend bounds, supervisor lifecycle and bootstrap, the browser bridge and the remote host-pressure gate.",
+  "exclusions": "Per-test selections exclude cases that fail identically on clean main: the product-guidance mirror and API-peer 401/404 cases in test_runtime_host_services.py, test_owned_project_refuses_real_shutdown_without_notifying_launcher in test_runtime_management.py (expects 'uncertain'; #1019 makes it 'failed'), and test_shared_automation_image_prepare_replay_and_changed_runner in test_runtime_host_observations.py. Process-level suites need a pidfd-capable Python with Nebula importable by spawned workers; locally they ran on Python 3.12 (SQLite as in CI; earlier also PostgreSQL). Under heavy shared-host load the existing 20 s worker readiness bound can time out spawn-based tests; reruns pass. No UI, native or Playwright cases: no frontend code changed; browser reconnect across a host swap is recorded as unverified. scripts/deploy_rehearsal and the docs are rehearsal tooling and evidence (E1-E7c in docs/validation/rolling-core-releases.md), not run by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 120,
+    "python": 128,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -13,11 +13,11 @@
   "python": [
     "tests/v3/test_project_handoff_agent.py",
     "tests/v3/test_runtime_service.py",
-    "tests/v3/test_runtime_management.py",
     "tests/v3/test_runtime_ipc.py",
     "tests/v3/test_supervisor.py",
     "tests/v3/test_runtime_bootstrap.py",
     "tests/v3/test_runtime_browser_bridge.py",
+    "tests/v3/test_runtime_host_observations.py::test_saved_pressure_reaches_exact_worker_grants_and_cache_expires",
     "tests/v3/test_runtime_host_services.py::test_real_private_listener_serves_one_host_knowledge_index",
     "tests/v3/test_runtime_host_services.py::test_second_service_owner_cannot_replace_a_live_socket",
     "tests/v3/test_runtime_host_services.py::test_shared_service_capabilities_require_a_valid_private_peer",
@@ -30,11 +30,19 @@
     "tests/v3/test_runtime_host_services.py::test_worker_observation_waits_for_a_replacement_host_instead_of_failing",
     "tests/v3/test_runtime_host_services.py::test_only_undispatched_observations_are_resent_within_a_bound",
     "tests/v3/test_runtime_host_services.py::test_supervisor_detach_joins_host_index_work_before_releasing_ownership",
-    "tests/v3/test_runtime_host_services.py::test_host_services_refuse_to_replace_a_non_socket_path"
+    "tests/v3/test_runtime_host_services.py::test_host_services_refuse_to_replace_a_non_socket_path",
+    "tests/v3/test_runtime_host_services.py::test_queued_pressure_callers_share_one_host_wait",
+    "tests/v3/test_runtime_host_services.py::test_peer_failures_fail_at_once_and_only_replacement_is_resent",
+    "tests/v3/test_runtime_management.py::test_management_validates_auth_body_and_parameters_before_accepting",
+    "tests/v3/test_runtime_management.py::test_stage_and_recovery_selection_replay_authoritative_result",
+    "tests/v3/test_runtime_management.py::test_operation_finishes_its_receipt_when_a_stopping_host_cancels_the_request",
+    "tests/v3/test_runtime_management.py::test_shutdown_callback_waits_for_success_and_never_repeats_saved_operation",
+    "tests/v3/test_runtime_management.py::test_uncertain_operation_never_notifies_shutdown_launcher",
+    "tests/v3/test_runtime_management.py::test_real_idle_api_shutdown_notifies_only_after_verified_process_retirement"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "7ead209b303d2608f711c48bd77c0d03876055a3986a0e7cc79a04be275d4631"
+  "change_digest": "f227b94000ead6848f09d7b225c96f11a014839952ecc5e909fdb49a9fa2f929"
 }

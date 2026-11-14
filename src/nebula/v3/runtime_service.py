@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
 from pathlib import Path
 import socket
+import stat
 import sys
 import webbrowser
 
@@ -36,11 +38,39 @@ from .supervisor import RuntimeSupervisor
 OFFLINE_ADOPTION = "offline-adoption.json"
 # First descriptor passed by socket activation (sd_listen_fds).
 LISTEN_FDS_START = 3
-# A replaced supervisor relays open viewer streams this long, then closes
-# them; viewers resume from their saved cursor on the next generation. An
-# unbounded drain keeps the host lock, and with it the replacement, waiting
-# on the longest-lived stream.
+# While a holder keeps the public socket, a stopping supervisor relays open
+# viewer streams this long, then closes them; viewers resume from their saved
+# cursor on the next generation. An unbounded drain keeps the host lock, and
+# with it the replacement, waiting on the longest-lived stream. A
+# self-bound listener keeps relaying every exchange to completion.
 VIEWER_DRAIN_SECONDS = 5
+# An exchange still waiting for its response headers is never closed before
+# it answers, up to this bound. The API worker answers an accepted request
+# with its saved receipt within 15 s.
+RELAY_ANSWER_LIMIT_SECONDS = 30
+
+
+def relay_drain(server, supervisor, *, inherited: bool):
+    """Start the bounded drain for a stopping generation, if a holder exists."""
+    if not inherited:
+        return None
+    from .diagnostics import create_diagnostic_task
+    from .supervisor import drain_relays
+
+    async def when_stopping():
+        while not server.should_exit:
+            await asyncio.sleep(0.1)
+        await drain_relays(
+            supervisor, VIEWER_DRAIN_SECONDS, limit=RELAY_ANSWER_LIMIT_SECONDS
+        )
+
+    return create_diagnostic_task(
+        when_stopping(),
+        feature="runtime",
+        event_code="runtime.relay_drain.failed",
+        failure_message="Relayed viewer streams were not drained.",
+        name="nebula-relay-drain",
+    )
 
 
 def inherited_listener(
@@ -66,15 +96,22 @@ def inherited_listener(
         if count != "1":
             raise ValueError("Core accepts exactly one inherited listening socket")
         descriptor = LISTEN_FDS_START
+    try:
+        requested = ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError(
+            "An inherited Core socket requires an IP address for --host"
+        ) from None
+    try:
+        is_socket = stat.S_ISSOCK(os.fstat(descriptor).st_mode)
+    except OSError as error:
+        raise ValueError("The inherited Core descriptor is not open") from error
+    if not is_socket:
+        raise ValueError("The inherited Core descriptor is not a socket")
+    # Validate before taking ownership: a wrong descriptor may belong to this
+    # process (an event-loop socketpair). It is never closed or modified.
     listener = socket.socket(fileno=descriptor)
     try:
-        listener.set_inheritable(False)
-        try:
-            requested = ipaddress.ip_address(host)
-        except ValueError:
-            raise ValueError(
-                "An inherited Core socket requires an IP address for --host"
-            ) from None
         if (
             listener.family not in (socket.AF_INET, socket.AF_INET6)
             or listener.type != socket.SOCK_STREAM
@@ -89,8 +126,9 @@ def inherited_listener(
                 "The inherited Core socket does not match the requested --host/--port"
             )
     except BaseException:
-        listener.close()
+        listener.detach()
         raise
+    listener.set_inheritable(False)
     return listener
 
 
@@ -235,6 +273,7 @@ async def serve_runtime(
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     connection = None
     automatic = None
+    drain = None
     try:
         # Bind before opening controllers or migrating legacy state into a live
         # runtime. An occupied compatibility port is never replaced silently.
@@ -299,11 +338,14 @@ async def serve_runtime(
                 access_log=False,
                 ssl_certfile=str(tls_cert) if tls_cert else None,
                 ssl_keyfile=str(tls_key) if tls_key else None,
-                timeout_graceful_shutdown=VIEWER_DRAIN_SECONDS,
             )
         )
+        drain = relay_drain(server, supervisor, inherited=inherited)
         await server.serve(sockets=[listener])
     finally:
+        if drain is not None:
+            drain.cancel()
+            await asyncio.gather(drain, return_exceptions=True)
         listener.close()
         try:
             try:

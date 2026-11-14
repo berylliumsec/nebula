@@ -46,10 +46,12 @@ def register_host_pressure(rpc, runtime_id, coordination, gate):
 class RemoteHostLoadGate(HostLoadGate):
     def __init__(self, client):
         super().__init__()
-        self.client, self.lock = client, asyncio.Lock()
+        self.client = client
         self._cached_sample = None
         self._cached_lease = None
         self._cached_at = 0.0
+        self._observation: asyncio.Future | None = None
+        self._observation_lease = None
 
     async def snapshot(self):
         lease = current_execution_lease()
@@ -57,16 +59,34 @@ class RemoteHostLoadGate(HostLoadGate):
             raise LeaseLost(
                 "Host pressure requires the current project execution context"
             )
-        async with self.lock:
-            if self._cached_lease == lease and time.monotonic() - self._cached_at < 1:
-                return self._cached_sample
-            result = await self.client.call(HOST_PRESSURE, asdict(lease))
-            if not isinstance(result, dict) or result.get("lease") != asdict(lease):
-                raise RuntimeIpcError("Invalid host pressure observation")
-            try:
-                sample = HostLoadSnapshot(**result["sample"])
-            except (KeyError, TypeError):
-                raise RuntimeIpcError("Invalid host pressure observation") from None
-            self._cached_sample, self._cached_lease = sample, lease
-            self._cached_at = time.monotonic()
-            return sample
+        if self._cached_lease == lease and time.monotonic() - self._cached_at < 1:
+            return self._cached_sample
+        # One host observation is in flight at a time, and every caller waiting
+        # for it shares its outcome. While the host is being replaced, callers
+        # queued behind it therefore fail or succeed together within one
+        # reconnect window, instead of each starting a window of its own.
+        observation = self._observation
+        if (
+            observation is None
+            or observation.done()
+            or self._observation_lease != lease
+        ):
+            # diagnostic-expected: every waiter receives this result or error; the callback only marks it retrieved when all waiters were cancelled.
+            observation = asyncio.ensure_future(self._observe(lease))
+            observation.add_done_callback(
+                lambda done: done.cancelled() or done.exception()
+            )
+            self._observation, self._observation_lease = observation, lease
+        return await asyncio.shield(observation)
+
+    async def _observe(self, lease):
+        result = await self.client.call(HOST_PRESSURE, asdict(lease))
+        if not isinstance(result, dict) or result.get("lease") != asdict(lease):
+            raise RuntimeIpcError("Invalid host pressure observation")
+        try:
+            sample = HostLoadSnapshot(**result["sample"])
+        except (KeyError, TypeError):
+            raise RuntimeIpcError("Invalid host pressure observation") from None
+        self._cached_sample, self._cached_lease = sample, lease
+        self._cached_at = time.monotonic()
+        return sample

@@ -217,18 +217,25 @@ Three independent designs were produced from the same fact sheet.
      marked non-inheritable, and the `LISTEN_*` variables are cleared.
    - **Effect.** Connections that arrive while one generation exits and the
      next starts wait in the kernel accept queue instead of being refused.
-   - **The old generation relays open requests for at most
-     `VIEWER_DRAIN_SECONDS` (5 s), then closes them.** Viewers resume from
-     their cursor. Today the drain is unbounded: the old process keeps the host
-     lock until the longest stream ends.
-   - **Deployment operations are not cut by that bound.** Each operation runs
-     in a shielded task that records its receipt even if its request is
-     cancelled. The supervisor joins those tasks before releasing host
-     authority. An operation still waiting for the operations lock then fails
-     as closed, with a definite receipt.
-   - **Other supervisor-local requests are cut after 5 s.** These are host
-     settings, memory budgets and pairing; they are short, and clients retry
-     with their idempotency key.
+   - **While a holder keeps the socket, the old generation drains its relayed
+     exchanges.**
+     - An exchange that already answered (an open viewer stream) is closed
+       after `VIEWER_DRAIN_SECONDS` (5 s); the viewer resumes from its cursor.
+     - An exchange still waiting for its response headers is never closed
+       before it answers, up to 30 s. The API worker answers an accepted
+       request with its saved receipt within 15 s, so a chat start or work-lane
+       mutation in flight at SIGTERM gets its receipt, not a 500.
+     - Without a holder (a self-bound listener) the old generation relays
+       every exchange to completion, as before: closing early would gain
+       nothing, because nothing queues the next connection.
+     - Today the drain is unbounded: the old process keeps the host lock until
+       the longest stream ends.
+   - **Deployment operations survive the drain.** Each operation runs in a
+     shielded task that records its receipt even if its request is cancelled.
+     A cancelled request answers 503 with the operation ID and `Retry-After`;
+     the caller reads the receipt again. The supervisor joins those tasks
+     before releasing host authority. An operation still waiting for the
+     operations lock then fails as closed, with a definite receipt.
    - **Without an inherited socket**, `serve`'s pre-start probe now uses
      `SO_REUSEADDR` like the real listener. TIME_WAIT no longer blocks a
      restart for a minute; a live listener is still refused.
@@ -237,10 +244,17 @@ Three independent designs were produced from the same fact sheet.
      provider and integration credentials. It resends them for up to 120 s,
      and only when the host provably did not run them:
      - a connection that was never established, or
-     - the gateway's new `X-Nebula-IPC-Undispatched: 1` 503. The gateway
-       returns it before dispatch while it is reconnecting, closed or
-       slot-limited, or when it cannot load the peer. A peer that is not ready,
-       or whose lease expired, still gets a 401 that is not resent.
+     - the gateway's new `X-Nebula-IPC-Undispatched: 1` 503, which it
+       returns before dispatch only while the host is being replaced (closed,
+       or not yet holding the host lock).
+     - Capacity limits (busy request slots, the 16-peer cap) and peer
+       failures (an unreadable credential) answer a plain 503 and fail at
+       once, as before. A peer that is not ready, or whose lease expired,
+       still gets a 401 that is not resent.
+   - **Waiting callers share one observation.** The host-pressure gate keeps
+     one observation in flight; every turn queued behind it gets its outcome.
+     During a host outage the queued turns therefore fail together within one
+     120 s window, not one window each.
    - Admission, follow-up dispatch, credentials and the browser bridge
      therefore wait through the gap.
    - Calls with effects (Butler memory, knowledge, memory control, host
@@ -381,11 +395,16 @@ The review checked every kind of work against the design.
 ## Prototype
 
 Changed modules:
-- `runtime_service.py`: `inherited_listener`, bounded viewer drain.
+- `runtime_service.py`: `inherited_listener`, and the drain that starts only
+  while a holder keeps the socket.
+- `supervisor.py`: `drain_relays`, which closes only exchanges that already
+  answered.
+- `runtime_host_pressure.py`: one shared host-pressure observation.
 - `cli.py`: socket adoption, `--listen-fd`; `probe_listen_address` with
   `SO_REUSEADDR`.
 - `runtime_management.py` and `supervisor.py`: shielded deployment operations,
-  joined before host authority is released.
+  a retryable 503 for a cancelled request, and joining before host authority
+  is released.
 - `runtime_ipc.py`: `RuntimeIpcUndispatched`.
 - `runtime_host_services.py`: `HostServiceClient`, undispatched 503 marker.
 - `runtime_project_handoff.py`: in-flight follow-up blocker.

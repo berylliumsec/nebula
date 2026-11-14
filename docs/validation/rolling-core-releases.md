@@ -60,6 +60,8 @@ Every run had two accommodations; neither is part of the change:
 | E4 | This change, behind a held listener | Full roll A→B: stage, migrate, supervisor generation swap, API, target, 4 handoffs (132.8 s) | 9/9 | 6/6 queue items complete. Each viewer cut once at the swap and resumed. 1051/1051 probes OK, max 19.3 s |
 | E5 | This change | Same roll B→C, started while admission was held, including one cold project; release at +75 s (204.8 s) | 6/6 | 1682/1682 probes OK, max 20.9 s. One project reported "A queued follow-up is being dispatched" for 17 s, then transferred cleanly |
 | E6 | This change | C→D handoff of one cold project whose `http.invoke/v1` chat start was still queued | 2/2 | Turn queued at 13:14:50; project transferred at about 13:15:21; turn admitted on the target at 13:16:14; one provider request. The start command completed on the source. The follow-up enqueue waited 29 s behind it on the work lane, then ran on the target |
+| E7 | After the review fixes | A→B host activation behind the holder; prepare_api then timed out under load average 44 | 9/9 | The supervisor generation swap took 38 s. 835/835 probes OK (max 37.6 s), none refused. The API worker missed the existing 20 s readiness bound twice, leaving `uncertain` receipts; no work was affected |
+| E7c | After the review fixes | Same roll resumed with a new operation ID: API blue/green, target, 4 handoffs (152 s) | 9/9 | 6/6 queue items complete, 0 error frames; `resident_versions` is the new release only |
 
 Additional detail for E4–E6:
 - Host activation took 19.4 s and 21.2 s. Connections queued in the kernel
@@ -76,14 +78,24 @@ These ran with a pidfd-capable Python 3.12, on SQLite and on PostgreSQL
   - a host observation waits for a replacement host socket;
   - the wait is bounded;
   - calls with effects are sent once;
-  - an operation's own 503 is not resent.
+  - an operation's own 503 is not resent;
+  - three turns queued behind a missing host fail together within one window,
+    and share one call when the host answers;
+  - peer-capacity and peer failures fail after one attempt, while a closed
+    gateway still marks its 503 undispatched.
 - `tests/v3/test_runtime_service.py`:
   - an inherited listener queues connections between generations;
   - an explicit fd must match an IP-literal `--host`/`--port`, so a wildcard
     is refused;
-  - the restart probe ignores TIME_WAIT but refuses a live listener.
+  - a wrong descriptor (a socketpair end, a pipe) is refused without being
+    closed or modified;
+  - the restart probe ignores TIME_WAIT but refuses a live listener;
+  - a self-bound listener gets no drain;
+  - under a real uvicorn stop with a holder, the drain closes an answered
+    stream but a request still awaiting its receipt receives its 202.
 - `tests/v3/test_runtime_management.py`: a deployment operation whose request
-  is cancelled still records `succeeded` before the host releases authority.
+  is cancelled answers a retryable 503 with its operation ID, and still records
+  `succeeded` before the host releases authority.
 
 Each regression test for the three defects, and the operation-completion test,
 fails without its fix. Failures in the touched suites

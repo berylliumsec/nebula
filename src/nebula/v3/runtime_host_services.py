@@ -306,16 +306,18 @@ class HostSharedServices:
                 scope, receive, send
             )
             return
-        if (
-            self.closed
-            or self.host.closed
-            or self.host.lock.descriptor is None
-            or self._slots.locked()
-        ):
+        if self.closed or self.host.closed or self.host.lock.descriptor is None:
+            # Only a host being replaced is marked: its caller resends the
+            # call to the next generation, which never saw it.
             await JSONResponse(
-                {"detail": "Shared host services are reconnecting or busy"},
+                {"detail": "Shared host services are reconnecting"},
                 status_code=503,
                 headers={UNDISPATCHED_HEADER: "1"},
+            )(scope, receive, send)
+            return
+        if self._slots.locked():
+            await JSONResponse(
+                {"detail": "Shared host services are busy"}, status_code=503
             )(scope, receive, send)
             return
         peers = [
@@ -336,10 +338,10 @@ class HostSharedServices:
                 peer = await self._peer(peers[0].decode("ascii"))
             except (RuntimeIpcError, OSError):
                 # diagnostic-expected: a missing or rejected private peer yields a bounded unavailable response.
+                # Peer capacity and credential failures do not heal by
+                # waiting for a replacement; the caller fails at once.
                 await JSONResponse(
-                    {"detail": "Shared host peer is unavailable"},
-                    status_code=503,
-                    headers={UNDISPATCHED_HEADER: "1"},
+                    {"detail": "Shared host peer is unavailable"}, status_code=503
                 )(scope, receive, send)
                 return
             if peer is None:

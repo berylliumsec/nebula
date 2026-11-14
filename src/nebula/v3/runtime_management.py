@@ -163,7 +163,25 @@ class RuntimeManagement:
                 # A supervisor generation that stops relaying this request
                 # still completes the operation and its receipt; the caller
                 # reads that receipt again with the same operation ID.
-                result = await asyncio.shield(execution)
+                try:
+                    result = await asyncio.shield(execution)
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is None or not current.cancelling():
+                        raise
+                    # diagnostic-expected: the stopping host answers definitely; the shielded operation keeps running and records its receipt.
+                    current.uncancel()
+                    return JSONResponse(
+                        {
+                            "detail": "Nebula is restarting. The operation continues; read it again with the same operation ID.",
+                            "operation_id": command.operation_id,
+                        },
+                        status_code=503,
+                        headers={
+                            "Cache-Control": "private, no-store",
+                            "Retry-After": "1",
+                        },
+                    )
             response = JSONResponse(
                 result, headers={"Cache-Control": "private, no-store"}
             )

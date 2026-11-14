@@ -79,10 +79,47 @@ class _Availability:
             return
         task = asyncio.current_task()
         owner.viewers.add(task)
+
+        async def answer(message):
+            # A drain may close an exchange only after it has answered; one
+            # still waiting for its upstream receipt must not become a 500.
+            if message["type"] in {"http.response.start", "websocket.accept"}:
+                owner.answered.setdefault(task, asyncio.get_running_loop().time())
+            await send(message)
+
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, answer)
         finally:
             owner.viewers.discard(task)
+            owner.answered.pop(task, None)
+
+
+async def drain_relays(owner, seconds, *, limit, answer_grace=1.0):
+    """Close the exchanges a stopping generation still relays, boundedly.
+
+    Used only while a longer-lived holder keeps the public socket, so the next
+    generation answers as soon as this one exits. An exchange that already
+    answered (an open viewer stream) is closed after ``seconds`` and resumes
+    from its cursor on the next generation. One still waiting for its response
+    headers (an accepted request whose receipt is pending upstream) is never
+    closed before it answers, up to ``limit``; after answering it gets
+    ``answer_grace`` to finish a complete response.
+    """
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    await asyncio.sleep(seconds)
+    while True:
+        pending = {task for task in owner.viewers if not task.done()}
+        if not pending:
+            return
+        now = loop.time()
+        for task in pending:
+            answered = owner.answered.get(task)
+            if (answered is not None and now - answered >= answer_grace) or (
+                now - began >= limit
+            ):
+                task.cancel()
+        await asyncio.sleep(0.1)
 
 
 class RuntimeSupervisor:
@@ -141,6 +178,8 @@ class RuntimeSupervisor:
         self._next_process_reconciliation = 0.0
         self._activated_handoffs: set[str] = set()
         self.viewers: set[asyncio.Task] = set()
+        # Relayed exchanges that have sent their response start, by loop time.
+        self.answered: dict[asyncio.Task, float] = {}
         authentication = CoreAuthentication(self.store, operator_token)
         self.authentication = authentication
 

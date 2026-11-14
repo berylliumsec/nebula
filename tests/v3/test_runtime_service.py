@@ -1,5 +1,6 @@
 """Startup migrations require a new database or explicit offline adoption."""
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -7,9 +8,13 @@ import socket
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 
+import httpx
 import pytest
+import uvicorn
 
+from nebula.v3 import runtime_service
 from nebula.v3.cli import probe_listen_address
 from nebula.v3.database import Database
 from nebula.v3.runtime_launcher import runtime_root, write_private
@@ -17,8 +22,10 @@ from nebula.v3.runtime_service import (
     OFFLINE_ADOPTION,
     inherited_listener,
     initialize_database,
+    relay_drain,
     runtime_pool_settings,
 )
+from nebula.v3.supervisor import _Availability
 
 pytestmark = pytest.mark.anyio
 
@@ -247,3 +254,98 @@ def test_restart_probe_ignores_closed_connections_but_refuses_a_live_listener():
         probe_listen_address("127.0.0.1", port)
     server.close()
     probe_listen_address("127.0.0.1", port)
+
+
+def test_wrong_descriptor_is_refused_without_closing_or_changing_it():
+    # A mistyped --listen-fd can name a socket this process already uses (an
+    # event-loop socketpair) or a non-socket. Neither is closed or modified.
+    left, right = socket.socketpair()
+    reader, writer = os.pipe()
+    try:
+        os.set_inheritable(left.fileno(), True)
+        with pytest.raises(ValueError, match="not a listening TCP socket"):
+            inherited_listener("127.0.0.1", 8000, descriptor=left.fileno())
+        os.fstat(left.fileno())
+        assert os.get_inheritable(left.fileno())
+        left.sendall(b"x")
+        assert right.recv(1) == b"x"
+        with pytest.raises(ValueError, match="not a socket"):
+            inherited_listener("127.0.0.1", 8000, descriptor=reader)
+        os.fstat(reader)
+    finally:
+        left.close()
+        right.close()
+        os.close(reader)
+        os.close(writer)
+
+
+def test_self_bound_listener_keeps_relaying_every_exchange_to_completion():
+    server = SimpleNamespace(should_exit=True)
+    assert relay_drain(server, SimpleNamespace(), inherited=False) is None
+
+
+async def test_drain_closes_answered_streams_but_never_an_exchange_awaiting_its_receipt(
+    monkeypatch,
+):
+    # SIGTERM while a holder keeps the socket: an open viewer stream is closed
+    # after the drain window and resumes elsewhere, but a request whose
+    # upstream receipt has not answered yet still receives it.
+    monkeypatch.setattr(runtime_service, "VIEWER_DRAIN_SECONDS", 0.3)
+    owner = SimpleNamespace(
+        closing=False, closed=False, started=True, viewers=set(), answered={}
+    )
+
+    async def upstream(scope, receive, send):
+        if scope["path"] == "/stream":
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            while True:
+                await send(
+                    {"type": "http.response.body", "body": b"x", "more_body": True}
+                )
+                await asyncio.sleep(0.05)
+        await asyncio.sleep(1.5)
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 202,
+                "headers": [(b"x-nebula-command-id", b"cmd-1")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(16)
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(_Availability(upstream, owner), log_level="critical")
+    )
+    drain = relay_drain(server, owner, inherited=True)
+    serving = asyncio.create_task(server.serve(sockets=[listener]))
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}", timeout=30
+        ) as client:
+            for _ in range(100):
+                if server.started:
+                    break
+                await asyncio.sleep(0.05)
+            async with client.stream("GET", "/stream") as stream:
+                chunks = stream.aiter_bytes()
+                await anext(chunks)
+                pending = asyncio.create_task(client.post("/accept"))
+                await asyncio.sleep(0.2)
+                server.should_exit = True
+                with pytest.raises(httpx.HTTPError):
+                    async for _chunk in chunks:
+                        pass
+            answer = await pending
+            assert answer.status_code == 202
+            assert answer.headers["x-nebula-command-id"] == "cmd-1"
+        await asyncio.wait_for(serving, 10)
+    finally:
+        server.should_exit = True
+        drain.cancel()
+        await asyncio.gather(drain, serving, return_exceptions=True)
+        listener.close()

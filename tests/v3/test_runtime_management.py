@@ -95,9 +95,10 @@ async def test_stage_and_recovery_selection_replay_authoritative_result(
 async def test_operation_finishes_its_receipt_when_a_stopping_host_cancels_the_request(
     recovery, tmp_path
 ):
-    # A supervisor generation that is being replaced stops relaying requests
-    # after its drain window. An accepted operation still completes, records
-    # a definite receipt, and is joined before host authority is released.
+    # A stopping supervisor generation may cancel a relayed request. The
+    # caller still gets a definite, retryable answer instead of a generic 500;
+    # the accepted operation completes, records its receipt, and is joined
+    # before host authority is released.
     source = tmp_path / "slow-source"
     digest = bundle(source, version="slow")
     original = recovery.root.stage
@@ -117,7 +118,10 @@ async def test_operation_finishes_its_receipt_when_a_stopping_host_cancels_the_r
     request = asyncio.create_task(recovery.client.post(PATH, headers=AUTH, json=body))
     await asyncio.wait_for(entered.wait(), 10)
     request.cancel()
-    await asyncio.gather(request, return_exceptions=True)
+    (answer,) = await asyncio.gather(request, return_exceptions=True)
+    assert isinstance(answer, httpx.Response), answer
+    assert answer.status_code == 503 and answer.headers["Retry-After"] == "1"
+    assert answer.json()["operation_id"] == "stage-during-drain"
     pending = set(recovery.root.management.inflight)
     assert pending
     await recovery.root.close()
