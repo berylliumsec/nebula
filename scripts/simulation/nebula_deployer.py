@@ -20,6 +20,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import socket
 import sqlite3
 import stat
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import zipfile
 from uuid import uuid4
@@ -75,6 +77,23 @@ CI_ARTIFACT_LIMIT = 1024 * 1024
 CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DEPLOYMENT_HISTORY_LIMIT = 32
+# After SIGTERM the foreground supervisor gets this long to exit. Releases
+# without #1021 (including 5ec14b4) wait for every open viewer stream, such as
+# a browser tab watching Work, and never exit on their own. systemd would then
+# SIGKILL only the onefile bootloader after its stop timeout (KillMode=process)
+# and leave that supervisor running with the Core lock and port.
+SUPERVISOR_STOP_GRACE_SECONDS = 30
+SUPERVISOR_EXIT_SECONDS = 30
+# A host that exits before it is ready is started again, a bounded number of
+# times. Releases without #1023 (including 5ec14b4) refuse to bind while the
+# previous host's closed connections remain in TIME_WAIT for about a minute.
+HOST_START_ATTEMPTS = 16
+HOST_RESTART_DELAY_SECONDS = 5
+# Host activation waits this long for chat turns to settle before it stops the
+# supervisor. Workers without #1023 fail a turn that needs the host while none
+# is running, so none may be queued, admitting or running across the gap.
+HOST_QUIET_WAIT_SECONDS = 300
+HOST_QUIET_POLL_SECONDS = 5
 
 
 class _LegacyAttempt:
@@ -2391,7 +2410,7 @@ def api() -> CoreClient:
 
 
 def service(action: str) -> None:
-    if action not in {"start", "stop"}:
+    if action not in {"start", "stop", "reset-failed"}:
         raise ValueError("unsupported service action")
     run("systemctl", "--user", action, SERVICE, timeout=180)
 
@@ -2906,14 +2925,38 @@ def wait_supervisor_host_ready(
     prior_status: dict[str, Any] | None,
     allow_degraded_workers: bool = False,
     degraded_baseline: bool = False,
+    restart_exited: bool = False,
     timeout: int = 480,
 ) -> dict[str, Any]:
+    """Wait for the exact host release to answer with its proven state.
+
+    With ``restart_exited`` (the caller just started the unit), a host that
+    exits before it becomes ready is started again after a short delay, at
+    most HOST_START_ATTEMPTS times in all. A unit without systemd Restart=
+    otherwise stays down for the whole wait: a release without #1023 exits
+    at once while the previous host's connections remain in TIME_WAIT.
+    """
     expected_package_version = runtime_package_version(version)
     deadline = time.monotonic() + timeout
     last_problem = "supervisor did not publish its accepted host identity"
+    starts = 1
     while time.monotonic() < deadline:
         try:
-            if unit_state(SERVICE) != "active":
+            unit = unit_state(SERVICE)
+            if unit != "active":
+                if restart_exited and unit in {"inactive", "failed"}:
+                    if starts >= HOST_START_ATTEMPTS:
+                        raise RuntimeError(
+                            f"Supervisor host {version} exited before it became "
+                            f"ready after {starts} starts"
+                        )
+                    time.sleep(HOST_RESTART_DELAY_SECONDS)
+                    if unit == "failed":
+                        service("reset-failed")
+                    service("start")
+                    starts += 1
+                    last_problem = "supervisor service exited before it became ready"
+                    continue
                 last_problem = "supervisor service is not active"
                 time.sleep(2)
                 continue
@@ -2970,6 +3013,7 @@ def wait_supervisor_host_ready(
                 "retained_project_owners": continuity["retained"],
                 "runtime_pid": identity["pid"],
                 "runtime_process_birth": identity["process_birth"],
+                "host_starts": starts,
             }
         except (OSError, ValueError, HTTPError) as error:
             last_problem = str(error)[:300]
@@ -2995,6 +3039,144 @@ def _save_host_activation(record: dict[str, Any], journal: dict[str, Any]) -> No
     atomic_json(STATE, record)
 
 
+def chat_turns_at_restart_boundary(client: CoreClient) -> list[str]:
+    """Return projects with a chat turn queued, admitting or running."""
+    busy = []
+    for project in client.all_entities("engagements"):
+        project_id = project.get("id")
+        if not isinstance(project_id, str) or not project_id:
+            raise ValueError("Core returned a project without an ID")
+        activity = client.get("chat/session-activity", engagement_id=project_id)
+        if not isinstance(activity, list):
+            raise ValueError("Core chat activity has an invalid shape")
+        if any(
+            not isinstance(item, dict) or item.get("state") != "idle"
+            for item in activity
+        ):
+            busy.append(project_id)
+    return busy
+
+
+def wait_quiet_restart_boundary() -> dict[str, Any]:
+    """Wait, bounded, until no chat turn would cross the host restart.
+
+    Supervisor workers outlive the host, but a worker without #1023 fails a
+    turn that reads the host (admission pressure, credentials, the browser
+    bridge) while no host is running. The operator gate runs before staging
+    and migration; this repeats its chat check at the moment of the stop.
+    Reads fail closed. Nothing is stopped when chat work does not settle.
+    """
+    started = time.monotonic()
+    deadline = started + HOST_QUIET_WAIT_SECONDS
+    while True:
+        busy = chat_turns_at_restart_boundary(api())
+        if not busy:
+            return {"quiet_after_seconds": round(time.monotonic() - started, 1)}
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Chat turns stayed queued, admitting or running in {len(busy)} "
+                "project(s) at the host restart boundary, so the supervisor was "
+                "not stopped: " + ", ".join(busy[:10])
+            )
+        time.sleep(HOST_QUIET_POLL_SECONDS)
+
+
+def _process_alive(identity: dict[str, Any]) -> bool:
+    return linux_process_birth(identity["pid"]) == identity["process_birth"]
+
+
+def _kill_process(identity: dict[str, Any]) -> bool:
+    """SIGKILL exactly this process identity; False when it already exited."""
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if pidfd_open is None or not hasattr(signal, "pidfd_send_signal"):
+        # Some builds lack pidfd support; the birth check directly before the
+        # signal leaves only PID reuse within that instant unguarded.
+        if linux_process_birth(identity["pid"]) != identity["process_birth"]:
+            return False
+        try:
+            os.kill(identity["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            return False
+        return True
+    try:
+        handle = pidfd_open(identity["pid"])
+    except ProcessLookupError:
+        return False
+    try:
+        # The descriptor pins the process: a reused PID cannot be signalled.
+        if linux_process_birth(identity["pid"]) != identity["process_birth"]:
+            return False
+        signal.pidfd_send_signal(handle, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return False
+    finally:
+        os.close(handle)
+
+
+def stop_supervisor_service(identity: dict[str, Any] | None) -> dict[str, Any]:
+    """Stop the foreground unit within a bound and prove its Core process exited.
+
+    ``identity`` is the supervisor process named by private runtime discovery
+    (a live pid with its birth), or None when none is running. After
+    SUPERVISOR_STOP_GRACE_SECONDS that exact process is killed. This bounds the
+    stop of releases that wait forever for open viewer streams, and it also
+    ends a supervisor that a KillMode=process stop timeout left running after
+    systemd killed only its onefile bootloader. Workers are never signalled. A
+    unit left failed by the forced exit is reset so the next start is clean.
+    """
+    started = time.monotonic()
+    outcome: dict[str, Any] = {
+        "process": (
+            {"pid": identity["pid"], "process_birth": identity["process_birth"]}
+            if identity is not None
+            else None
+        ),
+        "forced": False,
+    }
+    stopped = threading.Event()
+
+    def enforce_grace() -> None:
+        if identity is None:
+            return
+        deadline = started + SUPERVISOR_STOP_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if not _process_alive(identity):
+                return
+            stopped.wait(0.2)
+        if _kill_process(identity):
+            outcome["forced"] = True
+            outcome["forced_after_seconds"] = round(time.monotonic() - started, 1)
+
+    watchdog = threading.Thread(
+        target=enforce_grace, name="nebula-supervisor-stop-grace", daemon=True
+    )
+    watchdog.start()
+    try:
+        if unit_state(SERVICE) not in {"inactive", "failed"}:
+            service("stop")
+    finally:
+        # The watchdog keeps its grace even after the unit stops: an orphaned
+        # supervisor must still exit before another one may start.
+        watchdog.join()
+    if identity is not None:
+        deadline = time.monotonic() + SUPERVISOR_EXIT_SECONDS
+        while _process_alive(identity):
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "The previous supervisor process did not exit after SIGKILL"
+                )
+            time.sleep(0.2)
+    unit = unit_state(SERVICE)
+    if unit == "failed":
+        # A forced stop, or a host that crashed, leaves the unit failed. That
+        # only records the past exit; the process proof above is what counts.
+        service("reset-failed")
+        outcome["reset_failed"] = True
+    outcome["seconds"] = round(time.monotonic() - started, 1)
+    return outcome
+
+
 def _switch_supervisor_host(
     version: str,
     *,
@@ -3015,8 +3197,12 @@ def _switch_supervisor_host(
 
     if release.parent != RELEASES or release.name != version or release.is_symlink():
         raise RuntimeError("Host activation target is not the exact immutable release")
-    if unit_state(SERVICE) != "inactive":
-        service("stop")
+    # Record the operation before stopping anything, so a failure below leaves
+    # a journal that a retry or `rollback-host` resumes.
+    persist()
+    # The running supervisor, or one a stop timeout left behind. Discovery
+    # that names an exited process is not a running host.
+    journal["service_stop"] = stop_supervisor_service(host_connection(allow_stale=True))
     require_stopped()
     if current_release_version() != version:
         switch_to(release)
@@ -3032,6 +3218,7 @@ def _switch_supervisor_host(
         prior_status=prior_status,
         allow_degraded_workers=allow_degraded_workers,
         degraded_baseline=prior_status.get("health") == "degraded",
+        restart_exited=True,
     )
     journal["state"] = "complete"
     journal["readback"] = readback
@@ -3313,6 +3500,7 @@ def activate_supervisor_host(
                     raise RuntimeError(
                         "Previous supervisor does not match the interrupted activation journal"
                     )
+                existing["restart_boundary"] = wait_quiet_restart_boundary()
             readback = _switch_supervisor_host(
                 version,
                 release=release,
@@ -3329,6 +3517,9 @@ def activate_supervisor_host(
                 "previous_version": previous,
                 **readback,
             }
+    # Settle chat work first; the preflight below then reads the state that
+    # the restart actually starts from.
+    restart_boundary = wait_quiet_restart_boundary()
     service_identity = supervisor_service_identity()
     prior_host = host_connection()
     if prior_host is None:
@@ -3383,6 +3574,7 @@ def activate_supervisor_host(
         },
         "prior_service": service_identity,
         "operations": operations,
+        "restart_boundary": restart_boundary,
         "allow_degraded_workers": allow_degraded_workers,
         "degraded_baseline_reason": (
             "Accepted aggregate degraded status attributed by read-only diagnosis to stale old execution-worker leases; individual failed-worker equality is not asserted."
@@ -3407,7 +3599,10 @@ def activate_supervisor_host(
         _save_host_activation(record, journal)
         try:
             old_release, _ = runtime_release(previous_version)
-            current_identity = host_connection()
+            # The previous supervisor was stopped, so discovery usually still
+            # names its exited process: that means no host is running, not
+            # that the rollback cannot proceed.
+            current_identity = host_connection(allow_stale=True)
             if (
                 current_release_version() == previous_version
                 and unit_state(SERVICE) == "active"
