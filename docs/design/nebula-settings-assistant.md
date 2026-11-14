@@ -8,10 +8,15 @@ Enter or Tab reads the description and latest 200 check-ins, `/` searches titles
 and descriptions, R refreshes (Ctrl-R in Search), and Escape returns to the
 unchanged conversation and unsent draft. Failed reads explain retry in place;
 refresh retains selection when the item still exists and matches. Reopening or
-reconnecting reads Core again. There is no polling or terminal board mutation;
-Butler should direct creation, editing and status changes to the web Work
-destination or existing authorized Work tools, not claim that viewing a check-in
-verifies its results. Plain terminal `/board` prints status-grouped tasks.
+reconnecting reads Core again. There is no polling. The board also performs the
+web Work page's operator actions with Core readback: N creates a Ready item, U
+saves a check-in (summary, next step, blocker, status), T tracks the current
+conversation as a linked In Progress item, L links the selected item to the
+current conversation, and A toggles agent Work tools; Escape cancels a prompt
+without a write. Title edits and deletion are not offered (Core has no delete
+route). Butler should not claim that viewing or saving a check-in verifies its
+results. Plain terminal `/board` prints status-grouped tasks, and `/board new`,
+`update`, `track`, `link` and `tools` run the same actions.
 Settings > Paired devices remains the destination for pairing/revoking this
 client; no new Settings action or browser handoff is needed for board reads.
 

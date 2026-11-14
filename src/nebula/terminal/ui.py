@@ -68,7 +68,7 @@ COMMANDS = {
     "projects": "Browse, create or restore a project",
     "project": "Rename, relink, set mode, VPN, scope and tool follow-up, or archive this project",
     "snapshot": "Read this project's Core-owned summary",
-    "board": "Browse this project's Work board and check-ins (read-only)",
+    "board": "Project Work board: browse, add items, check in, track or link this chat",
     "notes": "Browse and edit this project's saved Notes",
     "chats": "Browse saved conversations",
     "new": "Start a new conversation",
