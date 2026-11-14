@@ -222,6 +222,24 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Reviewer approved the plan");
     await expect(page.getByText("Initial plan needs review")).toBeHidden();
     expect(page.url()).toContain(selected.items[0].item_id);
+    // Core saves a check-in with a blocker as Blocked whatever status is chosen; the form shows that before saving.
+    const updateForm = page.locator(".work-checkin-form");
+    const statusSelect = updateForm.getByRole("combobox", { name: "Status" });
+    await updateForm.getByRole("textbox", { name: "Progress" }).fill("Release notes need legal review");
+    await statusSelect.selectOption("review");
+    await updateForm.getByRole("textbox", { name: "Blocker" }).fill("Waiting for legal");
+    await expect(statusSelect).toHaveValue("blocked");
+    await expect(statusSelect).toBeDisabled();
+    await expect(statusSelect).toHaveAccessibleDescription("A blocker saves this update as Blocked.");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".work-checkin-form").analyze()).violations).toEqual([]);
+    await updateForm.getByRole("button", { name: "Save update" }).click();
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Blocked: Waiting for legal");
+    await expect.poll(async () => (await (await api.get(`engagements/${selected.engagement_id}/work/${selected.items[0].item_id}`)).json() as { status?: string }).status).toBe("blocked");
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Blocked: Waiting for legal");
+    await expect(statusSelect).toHaveValue("blocked");
+    await expect(statusSelect).toBeEnabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     const accessibility = await new AxeBuilder({ page }).include(".work-page").analyze();
     expect(accessibility.violations).toEqual([]);

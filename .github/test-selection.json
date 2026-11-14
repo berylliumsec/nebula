@@ -1,12 +1,12 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Re-tracking a conversation after its tracked Work item is Done was a silent no-op: the Work page's Track posted request_id 'track:<session>' (a key per conversation) and Core returns a request ID's first item whatever its status, so Track returned the Done item, ignored the new title and the conversation still had no open item. Track now follows a deterministic chain: while Core returns a Done item it posts again with 'track:<session>:after:<done item id>' (at most 50 steps), so repeated clicks, other tabs and other clients reach the same open item and a finished item is never reused. Core's retry contract is unchanged (Work import reuses request IDs for Done items). Selected: WorkPage.test.tsx (its mock POST now follows Core's request-ID rule; the new re-track case fails on main; also covers another client tracking first) and the work-import real-Core browser journey, extended to finish the tracked item with a check-in and track the conversation again (one Done and one new In progress item, the Working-now link opens the new one). That spec was red on main and is repaired: 32+ character token (minimum since 2d9f099), Idempotency-Key on its API mutations (required since b833782), a readiness wait before the first mutation, and removal of Core's read-only retained release; the helpers are in the new shared ui/tests/fixtures/core-api.ts.",
-  "exclusions": "No Python suites: Core code is unchanged. work-import runs three of its eight profiles (desktop 1440, Chromium 390, WebKit 390); the others are the same journey at other widths. The work-hub area also matches WorkPage* in playwright-impact.json but does not reach Track; it is extended in the separate blocker-status PR. No native code changed.",
+  "reason": "This branch is stacked on the re-track PR (#1067) and carries its commit; review only the top commit. A Work check-in with a blocker is saved as Blocked by Core (work.py: status = 'blocked' if data.blocker else ...), but the Work page's check-in form kept showing and posting the operator's chosen status (for example Review or Done), so the saved status silently differed from the form. The form now shows Blocked in a disabled Status select while the Blocker field has non-blank text, describes it with the hint 'A blocker saves this update as Blocked.' (aria-describedby), posts status 'blocked', and restores the operator's own choice when the blocker is cleared. Core's rule is unchanged. Selected: WorkPage.test.tsx (the new blocker case fails on main; the file also holds #1067's re-track case) and the work-import real-Core browser journey (repaired in #1067), extended at its end with a blocked check-in: select Review, type a blocker, the select shows Blocked disabled with its description, no horizontal overflow, axe on the form, save, Core's item status reads 'blocked', reload keeps it.",
+  "exclusions": "No Python suites: Core code is unchanged. work-import runs three of its eight profiles (desktop 1440, Chromium 390, WebKit 390); the others are the same journey at other widths. The work-hub area (real-core.spec.ts) also matches WorkPage* but is red on main (unkeyed mutations, 428) and real-core.spec.ts (1.18 MB) cannot be staged under the public commit guard's 1,024,000-byte limit; the real-core-e2e repair owns it. No native code changed.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 15,
+    "frontend": 16,
     "native": 0,
     "playwright": 3
   },
@@ -23,5 +23,5 @@
   "checks": [
     "frontend-audit"
   ],
-  "change_digest": "f3c190f8830e3889d440de7319e34eacdaea4e53b5e71b143bc47512db5c5caf"
+  "change_digest": "e9af625558b9b29e489737fa4751106261c95d540f0062df41bd12ae86e97d8a"
 }

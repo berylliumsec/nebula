@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, Plus, RefreshCw, X } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { ChatSessionActivity } from "../api/types";
@@ -82,6 +82,10 @@ export function WorkPage() {
   const [nextStep, setNextStep] = useState("");
   const [blocker, setBlocker] = useState("");
   const [nextStatus, setNextStatus] = useState<Status>("in_progress");
+  const blockerHintId = useId();
+  // Core saves any check-in with a blocker as Blocked, so the form shows that status instead of the operator's choice.
+  const blocked = blocker.trim() !== "";
+  const checkInStatus: Status = blocked ? "blocked" : nextStatus;
   const selectedProject = engagements.find((project) => project.id === projectId);
   const activeProjects = useMemo(() => engagements.filter((project) => project.status !== "archived"), [engagements]);
   const projectById = useMemo(() => new Map(activeProjects.map((project) => [project.id, project])), [activeProjects]);
@@ -380,7 +384,7 @@ export function WorkPage() {
     setBusy(true); setError(undefined);
     try {
       await api.request<WorkUpdate>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}/updates`, {
-        method: "POST", body: JSON.stringify({ summary: summary.trim(), next_step: nextStep.trim() || null, blocker: blocker.trim() || null, status: nextStatus }),
+        method: "POST", body: JSON.stringify({ summary: summary.trim(), next_step: nextStep.trim() || null, blocker: blocker.trim() || null, status: checkInStatus }),
       });
       setSummary(""); setNextStep(""); setBlocker("");
       await refresh();
@@ -504,7 +508,7 @@ export function WorkPage() {
                 : <p className="work-description">{selectedItem.description}</p>)}
               <dl className="work-fields"><div><dt>Assigned to</dt><dd>{selectedItem.assignee_session_id ? <Link to={resourcePath(projectId, "conversation", selectedItem.assignee_session_id)}>{assignee(selectedItem)}</Link> : "Unassigned"}</dd></div><div><dt>Last update</dt><dd>{time(selectedItem.last_update_at)}</dd></div></dl>
               {selectedUpdates.length !== 1 && <><h3>Earlier check-ins</h3><ol className="work-timeline">{selectedUpdates.slice(1).map((update) => <li key={update.id}><span className="work-timeline-dot" /><div><div className="work-timeline-top"><strong>{update.actor_kind === "agent" ? "Agent" : update.actor_kind === "import" ? "Imported" : "Operator"}</strong><time dateTime={update.created_at}>{time(update.created_at)}</time></div><WorkUpdateDetails update={update} projectId={selectedItem.engagement_id} /></div></li>)}{!selectedUpdates.length && <li className="work-no-updates">No check-ins yet.</li>}</ol></>}
-              <form className="work-checkin-form" onSubmit={(event) => void checkIn(event)}><h3>Post an update</h3><label>Progress<textarea required maxLength={4000} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What changed?" /></label><label>Next step<input maxLength={2000} value={nextStep} onChange={(event) => setNextStep(event.target.value)} /></label><label>Blocker<input maxLength={2000} value={blocker} onChange={(event) => setBlocker(event.target.value)} /></label><label>Status<select value={nextStatus} onChange={(event) => setNextStatus(event.target.value as Status)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}</select></label><button className="button primary" type="submit" disabled={busy || !summary.trim()}>Save update</button></form>
+              <form className="work-checkin-form" onSubmit={(event) => void checkIn(event)}><h3>Post an update</h3><label>Progress<textarea required maxLength={4000} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What changed?" /></label><label>Next step<input maxLength={2000} value={nextStep} onChange={(event) => setNextStep(event.target.value)} /></label><label>Blocker<input maxLength={2000} value={blocker} onChange={(event) => setBlocker(event.target.value)} /></label><label>Status<select value={checkInStatus} disabled={blocked} aria-describedby={blocked ? blockerHintId : undefined} onChange={(event) => setNextStatus(event.target.value as Status)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}</select>{blocked && <small id={blockerHintId} className="work-field-hint">A blocker saves this update as Blocked.</small>}</label><button className="button primary" type="submit" disabled={busy || !summary.trim()}>Save update</button></form>
             </> : <div role="alert" className="work-empty-inline">This item is unavailable. <Link to={projectSurface(projectId, "work")}>Return to board</Link></div>}
           </aside>}
         </div>

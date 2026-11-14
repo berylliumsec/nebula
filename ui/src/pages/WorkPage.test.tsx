@@ -96,6 +96,29 @@ describe("Work operator journey", () => {
     expect(screen.getByRole("heading", { name: "Build the search page" })).toBeVisible();
   });
 
+  it("shows that a check-in with a blocker is saved as Blocked and restores the chosen status without one", async () => {
+    const user = userEvent.setup();
+    openItem();
+    const form = (await screen.findByRole("heading", { name: "Post an update" })).closest("form")!;
+    const status = within(form).getByRole("combobox", { name: "Status" });
+    await user.selectOptions(status, "review");
+    await user.type(within(form).getByRole("textbox", { name: "Blocker" }), "Waiting for API keys");
+    expect(status).toHaveValue("blocked");
+    expect(status).toBeDisabled();
+    expect(status).toHaveAccessibleDescription("A blocker saves this update as Blocked.");
+    await user.clear(within(form).getByRole("textbox", { name: "Blocker" }));
+    expect(status).toHaveValue("review");
+    expect(status).toBeEnabled();
+    expect(status).not.toHaveAccessibleDescription();
+    await user.type(within(form).getByRole("textbox", { name: "Blocker" }), "Waiting for API keys");
+    await user.type(within(form).getByRole("textbox", { name: "Progress" }), "Filters need the search API");
+    await user.click(within(form).getByRole("button", { name: "Save update" }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work/item-1/updates", expect.objectContaining({ method: "POST", body: expect.stringContaining('"blocker":"Waiting for API keys","status":"blocked"') }));
+    expect(await screen.findByText("Blocked: Waiting for API keys")).toBeVisible();
+    expect(status).toHaveValue("blocked");
+    expect(status).toBeEnabled();
+  });
+
   it("starts with agent tools on and keeps saved Work when they are disabled", async () => {
     const user = userEvent.setup();
     openItem();
