@@ -1,36 +1,27 @@
 {
-  "reviewed_by": "Claude Code",
-  "reason": "Since #987 auto-admission started a project worker only for an open chat or a chat-start command, so every other project-routed write (rename, archive, delete and anything else the API delivers to the project's worker) on a project without an open chat stayed queued with 202 forever; archived projects were skipped outright, so deleting one could never run, and the stranded rows blocked runtime-stop. Queued non-barrier project commands now admit exactly their project (archived included, retirement-held excluded); idle retirement waits for queued or running project commands and request_project_retirement declines while one is queued; a request arriving during a retirement hold waits (bounded) and is then admitted instead of a 409. Selection covers chatless edit and archived delete through real API ingress, routing and auto-admission; retirement declining with queued work and ignoring host-committed barriers; the bounded ingress wait and its 409 bound; the existing chat-scoped admission, child/parent, legacy goal-create, metadata-batch and read no-admission cases; retirement hold and release contracts (the #987 hold test now records that retirement declines while project commands are queued); readmission fence and held-project cases; and the API worker suite for the changed ingress.",
-  "exclusions": "No UI, native or frontend code changed, so no frontend, native or Playwright tests; the operator journey (empty project rename, archive and delete through the API and the desktop project switcher, delete right after the last chat, runtime-stop afterwards) was checked on scratch supervisor Cores (see the PR). test_runtime_reconciliation.py, test_runtime_chat_resume.py, test_runtime_chat_stream.py and the real-Core test in test_shutdown_readmission.py fail identically on main in this environment (pidfd, fixture and LAN prerequisites); across the 13 related files no test fails only with this change. PostgreSQL parametrizations are collected but skip in CI; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
+  "reviewed_by": "Claude",
+  "reason": "The terminal client treated a supervisor Core's 202 saved-request receipt as the final answer: a first message on a cold project worker was reported as 'Connection lost. Nothing was resent' and restored to the draft while Core ran it, and mutations returned the receipt as the resource (a rename reported the old title as saved). AsyncApi now follows runtime/requests/{id}/response like the GUI, never resending; streamed submissions report the saved state, attach to the saved turn, block a duplicate new-conversation send, and /follow or /status resolve the receipt. Selected: the transport and shell unit contracts (including new receipt cases), the TUI presentation suite for the submission label, and real paired TLS LAN Core cases that send, stream, mutate with idempotency keys and recover remembered chats.",
+  "exclusions": "No full suites. No frontend, native or Playwright changes; only the separate Python terminal client changed, so browser viewport projects do not exercise it. Other tests/v3/test_terminal_core.py cases and tests/test_terminal_pty.py are not selected: 6 of them fail identically on pristine origin/main locally (scroll [52-18], wide layout, direct chats/reconnect, loading while opening, polling, queue/detach/approval), so they cannot prove this change; the selected four pass on main and on this branch. Supervisor 202 receipts cannot occur on the create_app fixture Core; that path is covered by MockTransport unit cases plus real supervisor scratch-Core evidence in the PR body, not executed by CI. No live provider calls or Core deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 57,
+    "python": 89,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_work_batches.py::test_project_edit_and_archived_delete_without_a_chat_admit_their_workers",
-    "tests/v3/test_runtime_work_batches.py::test_retirement_does_not_strand_queued_project_work",
-    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker",
-    "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
-    "tests/v3/test_runtime_work_batches.py::test_open_chat_created_without_routing_gets_its_exact_project_worker",
-    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
-    "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
-    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
-    "tests/v3/test_deployment_lifecycle.py::test_open_parent_chat_does_not_keep_child_project_worker",
-    "tests/v3/test_deployment_lifecycle.py::test_open_child_chat_keeps_its_exact_project_worker",
-    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_uses_its_own_hold_and_releases_exact_owner",
-    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation",
-    "tests/v3/test_shutdown_readmission.py::test_quiesced_and_fresh_projects_readmit_without_resetting_fences",
-    "tests/v3/test_shutdown_readmission.py::test_non_null_or_archived_projects_remain_held",
-    "tests/v3/test_shutdown_readmission.py::test_partial_shutdown_abort_keeps_unknown_worker_until_positive_retirement",
-    "tests/v3/test_api_worker.py"
+    "tests/test_terminal_transport.py",
+    "tests/test_terminal_shell.py",
+    "tests/test_terminal_tui.py",
+    "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
+    "tests/v3/test_terminal_core.py::test_paired_full_screen_slash_menu_tracks_chat_context",
+    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
+    "tests/v3/test_terminal_core.py::test_paired_tui_recovers_missing_remembered_chat"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4ec481fd9cc3167a4c0af4774a6c2178fdb35f4ff3bc18d841d916e40e64812c"
+  "change_digest": "77e6b326e9af658d1153f769523a4111ed65b1aa010bf325213dec59f4337c54"
 }

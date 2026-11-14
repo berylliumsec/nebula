@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
@@ -29,6 +30,55 @@ class ApiError(ClientError):
         super().__init__(message)
         self.status = status
         self.detail = detail
+
+
+# Core saves a project mutation durably, then answers 202 with a receipt when
+# its execution owner has not replied within its own short wait. The GUI keeps
+# reading that receipt's response for two minutes; the terminal does the same.
+RECEIPT_WAIT_SECONDS = 120.0
+
+
+class AcceptedRequest(ClientError):
+    """Core saved the request, but its execution owner has not answered yet."""
+
+    def __init__(self, command_id: str):
+        super().__init__(
+            "Core saved this request, but its execution owner has not answered "
+            "yet. Nothing was resent; check the saved result before retrying."
+        )
+        self.command_id = command_id
+
+
+def accepted_receipt(response: httpx.Response) -> str | None:
+    """Return Core's saved-request ID for a 202 receipt, not for other 202s."""
+    if response.status_code != 202:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    receipt = body.get("receipt")
+    if body.get("state") == "accepted" and isinstance(receipt, dict):
+        command = receipt.get("command_id")
+    elif set(body) == {"state", "command_id"}:
+        # Reading a saved response before its owner starts returns this shape.
+        command = body.get("command_id")
+    else:
+        return None
+    header = response.headers.get("x-nebula-command-id")
+    if not isinstance(command, str) or not command or (header and header != command):
+        return None
+    return command
+
+
+def _retry_after(response: httpx.Response) -> float:
+    try:
+        value = float(response.headers.get("retry-after", "1"))
+    except ValueError:
+        value = 1.0
+    return min(5.0, max(0.25, value))
 
 
 def terminal_text(value: Any) -> str:
@@ -247,6 +297,8 @@ def key(value: Any) -> str:
 class AsyncApi:
     """One exact-origin connection. Writes and submissions are never retried."""
 
+    receipt_wait = RECEIPT_WAIT_SECONDS
+
     def __init__(
         self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
     ):
@@ -262,8 +314,26 @@ class AsyncApi:
         if path.startswith(("/", "http:", "https:")):
             raise ClientError("Use a path within this Core's API.")
         response = await self.client.request(method, path, **kwargs)
+        command = accepted_receipt(response)
+        if command is not None:
+            response = await self._saved_response(command, response)
         check_response(response)
         return response.json() if response.content else None
+
+    async def _saved_response(
+        self, command: str, response: httpx.Response
+    ) -> httpx.Response:
+        """Read the one saved result of an accepted request; never resend it."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.receipt_wait
+        while accepted_receipt(response) is not None:
+            if loop.time() >= deadline:
+                raise AcceptedRequest(command)
+            await asyncio.sleep(_retry_after(response))
+            response = await self.client.get(
+                f"runtime/requests/{key(command)}/response"
+            )
+        return response
 
     async def page(
         self, path: str, *, offset: int = 0, limit: int = 100, **params: Any
@@ -282,6 +352,7 @@ class AsyncApi:
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         # Core can spend minutes preparing a turn before acceptance; once
         # accepted its stream includes heartbeats. This is never a retry budget.
+        command: str | None = None
         async with self.client.stream(
             method,
             path,
@@ -290,33 +361,69 @@ class AsyncApi:
             headers={"Accept": "text/event-stream"},
             json=body,
         ) as response:
-            if not response.is_success:
+            if response.status_code == 202:
                 await response.aread()
-                check_response(response)
-            event = "message"
-            data: list[str] = []
-            size = 0
-            async for line in response.aiter_lines():
-                if not line:
-                    if data:
-                        try:
-                            payload = json.loads("\n".join(data))
-                        except ValueError as exc:
-                            raise ClientError(
-                                "Core sent an invalid stream. Review /status and /history before retrying."
-                            ) from exc
-                        if not isinstance(payload, dict):
-                            raise ClientError(
-                                "Core sent an invalid stream object. Review /status."
-                            )
-                        yield event, payload
-                    event, data, size = "message", [], 0
-                elif line.startswith("event:"):
-                    event = line[6:].strip()
-                elif line.startswith("data:"):
-                    size += len(line)
-                    if size > 8 * 1024 * 1024:
+                command = accepted_receipt(response)
+                delay = _retry_after(response)
+            if command is None:
+                async for item in self._frames(response):
+                    yield item
+                return
+        # The request is saved on Core. Report that before waiting so the shell
+        # never treats a slow execution owner as a lost, unsent message.
+        yield "accepted", {"type": "accepted", "command_id": command}
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.receipt_wait
+        while True:
+            if loop.time() >= deadline:
+                raise AcceptedRequest(command)
+            await asyncio.sleep(delay)
+            async with self.client.stream(
+                "GET",
+                f"runtime/requests/{key(command)}/response",
+                params={"after": 0},
+                timeout=httpx.Timeout(30, read=300),
+                headers={"Accept": "text/event-stream"},
+            ) as response:
+                if response.status_code == 202:
+                    await response.aread()
+                    if accepted_receipt(response) is not None:
+                        delay = _retry_after(response)
+                        continue
+                async for item in self._frames(response):
+                    yield item
+                return
+
+    async def _frames(
+        self, response: httpx.Response
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        if not response.is_success:
+            await response.aread()
+            check_response(response)
+        event = "message"
+        data: list[str] = []
+        size = 0
+        async for line in response.aiter_lines():
+            if not line:
+                if data:
+                    try:
+                        payload = json.loads("\n".join(data))
+                    except ValueError as exc:
                         raise ClientError(
-                            "Core sent an oversized stream frame. Reconnect and review /history."
+                            "Core sent an invalid stream. Review /status and /history before retrying."
+                        ) from exc
+                    if not isinstance(payload, dict):
+                        raise ClientError(
+                            "Core sent an invalid stream object. Review /status."
                         )
-                    data.append(line[5:].removeprefix(" "))
+                    yield event, payload
+                event, data, size = "message", [], 0
+            elif line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                size += len(line)
+                if size > 8 * 1024 * 1024:
+                    raise ClientError(
+                        "Core sent an oversized stream frame. Reconnect and review /history."
+                    )
+                data.append(line[5:].removeprefix(" "))

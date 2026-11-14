@@ -70,6 +70,8 @@ class View:
     submitting: bool = False
     uncertain: bool = False
     environments: list[str] | None = None
+    # Core's saved-request ID while a submission waits for its execution owner.
+    receipt: str | None = None
 
     @property
     def project_id(self) -> str:
