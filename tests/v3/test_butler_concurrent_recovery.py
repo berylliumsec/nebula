@@ -281,7 +281,7 @@ async def test_background_runtime_matrix(
         _setup as harness_setup,
         _payload,
     )
-    from nebula.v3.domain import HarnessProfile, HarnessSession
+    from nebula.v3.domain import HarnessProfile, HarnessSession, ProviderProfile
 
     provider = RoutedProvider(
         parent=[
@@ -300,6 +300,24 @@ async def test_background_runtime_matrix(
     )
     store, project, harness, chat, adapter, runtime = await harness_setup(
         tmp_path, providers={"provider": provider}
+    )
+    # Since 6509bd4 a chat compacts at 60% of input capacity. On the 8K fallback
+    # window a background compaction would consume the parent's scripted
+    # replies, so the local model gets a configured window this exchange fits.
+    local_model = await store.get(ProviderProfile, "provider")
+    await store.update(
+        ProviderProfile,
+        local_model.id,
+        {
+            "metadata": {
+                **local_model.metadata,
+                "options": {
+                    **local_model.metadata.get("options", {}),
+                    "context_window": 32_768,
+                },
+            }
+        },
+        expected_revision=local_model.revision,
     )
     harness = await store.update(
         HarnessProfile,
