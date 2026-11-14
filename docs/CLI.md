@@ -96,10 +96,21 @@ scrollable description and latest 200 check-ins, including blockers and next
 steps. Tab cycles through details, Search and the task list; `/` focuses Search.
 Search matches titles and descriptions. R (or Ctrl-R while searching) refreshes
 from Core and retains the selected task when it still matches. Escape returns
-to the same chat and unsent draft; running chat work continues. This is a
-read-only, on-demand view, not a live activity feed. Create, edit and move
-tasks in the web Work page. The plain terminal prints tasks grouped by status
-when `/board` runs; run it again to refresh.
+to the same chat and unsent draft; running chat work continues. It is an
+on-demand view, not a live activity feed. The board also takes the web Work
+page's actions, each read back from Core: N creates a Ready item (title and
+optional description); U checks in on the selected item (summary, optional next
+step and blocker, and its status, defaulting to the current one); T tracks the
+current conversation as a new In Progress item linked to it; L links the
+selected item to the current conversation (refused when another conversation
+owns it); A turns agent Work tools on or off. Prompts open inside the board;
+Enter saves and Escape cancels without a write. The status line reports Core's
+result, including when Core's status differs from the one chosen (a check-in
+with a blocker is saved as Blocked) or when tracking returns this conversation's
+existing item. Work has no delete or title edit here or in the web page. The
+plain terminal prints tasks grouped by status when `/board` runs; run it again to
+refresh, and use `/board new`, `/board update`, `/board track`, `/board link` or
+`/board tools` for the same actions.
 
 Open `/notes` to browse the selected project's saved Notes without leaving the
 chat. The full-screen panel loads notes on open and refresh only. Up/Down selects
@@ -154,7 +165,7 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | `/thinking` | Show or collapse the model's thinking in the transcript |
 | `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
 | `/notes` | Browse, create, edit, refresh and delete the selected project's saved Notes in the full-screen TUI |
-| `/board` | Read the project's Work board, search tasks, inspect descriptions/check-ins and refresh without changing chat |
+| `/board` | Browse the project's Work board, create items, check in, track or link the current conversation and toggle agent Work tools, each read back from Core |
 | `/model`, `/settings`, `/mcp` | Select Core models and supported next-turn controls; `/mcp` selects this conversation's probed MCP servers |
 | `/skills`, `$name` | Toggle several skills for the next turn in one picker; `$name message` selects one skill for that message |
 | `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete a Core goal, including budgets and retained skills |

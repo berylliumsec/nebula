@@ -1509,7 +1509,7 @@ class Shell:
         elif name == "board":
             from .board import show_project_board
 
-            await show_project_board(self)
+            await show_project_board(self, args)
         elif name == "chats":
             await self.select_chat(" ".join(args) or None)
         elif name == "new":
