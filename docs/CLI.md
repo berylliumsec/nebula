@@ -199,6 +199,14 @@ permit sensitive data and needs an explicit confirmation that redacted tool
 output may be sent to it. Each change saves the whole setting with the project's
 revision and is read back from Core.
 
+If you press Enter while a command or send is still finishing, the entry is kept
+as the next input instead of being dropped: the footer shows **Next:** with the
+text, it runs as soon as the shell is ready, and Ctrl-C puts it back in the
+composer for editing. In multi-select menus, Space toggles the highlighted row
+until you start typing a search; after that Space is part of the search, so
+multi-word searches such as `Select all` work. Enter always toggles. A prompt
+that opens with a suggested answer puts the cursor at its end, so typing adds to it.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
