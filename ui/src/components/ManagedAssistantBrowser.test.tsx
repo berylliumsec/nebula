@@ -10,11 +10,21 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   let liveTab = { id: "tab-1", url: "https://example.test/", title: "Example" };
   let resetNoticePending = pageReset;
   let refuseLink = linkedFailure;
+  // What Core holds for assistant control once a Stop or Resume is saved, and the failures queued for the next ones.
+  let coreControlPaused: boolean | undefined;
+  const controlFailures: Error[] = [];
   const connection: { close: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; readyState: number; onopen?: () => void } = { close: vi.fn(), send: vi.fn(), readyState: 1 };
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
     if (path.endsWith("/browser-companion")) { const reset = resetNoticePending; resetNoticePending = false; return { session_id: "browser-1", conversation_id: "chat-1", page_state_reset: reset, tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] }; }
     if (path.endsWith("/control") && controlRead) return controlRead;
+    if (path.includes("/control?paused=")) {
+      const failure = controlFailures.shift();
+      if (failure) throw failure;
+      coreControlPaused = path.endsWith("paused=true");
+      return { paused: coreControlPaused };
+    }
+    if (path.endsWith("/control") && coreControlPaused !== undefined) return { paused: coreControlPaused };
     if (path.endsWith("/files")) {
       if (options?.method === "POST") savedFiles = [{ reference: "file-1", filename: JSON.parse(String(options.body)).filename, size: 12, media_type: "text/plain" }];
       return savedFiles;
@@ -44,7 +54,8 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   const api = { request, openBrowserCompanionStream: vi.fn(() => connection) } as unknown as ApiClient;
   const props = { api, projectId: "project-1", active, initialOpenUrl: linkedUrl, initialOpenRequest: linkedUrl ? `link-${Math.random()}` : undefined, onConversation, onContext, onControlChange, onImage: vi.fn(), imageSupported: false };
   const view = render(<ManagedAssistantBrowser {...props} />);
-  return { proposeUpload: () => { actions = [{ id: "action-1", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: false, request: { operation: "upload", file_ref: "file-1", tab_id: "tab-1", page_revision: "revision-1", element_id: "2" } }]; }, setControlsOpen: (controlsOpen: boolean) => view.rerender(<ManagedAssistantBrowser {...props} controlsOpen={controlsOpen} />), clickLinkAgain: () => view.rerender(<ManagedAssistantBrowser {...props} initialOpenRequest={`link-${Math.random()}`} />), request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; }, allowLink: () => { refuseLink = false; } };
+  return { proposeUpload: () => { actions = [{ id: "action-1", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: false, request: { operation: "upload", file_ref: "file-1", tab_id: "tab-1", page_revision: "revision-1", element_id: "2" } }]; }, setControlsOpen: (controlsOpen: boolean) => view.rerender(<ManagedAssistantBrowser {...props} controlsOpen={controlsOpen} />), clickLinkAgain: () => view.rerender(<ManagedAssistantBrowser {...props} initialOpenRequest={`link-${Math.random()}`} />), request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; }, allowLink: () => { refuseLink = false; },
+    failControl: (message: string) => { controlFailures.push(new Error(message)); }, coreReportsControl: (paused: boolean) => { coreControlPaused = paused; } };
 }
 
 describe("ManagedAssistantBrowser", () => {
@@ -228,6 +239,95 @@ describe("ManagedAssistantBrowser", () => {
     expect(onControlChange).toHaveBeenLastCalledWith(true);
     fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+  });
+  it("keeps a Stop that Core did not confirm on screen with a retry", async () => {
+    const { request, onControlChange, failControl } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    failControl("revision conflict: expected 4, found 5");
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("Assistant control was not stopped. The Assistant may still act in this browser.");
+    expect(notice).toHaveTextContent("revision conflict: expected 4, found 5");
+    // The control still shows what Core last confirmed: the Assistant has control.
+    expect(screen.getByRole("button", { name: "Stop assistant control" })).toBeEnabled();
+    expect(onControlChange).toHaveBeenLastCalledWith(true);
+    const retry = within(notice).getByRole("button", { name: "Retry stop" });
+    retry.focus();
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(request.mock.calls.filter(([path]) => path.endsWith("control?paused=true"))).toHaveLength(2);
+    expect(onControlChange).toHaveBeenLastCalledWith(false);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toHaveFocus());
+  });
+  it("keeps the failed Stop and its retry when the retry fails too", async () => {
+    const { onControlChange, failControl, setControlsOpen } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    failControl("Nebula Core is unreachable.");
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Nebula Core is unreachable.");
+    failControl("The request timed out.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry stop" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("The request timed out."));
+    expect(screen.getByRole("alert")).toHaveTextContent("Assistant control was not stopped.");
+    expect(screen.getByRole("button", { name: "Retry stop" })).toBeEnabled();
+    expect(onControlChange).toHaveBeenLastCalledWith(true);
+    // Hiding the browser chrome hides the control itself, never the failed Stop or its retry.
+    setControlsOpen(false);
+    expect(screen.getByRole("alert")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry stop" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  it("reports a Resume that Core did not confirm without claiming control", async () => {
+    const { onControlChange, failControl } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    failControl("revision conflict: expected 2, found 3");
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("Assistant control was not resumed.");
+    expect(notice).not.toHaveTextContent("may still act");
+    expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled();
+    expect(onControlChange).not.toHaveBeenCalledWith(true);
+    fireEvent.click(within(notice).getByRole("button", { name: "Retry resume" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop assistant control" })).toBeEnabled();
+  });
+  it("drops the failed Stop notice once Core reports control stopped", async () => {
+    const { onControlChange, failControl, coreReportsControl } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    failControl("The response was lost.");
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
+    await screen.findByRole("alert");
+    // Core saved the Stop after all, or another device stopped control.
+    coreReportsControl(true);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument(), { timeout: 4500 });
+    expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled();
+    expect(onControlChange).toHaveBeenLastCalledWith(false);
+  }, 10000);
+  it("says a Stop is in progress and takes no second click until Core answers", async () => {
+    const { request, onControlChange, connection } = fixture();
+    await waitFor(() => expect(connection.onopen).toBeTypeOf("function"));
+    act(() => connection.onopen?.());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    let answer!: (value: { paused: boolean }) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Stopping assistant control…");
+    expect(screen.getByRole("button", { name: "Stop assistant control" })).toBeDisabled();
+    // Not stopped until Core says so.
+    expect(onControlChange).toHaveBeenLastCalledWith(true);
+    await act(async () => { answer({ paused: true }); });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Assistant paused"));
+    expect(onControlChange).toHaveBeenLastCalledWith(false);
   });
   it("does not start a browser when the operator is using another workspace view", () => {
     const { request } = fixture(false);
