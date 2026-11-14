@@ -55,6 +55,20 @@ describe("project view lease", () => {
     expect(releases.at(-1)?.projectId).toBe("two");
   });
 
+  it("ends the lease when the page goes away and holds it again when restored from cache", async () => {
+    const { api, holds, releases } = fakeApi();
+    renderHook(() => useProjectViewLease(api as never, "one"));
+    await advance(0);
+    act(() => { window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })); });
+    expect(releases).toEqual([{ projectId: "one", leaseId: holds[0].leaseId }]);
+    await advance(60_000);
+    expect(holds).toHaveLength(1);
+    act(() => { window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })); });
+    await advance(0);
+    expect(holds).toHaveLength(2);
+    expect(holds[1].leaseId).toBe(holds[0].leaseId);
+  });
+
   it("lets the lease lapse while the page is hidden and takes it again on return", async () => {
     const { api, holds } = fakeApi();
     renderHook(() => useProjectViewLease(api as never, "one"));

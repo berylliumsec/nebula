@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { HarnessProfile, PostToolAssistantConfig } from "../api/types";
+import { PROJECT_RUNTIME_UNAVAILABLE, ProjectRuntimeRecovery } from "../api/projectRuntime";
 import { PostToolAssistant } from "./PostToolAssistant";
 
 const harness: HarnessProfile = {
@@ -50,6 +51,29 @@ function apiFor(config: PostToolAssistantConfig) {
 }
 
 describe("PostToolAssistant", () => {
+  it("waits for a starting project worker instead of showing an error, then loads", async () => {
+    let ready = false;
+    const recovery = new ProjectRuntimeRecovery(async () => ({ answered: ready }));
+    const { api } = apiFor({ suggestNextSteps: false, takeNotes: false, backendKind: "provider", cloudConfirmed: false });
+    const path = "/api/v1/engagements/project/post-tool-assistant";
+    vi.mocked(api.getPostToolAssistant).mockImplementation(async () => {
+      if (!ready) {
+        recovery.unavailable(path);
+        throw Object.assign(new Error("The project runtime is not ready."), { status: 503, code: PROJECT_RUNTIME_UNAVAILABLE });
+      }
+      recovery.answered(path);
+      return { suggestNextSteps: false, takeNotes: false, backendKind: "provider", cloudConfirmed: false };
+    });
+    (api as unknown as { projectRuntime: ProjectRuntimeRecovery }).projectRuntime = recovery;
+    render(<PostToolAssistant api={api} engagementId="project" providers={[]} harnesses={[]} onRun={vi.fn()} triggerVariant="panel" />);
+    await waitFor(() => expect(recovery.state).toBe("reconnecting"));
+    expect(screen.queryByText("Tool assistance unavailable")).toBeNull();
+    ready = true;
+    await waitFor(() => expect(api.getPostToolAssistant).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(screen.queryByText("Tool assistance unavailable")).toBeNull();
+    expect(recovery.state).toBe("available");
+  });
+
   it.each(["execution", "mission"])("explicitly requests automatic notes for a completed %s", async kind => {
     const config: PostToolAssistantConfig = {suggestNextSteps: false, takeNotes: true, backendKind: "harness",
       harnessProfileId: harness.id, model: harness.defaultModel, cloudConfirmed: false};
