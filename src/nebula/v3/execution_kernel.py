@@ -8491,9 +8491,7 @@ def create_execution_kernel(
             digest = await runtime.install()
         except WebSearchError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        await asyncio.to_thread(
-            runtime.record, image_digest=digest, last_detail="image pinned"
-        )
+        await runtime.record(image_digest=digest, last_detail="image pinned")
         return await web_search_status()
 
     @app.post(
@@ -8535,7 +8533,7 @@ def create_execution_kernel(
 
         runtime = require_search_runtime()
         result = await runtime.check()
-        await asyncio.to_thread(runtime.record, last_test=result)
+        await runtime.record(last_test=result)
         return await web_search_status()
 
     @app.put(
@@ -8550,7 +8548,7 @@ def create_execution_kernel(
         runtime = require_search_runtime()
         if len(set(request.engines)) != len(request.engines):
             raise HTTPException(status_code=422, detail="search engines must be unique")
-        await asyncio.to_thread(runtime.record, engines=request.engines)
+        await runtime.record(engines=request.engines)
         # The engine list lives in the mounted settings file, so a running
         # runtime keeps the old list until it is recreated.
         state, _ = await runtime.state()
