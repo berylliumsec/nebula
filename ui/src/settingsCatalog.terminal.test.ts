@@ -31,4 +31,7 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   }
   expect(pairing).toContain("turn elapsed time");
   expect(pairing).toContain("token usage");
+  for (const phrase of ["/project", "rename project", "relink project folder", "restore archived project", "delete archived project", "project execution mode", "project network scope"]) {
+    expect(pairing).toContain(phrase);
+  }
 });
