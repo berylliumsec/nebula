@@ -109,7 +109,8 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
   const fixture = await control.reset(false, false, undefined, true);
   await pair(page, request, fixture);
   // As on a real Core: idle project workers retire, and the next project command readmits one.
-  await control.control("automatic-recovery");
+  // No idle grace here, so the worker retires as soon as the project goes idle.
+  await control.control("automatic-recovery", {idle_grace_ms: 0});
   const headers = {Authorization: `Bearer ${fixture.token}`};
   const core = (path: string) => `${fixture.origin}/api/v1/${path}`;
   const projectRuntime = async () => {
