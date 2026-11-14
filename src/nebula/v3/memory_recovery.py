@@ -88,7 +88,18 @@ class MemoryReconciler:
 
     async def _loop(self):
         while True:
-            await self.once()
+            try:
+                await self.once()
+            except Exception as error:
+                # A worker now rides out a short SQL outage instead of
+                # restarting; an unreadable pass must not end cleanup for good.
+                record_caught_exception(
+                    "runtime",
+                    "memory.reconciliation.waiting",
+                    "Lost-worker cleanup could not read its jobs; the next pass retries.",
+                    error,
+                    stage="reconciliation",
+                )
             await asyncio.sleep(5)
 
     async def once(self) -> list[str]:
