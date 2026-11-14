@@ -108,7 +108,7 @@ async def setup(tmp_path):
     return store, project, codex, harness, mcp, service
 
 
-def destination(service, project, codex, repository="owner/nebula", **changes):
+async def destination(service, project, codex, repository="owner/nebula", **changes):
     data = dict(
         name=repository,
         repository=repository,
@@ -118,7 +118,7 @@ def destination(service, project, codex, repository="owner/nebula", **changes):
         auto_publish=True,
     )
     data.update(changes)
-    return service.create_destination(project.id, DestinationWrite(**data))
+    return await service.create_destination(project.id, DestinationWrite(**data))
 
 
 async def candidate(store, project, dest, key="refresh-failure", **changes):
@@ -141,7 +141,7 @@ async def candidate(store, project, dest, key="refresh-failure", **changes):
 
 async def test_public_issue_rechecks_visibility_and_holds_private_content(tmp_path):
     store, project, codex, _, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex)
+    dest = await destination(service, project, codex)
     calls = []
 
     async def github(_, method, path, **kwargs):
@@ -181,7 +181,7 @@ async def test_public_issue_rechecks_visibility_and_holds_private_content(tmp_pa
 
 async def test_private_to_public_change_blocks_research_draft_before_create(tmp_path):
     store, project, codex, _, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex, auto_publish=False)
+    dest = await destination(service, project, codex, auto_publish=False)
     draft = await candidate(
         store,
         project,
@@ -211,7 +211,7 @@ async def test_private_to_public_change_blocks_research_draft_before_create(tmp_
 
 async def test_unknown_github_visibility_holds_before_create(tmp_path):
     store, project, codex, _, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex)
+    dest = await destination(service, project, codex)
     draft = await candidate(store, project, dest)
 
     async def github(_, method, path, **kwargs):
@@ -231,7 +231,7 @@ async def test_destination_identity_is_fixed_and_uncertain_create_cannot_be_revi
     tmp_path,
 ):
     store, project, codex, _, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex)
+    dest = await destination(service, project, codex)
     data = DestinationWrite(
         name="Updated name",
         repository="owner/other",
@@ -292,7 +292,7 @@ async def test_slow_issue_review_does_not_occupy_the_oversight_worker(tmp_path):
 
 async def test_interrupted_source_review_is_held_without_replaying_codex(tmp_path):
     store, project, codex, harness, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex)
+    dest = await destination(service, project, codex)
     scan = await store.create(
         ButlerIssueScan(
             engagement_id=project.id,
@@ -310,7 +310,7 @@ async def test_interrupted_source_review_is_held_without_replaying_codex(tmp_pat
 
 async def test_timeout_is_reconciled_by_key_without_blind_retry(tmp_path):
     store, project, codex, _, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex)
+    dest = await destination(service, project, codex)
     draft = await candidate(store, project, dest)
     creates = []
     found = []
@@ -353,7 +353,7 @@ async def test_trusted_mcp_contract_routes_to_selected_private_repository(tmp_pa
             capabilities=McpCapabilitySnapshot(tools=tools),
         )
     )
-    dest = destination(
+    dest = await destination(
         service,
         project,
         codex,
@@ -380,7 +380,7 @@ async def test_completed_saved_chat_creates_separate_candidates_with_toolless_co
     tmp_path,
 ):
     store, project, codex, harness, _, service = await setup(tmp_path)
-    dest = destination(service, project, codex)
+    dest = await destination(service, project, codex)
     provider = await store.create(
         ProviderProfile(
             name="Local",

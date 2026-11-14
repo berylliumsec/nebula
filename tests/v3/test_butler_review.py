@@ -69,11 +69,11 @@ from tests.v3.test_chat import FakeProvider
 
 async def test_completed_turn_has_precedent_query_before_semantic_review():
     class Memory:
-        def list(self, project_id, *, limit):
+        async def list(self, project_id, *, limit):
             assert project_id == "project" and limit == 40
             return SimpleNamespace(items=[])
 
-        def search(self, project_id, query, *, limit):
+        async def search(self, project_id, query, *, limit):
             assert project_id == "project" and limit == 3
             assert "completed investigation" in query
             return SimpleNamespace(
@@ -132,8 +132,8 @@ async def _events(store):
     return await store.replay_operation_events(project_stream_id("project"))
 
 
-def _plan_edit(goals, goal):
-    return goals.update(
+async def _plan_edit(goals, goal):
+    return await goals.update(
         goal.session_id,
         GoalUpdate(
             expected_revision=goal.revision,
@@ -200,7 +200,7 @@ async def test_plan_change_event_is_atomic_and_skips_budget_only_edit(
 ):
     _, store, goals, goal, _ = await _setup(tmp_path)
     before = len((await _events(store)))
-    changed = _plan_edit(goals, goal)
+    changed = await _plan_edit(goals, goal)
     event = (await _events(store))[-1]
     assert len((await _events(store))) == before + 1
     assert event.event_type == "goal.plan_changed"
@@ -241,7 +241,7 @@ async def test_plan_change_event_is_atomic_and_skips_budget_only_edit(
 
 async def test_review_packet_is_bounded_and_contains_core_citations(tmp_path):
     _, store, goals, goal, _ = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     event = (await _events(store))[-1]
     packet = await build_review_packet(store, "project", event)
     assert packet.event_type == "goal.plan_changed"
@@ -281,7 +281,7 @@ async def test_precedent_packet_is_bounded_and_excludes_foreign_project_memory(
 
 async def test_review_decision_survives_restart_without_duplicate_model_call(tmp_path):
     path, store, goals, goal, worker = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     candidate = (await _events(store))[-1]
     reviewer = CitingReviewer(choice="steer")
     saved = await review_pending(store, "project", worker.worker_id, reviewer)
@@ -324,7 +324,7 @@ async def test_escalation_opens_one_project_incident_with_cited_evidence_and_rep
 ):
     path, store, goals, goal, worker = await _setup(tmp_path)
     (await store.create(Engagement(id="other-project", name="Other Project")))
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     reviewer = CitingReviewer(choice="escalate")
 
     first = await review_pending(store, "project", worker.worker_id, reviewer)
@@ -447,7 +447,7 @@ async def test_saved_agent_review_request_wakes_act_once_with_turn_evidence(tmp_
 async def test_repeated_escalation_updates_existing_concern_without_duplicate(tmp_path):
     _, store, goals, goal, worker = await _setup(tmp_path)
     reviewer = CitingReviewer(choice="escalate")
-    first_plan = _plan_edit(goals, goal)
+    first_plan = await _plan_edit(goals, goal)
     first = await review_pending(store, "project", worker.worker_id, reviewer)
     assert first is not None
     (
@@ -485,7 +485,7 @@ async def test_repeated_escalation_updates_existing_concern_without_duplicate(tm
 
 async def test_expired_review_lease_cannot_record_escalation(tmp_path):
     _, store, goals, goal, worker = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
 
     class ExpiringReviewer(CitingReviewer):
         async def review(self, packet):
@@ -514,7 +514,7 @@ async def test_incident_write_failure_rolls_back_decision_and_review_cursor(
     tmp_path, monkeypatch
 ):
     _, store, goals, goal, worker = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     original = semantic_review._append_project_event
 
     def fail_on_incident(*args, **kwargs):
@@ -548,7 +548,7 @@ async def test_incident_write_failure_rolls_back_decision_and_review_cursor(
 
 async def test_same_goal_plan_burst_is_coalesced_into_one_review(tmp_path):
     _, store, goals, goal, worker = await _setup(tmp_path)
-    first = _plan_edit(goals, goal)
+    first = await _plan_edit(goals, goal)
     second = await goals.update(
         first.session_id,
         GoalUpdate(
@@ -610,9 +610,9 @@ async def test_attention_report_is_review_boundary_even_with_adjacent_plan_chang
 
     if attention_first:
         (await report_attention())
-        _plan_edit(goals, goal)
+        await _plan_edit(goals, goal)
     else:
-        _plan_edit(goals, goal)
+        await _plan_edit(goals, goal)
         (await report_attention())
     attention_event = next(
         event
@@ -629,7 +629,7 @@ async def test_attention_report_is_review_boundary_even_with_adjacent_plan_chang
 
 async def test_overview_exposes_project_decision_and_pages_history(tmp_path):
     _, store, goals, goal, worker = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     saved = await review_pending(store, "project", worker.worker_id, CitingReviewer())
     app = FastAPI()
     app.include_router(butler_router(worker), prefix="/api/v1")
@@ -655,7 +655,7 @@ async def test_child_review_records_observation_without_messaging_child(tmp_path
         child.session_id, GoalWrite(expected_revision=child.revision, action="start")
     )
     assert await worker.replay_project("project")
-    _plan_edit(goals, child)
+    await _plan_edit(goals, child)
     review = CitingReviewer(choice="ask")
     saved = await review_pending(store, "project", worker.worker_id, review)
     assert saved is not None
@@ -669,7 +669,7 @@ async def test_invalid_model_citation_becomes_unavailable_without_foreign_eviden
     tmp_path,
 ):
     _, store, goals, goal, worker = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     saved = await review_pending(
         store,
         "project",
@@ -746,7 +746,7 @@ async def test_escalation_joins_guaranteed_overdue_incident(tmp_path):
 
 async def test_provider_reviewer_uses_goal_runtime_without_chat_mutation(tmp_path):
     _, store, goals, goal, worker = await _setup(tmp_path)
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     chat_before = await store.get(ChatSession, goal.session_id)
 
     class ReviewProvider(FakeProvider):
@@ -811,7 +811,7 @@ async def test_harness_reviewer_uses_project_scoped_tool_free_analysis_and_check
             },
         )
     )
-    _plan_edit(goals, goal)
+    await _plan_edit(goals, goal)
     chat_before = await store.get(ChatSession, goal.session_id)
 
     class FakeHarnessRuntime:

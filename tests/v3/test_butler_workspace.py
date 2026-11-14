@@ -329,7 +329,7 @@ async def test_butler_workspace_directory_actions_and_device_handoff(tmp_path):
         )
         assert deletion["client_action"]["kind"] == "workspace_delete_directory"
         assert ((await runtime.workspace_for(selected.id)) / "archive").exists()
-        workspace.delete(
+        await workspace.delete(
             selected.id,
             "archive",
             expected_entry_identity=current["directory_identity"],

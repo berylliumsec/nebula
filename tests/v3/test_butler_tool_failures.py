@@ -208,7 +208,7 @@ async def test_changed_or_ambiguous_read_only_outcomes_do_not_create_concern(tmp
 async def test_success_after_review_cancels_redundant_parent_steer(tmp_path):
     store, app, project, main, goal, _, worker = await _setup(tmp_path)
     authority = app.state.butler_authority
-    authority.write(
+    await authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
@@ -225,7 +225,7 @@ async def test_success_after_review_cancels_redundant_parent_steer(tmp_path):
     (await _record_call(store, goal, index=3, status=ToolCallStatus.COMPLETE))
     (await authority.process_project(project.id, worker.worker_id))
     assert (await store.count_entities(ButlerAction, engagement_id=project.id)) == 0
-    assert app.state.control_assistant_work.queue.get(main.id).items == []
+    assert (await app.state.control_assistant_work.queue.get(main.id)).items == []
     assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 1
 
 
