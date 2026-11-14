@@ -50,9 +50,18 @@ class AcceptedRequest(ClientError):
         self.command_id = command_id
 
 
+# Core marks every answer on a receipt-following path, because some routes
+# answer 202 as their final response: "pending" is a receipt or status to follow
+# again; any other value is the answer itself or needs reconciliation.
+REQUEST_STATE_HEADER = "x-nebula-request-state"
+
+
 def accepted_receipt(response: httpx.Response) -> str | None:
     """Return Core's saved-request ID for a 202 receipt, not for other 202s."""
     if response.status_code != 202:
+        return None
+    marker = response.headers.get(REQUEST_STATE_HEADER, "").strip().lower()
+    if marker and marker != "pending":
         return None
     try:
         body = response.json()
@@ -61,14 +70,20 @@ def accepted_receipt(response: httpx.Response) -> str | None:
     if not isinstance(body, dict):
         return None
     receipt = body.get("receipt")
+    header = response.headers.get("x-nebula-command-id")
     if body.get("state") == "accepted" and isinstance(receipt, dict):
         command = receipt.get("command_id")
     elif set(body) == {"state", "command_id"}:
         # Reading a saved response before its owner starts returns this shape.
         command = body.get("command_id")
+    elif marker or (
+        body.get("state") == "accepted" and isinstance(body.get("turn_id"), str)
+    ):
+        # A chat turn's saved acceptance precedes its stream; the replay names
+        # its command only in the header. Older Cores do not mark it.
+        command = header
     else:
         return None
-    header = response.headers.get("x-nebula-command-id")
     if not isinstance(command, str) or not command or (header and header != command):
         return None
     return command

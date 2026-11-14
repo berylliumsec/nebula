@@ -19,7 +19,7 @@ from .execution_scope import current_execution_lease
 from .memory_actor import memory_actor
 from .memory_runtime import compute_context
 from .runtime_coordination import CoordinationConflict, LeaseLost, ProjectLease
-from .runtime_delivery import HttpIntent
+from .runtime_delivery import HttpIntent, REQUEST_PENDING, REQUEST_STATE_HEADER
 from .runtime_global_api import RuntimeGlobalApi
 from .runtime_global_delivery import GlobalSqlDelivery
 from .runtime_ipc import RuntimeIpcError
@@ -238,7 +238,7 @@ class _HostSettingsTransport:
             response = await settings.effect.response(
                 "operator", receipt.command_id, receipt=receipt, wait_seconds=15
             )
-            if response.status_code == 202:
+            if response.headers.get(REQUEST_STATE_HEADER) == REQUEST_PENDING:
                 self.pending = receipt.command_id
         await response(scope, receive, send)
 

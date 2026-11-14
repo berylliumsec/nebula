@@ -55,6 +55,21 @@ MAX_REQUEST_BYTES = 8 * 1024**2
 # JSON. Keep a bounded allowance for the filename, media type and JSON syntax.
 MAX_LIBRARY_INGEST_REQUEST_BYTES = 4 * ((20 * 1024**2 + 2) // 3) + 128 * 1024
 MAX_FRAME_BYTES = 256 * 1024
+# Some routes answer 202 as their final response, so a client cannot tell a
+# finished request from a receipt by status. Every answer on a receipt-following
+# path says which it is: the request's own final response ("complete"), a
+# receipt or status envelope to follow again ("pending"), or a saved request
+# that needs reconciliation and is never retried.
+REQUEST_STATE_HEADER = "X-Nebula-Request-State"
+REQUEST_COMPLETE = "complete"
+REQUEST_PENDING = "pending"
+REQUEST_NEEDS_RECONCILIATION = "needs-reconciliation"
+_REPLAY_EXCLUDED_HEADERS = {
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    REQUEST_STATE_HEADER.lower(),
+}
 _INTENT_HEADERS = {
     "content-type",
     "accept",
@@ -71,6 +86,21 @@ def _json(value) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()
+
+
+def replayed_headers(
+    saved, command_id: str, *, state: str = REQUEST_COMPLETE
+) -> list[tuple[bytes, bytes]]:
+    """Headers of a saved response replayed with its command and request state."""
+    return [
+        (name.lower().encode("latin-1"), value.encode("latin-1"))
+        for name, value in saved
+        if name.lower() not in _REPLAY_EXCLUDED_HEADERS
+        and not name.lower().startswith("x-nebula-internal-")
+    ] + [
+        (b"x-nebula-command-id", command_id.encode()),
+        (REQUEST_STATE_HEADER.lower().encode(), state.encode()),
+    ]
 
 
 def http_intent_body_limit(method: str, path: str) -> int:

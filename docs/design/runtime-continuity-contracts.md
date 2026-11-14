@@ -15,8 +15,16 @@ Every submitted mutation has one immutable client-generated `Idempotency-Key`.
 without submitting another command. Lookup, status and response reads are scoped
 to the authenticated actor. Unknown and other actors' keys return the same 404.
 The existing command ID, status, response and stream cursor formats remain valid.
-HTTP 202 means saved and waiting; clients honor Retry-After and never interpret it
-as an event stream. An uncertain outcome requires reconciliation, not replay.
+Some routes answer 202 as their final response, so status alone never means
+waiting. Every answer to a mutation or response read carries
+`X-Nebula-Request-State`. `pending` is a receipt or status envelope: the request
+is saved and waiting, so clients honor Retry-After and never interpret it as an
+event stream. A chat turn's saved 202 acceptance is also `pending` until its turn
+stream is ready. `complete` is the request's own response, replayed with its
+original status, headers and body. `needs-reconciliation` is the 409 for an
+uncertain outcome, which requires reconciliation, not replay. Without the marker
+(older Cores), only Core's receipt, `{state, command_id}` status and chat
+acceptance envelopes are pending.
 
 The host can report authenticated health with `api_ready: false` and recovery
 path `/settings#memory-budget-settings`. This proves recovery availability only.

@@ -15,6 +15,7 @@ from nebula.v3.api_worker import create_api_worker
 from nebula.v3.database import Database, RuntimeCommandRow
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import Engagement, PairedDeviceSession, utc_now
+from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_coordination import RuntimeCoordination
 from nebula.v3.runtime_delivery import DurableHttpRunner, RuntimeDelivery
 from nebula.v3.runtime_vault import RuntimeVault
@@ -144,6 +145,113 @@ async def test_api_replacement_replays_saved_response_without_reexecution(bounda
         f"/api/v1/runtime/requests/{command}/response?after=3", headers=_AUTH
     )
     assert beyond.status_code == 201 and beyond.content == b""
+
+
+def answer(status, body, *extra_headers):
+    async def application(_scope, _receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"application/json"), *extra_headers],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    return application
+
+
+async def test_receipt_answers_say_whether_a_202_is_the_final_response(boundary):
+    _, client = boundary.api()
+    mission = {"objective": "inert"}
+    accepted = await client.post("/api/v1/missions", headers=_AUTH, json=mission)
+    assert accepted.status_code == 202
+    assert accepted.headers["x-nebula-request-state"] == "pending"
+    command = accepted.json()["receipt"]["command_id"]
+    waiting = await client.get(
+        f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+    )
+    assert waiting.status_code == 202 and waiting.json()["command_id"] == command
+    assert waiting.headers["x-nebula-request-state"] == "pending"
+    # The route's own answer is a 202; a saved marker cannot claim it is pending.
+    final = answer(
+        202,
+        b'{"id":"run-1","status":"queued"}',
+        (b"x-nebula-request-state", b"pending"),
+    )
+    runner = DurableHttpRunner(boundary.delivery, final, operator_token=_TOKEN)
+    assert await runner.run_one(boundary.lease, lane="work")
+    for response in (
+        await client.get(f"/api/v1/runtime/requests/{command}/response", headers=_AUTH),
+        await client.post("/api/v1/missions", headers=_AUTH, json=mission),
+    ):
+        assert response.status_code == 202
+        assert response.json() == {"id": "run-1", "status": "queued"}
+        assert response.headers["x-nebula-command-id"] == command
+        assert response.headers.get_list("x-nebula-request-state") == ["complete"]
+
+    async def lost(_scope, _receive, _send):
+        raise RuntimeError("synthetic controller loss")
+
+    unknown = await client.post(
+        "/api/v1/synthetic", headers={**_AUTH, "Idempotency-Key": "lost"}, json={}
+    )
+    unknown_command = unknown.json()["receipt"]["command_id"]
+    with pytest.raises(RuntimeError, match="controller loss"):
+        await DurableHttpRunner(boundary.delivery, lost, operator_token=_TOKEN).run_one(
+            boundary.lease, lane="work"
+        )
+    unresolved = await client.get(
+        f"/api/v1/runtime/requests/{unknown_command}/response", headers=_AUTH
+    )
+    assert unresolved.status_code == 409
+    assert unresolved.headers["x-nebula-request-state"] == "needs-reconciliation"
+
+
+async def test_chat_acceptance_is_pending_until_its_turn_stream_is_ready(
+    boundary, monkeypatch
+):
+    app, client = boundary.api()
+    binding = SimpleNamespace(ready=False, turn_id="turn", stream_after=None)
+
+    async def chat_binding(_actor, _command):
+        return binding
+
+    app.state.runtime_delivery.chat_binding = chat_binding
+    accepted = await client.post(
+        "/api/v1/chat/completions", headers=_AUTH, json={"stream": True}
+    )
+    command = accepted.json()["receipt"]["command_id"]
+    acknowledged = answer(
+        202, b'{"session_id":"session","state":"accepted","turn_id":"turn"}'
+    )
+    runner = DurableHttpRunner(boundary.delivery, acknowledged, operator_token=_TOKEN)
+    assert await runner.run_one(boundary.lease, lane="work")
+    saved = await client.get(
+        f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+    )
+    assert saved.status_code == 202 and saved.json()["turn_id"] == "turn"
+    assert saved.headers["x-nebula-command-id"] == command
+    assert saved.headers["x-nebula-request-state"] == "pending"
+
+    async def history(_journal, _turn):
+        return True
+
+    async def cursor(_journal, _turn, **_options):
+        return None
+
+    async def sse(_journal, _turn, **_options):
+        yield b'data: {"type":"done"}\n\n'
+
+    monkeypatch.setattr(RuntimeChatJournal, "has_history", history)
+    monkeypatch.setattr(RuntimeChatJournal, "validate_cursor", cursor)
+    monkeypatch.setattr(RuntimeChatJournal, "sse", sse)
+    binding.ready = True
+    stream = await client.get(
+        f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+    )
+    assert stream.status_code == 200 and stream.content == b'data: {"type":"done"}\n\n'
+    assert stream.headers["x-nebula-request-state"] == "complete"
 
 
 async def test_live_memory_apply_uses_control_while_original_work_is_running(boundary):
