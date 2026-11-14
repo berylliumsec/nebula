@@ -9,6 +9,7 @@ import os
 import re
 import ssl
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -270,8 +271,28 @@ def connection(
         yield client
 
 
+def saved_response(
+    client: httpx.Client,
+    command: str,
+    response: httpx.Response,
+    *,
+    wait: float = RECEIPT_WAIT_SECONDS,
+) -> httpx.Response:
+    """Read an accepted request's one saved result; never resend it (sync)."""
+    deadline = time.monotonic() + wait
+    while accepted_receipt(response) is not None:
+        if time.monotonic() >= deadline:
+            raise AcceptedRequest(command)
+        time.sleep(_retry_after(response))
+        response = client.get(f"runtime/requests/{key(command)}/response")
+    return response
+
+
 def request(client: httpx.Client, method: str, path: str, **kwargs: Any) -> Any:
     response = client.request(method, path, **kwargs)
+    command = accepted_receipt(response)
+    if command is not None:
+        response = saved_response(client, command, response)
     check_response(response)
     return response.json() if response.content else None
 
