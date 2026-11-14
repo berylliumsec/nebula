@@ -12162,22 +12162,24 @@ class HarnessRuntimeService:
         if pending is None or not connection.external_session_id:
             return
         standing, digest = pending
-        latest = await self.store.get(HarnessSession, session_id)
-        await self.store.update(
+        external_session_id = connection.external_session_id
+        # The stream records this while approvals and gateway tools save the
+        # same session, so it is merged into the newest session record.
+        await revise_latest(
+            self.store,
             HarnessSession,
             session_id,
-            {
-                "external_session_id": connection.external_session_id,
+            lambda latest: {
+                "external_session_id": external_session_id,
                 "metadata": {
                     **latest.metadata,
                     "standing_instructions": standing,
                     "instruction_channel": {
                         "sha256": digest,
-                        "external_session_id": connection.external_session_id,
+                        "external_session_id": external_session_id,
                     },
                 },
             },
-            expected_revision=latest.revision,
         )
         connection._nebula_instruction_channel = None
 
