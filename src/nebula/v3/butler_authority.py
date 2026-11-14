@@ -47,6 +47,7 @@ from .butler_precedent import read_precedents
 
 if TYPE_CHECKING:
     from .butler_memory import ButlerMemoryService
+    from .control_assistant_work import ControlAssistantWork
 
 
 Authority = Literal["watch", "steer", "delegate", "act"]
@@ -132,7 +133,7 @@ class ButlerAuthorityService:
     def __init__(
         self,
         store: NebulaStore,
-        work: Any,
+        work: ControlAssistantWork,
         *,
         memory_service: ButlerMemoryService | None = None,
     ) -> None:
@@ -516,10 +517,10 @@ class ButlerAuthorityService:
             "The machine status is not independently verified."
         )
 
-    def _queue_item(self, action: ButlerAction) -> dict | None:
+    async def _queue_item(self, action: ButlerAction) -> dict | None:
         if not action.target_session_id:
             return None
-        queue = self.work.queue.get(action.target_session_id)
+        queue = await self.work.queue.get(action.target_session_id)
         return next(
             (item for item in queue.items if item.get("key") == action.idempotency_key),
             None,
@@ -748,7 +749,7 @@ class ButlerAuthorityService:
             "request_parent_status",
             "request_parent_plan_reassessment",
         }:
-            item = self._queue_item(action)
+            item = await self._queue_item(action)
             if item is not None:
                 (
                     await self._finish(
@@ -823,7 +824,9 @@ class ButlerAuthorityService:
                 )
                 return
         goal = await self.store.get(ChatGoal, action.goal_id)
-        detail = self.work.chat_detail(action.engagement_id, action.source_session_id)
+        detail = await self.work.chat_detail(
+            action.engagement_id, action.source_session_id
+        )
         target = detail.get("message_via_session_id")
         if action.action_type in {
             "request_parent_status",
@@ -832,7 +835,7 @@ class ButlerAuthorityService:
             if not target:
                 (await self._hold(action, "main_agent_unavailable"))
                 return
-            target_detail = self.work.chat_detail(action.engagement_id, target)
+            target_detail = await self.work.chat_detail(action.engagement_id, target)
             if target_detail.get("kind") != "main":
                 (await self._hold(action, "main_agent_unavailable"))
                 return
@@ -876,7 +879,7 @@ class ButlerAuthorityService:
             )
         try:
             if action.action_type == "force_one_task_plan":
-                receipt = self.work.require_plan(
+                receipt = await self.work.require_plan(
                     action.engagement_id,
                     {
                         "session_id": goal.session_id,
