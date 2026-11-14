@@ -19,7 +19,14 @@ whole response, so separate chats in one project can run concurrently.
 
 `chat.accept/v1` is an optional release feature and command transport. APIs select
 it only for streaming provider submissions whose current owner declares support.
-Older owners keep the existing `http.invoke/v1` streaming path. Both transports
+Older owners keep the existing `http.invoke/v1` streaming path. A project with no
+owner yet (its first chat after Core starts or after idle retirement) also gets
+`http.invoke/v1`, because the API cannot know which release will claim it. The
+owner that claims such a chat start knows what its application serves: under its
+fence it renames the running command to `chat.accept/v1` (or `chat.resume/v1` for
+an explicit resume) before invoking it, so it too ends at acceptance and frees the
+work lane. Viewers read the binding before the command, so a rename followed by a
+binding never looks like a binding on an untyped receipt. Both transports
 hash the same HTTP identity, so retries after negotiation return the original
 receipt; changed content still conflicts. Public JSON cannot set the private
 command identity. Binding reads require the accepting actor, and execution

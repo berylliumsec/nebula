@@ -457,6 +457,11 @@ class ProjectExecution:
                         delivery,
                         app,
                         operator_token=self.context.bootstrap.operator_token.get_secret_value(),
+                        typed_chat_commands=getattr(
+                            getattr(app, "state", None),
+                            "typed_chat_commands",
+                            frozenset(),
+                        ),
                     )
 
                     loop = asyncio.get_running_loop()
