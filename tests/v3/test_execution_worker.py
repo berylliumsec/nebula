@@ -339,10 +339,14 @@ async def test_idle_worker_makes_no_fenced_claims_and_still_picks_up_work(
     monkeypatch.setattr(execution_worker, "HEARTBEAT_SECONDS", 60.0)
     coordination = runtime.coordination.coordination
     original, claims, statements = coordination.claim_next, [], []
+    settled = []
 
     async def counted(lease, *, lane=None):
         claims.append(lane)
-        return await original(lease, lane=lane)
+        try:
+            return await original(lease, lane=lane)
+        finally:
+            settled.append(lane)
 
     def record(_connection, _cursor, statement, *_args):
         statements.append(statement)
@@ -352,7 +356,10 @@ async def test_idle_worker_makes_no_fenced_claims_and_still_picks_up_work(
     event.listen(engine, "before_cursor_execute", record)
     try:
         await attach(runtime)
-        await asyncio.sleep(0.3)
+        # A new owner claims every lane once, under the fence, right after it
+        # is ready. Those claims queue on the ownership row and can run past
+        # any fixed settle time on a busy host; measure only after they return.
+        await until(lambda: set(settled) >= set(execution_worker.COMMAND_LANES))
         claims.clear()
         statements.clear()
         await asyncio.sleep(2)
