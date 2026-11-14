@@ -1,7 +1,7 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Verify the recovery bundle version against its hash-bound package manifest rather than the outer Core commit, and safely retry the exact failed activation journal after proving the previous host is healthy.",
-  "exclusions": "CI runs only three focused Python cases across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment. Live activation remains a separate guarded operation.",
+  "reason": "Verify project chat creation through an execution-scoped store uses its locked owner row without forbidden host-coordination DML, while preserving chat-start serialization with project retirement.",
+  "exclusions": "CI runs one focused execution-scope regression across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment.",
   "python_versions": [
     "3.11",
     "3.12",
@@ -10,19 +10,17 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 3,
+    "python": 1,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_host_activation.py::test_package_version_discovery_binds_to_release_and_authenticated_health",
-    "tests/test_simulation_host_activation.py::test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_api_db",
-    "tests/test_simulation_host_activation.py::test_needs_attention_activation_retries_only_from_verified_previous_host"
+    "tests/v3/test_execution_scope.py::test_execution_worker_can_start_chat_under_lease_and_retirement_hold"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "3d289143a1f1dd2034d6bb35141200836e4613e5abde5e5cb2910d63e61bd4f1"
+  "change_digest": "c709638ed20f01435b850702220d00614c350032c69c3a317c0446627dc7d6cc"
 }
