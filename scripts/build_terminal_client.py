@@ -31,6 +31,7 @@ CLIENT_FILES = (
     "terminal/attachments.py",
     "terminal/conversations.py",
     "terminal/followups.py",
+    "terminal/projects.py",
 )
 
 

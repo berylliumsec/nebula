@@ -334,24 +334,30 @@ class Shell:
     async def select_project(
         self, selected: str | None = None, *, chat: str | None = None
     ) -> None:
-        item = await self.collection(
-            "Project",
-            "engagements",
-            selected=selected,
-            extras=[{"id": "__create", "name": "Create project"}],
-            predicate=lambda row: not (row.get("metadata") or {}).get("archived_at"),
-            complete_catalog=True,
-            page_size=1000,
-        )
-        if item["id"] == "__create":
-            name = (await self.ui.ask("Project name")).strip()
-            if not name:
-                raise ClientError("A project needs a name.")
-            item = await self.api.request(
-                "POST", "engagements", json={"name": name, "request_id": str(uuid4())}
+        from .projects import archived, archived_projects, create
+
+        while True:
+            item = await self.collection(
+                "Project",
+                "engagements",
+                selected=selected,
+                extras=[
+                    {"id": "__create", "name": "Create project"},
+                    {"id": "__archived", "name": "Archived projects"},
+                ],
+                # Core archives a project by status, as the GUI's list reads it.
+                predicate=lambda row: not archived(row),
+                complete_catalog=True,
+                page_size=1000,
             )
-            item = await self.api.request("GET", f"engagements/{key(item['id'])}")
-            self.ui.say(f"Created {item['name']}.")
+            if item["id"] == "__archived":
+                restored = await archived_projects(self)
+                if restored is None:
+                    continue
+                item = restored
+            elif item["id"] == "__create":
+                item = await create(self)
+            break
         await self.select_chat(chat, project=item)
 
     async def select_chat(
@@ -487,9 +493,11 @@ class Shell:
             )
             if self.view is not view:
                 return
-            visible_projects = projects
-            if not any(row.get("id") == view.project_id for row in projects):
-                visible_projects = [view.project, *projects]
+            visible_projects = [
+                row for row in projects if row.get("status") != "archived"
+            ]
+            if not any(row.get("id") == view.project_id for row in visible_projects):
+                visible_projects = [view.project, *visible_projects]
             visible_chats = [row for row in chats if main_chat(row)]
             selected = view.session
             if selected is not None and not any(
@@ -1582,6 +1590,10 @@ class Shell:
             await self.select_project()
         elif name == "projects":
             await self.select_project(args[0] if args else None)
+        elif name == "project":
+            from .projects import project
+
+            await project(self, args)
         elif name == "snapshot":
             from .snapshot import show_project_snapshot
 
@@ -1655,6 +1667,9 @@ class Shell:
                     selected = await self.api.request(
                         "GET", f"engagements/{key(prefs['project_id'])}"
                     )
+                    if selected.get("status") == "archived":
+                        # The GUI does not reopen an archived project either.
+                        raise ApiError("The remembered project is archived.", 409)
                     if chat is not None:
                         await self.select_chat(chat, project=selected)
                     elif prefs.get("session_id"):
@@ -1671,7 +1686,10 @@ class Shell:
                     if exc.status not in {404, 409}:
                         raise
                     self.ui.say(
-                        "The remembered conversation is unavailable. Choose another."
+                        "The remembered project is archived. Choose another, or "
+                        "restore it from /projects › Archived projects."
+                        if str(exc) == "The remembered project is archived."
+                        else "The remembered conversation is unavailable. Choose another."
                     )
             if not restored:
                 await self.select_project(project, chat=chat)
