@@ -12473,7 +12473,16 @@ class HarnessRuntimeService:
             or (await goals.get(owner.session_id)).status == ChatGoalStatus.RUNNING
         )
 
-    async def _pause_goal(self, session_id: str, reason: str) -> None:
+    async def _pause_goal(
+        self, session_id: str, reason: str, *, settling_turn_id: str | None = None
+    ) -> None:
+        """Pause a running goal; a settling turn pauses only a goal it still owns.
+
+        Pausing clears the goal's execution claim. A turn's cleanup can start
+        the goal's next turn (a subagent report) before it settles itself, and
+        that newer turn then holds the claim and settles the goal on its own.
+        """
+
         from .chat_goals import ChatGoalService, GoalWrite
 
         goals = ChatGoalService(self.store)
@@ -12481,6 +12490,11 @@ class HarnessRuntimeService:
             try:
                 goal = await goals.get(session_id)
                 if goal.status != ChatGoalStatus.RUNNING:
+                    return
+                if settling_turn_id is not None and goal.execution_claim_id not in {
+                    None,
+                    settling_turn_id,
+                }:
                     return
                 (
                     await goals.write(
@@ -12556,23 +12570,40 @@ class HarnessRuntimeService:
         turn = await self.store.get(ChatTurn, harness_turn.chat_turn_id)
         if not turn.goal_id:
             return
+        goals = ChatGoalService(self.store)
+        try:
+            goal = await goals.get(turn.session_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the goal was removed while its turn ran
+            return
+        if goal.execution_claim_id not in {None, turn.id}:
+            # This turn's cleanup already started the goal's next turn (a
+            # subagent report). That turn owns the goal and settles it; its
+            # step and claim are not this turn's to judge or clear.
+            return
         if turn.status != ChatTurnStatus.COMPLETE:
             (
                 await self._pause_goal(
                     turn.session_id,
                     "The harness response stopped or failed. Review its saved state, then resume the goal.",
+                    settling_turn_id=turn.id,
                 )
             )
             return
-        goals = ChatGoalService(self.store)
-        goal = await goals.get(turn.session_id)
         if goal.status != ChatGoalStatus.RUNNING:
             return
         if await goals.has_working_subagents(turn.session_id):
             (await goals.settle_active_time(turn.session_id))
             return
         if goal.step_budget is not None and goal.current_step >= goal.step_budget:
-            (await self._pause_goal(turn.session_id, "Goal step budget is exhausted."))
+            (
+                await self._pause_goal(
+                    turn.session_id,
+                    "Goal step budget is exhausted.",
+                    settling_turn_id=turn.id,
+                )
+            )
             return
         if (
             goal.time_budget_seconds is not None
@@ -12580,7 +12611,9 @@ class HarnessRuntimeService:
         ):
             (
                 await self._pause_goal(
-                    turn.session_id, "Goal active-time budget is exhausted."
+                    turn.session_id,
+                    "Goal active-time budget is exhausted.",
+                    settling_turn_id=turn.id,
                 )
             )
             return
