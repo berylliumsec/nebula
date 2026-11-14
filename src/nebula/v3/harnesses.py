@@ -608,14 +608,18 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
         },
     ),
     "work.check_in": (
-        "Post a concise progress update to this project's item or a linked child project's item. Include what changed, the next step, and any blocker. Give a stable request_id for retry safety.",
+        "Post a concise progress update to this project's item or a linked child project's item. Include what changed and the next step. A blocker saves the item as blocked, whatever status you pass, so give one only when the work cannot continue. Give a stable request_id for retry safety.",
         {
             "type": "object",
             "properties": {
                 "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
                 "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
                 "next_step": {"type": "string", "maxLength": 2000},
-                "blocker": {"type": "string", "maxLength": 2000},
+                "blocker": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "Only when the work cannot continue; any blocker saves the item as blocked whatever status is given.",
+                },
                 "status": {
                     "type": "string",
                     "enum": [
