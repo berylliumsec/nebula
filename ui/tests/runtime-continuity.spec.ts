@@ -104,7 +104,7 @@ test("dead project runtime recovers automatically without restarting Core or dup
 
 test("worker-backed panes wait calmly while an idle project's worker is away and recover without a reload", async ({page, request}, info) => {
   // Retirement and readmission each take real worker start-up and shutdown.
-  test.setTimeout(420_000);
+  test.setTimeout(540_000);
   const control = await controller(request);
   const fixture = await control.reset(false, false, undefined, true);
   await pair(page, request, fixture);
@@ -144,20 +144,20 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
   await expect(bookmark).toHaveAttribute("aria-pressed", "true");
   await expect(hardErrors).toHaveCount(0);
 
-  // The operator leaves; the project goes idle (its only chat is archived) and its worker retires.
+  // The operator leaves; the project goes quiet (its only chat is archived) and its worker retires.
+  // Leaving ends this page's view lease (pagehide); allow for its 90 s lapse if the release is lost.
   await page.goto("/projects");
   await archive();
-  await expect.poll(projectRuntime, {timeout: 90_000}).toBeNull();
+  await expect.poll(projectRuntime, {timeout: 180_000}).toBeNull();
 
-  // Coming back: every worker-backed read is refused until the operator acts. Reads never
-  // wake an idle project, so the page says so calmly instead of promising a refresh.
+  // Coming back: the open project view holds a view lease, so Core starts the project's worker
+  // again with no other action. Until it answers, reads are refused and every pane waits calmly.
+  recording = true;
   await page.goto(chat);
+  await page.evaluate(() => { (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument = true; });
   await expect(page.locator(".chat-archived-notice")).toBeVisible({timeout: 60_000});
-  await expect(idle).toBeVisible({timeout: 30_000});
-  await expect(reconnecting).toHaveCount(0);
   await expect(hardErrors).toHaveCount(0);
   await expect(alerts).toHaveCount(0);
-  expect((await new AxeBuilder({page}).include(".project-runtime-notice").analyze()).violations).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   const unarchive = page.getByRole("button", {name: "Unarchive", exact: true});
   // The wait never covers or crowds out the operator's next action.
@@ -166,13 +166,12 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
     const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
     return Boolean(top && node.contains(top)) && box.bottom <= innerHeight;
   })).toBe(true);
-  await page.screenshot({path: info.outputPath("reconnecting.png"), fullPage: true});
+  if (await reconnecting.count()) {
+    expect((await new AxeBuilder({page}).include(".project-runtime-notice").analyze()).violations).toEqual([]);
+    await page.screenshot({path: info.outputPath("reconnecting.png"), fullPage: true});
+  }
 
-  // Unarchiving is a project command, so Core readmits a worker. Every pane recovers in this same document.
-  await page.evaluate(() => { (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument = true; });
-  recording = true;
-  await unarchive.click();
-  // Readmission starts a real worker process; allow for a slow runner.
+  // Starting a worker is a real process; allow for a slow runner. Every pane recovers in this same document.
   await expect.poll(projectRuntime, {timeout: 180_000}).not.toBeNull();
   await expect(answer).toBeVisible({timeout: 30_000});
   await expect(bookmark).toHaveAttribute("aria-pressed", "true");
@@ -183,9 +182,11 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
     "/chat/sessions/:chat/catch-up", "/chat/sessions/:chat/goal", "/chat/sessions/:chat/side-chats", "/api/v1/runs", "/api/v1/assets"]) {
     await expect.poll(() => [...reads].find(([path]) => path.endsWith(route))?.[1], {message: route, timeout: 30_000}).toBeLessThan(500);
   }
-  await expect(page.locator(".chat-archived-notice")).toHaveCount(0);
   await expect(hardErrors).toHaveCount(0);
   await expect(alerts).toHaveCount(0);
+  // Unarchiving still works in place once the worker is back.
+  await unarchive.click();
+  await expect(page.locator(".chat-archived-notice")).toHaveCount(0, {timeout: 30_000});
   expect(await page.evaluate(() => (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument)).toBe(true);
   await page.screenshot({path: info.outputPath("recovered.png"), fullPage: true});
 });
