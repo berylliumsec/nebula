@@ -82,7 +82,7 @@ COMMANDS = {
     "context": "Inspect context usage",
     "activity": "Inspect activity and plans",
     "results": "Read saved results",
-    "model": "Select a model and runtime",
+    "model": "Select a model and runtime, or allow another model a provider offers",
     "settings": "Change next-turn Assistant settings",
     "skills": "Choose up to eight project skills and one installed skill for one turn",
     "mcp": "Select MCP servers for this conversation",

@@ -148,7 +148,10 @@ running turn and sends the message first, as the GUI's Stop and send does.
 `/model` in a saved conversation switches provider models through Core's checked
 runtime switch, also when the conversation was on a harness; a model not yet
 verified for tool use is verified first, and a switch Core defers says it applies
-after the running work. Model, effort, MCP, hook and subagent choices also become
+after the running work. `/model` also lists **More <provider> models · adds to
+allowed**: models the provider reports beyond its allowlist. Choosing one adds it to
+the provider's allowed models in Core, read back, and then switches to it, as the
+GUI's model picker does. Model, effort, MCP, hook and subagent choices also become
 the project's defaults for new chats, as they do in the GUI, and a new chat starts
 with them. `/mcp` shows each server as always loaded, on demand, excluded next
 turn or not sent; its first row chooses whether selected tool schemas are always
