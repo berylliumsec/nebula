@@ -280,6 +280,10 @@ COALESCED_DELTA_TYPES = frozenset({"message_delta", "output_delta"})
 # fallback only bounds status changes written without either, such as a turn
 # settled by another code path while nothing streams.
 ACTIVITY_FOLLOW_IDLE_SECONDS = 1.0
+# Stop and a turn's producer save the same turn, owner and session records.
+# A read-then-write step that finds its record moved in between is repeated on
+# the newest revision this many times before the conflict is reported.
+STALE_WRITE_ATTEMPTS = 8
 HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
 HARNESS_INTERRUPT_TIMEOUT_SECONDS = 5.0
 CODEX_SESSION_LIST_TIMEOUT_SECONDS = 15.0
@@ -671,6 +675,7 @@ def _subagent_wait_limits(kind: HarnessKind | None) -> tuple[int, int]:
 
 
 _GatewayResult = TypeVar("_GatewayResult")
+_StepResult = TypeVar("_StepResult")
 
 
 def _consume_gateway_work(task: asyncio.Task[Any]) -> None:
@@ -12955,6 +12960,7 @@ class HarnessRuntimeService:
         """Replay and follow a turn without owning or cancelling its execution."""
 
         cursor = after_sequence
+        ended = False
         while True:
             # Hold the signal before reading, so an event appended between
             # this read and the wait below still wakes this follower.
@@ -12967,6 +12973,8 @@ class HarnessRuntimeService:
                 yield event
             if page.events:
                 continue
+            if ended:
+                return
             turn = await self.store.get(HarnessTurn, turn_id)
             if turn.status in {
                 HarnessTurnStatus.COMPLETE,
@@ -12974,7 +12982,13 @@ class HarnessRuntimeService:
                 HarnessTurnStatus.CANCELLED,
                 HarnessTurnStatus.INTERRUPTED,
             }:
-                return
+                # A turn saves its closing event before its terminal status.
+                # Both may land between the empty read above and this status
+                # read, so read the ledger once more before ending: a
+                # follower that stopped here would miss the error event and
+                # report the failure without its reason.
+                ended = True
+                continue
             try:
                 await asyncio.wait_for(
                     signal.wait(), timeout=ACTIVITY_FOLLOW_IDLE_SECONDS
@@ -13457,20 +13471,8 @@ class HarnessRuntimeService:
                     "rate_limited",
                     "stale_state",
                 }
-                (
-                    await self._fail_turn(
-                        turn.id,
-                        HarnessTurnStatus.INTERRUPTED,
-                        error,
-                        diagnostic={
-                            "error_id": error_id,
-                            "reason_code": reason,
-                            "remediation_id": guidance.remediation_id,
-                        },
-                    )
-                )
                 yield (
-                    await self._persist_activity(
+                    await self._fail_turn_with_event(
                         turn,
                         session,
                         HarnessEvent(
@@ -13491,6 +13493,12 @@ class HarnessRuntimeService:
                             remediation_id=guidance.remediation_id,
                             help_article=guidance.help_article,
                         ),
+                        error,
+                        diagnostic={
+                            "error_id": error_id,
+                            "reason_code": reason,
+                            "remediation_id": guidance.remediation_id,
+                        },
                     )
                 )
                 return
@@ -13500,25 +13508,18 @@ class HarnessRuntimeService:
                 task=asyncio.current_task(),
             )
             self._active[session.id] = active
-            turn = await self.store.update(
-                HarnessTurn,
-                turn.id,
-                {"status": HarnessTurnStatus.RUNNING, "started_at": utc_now()},
-                expected_revision=turn.revision,
-            )
-            session = await self.store.get(HarnessSession, session.id)
-            session = await self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "status": HarnessSessionStatus.RUNNING,
-                    "last_turn_id": turn.id,
-                    "last_activity_at": utc_now(),
-                    "external_session_id": connection.external_session_id,
-                    "adapter_version": connection.adapter_version,
-                },
-                expected_revision=session.revision,
-            )
+            # Stop cancels this producer wherever it waits, and the cleanup
+            # further down only covers the vendor stream. Release the session
+            # on every exit, or a turn stopped while it starts would leave the
+            # session reserved for good.
+            held_locks.callback(self._release_active_turn, session.id, active)
+            running = await self._mark_turn_running(turn, session, connection)
+            if running is None:
+                # Stop already saved this turn's end; nothing reached the
+                # vendor, so there is nothing left to run or to interrupt.
+                self._wake_activity_followers(turn.id)
+                return
+            turn, session = running
             (await self._start_owner(turn))
             yield (
                 await self._persist_activity(
@@ -13968,26 +13969,8 @@ class HarnessRuntimeService:
                     ),
                 )
                 guidance = guidance_for("harnesses", reason, operator_detail=error)
-                (
-                    await self._fail_turn(
-                        turn.id,
-                        HarnessTurnStatus.INTERRUPTED,
-                        error,
-                        diagnostic={
-                            "error_id": error_id,
-                            "reason_code": reason,
-                            "remediation_id": guidance.remediation_id,
-                            **(
-                                {"vendor_error_info": exc.vendor_error_info}
-                                if isinstance(exc, HarnessTurnFailedError)
-                                and exc.vendor_error_info is not None
-                                else {}
-                            ),
-                        },
-                    )
-                )
                 yield (
-                    await self._persist_activity(
+                    await self._fail_turn_with_event(
                         turn,
                         session,
                         HarnessEvent(
@@ -14012,6 +13995,18 @@ class HarnessRuntimeService:
                             remediation_id=guidance.remediation_id,
                             help_article=guidance.help_article,
                         ),
+                        error,
+                        diagnostic={
+                            "error_id": error_id,
+                            "reason_code": reason,
+                            "remediation_id": guidance.remediation_id,
+                            **(
+                                {"vendor_error_info": exc.vendor_error_info}
+                                if isinstance(exc, HarnessTurnFailedError)
+                                and exc.vendor_error_info is not None
+                                else {}
+                            ),
+                        },
                     )
                 )
             finally:
@@ -14073,6 +14068,54 @@ class HarnessRuntimeService:
                     await asyncio.wait(
                         stopped_work, timeout=GATEWAY_CANCEL_GRACE_SECONDS
                     )
+
+    def _release_active_turn(self, session_id: str, active: _ActiveTurn) -> None:
+        """Free a session's live-turn slot if this turn still holds it."""
+
+        if self._active.get(session_id) is active:
+            self._active.pop(session_id, None)
+
+    async def _mark_turn_running(
+        self,
+        turn: HarnessTurn,
+        session: HarnessSession,
+        connection: HarnessConnection,
+    ) -> tuple[HarnessTurn, HarnessSession] | None:
+        """Save a connected turn and its session as running, in one unit.
+
+        Returns None when the turn is no longer queued: Stop, or another
+        settlement, saved its end while the harness connected. The turn and
+        the session are written together so that a session can never be marked
+        running for a turn that was stopped first, which would keep it busy.
+        """
+
+        async def save_running() -> tuple[HarnessTurn, HarnessSession] | None:
+            queued = await self.store.get(HarnessTurn, turn.id)
+            if queued.status != HarnessTurnStatus.QUEUED:
+                return None
+            idle = await self.store.get(HarnessSession, session.id)
+            async with self.store.transaction() as transaction:
+                running_turn = await transaction.update(
+                    HarnessTurn,
+                    queued.id,
+                    {"status": HarnessTurnStatus.RUNNING, "started_at": utc_now()},
+                    expected_revision=queued.revision,
+                )
+                running_session = await transaction.update(
+                    HarnessSession,
+                    idle.id,
+                    {
+                        "status": HarnessSessionStatus.RUNNING,
+                        "last_turn_id": queued.id,
+                        "last_activity_at": utc_now(),
+                        "external_session_id": connection.external_session_id,
+                        "adapter_version": connection.adapter_version,
+                    },
+                    expected_revision=idle.revision,
+                )
+            return running_turn, running_session
+
+        return await self._retry_stale_write(save_running)
 
     async def start_mission(
         self,
@@ -15208,14 +15251,68 @@ class HarnessRuntimeService:
             )
         (await self._start_owner(turn))
 
+    async def _retry_stale_write(
+        self, step: Callable[[], Awaitable[_StepResult]]
+    ) -> _StepResult:
+        """Repeat a read-then-write step when another writer moved its record.
+
+        Stop and the producer of a turn save the same turn, owner and session
+        records. A step whose record changed between its read and its write
+        reads the newest revision and decides again, instead of failing its
+        caller with a stale-revision error.
+        """
+
+        for remaining in range(STALE_WRITE_ATTEMPTS - 1, -1, -1):
+            try:
+                return await step()
+            except ConflictError:
+                # diagnostic-expected: the step reads the record again; only
+                # the last attempt's conflict reaches the caller.
+                if not remaining:
+                    raise
+                await asyncio.sleep(0)
+        raise HarnessStateError("a stale write was not attempted")
+
     async def cancel_turn(self, harness_turn_id: str, *, reason: str) -> HarnessTurn:
-        turn = await self.store.get(HarnessTurn, harness_turn_id)
-        if turn.status in {
-            HarnessTurnStatus.COMPLETE,
-            HarnessTurnStatus.CANCELLED,
-            HarnessTurnStatus.FAILED,
-            HarnessTurnStatus.INTERRUPTED,
-        }:
+        cancellation_recorded = False
+
+        async def save_turn_stop() -> HarnessTurn | None:
+            """Save a live turn as stopped; None when it has already ended."""
+
+            nonlocal cancellation_recorded
+            live = await self.store.get(HarnessTurn, harness_turn_id)
+            if live.status in {
+                HarnessTurnStatus.COMPLETE,
+                HarnessTurnStatus.CANCELLED,
+                HarnessTurnStatus.FAILED,
+                HarnessTurnStatus.INTERRUPTED,
+            }:
+                return None
+            cancellation_recorded = bool(
+                live.metadata.get("cancellation_activity_recorded")
+            )
+            return await self.store.update(
+                HarnessTurn,
+                live.id,
+                {
+                    "status": HarnessTurnStatus.CANCELLED,
+                    "error": reason[:1_000],
+                    "completed_at": live.completed_at or utc_now(),
+                    "metadata": {
+                        **live.metadata,
+                        "cancellation_activity_recorded": True,
+                    },
+                },
+                expected_revision=live.revision,
+            )
+
+        # The producer keeps saving its own bookkeeping on the turn, its owner
+        # and its session while Stop runs. Each Stop write is therefore made on
+        # the record's newest revision: a producer write that lands first is
+        # kept, and never fails the Stop.
+        stopped = await self._retry_stale_write(save_turn_stop)
+        if stopped is None:
+            turn = await self.store.get(HarnessTurn, harness_turn_id)
             # Stop is an operator recovery control. A late click or retry can race
             # with transport failure and terminal persistence, so acknowledge the
             # authoritative terminal state instead of surfacing a stale-state
@@ -15249,77 +15346,71 @@ class HarnessRuntimeService:
                 ):
                     task.cancel()
             return await self.store.get(HarnessTurn, turn.id)
-        cancellation_recorded = bool(
-            turn.metadata.get("cancellation_activity_recorded")
-        )
-        if turn.status != HarnessTurnStatus.CANCELLED or not cancellation_recorded:
-            turn = await self.store.update(
-                HarnessTurn,
-                turn.id,
-                {
-                    "status": HarnessTurnStatus.CANCELLED,
-                    "error": reason[:1_000],
-                    "completed_at": turn.completed_at or utc_now(),
-                    "metadata": {
-                        **turn.metadata,
-                        "cancellation_activity_recorded": True,
-                    },
-                },
-                expected_revision=turn.revision,
-            )
-        if turn.chat_turn_id:
-            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
-            if chat_turn.status not in {
-                ChatTurnStatus.COMPLETE,
-                ChatTurnStatus.CANCELLED,
-                ChatTurnStatus.FAILED,
-                ChatTurnStatus.INTERRUPTED,
-            }:
-                (
-                    await self.store.update(
-                        ChatTurn,
-                        chat_turn.id,
-                        {"status": ChatTurnStatus.CANCELLED, "error": reason[:1_000]},
-                        expected_revision=chat_turn.revision,
+        turn = stopped
+
+        async def save_owner_stop() -> None:
+            if turn.chat_turn_id:
+                chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
+                if chat_turn.status not in {
+                    ChatTurnStatus.COMPLETE,
+                    ChatTurnStatus.CANCELLED,
+                    ChatTurnStatus.FAILED,
+                    ChatTurnStatus.INTERRUPTED,
+                }:
+                    (
+                        await self.store.update(
+                            ChatTurn,
+                            chat_turn.id,
+                            {
+                                "status": ChatTurnStatus.CANCELLED,
+                                "error": reason[:1_000],
+                            },
+                            expected_revision=chat_turn.revision,
+                        )
                     )
-                )
-        elif turn.run_id:
-            run = await self.store.get(AgentRun, turn.run_id)
-            if run.status not in {
-                RunStatus.COMPLETE,
-                RunStatus.CANCELLED,
-                RunStatus.FAILED,
-                RunStatus.INTERRUPTED,
-            }:
-                (
-                    await self.store.update_with_event(
-                        AgentRun,
-                        run.id,
-                        {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
-                        expected_revision=run.revision,
-                        run_id=run.id,
-                        event_type="run.cancelled",
-                        event_payload={
-                            "reason": reason[:1_000],
-                            "harness_turn_id": turn.id,
-                        },
-                        idempotency_key="run:cancelled",
+            elif turn.run_id:
+                run = await self.store.get(AgentRun, turn.run_id)
+                if run.status not in {
+                    RunStatus.COMPLETE,
+                    RunStatus.CANCELLED,
+                    RunStatus.FAILED,
+                    RunStatus.INTERRUPTED,
+                }:
+                    (
+                        await self.store.update_with_event(
+                            AgentRun,
+                            run.id,
+                            {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
+                            expected_revision=run.revision,
+                            run_id=run.id,
+                            event_type="run.cancelled",
+                            event_payload={
+                                "reason": reason[:1_000],
+                                "harness_turn_id": turn.id,
+                            },
+                            idempotency_key="run:cancelled",
+                        )
                     )
-                )
-        session = await self.store.get(HarnessSession, turn.harness_session_id)
-        if session.status not in {
-            HarnessSessionStatus.CLOSED,
-            HarnessSessionStatus.FAILED,
-        }:
-            session = await self.store.update(
+
+        async def save_session_idle() -> HarnessSession:
+            latest = await self.store.get(HarnessSession, turn.harness_session_id)
+            if latest.status in {
+                HarnessSessionStatus.CLOSED,
+                HarnessSessionStatus.FAILED,
+            }:
+                return latest
+            return await self.store.update(
                 HarnessSession,
-                session.id,
+                latest.id,
                 {
                     "status": HarnessSessionStatus.IDLE,
                     "last_activity_at": utc_now(),
                 },
-                expected_revision=session.revision,
+                expected_revision=latest.revision,
             )
+
+        await self._retry_stale_write(save_owner_stop)
+        session = await self._retry_stale_write(save_session_idle)
         if not cancellation_recorded:
             (
                 await self._persist_activity(
@@ -20438,31 +20529,37 @@ class HarnessRuntimeService:
         return await adapter.open(request)
 
     async def _start_owner(self, turn: HarnessTurn) -> None:
-        if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
-            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
-            if chat_turn.status in {
-                ChatTurnStatus.ROUTING,
-                ChatTurnStatus.WAITING_APPROVAL,
-            }:
-                (
-                    await self.store.update(
-                        ChatTurn,
-                        chat_turn.id,
-                        {"status": ChatTurnStatus.ROUTING, "approval_id": None},
-                        expected_revision=chat_turn.revision,
+        async def save_owner_start() -> None:
+            if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
+                chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
+                if chat_turn.status in {
+                    ChatTurnStatus.ROUTING,
+                    ChatTurnStatus.WAITING_APPROVAL,
+                }:
+                    (
+                        await self.store.update(
+                            ChatTurn,
+                            chat_turn.id,
+                            {"status": ChatTurnStatus.ROUTING, "approval_id": None},
+                            expected_revision=chat_turn.revision,
+                        )
                     )
-                )
-        elif turn.run_id:
-            run = await self.store.get(AgentRun, turn.run_id)
-            if run.status in {RunStatus.QUEUED, RunStatus.WAITING_APPROVAL}:
-                changes: dict[str, Any] = {"status": RunStatus.RUNNING}
-                if run.started_at is None:
-                    changes["started_at"] = utc_now()
-                (
-                    await self.store.update(
-                        AgentRun, run.id, changes, expected_revision=run.revision
+            elif turn.run_id:
+                run = await self.store.get(AgentRun, turn.run_id)
+                if run.status in {RunStatus.QUEUED, RunStatus.WAITING_APPROVAL}:
+                    changes: dict[str, Any] = {"status": RunStatus.RUNNING}
+                    if run.started_at is None:
+                        changes["started_at"] = utc_now()
+                    (
+                        await self.store.update(
+                            AgentRun, run.id, changes, expected_revision=run.revision
+                        )
                     )
-                )
+
+        # Stop saves the same owner record. When it lands between this read
+        # and write the owner is read again, and a stopped owner is left as it
+        # is instead of failing the producer.
+        await self._retry_stale_write(save_owner_start)
 
     async def _waiting_owner(
         self, turn: HarnessTurn, *, approval_id: str | None = None
@@ -20927,6 +21024,34 @@ class HarnessRuntimeService:
                         expected_revision=run_owner.revision,
                     )
                 )
+
+    async def _fail_turn_with_event(
+        self,
+        turn: HarnessTurn,
+        session: HarnessSession,
+        event: HarnessEvent,
+        error: str,
+        *,
+        diagnostic: Mapping[str, Any],
+    ) -> HarnessEvent:
+        """Save a failed turn's error event, then interrupt the turn.
+
+        Followers end once the turn's status is terminal, so the event that
+        carries the failure's reason and reference has to be in the ledger
+        first: saved afterwards, a follower ends without it and the API
+        reports the failure with no reason and a different reference. The
+        turn is interrupted even when the event itself cannot be saved.
+        """
+
+        try:
+            return await self._persist_activity(turn, session, event)
+        finally:
+            await self._fail_turn(
+                turn.id, HarnessTurnStatus.INTERRUPTED, error, diagnostic=diagnostic
+            )
+            # The status is written without a ledger event; a follower that
+            # already read the error event must not wait out its idle interval.
+            self._wake_activity_followers(turn.id)
 
     async def _fail_turn(
         self,
