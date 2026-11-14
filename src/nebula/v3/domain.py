@@ -1459,6 +1459,10 @@ class BrowserTrafficExchange(Entity):
 
     entity_kind: ClassVar[str] = "browser_traffic"
     engagement_id: str
+    # Retired with the built-in attack workflows (abd34d7). Kept so records an
+    # earlier release wrote (live had 202 traffic rows carrying it) still load
+    # under strict validation; this release never sets it.
+    assessment_id: str | None = Field(default=None, max_length=200)
     session_id: str = Field(min_length=1, max_length=200)
     tab_id: str = Field(min_length=1, max_length=200)
     identity_id: str = Field(min_length=1, max_length=200)
@@ -1669,6 +1673,10 @@ class BrowserCommand(Entity):
 
     entity_kind: ClassVar[str] = "browser_commands"
     engagement_id: str
+    # Retired with the built-in attack workflows (abd34d7). Kept so records an
+    # earlier release wrote (live had 202 traffic rows carrying it) still load
+    # under strict validation; this release never sets it.
+    assessment_id: str | None = Field(default=None, max_length=200)
     run_id: str = Field(min_length=1, max_length=200)
     lease_id: str = Field(min_length=1, max_length=200)
     session_id: str = Field(min_length=1, max_length=200)
