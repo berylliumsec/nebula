@@ -44,8 +44,23 @@ PROJECT_RUNTIME_UNAVAILABLE = "project_runtime_unavailable"
 PROJECT_RUNTIME_RETRY_AFTER_SECONDS = 1
 
 
-def project_runtime_unavailable_body(detail: str) -> dict[str, Any]:
-    return {"detail": detail, "code": PROJECT_RUNTIME_UNAVAILABLE, "retryable": True}
+# Why no ready worker owns the project: "starting" (Core is admitting or
+# recovering one), "closing" (the worker is retiring or was replaced) or "idle"
+# (nothing will admit one until the operator resumes work in the project).
+PROJECT_RUNTIME_REASONS = ("starting", "closing", "idle")
+
+
+def project_runtime_unavailable_body(
+    detail: str, reason: str = "starting"
+) -> dict[str, Any]:
+    if reason not in PROJECT_RUNTIME_REASONS:
+        raise ValueError("unknown project runtime reason")
+    return {
+        "detail": detail,
+        "code": PROJECT_RUNTIME_UNAVAILABLE,
+        "reason": reason,
+        "retryable": True,
+    }
 
 
 def project_runtime_unavailable_headers() -> dict[str, str]:
@@ -54,6 +69,12 @@ def project_runtime_unavailable_headers() -> dict[str, str]:
 
 class ProjectRuntimeUnavailable(RuntimeIpcError):
     """No ready worker owns the project now; a later read can succeed."""
+
+    def __init__(self, message: str, *, reason: str = "starting"):
+        if reason not in PROJECT_RUNTIME_REASONS:
+            raise ValueError("unknown project runtime reason")
+        super().__init__(message)
+        self.reason = reason
 
 
 # A handler that refuses with RuntimeIpcError or CoordinationConflict wrote its

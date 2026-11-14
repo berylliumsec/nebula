@@ -188,6 +188,7 @@ async def test_unassigned_worker_starts_no_controllers_and_holds_reads(runtime):
     assert held.status_code == 503
     assert held.headers["retry-after"] == "1"
     assert held.json()["code"] == "project_runtime_unavailable"
+    assert held.json()["reason"] == "starting"
     assert held.json()["retryable"] is True
     assert runtime.seen == []
 

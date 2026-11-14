@@ -132,7 +132,7 @@ def create_api_worker(
         )
     auth = CoreAuthentication(store, operator_token)
     coordinator = DeploymentCoordinator(store.database)
-    proxy = RuntimeHttpProxy(upstream_for)
+    proxy = RuntimeHttpProxy(upstream_for, project_reads=True)
     work_slots = asyncio.Semaphore(maximum_waiting_views)
     control_slots = asyncio.Semaphore(maximum_control_views)
     journal = RuntimeChatJournal(delivery.coordination, store)
@@ -189,7 +189,10 @@ def create_api_worker(
             # or a readmitted one is still starting: the read can be repeated.
             return JSONResponse(
                 project_runtime_unavailable_body(
-                    "The project runtime is idle or starting. Saved work is unchanged; read again shortly."
+                    "The project runtime is not ready. Saved work is unchanged; read again shortly."
+                    if error.reason != "idle"
+                    else "The project is idle. Saved work is unchanged; it loads when work resumes in the project.",
+                    error.reason,
                 ),
                 status_code=503,
                 headers=project_runtime_unavailable_headers(),
