@@ -1,4 +1,4 @@
-"""Chat-scoped project admission and cold API recovery under the stable host."""
+"""Project admission for chats and queued project work, and cold API recovery."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from .database import (
 )
 from .diagnostics import record_caught_exception
 from .domain import Engagement
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, project_worker_commands
 from .setup import bootstrap_scratch_project
 
 _RECOVERY_ACTOR = "runtime-auto-recovery"
@@ -169,15 +169,28 @@ class RuntimeAutoAdmission:
                     )
                     .exists()
                 )
+                # A rename, archive, delete or any other project-routed write
+                # waits for the project's worker even without an open chat.
+                queued_work = project_worker_commands(ProjectOwnershipRow.project_id)
+                # Retiring a worker while its project command runs would only
+                # record a blocker every pass; wait for the command to finish.
+                active_work = project_worker_commands(
+                    ProjectOwnershipRow.project_id, ("queued", "running")
+                )
                 demands = list(
-                    await session.scalars(
-                        select(ProjectOwnershipRow)
+                    await session.execute(
+                        select(ProjectOwnershipRow, queued_work)
                         # A verified quiescence clears the owner while retaining
                         # its fencing history. Reopening may claim the next fence;
                         # expired or uncertain owners still have a runtime ID.
                         .where(
                             ProjectOwnershipRow.runtime_id.is_(None),
-                            or_(open_chat, pending_chat_start, legacy_chat_start),
+                            or_(
+                                open_chat,
+                                pending_chat_start,
+                                legacy_chat_start,
+                                queued_work,
+                            ),
                         )
                         .limit(16)
                     )
@@ -191,6 +204,7 @@ class RuntimeAutoAdmission:
                     ~open_chat,
                     ~pending_chat_start,
                     ~legacy_chat_start,
+                    ~active_work,
                 )
                 if self._retirement_cursor is not None:
                     idle_query = idle_query.where(
@@ -215,6 +229,7 @@ class RuntimeAutoAdmission:
                                 ~open_chat,
                                 ~pending_chat_start,
                                 ~legacy_chat_start,
+                                ~active_work,
                             )
                             .order_by(ProjectOwnershipRow.project_id)
                             .limit(8)
@@ -265,12 +280,14 @@ class RuntimeAutoAdmission:
                                     "kind": "project",
                                 },
                             )
-            for demand in demands:
+            for demand, has_project_work in demands:
                 if self._blocked.get(demand.project_id) == signature:
                     continue
                 try:
                     project = await supervisor.store.get(Engagement, demand.project_id)
-                    if project.status == "archived":
+                    if project.status == "archived" and not has_project_work:
+                        # An archived project's chats keep no worker, but an
+                        # explicit request for it (unarchive or delete) does.
                         continue
                     runtime_id = self._pending.get(project.id)
                     if runtime_id is not None:
