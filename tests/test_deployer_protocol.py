@@ -20,6 +20,7 @@ spec = importlib.util.spec_from_file_location(
 deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deployer)
 OLD, NEW = "a" * 40, "b" * 40
+PR_MERGE, PR_HEAD, TREE = "e" * 40, "f" * 40, "9" * 40
 
 
 def setup(monkeypatch, get):
@@ -238,8 +239,21 @@ def test_ci_acceptance_chain_binds_each_commit_to_exact_run(monkeypatch, tmp_pat
         "first_parent_commits",
         lambda _directory, *, previous, sha: commits,
     )
+    monkeypatch.setattr(
+        deployer,
+        "run",
+        lambda *_args, **_kwargs: json.dumps({"playwright": []}),
+    )
 
-    def verify(run_id, *, previous, sha, directory, trusted_baseline):
+    def verify(
+        run_id,
+        *,
+        previous,
+        sha,
+        directory,
+        trusted_baseline,
+        supplemental_playwright=None,
+    ):
         calls.append((run_id, previous, sha, directory, trusted_baseline))
         return receipts[len(calls) - 1]
 
@@ -258,6 +272,165 @@ def test_ci_acceptance_chain_binds_each_commit_to_exact_run(monkeypatch, tmp_pat
         "commit": NEW,
         "receipts": receipts,
     }
+
+
+def test_ci_acceptance_chain_accepts_exact_tree_pr_playwright_evidence(
+    monkeypatch, tmp_path
+):
+    selection = _ci_plan(playwright=["area:browser-harness"])
+    monkeypatch.setattr(
+        deployer,
+        "first_parent_commits",
+        lambda *_args, **_kwargs: [PR_MERGE],
+    )
+    monkeypatch.setattr(
+        deployer,
+        "run",
+        lambda *args, **_kwargs: (
+            json.dumps(selection)
+            if "show" in args
+            else pytest.fail(f"unexpected git command: {args!r}")
+        ),
+    )
+    monkeypatch.setattr(deployer, "commit_parents", lambda *_args: [OLD, PR_HEAD])
+    monkeypatch.setattr(deployer, "git_tree", lambda *_args: TREE)
+    pr_ci = {
+        "head_commit": PR_HEAD,
+        "base_commit": OLD,
+        "merge_commit": PR_MERGE,
+        "tree_sha": TREE,
+        "run_id": 60001,
+        "selection_change_digest": "c" * 64,
+        "selection_plan_sha256": "d" * 64,
+    }
+    pr_playwright = {**pr_ci, "run_id": 60002}
+    monkeypatch.setattr(
+        deployer, "verify_pr_ci_supplement", lambda *_args, **_kwargs: pr_ci
+    )
+    monkeypatch.setattr(
+        deployer,
+        "verify_pr_playwright_supplement",
+        lambda *_args, **_kwargs: pr_playwright,
+    )
+    main_runs = []
+
+    def verify_main(*args, supplemental_playwright=None, **kwargs):
+        main_runs.append((args, kwargs, supplemental_playwright))
+        receipt = _ci_run_receipt(60003, PR_MERGE, OLD)
+        receipt["supplemental_pr_evidence"] = supplemental_playwright
+        return receipt
+
+    monkeypatch.setattr(deployer, "verify_ci_acceptance", verify_main)
+    accepted = deployer.verify_ci_acceptance_chain(
+        ["60003"],
+        previous=OLD,
+        sha=PR_MERGE,
+        directory=tmp_path,
+        pr_ci_run_ids=["60001"],
+        pr_playwright_run_ids=["60002"],
+    )
+
+    assert len(main_runs) == 1
+    assert main_runs[0][2] == {
+        "pull_request_ci": pr_ci,
+        "playwright": pr_playwright,
+    }
+    assert accepted["supplemental_pr_evidence"] == main_runs[0][2]
+
+
+@pytest.mark.parametrize("head_tree", ["8" * 40, TREE])
+def test_pr_playwright_binding_checks_exact_merge_tree(
+    monkeypatch, tmp_path, head_tree
+):
+    run_info = {
+        "head_sha": PR_HEAD,
+        "head_branch": "codex/pr-fixture",
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "success",
+        "repository": {"full_name": "berylliumsec/nebula"},
+        "workflow_id": 77,
+        "run_attempt": 1,
+        "html_url": "https://github.com/berylliumsec/nebula/actions/runs/60004",
+    }
+    pull = {
+        "number": 989,
+        "state": "closed",
+        "merged_at": "2026-11-13T18:36:18Z",
+        "merge_commit_sha": PR_MERGE,
+        "base": {"sha": OLD},
+        "head": {"sha": PR_HEAD, "ref": "codex/pr-fixture"},
+    }
+    monkeypatch.setattr(
+        deployer,
+        "github_json",
+        lambda path: (
+            run_info
+            if path == "actions/runs/60004"
+            else {"path": ".github/workflows/playwright-impact.yml", "state": "active"}
+        ),
+    )
+    monkeypatch.setattr(deployer, "github_json_value", lambda _path: [pull])
+
+    def fake_run(*args, **_kwargs):
+        if "rev-list" in args:
+            return f"{PR_MERGE} {OLD} {PR_HEAD}"
+        if "rev-parse" in args:
+            return TREE if args[-1] == f"{PR_MERGE}^{{tree}}" else head_tree
+        pytest.fail(f"unexpected git command: {args!r}")
+
+    monkeypatch.setattr(deployer, "run", fake_run)
+    if head_tree == TREE:
+        accepted = deployer.bind_pr_run(
+            "60004",
+            head_sha=PR_HEAD,
+            base_sha=OLD,
+            merge_sha=PR_MERGE,
+            workflow_path=".github/workflows/playwright-impact.yml",
+            directory=tmp_path,
+        )
+        assert accepted["tree_sha"] == TREE
+    else:
+        with pytest.raises(RuntimeError, match="PR head tree differs"):
+            deployer.bind_pr_run(
+                "60004",
+                head_sha=PR_HEAD,
+                base_sha=OLD,
+                merge_sha=PR_MERGE,
+                workflow_path=".github/workflows/playwright-impact.yml",
+                directory=tmp_path,
+            )
+
+
+def test_pr_playwright_matrix_requires_every_selected_shard():
+    def entry(project):
+        return {
+            "area": "browser-harness",
+            "grep": "browser harness",
+            "project": project,
+            "runtime": "real-core",
+            "shard": "1/1",
+            "test_match": "tests/real-core.spec.ts",
+        }
+
+    include = [entry("assistant-real-desktop"), entry("assistant-real-webkit-390")]
+    jobs = [
+        {"name": "plan", "status": "completed", "conclusion": "success"},
+        {"name": "gate", "status": "completed", "conclusion": "success"},
+        {
+            "name": "playwright (browser-harness, browser harness, assistant-real-desktop, real-core, 1/1, tests/real-core.spec.ts)",
+            "status": "completed",
+            "conclusion": "success",
+        },
+        {
+            "name": "playwright (browser-harness, browser harness, assistant-real-webkit-390, real-core, 1/1, tests/real-core.spec.ts)",
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+    assert len(deployer.validate_playwright_matrix_jobs(jobs, include)) == 4
+    with pytest.raises(RuntimeError, match="cover every selected entry"):
+        deployer.validate_playwright_matrix_jobs(jobs[:-1], include)
 
 
 def test_ci_acceptance_chain_rejects_missing_extra_and_duplicate_runs(
@@ -288,6 +461,11 @@ def test_ci_acceptance_chain_rejects_reordered_or_gap_receipts(
         deployer,
         "first_parent_commits",
         lambda *_args, **_kwargs: [middle, NEW],
+    )
+    monkeypatch.setattr(
+        deployer,
+        "run",
+        lambda *_args, **_kwargs: json.dumps({"playwright": []}),
     )
     monkeypatch.setattr(
         deployer,

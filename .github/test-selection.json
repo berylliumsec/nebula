@@ -1,7 +1,7 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Verify project chat creation through an execution-scoped store uses its locked owner row without forbidden host-coordination DML, while preserving chat-start serialization with project retirement.",
-  "exclusions": "CI runs one focused execution-scope regression across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment.",
+  "reason": "Verify supplemental PR Playwright acceptance is exact-tree bound to merged main commits, validates the reviewed selector and artifact digest, and requires every selected browser matrix shard plus companion PR CI.",
+  "exclusions": "CI runs four focused deployer verifier cases across Python 3.11, 3.12, and 3.13. No local tests, broad suites, new workflow, database backup, or live Core mutation.",
   "python_versions": [
     "3.11",
     "3.12",
@@ -10,17 +10,19 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 1,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_scope.py::test_execution_worker_can_start_chat_under_lease_and_retirement_hold"
+    "tests/test_deployer_protocol.py::test_ci_acceptance_chain_accepts_exact_tree_pr_playwright_evidence",
+    "tests/test_deployer_protocol.py::test_pr_playwright_binding_checks_exact_merge_tree",
+    "tests/test_deployer_protocol.py::test_pr_playwright_matrix_requires_every_selected_shard"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "c709638ed20f01435b850702220d00614c350032c69c3a317c0446627dc7d6cc"
+  "change_digest": "e7e8e7a2f2a643a97a2210be00208046bc609104dc6c82c75e85d61f98b28db9"
 }
