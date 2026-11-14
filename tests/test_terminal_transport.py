@@ -343,3 +343,130 @@ def test_saved_chat_acceptance_is_followed_to_its_turn_stream(
         ("done", {"type": "done", "turn_id": "turn-a"}),
     ]
     assert seen == ["POST", "GET"]
+
+
+def _busy():
+    return httpx.Response(
+        429,
+        json={
+            "detail": "Viewer capacity is busy; reconnect using the saved request ID"
+        },
+    )
+
+
+def _unavailable():
+    return httpx.Response(
+        503,
+        json={
+            "detail": "Runtime delivery is unavailable. The saved request has not been retried."
+        },
+    )
+
+
+@pytest.mark.parametrize("not_yet", [_busy, _unavailable])
+def test_a_busy_read_of_a_saved_result_keeps_waiting_for_it(tmp_path, no_wait, not_yet):
+    """Before, a 429 or 503 while reading a receipt dropped the saved request's ID."""
+    seen = []
+    polls = iter(
+        [not_yet(), httpx.Response(200, json={"id": "chat-a", "title": "Renamed"})]
+    )
+
+    def handler(request):
+        seen.append(request.method)
+        if request.method == "PATCH":
+            return _receipt()
+        return next(polls)
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            return await api.request("PATCH", "chat-sessions/chat-a", json={})
+        finally:
+            await api.close()
+
+    assert asyncio.run(run()) == {"id": "chat-a", "title": "Renamed"}
+    assert seen == ["PATCH", "GET", "GET"]
+
+
+def test_a_saved_result_still_busy_at_the_deadline_names_its_request(tmp_path, no_wait):
+    def handler(request):
+        if request.method == "PATCH":
+            return _receipt()
+        return _busy()
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        api.receipt_wait = 0
+        try:
+            await api.request("PATCH", "chat-sessions/chat-a", json={})
+        finally:
+            await api.close()
+
+    with pytest.raises(AcceptedRequest) as raised:
+        asyncio.run(run())
+    assert raised.value.command_id == "command-a"
+
+
+def test_a_marked_final_busy_answer_is_not_waited_on(tmp_path, no_wait):
+    def handler(request):
+        if request.method == "PATCH":
+            return _receipt()
+        return httpx.Response(
+            503,
+            json={"detail": "Saved request failed"},
+            headers={"X-Nebula-Request-State": "needs-reconciliation"},
+        )
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            await api.request("PATCH", "chat-sessions/chat-a", json={})
+        finally:
+            await api.close()
+
+    with pytest.raises(ApiError):
+        asyncio.run(run())
+
+
+def test_the_sync_client_keeps_waiting_through_a_busy_read(tmp_path, monkeypatch):
+    monkeypatch.setattr("nebula.terminal.transport.time.sleep", lambda _seconds: None)
+    polls = iter([_busy(), httpx.Response(200, json={"id": "project-a"})])
+
+    def handler(request):
+        if request.method == "POST":
+            return _receipt()
+        return next(polls)
+
+    options = connection_options(_settings(tmp_path))
+    options["transport"] = httpx.MockTransport(handler)
+    with httpx.Client(**options) as client:
+        assert request(client, "POST", "engagements", json={}) == {"id": "project-a"}
+
+
+def test_an_accepted_stream_keeps_waiting_through_a_busy_read(tmp_path, no_wait):
+    polls = iter(
+        [
+            _busy(),
+            httpx.Response(
+                200,
+                text='event: done\ndata: {"type":"done","turn_id":"turn-a"}\n\n',
+            ),
+        ]
+    )
+
+    def handler(request):
+        if request.method == "POST":
+            return _receipt()
+        return next(polls)
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            return [item async for item in api.events("POST", "chat/completions")]
+        finally:
+            await api.close()
+
+    assert asyncio.run(run()) == [
+        ("accepted", {"type": "accepted", "command_id": "command-a"}),
+        ("done", {"type": "done", "turn_id": "turn-a"}),
+    ]
