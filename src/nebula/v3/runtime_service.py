@@ -103,6 +103,23 @@ def configure_retained_resources(bundle: Path) -> None:
         os.environ["NEBULA_SECURITY_PROXY_ADDON"] = str(addon)
 
 
+# Viewer streams (work events, chat turns) are relayed from workers that
+# outlive this listener, so they never end on their own. Without a bound,
+# SIGTERM or a confirmed shutdown waits for every open browser tab. Clients
+# reconnect with their saved cursors.
+STABLE_LISTENER_GRACE_SECONDS = 5
+
+
+def stable_listener_config(app, **options) -> uvicorn.Config:
+    return uvicorn.Config(
+        app,
+        log_level="error",
+        access_log=False,
+        timeout_graceful_shutdown=STABLE_LISTENER_GRACE_SECONDS,
+        **options,
+    )
+
+
 async def serve_runtime(
     *,
     data_root: Path,
@@ -227,12 +244,10 @@ async def serve_runtime(
         if open_browser:
             webbrowser.open(endpoint.removesuffix("/api/v1") + "/#token=" + token)
         server = uvicorn.Server(
-            uvicorn.Config(
+            stable_listener_config(
                 supervisor.app,
                 host=host,
                 port=port,
-                log_level="error",
-                access_log=False,
                 ssl_certfile=str(tls_cert) if tls_cert else None,
                 ssl_keyfile=str(tls_key) if tls_key else None,
             )
