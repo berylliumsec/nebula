@@ -176,7 +176,7 @@ class Connection(HarnessConnection):
                 )
             )
             await ticket.decision
-            ticket.acknowledge_handoff("sent")
+            await ticket.acknowledge_handoff("sent")
         yield HarnessEvent(type="message_delta", delta="Synthetic harness answer.")
         yield HarnessEvent(type="completed", message="Synthetic harness answer.")
 
