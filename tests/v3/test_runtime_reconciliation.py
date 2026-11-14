@@ -426,3 +426,77 @@ async def test_unreadable_origin_only_replaces_a_missing_socket_directory(
     current = json.loads(marker.read_text())
     assert replacement.launch_origin is None and current["process_origin"] is None
     assert current["replaced"]["reason"] == "socket_root_missing"
+
+
+def _record_socket_root(managed, path, *, namespace=None):
+    """Point the private marker at another socket directory (same boot)."""
+    marker = managed.data / "runtime" / "process-origin.json"
+    document = json.loads(marker.read_text())
+    document["socket_root"] = str(path)
+    if namespace is not None:
+        kind, boot, label, _inode = document["process_origin"].split(":")
+        document["process_origin"] = ":".join((kind, boot, label, namespace))
+    marker.write_text(json.dumps(document))
+    return marker
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root owns every directory")
+@pytest.mark.parametrize("kind", ["foreign", "shared", "symlink"])
+async def test_untrusted_socket_directory_on_the_same_boot_is_never_reused(
+    managed, tmp_path, request, kind
+):
+    await managed.stage("v1")
+    execution = await managed.host.spawn("v1", "execution")
+    await managed.host.close()
+    original = managed.host.socket_root
+    if kind == "foreign":
+        # e.g. another local user recreated the vanished public /tmp path.
+        untrusted = Path("/")
+    elif kind == "shared":
+        untrusted = original
+        untrusted.chmod(0o755)
+    else:
+        untrusted = tmp_path / "linked-sockets"
+        untrusted.symlink_to(original)
+    before = os.lstat(untrusted)
+    marker = _record_socket_root(managed, untrusted)
+    replacement = managed.new_host()
+    await replacement.start()
+    current = json.loads(marker.read_text())
+    assert replacement.launch_origin == current["process_origin"] == process_origin()
+    assert current["replaced"]["reason"] == "socket_root_untrusted"
+    assert current["replaced"]["socket_root"] == str(untrusted)
+    fresh = replacement.socket_root
+    assert fresh not in {untrusted, original} and str(fresh) == current["socket_root"]
+    details = os.lstat(fresh)
+    assert stat.S_ISDIR(details.st_mode) and stat.S_IMODE(details.st_mode) == 0o700
+    # The untrusted path is neither repaired, followed nor removed.
+    after = os.lstat(untrusted)
+    assert (after.st_mode, after.st_uid, after.st_ino) == (
+        before.st_mode,
+        before.st_uid,
+        before.st_ino,
+    )
+    # A live worker recorded in the old directory is not presumed dead.
+    [observed] = await replacement.rediscover()
+    assert observed.process_state == "alive"
+    assert not (await replacement.reconcile_processes())["retired_runtime_ids"]
+    assert same_process(execution.pid, execution.process_birth)
+    worker = await replacement.spawn("v1", "execution")
+    assert worker.endpoint.startswith("unix://" + str(fresh) + "/")
+    original.chmod(0o700)
+    managed.host.socket_root = fresh  # the fixture removes the new root
+    request.addfinalizer(lambda: shutil.rmtree(original, ignore_errors=True))
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root owns every directory")
+async def test_untrusted_socket_directory_in_another_namespace_is_refused(managed):
+    await managed.stage("v1")
+    await managed.host.close()
+    marker = _record_socket_root(managed, Path("/"), namespace="4026599999")
+    recorded = marker.read_bytes()
+    replacement = managed.new_host()
+    with pytest.raises(CoordinationConflict, match="another process namespace"):
+        await replacement.start()
+    assert marker.read_bytes() == recorded
+    assert replacement.socket_root is None

@@ -59,6 +59,16 @@ ORIGIN_MARKER = "process-origin.json"
 PREVIOUS_BOOT_LEASE_WAIT_SECONDS = LEASE_MS / 1000 + 5
 
 
+def _private_directory(details: os.stat_result | None) -> bool:
+    """An lstat result for a real directory only this user can enter or write."""
+    return (
+        details is not None
+        and stat.S_ISDIR(details.st_mode)
+        and details.st_uid == os.getuid()
+        and not details.st_mode & 0o077
+    )
+
+
 def _new_socket_root() -> Path:
     """Create a fresh owner-only socket directory; never reuse a recorded path.
 
@@ -367,16 +377,22 @@ class RuntimeProcessHost:
             # boot id is virtualised; a live lease shows either case.
             await self._await_recorded_leases()
             reason = "previous_boot"
-        elif socket_details is None and recorded == current:
-            # Boot cleanup or /tmp ageing removed it. Live same-boot workers
-            # stay unreachable and retained; only new workers use the new root.
-            # An unreadable origin (None on both sides) stays None.
-            reason = "socket_root_missing"
-        elif socket_details is None:
+        elif not _private_directory(socket_details) and recorded == current:
+            # Boot cleanup or /tmp ageing removed it, and another user may have
+            # recreated the public path. Never reuse, repair or delete it: live
+            # same-boot workers stay unreachable and retained, and only new
+            # workers use the new root. An unreadable origin (None) stays None.
+            reason = (
+                "socket_root_missing"
+                if socket_details is None
+                else "socket_root_untrusted"
+            )
+        elif not _private_directory(socket_details):
             raise CoordinationConflict(
-                "Worker sockets are missing and this supervisor runs in another "
-                "process namespace on the same boot; start Core in its original "
-                "namespace. Recorded workers are retained for trusted recovery"
+                "Worker sockets are missing or not private and this supervisor "
+                "runs in another process namespace on the same boot; start Core "
+                "in its original namespace. Recorded workers are retained for "
+                "trusted recovery"
             )
         else:
             reason = None
@@ -403,11 +419,11 @@ class RuntimeProcessHost:
                 "runtime",
                 "runtime.process_origin_replaced",
                 "The supervisor replaced its worker socket directory after "
-                + (
-                    "a host restart."
-                    if reason == "previous_boot"
-                    else "the previous directory was removed."
-                ),
+                + {
+                    "previous_boot": "a host restart.",
+                    "socket_root_missing": "the previous directory was removed.",
+                    "socket_root_untrusted": "the recorded path was not its private directory.",
+                }[reason],
                 stage="startup",
                 outcome="success",
                 operator_detail=(
@@ -422,12 +438,7 @@ class RuntimeProcessHost:
             )
             recorded, sockets = current, fresh
             socket_details = os.lstat(sockets)
-        assert socket_details is not None
-        if (
-            not stat.S_ISDIR(socket_details.st_mode)
-            or socket_details.st_uid != os.getuid()
-            or socket_details.st_mode & 0o077
-        ):
+        if not _private_directory(socket_details):
             raise ValueError("worker sockets require an owner-only directory")
         return recorded, sockets
 
