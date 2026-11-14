@@ -12648,16 +12648,23 @@ class ChatService:
         return history
 
     async def _project_scope(self, engagement_id: str) -> ScopePolicy:
-        """The project's stored scope, or the default other runtimes build.
+        """The scope Core-owned tool families (skills, subagents, agent
+        messages, Work) start from when no runtime component supplied one.
 
-        Core-owned tool families (skills, subagents, agent messages, Work) must
-        start from this scope. ``_eligible_provider_specs`` compares a turn's
-        scope with the stored one, so a placeholder id rejects every turn.
+        With a stored scope this must be that scope: ``_eligible_provider_specs``
+        compares a turn's scope with it, so any other id rejects every turn.
+        Without one, keep the established per-project placeholder id: those
+        turns are persisted with it, so they still resume across an upgrade,
+        and a scope first saved as ``scope:<project>`` mid-response still reads
+        as a change rather than colliding with a default.
         """
         engagement = await self.store.get(Engagement, engagement_id)
         if engagement.scope_policy_id:
             return await self.store.get(ScopePolicy, engagement.scope_policy_id)
-        return ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+        return ScopePolicy(
+            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement.id}")),
+            engagement_id=engagement.id,
+        )
 
     async def _mcp_catalog(
         self,
