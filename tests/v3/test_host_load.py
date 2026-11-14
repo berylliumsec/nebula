@@ -16,15 +16,19 @@ from nebula.v3.api import create_app
 from nebula.v3.domain import (
     AgentRun,
     ChatMessage,
+    ChatSession,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     HarnessTurn,
     ProviderProfile,
     RunBudget,
     RunStatus,
+    utc_now,
 )
 from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 from nebula.v3.missions import MissionService
+from nebula.v3.provider_scheduler import ProviderScheduler
 from nebula.v3.storage import NebulaStore
 from nebula.v3.settings_assistant_api import SettingsAssistantApi
 from tests.v3.test_chat_api import ApiChatProvider
@@ -204,6 +208,81 @@ async def test_concurrent_refresh_is_shared_and_survives_waiter_cancellation(
             release.set()
 
     (await exercise())
+
+
+class _ReadingSequence(HostLoadMonitor):
+    """Each fresh sample takes the next CPU reading, then the host is calm."""
+
+    def __init__(self, readings):
+        super().__init__(interval=0.01)
+        self.readings = list(readings)
+
+    def cached(self):
+        return None
+
+    def sample(self):
+        reading = self.readings.pop(0) if self.readings else 0.1
+        return HostLoadSnapshot(time.monotonic(), 4, reading, 0.5, False, None, True)
+
+
+async def test_a_queued_turn_saves_why_it_waits_not_each_new_reading(tmp_path):
+    store = NebulaStore(tmp_path / "readings.db")
+    (await store.create(Engagement(id="project", name="Readings")))
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider",
+                name="Provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model"],
+            )
+        )
+    )
+    (
+        await store.create(
+            ChatSession(
+                id="session",
+                engagement_id="project",
+                title="Readings",
+                provider_profile_id="provider",
+                model="model",
+            )
+        )
+    )
+    turn = await store.create(
+        ChatTurn(
+            id="turn",
+            engagement_id="project",
+            session_id="session",
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.QUEUED,
+            queued_at=utc_now(),
+        )
+    )
+    reasons = []
+    monitor = _ReadingSequence([0.99, 1.0, 0.95, 0.86] * 3)
+    original = monitor.sample
+
+    def sample():
+        snapshot = original()
+        reasons.append(snapshot.evaluate(monitor.thresholds).reason)
+        return snapshot
+
+    monitor.sample = sample  # type: ignore[method-assign]
+    scheduler = ProviderScheduler(
+        store, worker_id="worker", host_load=HostLoadGate(monitor)
+    )
+    (await scheduler.enqueue(turn))
+
+    admission = await asyncio.wait_for(scheduler.admit(turn.id), 10)
+
+    # Created, its wait saved once, cleared, admitted. Before the reason
+    # carried the live reading, and each change rewrote the queued turn.
+    assert (await store.get(ChatTurn, turn.id)).revision == 4
+    assert reasons[0] == "Waiting for host pressure: CPU use at or above 80%"
+    await admission.release(turn.id)
 
 
 async def test_pressure_wait_is_fifo_and_cancellation_does_not_leak():

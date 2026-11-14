@@ -1,35 +1,31 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Stacked on the shutdown diagnosability change. A quiesced project whose only failed stop came from a service that runs inside the worker (chat follow-ups, chat schedules, event-loop monitor, event-history pruning) now closes and releases after the worker's own teardown finishes, with the failure reported as a cleanup warning; any other failure still keeps ownership. runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
-  "exclusions": "Process-level suites (test_runtime_processes, test_execution_worker_process, test_runtime_host_services, test_runtime_memory_control, test_runtime_browser_bridge, test_runtime_worker_features, test_runtime_management, test_recovery_reconciliation, test_shutdown_readmission) need a pidfd-capable interpreter or a non-loopback LAN Core fixture; locally the same 76 cases fail identically on pristine main and on this branch (no new failures), so they are not selected. No UI, native or Playwright cases: no frontend code changed (the desktop Stop control only prints runtime-stop stderr). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core scratch evidence (injected service stop failures, six-project startup races, LAN-bound status reads) is recorded in the PR body, not executed by CI.",
+  "reason": "Host pressure's waiting reason embedded the live reading (e.g. 'CPU use (99% >= 80%)'). Queued chat turns, missions and harness turns save that text, so each change in the reading rewrote every waiting record (a real Core turn reached ~50 revisions in 17 minutes; up to one write and one queued stream frame per second) and widened stale-revision windows for harness and mission Stop. The reason now names only the metric and threshold. Selected: host load sampling/admission (with the new regression test), host pressure settings and admission, shared runtime capacity waits, Butler host-load reads, and the host-load-admission browser journey that shows the queued notice.",
+  "exclusions": "test_butler_host_load.py::test_host_load_is_discoverable_read_only_and_rereads_core and test_host_cpu_budget.py (11 cases) fail identically on pristine origin/main and with this patch, so they are excluded. Playwright runs three of the eight host-load-admission profiles (desktop, Chromium 390, WebKit 390), all passing locally on the LAN origin; the other five are the same journey at other widths. Real-Core evidence (scratch Postgres Core, forced CPU threshold: a queued turn's revision 1 -> 33 in 40 s on main vs 2 -> 2 with this patch) is recorded in the PR, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 339,
+    "python": 67,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_runtime_ipc.py",
-    "tests/v3/test_runtime_operations.py",
-    "tests/v3/test_runtime_launcher.py",
-    "tests/v3/test_async_core.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_shutdown_admission.py",
-    "tests/v3/test_runtime_host_search.py",
-    "tests/v3/test_shared_butler_memory.py",
-    "tests/v3/test_shared_knowledge.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_runtime_auto_recovery.py"
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_host_pressure.py",
+    "tests/v3/test_runtime_capacity.py",
+    "tests/v3/test_butler_host_load.py::test_core_startup_syncs_current_host_load_guidance_into_chroma",
+    "tests/v3/test_butler_host_load.py::test_managed_host_load_uses_fixed_route_and_preserves_unknown_values",
+    "tests/v3/test_butler_host_load.py::test_scheduled_global_butler_can_discover_and_reread_host_load",
+    "tests/v3/test_butler_host_load.py::test_expired_host_sample_refresh_runs_off_loop_and_is_shared"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "host-load-admission/model-desktop",
+    "host-load-admission/model-chromium-390",
+    "host-load-admission/model-webkit-390"
+  ],
   "checks": [],
-  "change_digest": "bf9fc60c5ebae9c92944f342807e8d6311ae55dc22099eafeed04a06536ed8b3"
+  "change_digest": "453dc2ac7e2768b4779194608465df7cb27a49fbc00f80e971dd5d4927cb7639"
 }
