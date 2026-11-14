@@ -1,26 +1,24 @@
 {
   "reviewed_by": "Claude",
-  "reason": "A host shutdown that quiesced some projects and then aborted left their workers alive, closed and unowned with process rows still 'ready'. Auto-admission then skipped every new demand (any unowned execution process blocks it), and a stale pending entry re-claimed a released project onto its closed worker (claim committed before the worker refused the attach), so the heartbeat kept that project owned by a worker that could never run it. Releasing a quiesced project now drains its worker's process row in the same transaction, attach_execution claims only for an unassigned worker and refuses a bound worker that does not hold the current grant, the retirement reconciler also retires workers quiesced by an aborted host shutdown, and auto-admission drops a pending process that is no longer reserved, starting or ready. Selected suites cover quiescence with an aborted shutdown, the retirement reconciler, deployment status and lifecycle, the execution worker, automatic recovery, Work batch idle retirement and the recovery attach path.",
-  "exclusions": "Process-level and LAN-fixture suites (test_runtime_reconciliation, test_runtime_integration_credentials, test_runtime_host_settings, test_runtime_host_operator, test_shutdown_readmission, most of test_recovery_reconciliation) fail locally with 24 identical cases on pristine main and on this branch, so they are not selected. No UI, native or Playwright cases: no frontend code changed. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set.",
+  "reason": "The terminal shell and legacy nebula-chat client read Core's 202 chat receipt (a cold project's worker not started within 15 s) as an empty event stream and reported a lost connection, restored the accepted message and lost the new chat's identity. Both now follow the receipt into GET /runtime/requests/{id}/response without resending, and the TUI shows Core's queue reason beside the position. Selected: the terminal shell, transport and TUI suites (new receipt-following, no-resend and queue-reason tests) and the legacy chat client suite.",
+  "exclusions": "tests/test_terminal_package.py, tests/v3/test_chat_cli_core.py and tests/v3/test_terminal_core.py fail or error identically on pristine origin/main in this environment (packaging and installed-client requirements) and are not selected. No Core, UI, native or Playwright change: the GUI already follows receipts.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 214,
+    "python": 121,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_runtime_work_batches.py",
-    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work"
+    "tests/test_terminal_shell.py",
+    "tests/test_terminal_transport.py",
+    "tests/test_terminal_tui.py",
+    "tests/v3/test_chat_cli.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "9cd310ac5efec419ee89cc6ad48ebdc6f26905577cda95bae3f9e65037514541"
+  "change_digest": "79c31b8ae438d7d7b15f51e393d44bf5bc9c8469ff14cd9ff87d2d99a40f50c4"
 }

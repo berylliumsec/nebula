@@ -1398,3 +1398,138 @@ def test_restore_scopes_missing_chat_and_only_recovers_missing_selection(
         assert len(calls) == 2
 
     asyncio.run(run())
+
+
+RECEIPT = {
+    "state": "accepted",
+    "receipt": {
+        "command_id": "cmd-1",
+        "project_id": "project-a",
+        "sequence": 7,
+        "accepted_at_ms": 1,
+    },
+    "detail": "Saved; waiting for its execution owner",
+}
+
+
+def receipt(status=202, body=RECEIPT):
+    # What Core's API worker answers when a project's worker has not started
+    # the saved request within its start window (a cold project).
+    return httpx.Response(
+        status,
+        json=body,
+        headers={"x-nebula-command-id": "cmd-1", "retry-after": "0"},
+    )
+
+
+def test_cold_project_receipt_is_followed_into_the_new_chat(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        if request.method == "POST":
+            return receipt()
+        assert request.url.path.endswith("/runtime/requests/cmd-1/response")
+        assert request.headers["accept"] == "text/event-stream"
+        if sum(1 for _, path in seen if path.endswith("/response")) == 1:
+            # Still starting: Core answers another receipt.
+            return receipt(body={"state": "queued", "command_id": "cmd-1"})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=frame("queued", turn_id="turn-a", session_id="chat-new", sequence=1)
+            + frame("started", turn_id="turn-a", session_id="chat-new", sequence=2)
+            + frame("delta", turn_id="turn-a", delta="Ready.", sequence=3)
+            + frame(
+                "done", turn_id="turn-a", message={"content": "Ready."}, sequence=4
+            ),
+        )
+
+    async def run():
+        shell = make_shell(tmp_path, handler, saved=False)
+        view = shell.current()
+        view.submitting = True
+        view.pending_draft = None
+        await shell.stream(view, "POST", "chat/completions", {"backend": "provider"})
+        assert [method for method, _ in seen] == ["POST", "GET", "GET"]
+        assert view.session["id"] == "chat-new"
+        assert not view.uncertain and not view.submitting
+        assert "Ready." in shell.ui.output
+        assert not any("Connection lost" in line for line in shell.ui.output)
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_saved_submission_is_never_resent_when_following_fails(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(request.method)
+        if request.method == "POST":
+            return receipt()
+        raise httpx.ConnectError("Core restarted")
+
+    async def run():
+        shell = make_shell(tmp_path, handler)
+        view = shell.current()
+        view.draft.text = "keep me"
+        view.pending_draft, view.draft = view.draft, type(view.draft)()
+        await shell.stream(view, "POST", "chat/completions", {"backend": "provider"})
+        assert seen == ["POST", "GET"]
+        # Core saved it: the draft is not restored for a second send.
+        assert not view.uncertain and view.draft.text == ""
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_queued_turn_shows_core_reason_with_its_position(tmp_path):
+    class FeedbackUI(UI):
+        def activity(self, value):
+            self.output.append("Activity: " + value)
+
+    reason = "Waiting for host pressure: CPU use (82% >= 80%)"
+
+    def handler(_request):
+        return httpx.Response(
+            200,
+            content=frame(
+                "queued", turn_id="turn-a", queue_position=1, detail=reason, sequence=1
+            )
+            + frame("done", turn_id="turn-a", message={"content": "ok"}, sequence=2),
+        )
+
+    async def run():
+        ui = FeedbackUI()
+        shell = make_shell(tmp_path, handler, ui=ui)
+        await shell.stream(shell.current(), "GET", "chat/turns/turn-a/events")
+        assert f"Activity: Queued at position 1: {reason}" in ui.output
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_legacy_chat_follows_a_cold_project_receipt():
+    from nebula import chat_cli
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        if request.method == "POST":
+            return receipt()
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=frame("delta", turn_id="turn-a", delta="Hello")
+            + frame("done", turn_id="turn-a", message={"content": "Hello"}),
+        )
+
+    client = httpx.Client(
+        base_url="https://core.example/api/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    chat_cli.stream(client, method="POST", path="chat/completions", body={})
+    assert [method for method, _ in seen] == ["POST", "GET"]
+    assert seen[1][1] == "/api/v1/runtime/requests/cmd-1/response"

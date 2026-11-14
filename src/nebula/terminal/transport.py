@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
@@ -244,6 +245,69 @@ def key(value: Any) -> str:
     return quote(str(value), safe="")
 
 
+# How long a saved chat submission is followed before the operator is told to
+# read it back later. Core keeps it either way.
+RECEIPT_FOLLOW_SECONDS = 600.0
+
+
+def retry_after(response: httpx.Response) -> float:
+    try:
+        return min(10.0, max(0.25, float(response.headers.get("Retry-After", "1"))))
+    except ValueError:
+        # diagnostic-expected: a malformed Retry-After falls back to one second.
+        return 1.0
+
+
+def saved_receipt(response: httpx.Response) -> tuple[str, float]:
+    """The saved command a 202 response names, and how long to wait."""
+    try:
+        value = response.json()
+    except ValueError:
+        # diagnostic-expected: the command id may still arrive in the header.
+        value = {}
+    receipt = value.get("receipt") if isinstance(value, dict) else None
+    command = response.headers.get("X-Nebula-Command-Id") or (
+        receipt.get("command_id") if isinstance(receipt, dict) else None
+    )
+    if not isinstance(command, str) or not command:
+        raise ClientError(
+            "Core saved this request without a receipt. Nothing was resent; review /chats and /status."
+        )
+    return command, retry_after(response)
+
+
+async def _stream_frames(
+    response: httpx.Response,
+) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    event = "message"
+    data: list[str] = []
+    size = 0
+    async for line in response.aiter_lines():
+        if not line:
+            if data:
+                try:
+                    payload = json.loads("\n".join(data))
+                except ValueError as exc:
+                    raise ClientError(
+                        "Core sent an invalid stream. Review /status and /history before retrying."
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise ClientError(
+                        "Core sent an invalid stream object. Review /status."
+                    )
+                yield event, payload
+            event, data, size = "message", [], 0
+        elif line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:"):
+            size += len(line)
+            if size > 8 * 1024 * 1024:
+                raise ClientError(
+                    "Core sent an oversized stream frame. Reconnect and review /history."
+                )
+            data.append(line[5:].removeprefix(" "))
+
+
 class AsyncApi:
     """One exact-origin connection. Writes and submissions are never retried."""
 
@@ -293,30 +357,44 @@ class AsyncApi:
             if not response.is_success:
                 await response.aread()
                 check_response(response)
-            event = "message"
-            data: list[str] = []
-            size = 0
-            async for line in response.aiter_lines():
-                if not line:
-                    if data:
-                        try:
-                            payload = json.loads("\n".join(data))
-                        except ValueError as exc:
-                            raise ClientError(
-                                "Core sent an invalid stream. Review /status and /history before retrying."
-                            ) from exc
-                        if not isinstance(payload, dict):
-                            raise ClientError(
-                                "Core sent an invalid stream object. Review /status."
-                            )
-                        yield event, payload
-                    event, data, size = "message", [], 0
-                elif line.startswith("event:"):
-                    event = line[6:].strip()
-                elif line.startswith("data:"):
-                    size += len(line)
-                    if size > 8 * 1024 * 1024:
+            if response.status_code != 202:
+                async for item in _stream_frames(response):
+                    yield item
+                return
+            await response.aread()
+            command, wait = saved_receipt(response)
+        # 202 means Core saved the request and its project is still starting.
+        # Follow the saved response; the request itself is never sent again.
+        yield (
+            "receipt",
+            {
+                "type": "receipt",
+                "command_id": command,
+                "detail": "Saved; waiting for Core to start it",
+            },
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RECEIPT_FOLLOW_SECONDS
+        while True:
+            await asyncio.sleep(wait)
+            async with self.client.stream(
+                "GET",
+                f"runtime/requests/{key(command)}/response",
+                timeout=httpx.Timeout(30, read=300),
+                headers={"Accept": "text/event-stream"},
+            ) as response:
+                if not response.is_success:
+                    await response.aread()
+                    check_response(response)
+                if response.status_code == 202:
+                    await response.aread()
+                    if loop.time() >= deadline:
                         raise ClientError(
-                            "Core sent an oversized stream frame. Reconnect and review /history."
+                            "Core saved this request but has not started it yet. "
+                            "Nothing was resent; /chats and /status show it once it starts."
                         )
-                    data.append(line[5:].removeprefix(" "))
+                    wait = retry_after(response)
+                    continue
+                async for item in _stream_frames(response):
+                    yield item
+                return

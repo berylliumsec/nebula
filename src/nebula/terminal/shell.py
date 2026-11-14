@@ -931,6 +931,20 @@ class Shell:
                     method, path, body=body, params=params
                 ):
                     event = payload.get("type") or event
+                    if event == "receipt":
+                        # Core saved the submission and starts it when its
+                        # project is ready; it is never sent again.
+                        accepted = True
+                        view.uncertain = False
+                        if submission:
+                            view.pending_draft = None
+                            if isinstance(self.ui, TuiUI):
+                                self.ui.mark_submission("accepted")
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.set_turn_phase("queued")
+                        if self.view is view:
+                            self.update_toolbar(str(payload.get("detail") or "Saved"))
+                        continue
                     if payload.get("turn_id"):
                         view.cursor.turn_id = payload["turn_id"]
                     if event in {
@@ -1082,7 +1096,12 @@ class Shell:
                             or event.replace("_", " ")
                         )
                         if event == "queued" and payload.get("queue_position"):
-                            detail = f"Queued at position {payload['queue_position']}"
+                            # Keep Core's reason, such as a host-pressure wait.
+                            reason = payload.get("detail")
+                            detail = (
+                                f"Queued at position {payload['queue_position']}"
+                                + (f": {reason}" if reason else "")
+                            )
                         elif event == "tool_started":
                             detail = "Tool: " + str(detail)
                         elif event == "tool_completed":

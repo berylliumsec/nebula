@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Annotated, Any, Iterator
 from urllib.parse import quote
@@ -15,6 +16,9 @@ import httpx
 import typer
 
 from .terminal.transport import (
+    RECEIPT_FOLLOW_SECONDS,
+    retry_after,
+    saved_receipt,
     ClientError as ClientError,
     Settings as Settings,
     check_response as check_response,
@@ -376,52 +380,83 @@ def stream(
     displayed = ""
     finished = False
     typer.echo("Butler: ", nl=False)
+
+    def consume(response: httpx.Response) -> None:
+        nonlocal displayed, finished, turn_id
+        for event, payload in server_events(response):
+            turn_id = payload.get("turn_id") or turn_id
+            if event in {"delta", "message_delta"}:
+                delta = terminal_text(payload.get("delta") or "")
+                displayed += delta
+                typer.echo(delta, nl=False)
+            elif event == "done":
+                final = terminal_text((payload.get("message") or {}).get("content", ""))
+                typer.echo(
+                    final[len(displayed) :]
+                    if final.startswith(displayed)
+                    else "\nSaved answer: " + final,
+                    nl=False,
+                )
+                finished = True
+                break
+            elif event in {
+                "approval_required",
+                "input_required",
+                "interaction_required",
+            } or (
+                event in {"approval", "interaction"}
+                and payload.get("item_status") in {"waiting_approval", "waiting_input"}
+            ):
+                typer.echo(
+                    f"\nAction required: {terminal_text(payload.get('detail') or payload.get('message') or payload.get('summary') or payload.get('title') or event.replace('_', ' '))}. Review /status; /stop cancels the turn."
+                )
+                finished = True
+                break
+            elif event in {"error", "cancelled"}:
+                raise ClientError(
+                    terminal_text(
+                        payload.get("operator_detail")
+                        or payload.get("detail")
+                        or payload.get("message")
+                        or "Turn stopped. Review /history before retrying."
+                    )
+                )
+
     try:
+        command = None
         with client.stream(method, path, json=body) as response:
             if not response.is_success:
                 response.read()
                 check_response(response)
-            for event, payload in server_events(response):
-                turn_id = payload.get("turn_id") or turn_id
-                if event in {"delta", "message_delta"}:
-                    delta = terminal_text(payload.get("delta") or "")
-                    displayed += delta
-                    typer.echo(delta, nl=False)
-                elif event == "done":
-                    final = terminal_text(
-                        (payload.get("message") or {}).get("content", "")
-                    )
-                    typer.echo(
-                        final[len(displayed) :]
-                        if final.startswith(displayed)
-                        else "\nSaved answer: " + final,
-                        nl=False,
-                    )
-                    finished = True
-                    break
-                elif event in {
-                    "approval_required",
-                    "input_required",
-                    "interaction_required",
-                } or (
-                    event in {"approval", "interaction"}
-                    and payload.get("item_status")
-                    in {"waiting_approval", "waiting_input"}
-                ):
-                    typer.echo(
-                        f"\nAction required: {terminal_text(payload.get('detail') or payload.get('message') or payload.get('summary') or payload.get('title') or event.replace('_', ' '))}. Review /status; /stop cancels the turn."
-                    )
-                    finished = True
-                    break
-                elif event in {"error", "cancelled"}:
-                    raise ClientError(
-                        terminal_text(
-                            payload.get("operator_detail")
-                            or payload.get("detail")
-                            or payload.get("message")
-                            or "Turn stopped. Review /history before retrying."
+            if response.status_code == 202:
+                response.read()
+                command, wait = saved_receipt(response)
+            else:
+                consume(response)
+        if command is not None:
+            # Core saved the request while its project starts. Follow the
+            # saved response; the request is never sent again.
+            typer.echo("(saved; waiting for Core to start it) ", nl=False)
+            deadline = time.monotonic() + RECEIPT_FOLLOW_SECONDS
+            while True:
+                time.sleep(wait)
+                with client.stream(
+                    "GET",
+                    f"runtime/requests/{quote(command, safe='')}/response",
+                    headers={"Accept": "text/event-stream"},
+                ) as response:
+                    if not response.is_success:
+                        response.read()
+                        check_response(response)
+                    if response.status_code != 202:
+                        consume(response)
+                        break
+                    response.read()
+                    if time.monotonic() >= deadline:
+                        raise ClientError(
+                            "Core saved this message but has not started it yet. Nothing was resent; use /follow and /history once it starts."
                         )
-                    )
+                    wait = retry_after(response)
         if not finished:
             raise ClientError(
                 "Connection ended before completion. Reconnect or use /follow and /history to review Core's saved turn before retrying."
