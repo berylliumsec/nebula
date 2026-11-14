@@ -1,6 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
-import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
+import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeDetail, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
   receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
   type RuntimeRequestStatus } from "./durableRequests";
@@ -1989,6 +1989,14 @@ interface WireScopeImport extends WireEntity {
   applied_candidate_ids?: string[];
   applied_scope_policy_id?: string | null;
   applied_scope_revision?: number | null;
+}
+
+export interface ProjectViewLease {
+  leaseId: string;
+  projectId: string;
+  expiresAt: string;
+  renewAfterSeconds: number;
+  runtime: { state: "ready" | "starting" | "held"; reason?: string };
 }
 
 export interface ApiClientOptions {
@@ -5076,6 +5084,37 @@ export class ApiClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
+  /**
+   * Hold (or renew) this view's project lease: an open project view is the
+   * demand that brings up an idle project's worker. Keyed by the view's own
+   * lease ID, so a replay is a renewal; it is not a saved request.
+   */
+  async holdProjectView(projectId: string, leaseId: string, signal?: AbortSignal): Promise<ProjectViewLease> {
+    const headers = this.authorizeHeaders(new Headers({ Accept: "application/json", "Content-Type": "application/json" }), "PUT");
+    const response = await this.fetchImpl(`${this.baseUrl}/engagements/${encodeURIComponent(projectId)}/view-leases/${encodeURIComponent(leaseId)}`, {
+      method: "PUT", headers, credentials: "same-origin", body: "{}", signal, cache: "no-store",
+    });
+    if (!response.ok) throw await responseError(response);
+    const value = await response.json() as { lease_id: string; project_id: string; expires_at: string; renew_after_seconds: number; runtime?: { state?: string; reason?: string } };
+    const state = value.runtime?.state;
+    return {
+      leaseId: value.lease_id,
+      projectId: value.project_id,
+      expiresAt: value.expires_at,
+      renewAfterSeconds: Number.isFinite(value.renew_after_seconds) ? value.renew_after_seconds : 30,
+      runtime: { state: state === "ready" || state === "held" ? state : "starting", reason: typeof value.runtime?.reason === "string" ? value.runtime.reason : undefined },
+    };
+  }
+
+  /** Release this view's project lease; expiry is the backstop when this cannot run. */
+  async releaseProjectView(projectId: string, leaseId: string): Promise<void> {
+    const headers = this.authorizeHeaders(new Headers({ Accept: "application/json" }), "DELETE");
+    const response = await this.fetchImpl(`${this.baseUrl}/engagements/${encodeURIComponent(projectId)}/view-leases/${encodeURIComponent(leaseId)}`, {
+      method: "DELETE", headers, credentials: "same-origin", keepalive: true,
+    });
+    if (!response.ok && response.status !== 404) throw await responseError(response);
+  }
+
   /** Repeat one project read without reporting it; only whether its runtime answered matters. */
   private async probeProjectRuntime(path: string, signal: AbortSignal): Promise<ProjectRuntimeProbeResult> {
     const response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
@@ -5090,7 +5129,7 @@ export class ApiClient {
     }
     const error = await responseError(response);
     return isProjectRuntimeUnavailable(error)
-      ? { answered: false, retryAfterMs: error.retryAfterMs, reason: projectRuntimeReason(error) }
+      ? { answered: false, retryAfterMs: error.retryAfterMs, reason: projectRuntimeReason(error), detail: projectRuntimeDetail(error) }
       : { answered: true };
   }
 
@@ -5413,7 +5452,7 @@ export class ApiClient {
       // An idle project's worker has retired, or a readmitted one is starting.
       // The read is repeated when it is back; it is not an operation failure.
       const runtimeAway = read && isProjectRuntimeUnavailable(error);
-      if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error));
+      if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error), projectRuntimeDetail(error));
       else if (read) this.projectRuntime.answered(path);
       void logDiagnostic({
         level: runtimeAway ? "warning" : response.status >= 500 ? "error" : "warning",

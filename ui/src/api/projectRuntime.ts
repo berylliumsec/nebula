@@ -26,15 +26,16 @@ const MAX_RETRY_AFTER_MS = 10_000;
 const MAX_TRACKED_READS = 16;
 
 /** Why no ready worker owns the project. */
-export type ProjectRuntimeReason = "starting" | "closing" | "idle";
-/** "reconnecting" or "idle" while a view waits; "available" otherwise. */
-export type ProjectRuntimeState = "available" | "reconnecting" | "idle";
+export type ProjectRuntimeReason = "starting" | "closing" | "idle" | "held";
+/** "reconnecting", "held" or "idle" while a view waits; "available" otherwise. */
+export type ProjectRuntimeState = "available" | "reconnecting" | "idle" | "held";
 
 export interface ProjectRuntimeProbeResult {
   /** The runtime answered the read (with anything but runtime unavailability). */
   answered: boolean;
   retryAfterMs?: number;
   reason?: ProjectRuntimeReason;
+  detail?: string;
 }
 
 export type ProjectRuntimeProbe = (path: string, signal: AbortSignal) => Promise<ProjectRuntimeProbeResult>;
@@ -53,7 +54,14 @@ export function isProjectRuntimeUnavailable(error: unknown): boolean {
 export function projectRuntimeReason(error: unknown): ProjectRuntimeReason {
   const details = error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
   const reason = details && typeof details === "object" ? (details as { reason?: unknown }).reason : undefined;
-  return reason === "idle" || reason === "closing" ? reason : "starting";
+  return reason === "idle" || reason === "closing" || reason === "held" ? reason : "starting";
+}
+
+/** Core's operator text for a held start (for example the memory budget). */
+export function projectRuntimeDetail(error: unknown): string | undefined {
+  const details = error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
+  const detail = details && typeof details === "object" ? (details as { detail?: unknown }).detail : undefined;
+  return typeof detail === "string" && detail.trim() ? detail.slice(0, 1000) : undefined;
 }
 
 /** Milliseconds from a Retry-After header (delta seconds or an HTTP date). */
@@ -65,9 +73,9 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
   return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
 }
 
-/** 1 s, 2 s, 4 s, then 5 s (10 s for an idle project); a longer Retry-After (up to 10 s) is honoured. */
+/** 1 s, 2 s, 4 s, then 5 s (10 s while idle or held); a longer Retry-After (up to 10 s) is honoured. */
 export function projectRuntimeRetryDelay(attempt: number, retryAfterMs?: number, reason: ProjectRuntimeReason = "starting"): number {
-  const ceiling = reason === "idle" ? IDLE_DELAY_MS : MAX_DELAY_MS;
+  const ceiling = reason === "idle" || reason === "held" ? IDLE_DELAY_MS : MAX_DELAY_MS;
   const backoff = Math.min(ceiling, BASE_DELAY_MS * 2 ** Math.max(0, Math.min(attempt, 8)));
   const floor = retryAfterMs !== undefined && Number.isFinite(retryAfterMs)
     ? Math.min(MAX_RETRY_AFTER_MS, Math.max(0, retryAfterMs))
@@ -89,7 +97,7 @@ function aborted(): DOMException {
 }
 
 export class ProjectRuntimeRecovery {
-  private readonly failed = new Map<string, { path: string; retryAfterMs?: number; reason: ProjectRuntimeReason }>();
+  private readonly failed = new Map<string, { path: string; retryAfterMs?: number; reason: ProjectRuntimeReason; detail?: string }>();
   private readonly waiters = new Set<() => void>();
   private readonly listeners = new Set<(state: ProjectRuntimeState) => void>();
   private timer?: ReturnType<typeof setTimeout>;
@@ -103,7 +111,13 @@ export class ProjectRuntimeRecovery {
   /** While a view waits for a project read Core could not route yet: "reconnecting", or "idle" when nothing will start the worker until the operator resumes work. */
   get state(): ProjectRuntimeState {
     if (!this.failed.size || !this.waiters.size) return "available";
-    return this.latest()?.reason === "idle" ? "idle" : "reconnecting";
+    const reason = this.latest()?.reason;
+    return reason === "idle" || reason === "held" ? reason : "reconnecting";
+  }
+
+  /** Core's text for the latest wait, such as why a start is held. */
+  get detail(): string | undefined {
+    return this.state === "available" ? undefined : this.latest()?.detail;
   }
 
   subscribe(listener: (state: ProjectRuntimeState) => void): () => void {
@@ -112,10 +126,10 @@ export class ProjectRuntimeRecovery {
   }
 
   /** A project read answered 503 project_runtime_unavailable. */
-  unavailable(path: string, retryAfterMs?: number, reason: ProjectRuntimeReason = "starting"): void {
+  unavailable(path: string, retryAfterMs?: number, reason: ProjectRuntimeReason = "starting", detail?: string): void {
     const key = readKey(path);
     this.failed.delete(key);
-    this.failed.set(key, { path, retryAfterMs, reason });
+    this.failed.set(key, { path, retryAfterMs, reason, detail });
     while (this.failed.size > MAX_TRACKED_READS) this.failed.delete(this.failed.keys().next().value!);
     this.notify();
     this.schedule();
@@ -202,6 +216,7 @@ export class ProjectRuntimeRecovery {
     if (current) {
       if (result.retryAfterMs !== undefined) current.retryAfterMs = result.retryAfterMs;
       if (result.reason) current.reason = result.reason;
+      current.detail = result.detail;
       this.notify();
     }
     this.attempt += 1;
