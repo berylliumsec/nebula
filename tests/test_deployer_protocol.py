@@ -453,9 +453,7 @@ def test_ci_acceptance_chain_rejects_missing_extra_and_duplicate_runs(
             )
 
 
-def test_ci_acceptance_chain_rejects_reordered_or_gap_receipts(
-    monkeypatch, tmp_path
-):
+def test_ci_acceptance_chain_rejects_reordered_or_gap_receipts(monkeypatch, tmp_path):
     middle = "c" * 40
     monkeypatch.setattr(
         deployer,
@@ -529,9 +527,7 @@ def test_ci_acceptance_rejects_modified_trusted_workflow_or_validator(
 
     monkeypatch.setattr(deployer, "run", fake_run)
     with pytest.raises(RuntimeError, match="changes to trusted workflows"):
-        deployer.verify_ci_trust_inputs(
-            tmp_path, trusted_baseline=OLD, sha=NEW
-        )
+        deployer.verify_ci_trust_inputs(tmp_path, trusted_baseline=OLD, sha=NEW)
 
     diff_args = next(args for args in calls if "diff" in args)
     assert ".github/workflows" in diff_args
@@ -594,3 +590,46 @@ def test_ci_acceptance_rejects_a_failed_selected_job():
             ],
             {"selection", "python (3.12)"},
         )
+
+
+def test_deployment_post_honours_retry_after_and_resubmits_the_same_operation(
+    monkeypatch,
+):
+    # A stopping supervisor answers 503 with Retry-After while the operation
+    # continues; the same operation ID is resubmitted until its receipt exists.
+    monkeypatch.setattr(
+        deployer,
+        "api",
+        lambda: SimpleNamespace(origin="http://127.0.0.1:8000", token="inert"),
+    )
+    sleeps, bodies = [], []
+    monkeypatch.setattr(deployer.time, "sleep", sleeps.append)
+    receipt = {"operation_id": "op-1", "state": "succeeded", "result": {}}
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def urlopen(request, timeout):
+        bodies.append(request.data)
+        if len(bodies) < 3:
+            raise HTTPError(
+                request.full_url, 503, "restarting", {"Retry-After": "1"}, None
+            )
+        return Response(json.dumps(receipt).encode())
+
+    monkeypatch.setattr(deployer, "urlopen", urlopen)
+    payload = {"operation_id": "op-1", "action": "stage", "parameters": {}}
+    assert deployer.deployment_post("deployment/operations", payload) == receipt
+    assert sleeps == [1, 1] and len(set(bodies)) == 1
+
+    def refused(request, timeout):
+        raise HTTPError(request.full_url, 503, "unavailable", {}, None)
+
+    monkeypatch.setattr(deployer, "urlopen", refused)
+    with pytest.raises(HTTPError):
+        deployer.deployment_post("deployment/operations", payload)
+    assert sleeps == [1, 1]

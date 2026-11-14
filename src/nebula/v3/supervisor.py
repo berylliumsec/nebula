@@ -62,7 +62,7 @@ class _Availability:
         if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
-        if owner.closed or not owner.started:
+        if owner.closing or owner.closed or not owner.started:
             if scope["type"] == "websocket":
                 await send(
                     {
@@ -79,10 +79,47 @@ class _Availability:
             return
         task = asyncio.current_task()
         owner.viewers.add(task)
+
+        async def answer(message):
+            # A drain may close an exchange only after it has answered; one
+            # still waiting for its upstream receipt must not become a 500.
+            if message["type"] in {"http.response.start", "websocket.accept"}:
+                owner.answered.setdefault(task, asyncio.get_running_loop().time())
+            await send(message)
+
         try:
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, answer)
         finally:
             owner.viewers.discard(task)
+            owner.answered.pop(task, None)
+
+
+async def drain_relays(owner, seconds, *, limit, answer_grace=1.0):
+    """Close the exchanges a stopping generation still relays, boundedly.
+
+    Used only while a longer-lived holder keeps the public socket, so the next
+    generation answers as soon as this one exits. An exchange that already
+    answered (an open viewer stream) is closed after ``seconds`` and resumes
+    from its cursor on the next generation. One still waiting for its response
+    headers (an accepted request whose receipt is pending upstream) is never
+    closed before it answers, up to ``limit``; after answering it gets
+    ``answer_grace`` to finish a complete response.
+    """
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    await asyncio.sleep(seconds)
+    while True:
+        pending = {task for task in owner.viewers if not task.done()}
+        if not pending:
+            return
+        now = loop.time()
+        for task in pending:
+            answered = owner.answered.get(task)
+            if (answered is not None and now - answered >= answer_grace) or (
+                now - began >= limit
+            ):
+                task.cancel()
+        await asyncio.sleep(0.1)
 
 
 class RuntimeSupervisor:
@@ -133,7 +170,7 @@ class RuntimeSupervisor:
         self._recovery_version = recovery_version
         self._shutdown_requested = shutdown_requested
         self._shutdown_committed = False
-        self.started, self.closed = False, False
+        self.started, self.closed, self.closing = False, False, False
         self._operations = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._handoff_task = None
@@ -141,6 +178,8 @@ class RuntimeSupervisor:
         self._next_process_reconciliation = 0.0
         self._activated_handoffs: set[str] = set()
         self.viewers: set[asyncio.Task] = set()
+        # Relayed exchanges that have sent their response start, by loop time.
+        self.answered: dict[asyncio.Task, float] = {}
         authentication = CoreAuthentication(self.store, operator_token)
         self.authentication = authentication
 
@@ -868,12 +907,20 @@ class RuntimeSupervisor:
 
     async def close(self):
         if self._close_task is None:
-            self.closed, self.started = True, False
+            # Refuse new requests immediately. Deployment operations already
+            # accepted, including those whose request a stopping generation
+            # cancelled, finish with a definite receipt before host authority
+            # is released; only then do later operations fail as closed.
+            self.closing = True
+            pending = set(self.management.inflight)
             caller = asyncio.current_task()
 
             async def cleanup():
-                # Stop admitting operations immediately, then drain every
-                # accepted copy/RPC/preparation before releasing host authority.
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                self.closed, self.started = True, False
+                # Drain every accepted copy/RPC/preparation before releasing
+                # host authority.
                 async with self._operations:
                     await self._detach_resources(caller)
 

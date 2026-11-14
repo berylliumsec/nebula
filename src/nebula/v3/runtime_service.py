@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import socket
+import stat
 import sys
 import webbrowser
 
@@ -33,6 +37,127 @@ from .runtime_processes import RuntimeProcessHost
 from .supervisor import RuntimeSupervisor
 
 OFFLINE_ADOPTION = "offline-adoption.json"
+# First descriptor passed by socket activation (sd_listen_fds).
+LISTEN_FDS_START = 3
+# While a holder keeps the public socket, a stopping supervisor relays open
+# viewer streams this long, then closes them; viewers resume from their saved
+# cursor on the next generation. An unbounded drain keeps the host lock, and
+# with it the replacement, waiting on the longest-lived stream. A
+# self-bound listener keeps relaying every exchange to completion.
+VIEWER_DRAIN_SECONDS = 5
+# An exchange still waiting for its response headers is never closed before
+# it answers, up to this bound. The API worker answers an accepted request
+# with its saved receipt within 15 s.
+RELAY_ANSWER_LIMIT_SECONDS = 30
+# After every relayed exchange has finished or been closed, a connection may
+# still hold response bytes its client stopped reading (a phone that left the
+# network, a paused download). It gets this long to flush, then is aborted.
+RELAY_FLUSH_SECONDS = 5
+
+
+def relay_stop_bound() -> int:
+    """Hard bound on a holder-backed stop, as uvicorn's graceful timeout.
+
+    The drain below normally finishes well within it; this backstop holds
+    even if the drain itself fails, so the host lock is always released.
+    """
+    return math.ceil(
+        VIEWER_DRAIN_SECONDS + RELAY_ANSWER_LIMIT_SECONDS + 2 * RELAY_FLUSH_SECONDS
+    )
+
+
+def relay_drain(server, supervisor, *, inherited: bool):
+    """Start the bounded drain for a stopping generation, if a holder exists."""
+    if not inherited:
+        return None
+    from .diagnostics import create_diagnostic_task
+    from .supervisor import drain_relays
+
+    async def when_stopping():
+        while not server.should_exit:
+            await asyncio.sleep(0.1)
+        await drain_relays(
+            supervisor, VIEWER_DRAIN_SECONDS, limit=RELAY_ANSWER_LIMIT_SECONDS
+        )
+        # Uvicorn waits for every connection to close before it releases the
+        # application. A connection whose client stopped reading never closes
+        # by itself; abort it once the flush window ends, so a stalled reader
+        # cannot keep this generation, and the host lock, alive.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RELAY_FLUSH_SECONDS
+        while server.server_state.connections and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        for connection in list(server.server_state.connections):
+            transport = getattr(connection, "transport", None)
+            if transport is not None:
+                transport.abort()
+
+    return create_diagnostic_task(
+        when_stopping(),
+        feature="runtime",
+        event_code="runtime.relay_drain.failed",
+        failure_message="Relayed viewer streams were not drained.",
+        name="nebula-relay-drain",
+    )
+
+
+def inherited_listener(
+    host: str, port: int, *, descriptor: int | None = None
+) -> socket.socket | None:
+    """Adopt a listening socket held by a longer-lived owner.
+
+    When a holder that never restarts (a systemd socket unit) owns the public
+    socket, connections that arrive while one supervisor generation replaces
+    another wait in the kernel accept queue instead of being refused. The
+    socket is adopted when socket activation names this exact process
+    (LISTEN_PID/LISTEN_FDS), or when the operator passes its descriptor
+    explicitly because a launcher (a onefile bootloader or wrapper) sits
+    between the holder and Core. Returns None when nothing was passed.
+    """
+    activated = os.environ.get("LISTEN_PID") == str(os.getpid())
+    count = os.environ.get("LISTEN_FDS")
+    for name in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):
+        os.environ.pop(name, None)
+    if descriptor is None:
+        if not activated:
+            return None
+        if count != "1":
+            raise ValueError("Core accepts exactly one inherited listening socket")
+        descriptor = LISTEN_FDS_START
+    try:
+        requested = ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError(
+            "An inherited Core socket requires an IP address for --host"
+        ) from None
+    try:
+        is_socket = stat.S_ISSOCK(os.fstat(descriptor).st_mode)
+    except OSError as error:
+        raise ValueError("The inherited Core descriptor is not open") from error
+    if not is_socket:
+        raise ValueError("The inherited Core descriptor is not a socket")
+    # Validate before taking ownership: a wrong descriptor may belong to this
+    # process (an event-loop socketpair). It is never closed or modified.
+    listener = socket.socket(fileno=descriptor)
+    try:
+        if (
+            listener.family not in (socket.AF_INET, socket.AF_INET6)
+            or listener.type != socket.SOCK_STREAM
+            or not listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
+        ):
+            raise ValueError("The inherited Core socket is not a listening TCP socket")
+        bound = listener.getsockname()
+        # The bound address, not the flag, decides exposure: a wildcard or
+        # different address never passes as the requested loopback one.
+        if bound[1] != port or ipaddress.ip_address(bound[0]) != requested:
+            raise ValueError(
+                "The inherited Core socket does not match the requested --host/--port"
+            )
+    except BaseException:
+        listener.detach()
+        raise
+    listener.set_inheritable(False)
+    return listener
 
 
 async def initialize_database(database: Database, data_root: Path) -> None:
@@ -119,6 +244,7 @@ async def serve_runtime(
     print_ready: bool = False,
     diagnostics_level: str | None = None,
     startup_id: str | None = None,
+    listener: socket.socket | None = None,
 ) -> None:
     if not sys.platform.startswith("linux"):
         raise ValueError(
@@ -167,17 +293,22 @@ async def serve_runtime(
         allow_browser_diagnostics=allow_browser_diagnostics,
         shutdown_requested=shutdown_requested,
     )
-    listener = socket.socket(
-        socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM
-    )
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    inherited = listener is not None
+    if listener is None:
+        listener = socket.socket(
+            socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM
+        )
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     connection = None
     automatic = None
+    drain = None
     try:
         # Bind before opening controllers or migrating legacy state into a live
         # runtime. An occupied compatibility port is never replaced silently.
-        listener.bind((host, port))
-        listener.listen(2048)
+        # An inherited socket stays open in its holder across generations.
+        if not inherited:
+            listener.bind((host, port))
+            listener.listen(2048)
         port = listener.getsockname()[1]
         from .automation_runtime import resolve_callback_origin
 
@@ -235,10 +366,15 @@ async def serve_runtime(
                 access_log=False,
                 ssl_certfile=str(tls_cert) if tls_cert else None,
                 ssl_keyfile=str(tls_key) if tls_key else None,
+                timeout_graceful_shutdown=relay_stop_bound() if inherited else None,
             )
         )
+        drain = relay_drain(server, supervisor, inherited=inherited)
         await server.serve(sockets=[listener])
     finally:
+        if drain is not None:
+            drain.cancel()
+            await asyncio.gather(drain, return_exceptions=True)
         listener.close()
         try:
             try:
