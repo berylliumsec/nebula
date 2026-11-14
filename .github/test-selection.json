@@ -1,32 +1,40 @@
 {
   "reviewed_by": "Claude Code",
-  "reason": "After #987, archiving a project's only chat retires its execution worker, and a later unarchive (PATCH /api/v1/chat-sessions/{id} {\"archived\": false}) stayed queued until another chat message admitted the project, because ingress did not classify the unarchive as a chat start. The unarchive PATCH is now a chat-start intent, and the legacy queued-command scan promotes an older unclassified unarchive only when the named chat belongs to the command's project. Selection covers the classifier (positive, negative and malformed bodies), the unchanged session-creation intents, exact-project admission, archive retirement, unarchive admission through real API ingress, RuntimeRouting, retirement and auto-admission without a message, legacy promotion for the exact chat project, and the refactored legacy goal-conversation promotion. Rebased onto #1028 (queued project commands admit their worker): test_project_admission_requires_a_chat_start_or_queued_project_command (renamed from ..._requires_an_exact_chat_start) now expects a legacy ordinary command to admit its project like a chat start, while reads and barriers still do not; the legacy-unarchive test still requires promotion only for the chat's own project and now also checks that each project's owner claims only its own head. #1028's three admission tests are selected to guard the combined behaviour.",
-  "exclusions": "tests/v3/test_chat_unarchive_readmission.py (real Core: first chat, archive, real retirement, unarchive) is not selected: its shared Core fixture needs the already-cached local embedding model and a host name that resolves to a non-loopback LAN address, which CI does not have, so it now skips with that reason instead of erroring. It passed locally on Python 3.12 against this rebased branch (see the PR). No UI, native or frontend code changed, so no frontend, native or Playwright tests; the UI journey was checked in desktop Chromium and phone WebKit against a scratch supervisor Core (see the PR). PostgreSQL parametrizations are collected but skip in CI because these files are not in the workflow's PostgreSQL list; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
+  "reason": "After a worker-start timeout, auto-admission kept the prepared worker's runtime ID until an attach fully succeeded and blocked the project until the host or memory-policy revision changed, with no time-based retry. An attach that timed out after the grant committed left the ID behind; once that worker retired, the next readmission re-attached the dead process (connection refused) and the project stayed without a worker until Core restarted. A prepared worker is now forgotten only on SQL evidence (owns the project, not attachable, or serves another project), failed admissions retry with a bounded backoff (and at once on a revision change) without starving other projects, diagnostics name the project and attempt and flag a persistent failure, and the attach wait tolerates a slow status read within its bound. Rebased onto #1028 (queued project commands admit a worker) and #1032 (no claim onto a worker an aborted shutdown closed): the demand query keeps #1028's queued-work demand, archived-with-work admission and retirement-hold exclusion, and adds this change's backoff exclusion. Selection covers the stale-worker readmission, backoff without a revision change, the persistent-failure diagnostic, the slow status read, #1028's chatless edit/archived delete admission, retirement and ingress-wait cases and its retirement contract tests, #1032's aborted-shutdown claim and retirement cases, and the existing admission, readmission, held-project, auto-recovery and API worker cases.",
+  "exclusions": "No UI, native or frontend code changed, so no frontend, native or Playwright tests. The real-Core stall reproduction (SIGSTOP of a starting worker, retire, new chat) was run by hand on scratch supervisor Cores on main and on this change (see the PR). PostgreSQL parametrizations are collected but skip in CI; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 44,
+    "python": 115,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_work_batch_contracts.py::test_session_creation_routes_are_explicit_chat_start_intents",
-    "tests/v3/test_work_batch_contracts.py::test_only_unarchive_patch_is_a_chat_session_start_intent",
-    "tests/v3/test_work_batch_contracts.py::test_malformed_unarchive_body_is_not_a_chat_start_intent",
-    "tests/v3/test_work_batch_contracts.py::test_project_admission_requires_a_chat_start_or_queued_project_command",
-    "tests/v3/test_runtime_work_batches.py::test_unarchive_after_final_chat_retirement_admits_its_project_without_a_message",
-    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_unarchive_is_promoted_only_for_its_chat_project",
+    "tests/v3/test_admission_retry.py",
+    "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
+    "tests/v3/test_runtime_work_batches.py::test_open_chat_created_without_routing_gets_its_exact_project_worker",
     "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
-    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
     "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
+    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
+    "tests/v3/test_shutdown_readmission.py::test_quiesced_and_fresh_projects_readmit_without_resetting_fences",
+    "tests/v3/test_shutdown_readmission.py::test_non_null_or_archived_projects_remain_held",
+    "tests/v3/test_shutdown_readmission.py::test_partial_shutdown_abort_keeps_unknown_worker_until_positive_retirement",
+    "tests/v3/test_runtime_auto_recovery.py",
     "tests/v3/test_runtime_work_batches.py::test_project_edit_and_archived_delete_without_a_chat_admit_their_workers",
     "tests/v3/test_runtime_work_batches.py::test_retirement_does_not_strand_queued_project_work",
-    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker"
+    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker",
+    "tests/v3/test_deployment_lifecycle.py::test_open_parent_chat_does_not_keep_child_project_worker",
+    "tests/v3/test_deployment_lifecycle.py::test_open_child_chat_keeps_its_exact_project_worker",
+    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_uses_its_own_hold_and_releases_exact_owner",
+    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation",
+    "tests/v3/test_api_worker.py",
+    "tests/v3/test_runtime_quiescence.py::test_aborted_shutdown_never_reclaims_a_project_for_its_closed_worker",
+    "tests/v3/test_runtime_quiescence.py::test_workers_quiesced_by_an_aborted_shutdown_are_retired"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "f8d9aefc3dc9be4896c61e3f8748cd5c34eb5ec06e57ef65aa6893055322c238"
+  "change_digest": "a4a9494207695fa01ef82653fd2d76036dd6b227b1e211edd08af26152d1b6d4"
 }
