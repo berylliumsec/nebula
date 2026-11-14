@@ -23,6 +23,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import uvicorn
+from pydantic import SecretStr
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from typer.testing import CliRunner
@@ -82,42 +83,101 @@ def test_schema_migrate_uses_psycopg3_for_a_bare_postgresql_url(tmp_path, monkey
 def test_serve_preserves_local_mission_checkpoint_location(
     tmp_path, monkeypatch, dialect
 ):
-    observed = {}
-    store = SimpleNamespace(
-        database=SimpleNamespace(
-            engine=SimpleNamespace(dialect=SimpleNamespace(name=dialect))
-        )
+    # Since 2d9f099 (#960) serve launches an independent runtime for its data
+    # directory, and each project worker builds the application there. Either
+    # database keeps mission checkpoints at <data dir>/mission-checkpoints.db,
+    # the file a SQLite Core keeps beside <data dir>/nebula.db.
+    from nebula.v3 import (
+        execution_kernel,
+        execution_worker,
+        runtime_launcher,
+        runtime_platform,
+        runtime_service,
     )
-    monkeypatch.setattr(
-        "nebula.v3.cli._services", lambda *_args, **_kwargs: (tmp_path, store, None)
-    )
-    monkeypatch.setattr(
-        "nebula.v3.cli.CrossEncoderReranker",
-        lambda *_args, **_kwargs: SimpleNamespace(start_if_present=lambda: None),
-    )
-    monkeypatch.setattr(
-        "nebula.v3.cli.ChromaKnowledgeIndex", lambda *_args, **_kwargs: None
-    )
-    monkeypatch.setattr(
-        "nebula.v3.cli.default_runtime_platform", lambda **_kwargs: None
-    )
+    from nebula.v3.database import Database
+    from nebula.v3.missions import default_checkpoint_path
+    from nebula.v3.runtime_project_admission import PARTICIPANT_FEATURE
 
-    def create(*_args, **kwargs):
-        observed.update(kwargs)
-        return SimpleNamespace(state=SimpleNamespace())
+    launched = {}
 
-    monkeypatch.setattr("nebula.v3.cli.create_app", create)
+    async def serve_runtime(**kwargs):
+        launched.update(kwargs)
+
     monkeypatch.setattr(
-        "nebula.v3.cli.uvicorn.Server",
-        lambda *_args, **_kwargs: SimpleNamespace(run=lambda **_options: None),
+        runtime_launcher,
+        "retain_bundle",
+        lambda *_args, **_kwargs: (tmp_path / "bundle", "0" * 64),
     )
+    monkeypatch.setattr(runtime_service, "serve_runtime", serve_runtime)
     result = CliRunner().invoke(
         app,
         ["serve", "--data-dir", str(tmp_path), "--port", "0", "--token", "synthetic"],
     )
     assert result.exit_code == 0, result.output
-    assert observed["mission_checkpoint_path"] == (
-        tmp_path / "mission-checkpoints.db" if dialect == "postgresql" else None
+    data_root = launched["data_root"]
+    assert data_root == tmp_path.resolve()
+
+    observed = {}
+
+    class Built(Exception):
+        """Stop once the worker has chosen the application's arguments."""
+
+    def create(store, **kwargs):
+        observed.update(kwargs, store=store)
+        raise Built
+
+    class HostServices:
+        async def call(self, method, payload):
+            assert (method, payload) == ("host.services/v1", {})
+            return {
+                "protocol": "nebula.host-services/v1",
+                "memory": True,
+                "capacity": True,
+                "knowledge": False,
+            }
+
+        async def close(self):
+            return None
+
+    async def recovery_status(_project_id):
+        return None
+
+    monkeypatch.setattr(
+        execution_worker, "host_service_client", lambda *_args: HostServices()
+    )
+    monkeypatch.setattr(
+        runtime_platform, "default_runtime_platform", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(execution_kernel, "create_execution_kernel", create)
+    context = SimpleNamespace(
+        bootstrap=SimpleNamespace(
+            identity=SimpleNamespace(runtime_id="runtime"),
+            data_root=str(data_root),
+            database=Database._normalize_url(data_root / "nebula.db")
+            if dialect == "sqlite"
+            else "postgresql+psycopg://synthetic@localhost/synthetic",
+            pool_settings=None,
+            operator_token=SecretStr("synthetic"),
+        ),
+        secret=b"synthetic",
+        manifest=SimpleNamespace(features=frozenset({PARTICIPANT_FEATURE})),
+        coordinator=SimpleNamespace(
+            coordination=SimpleNamespace(database=None),
+            recovery_status=recovery_status,
+        ),
+    )
+    lease = SimpleNamespace(runtime_id="runtime", project_id="project")
+
+    async def build():
+        with pytest.raises(Built):
+            async with execution_worker.project_application(context, lease):
+                pass
+
+    asyncio.run(build())
+    assert observed["store"].database.engine.dialect.name == dialect
+    assert observed["mission_checkpoint_path"] == data_root / "mission-checkpoints.db"
+    assert default_checkpoint_path(observed["store"]) == (
+        observed["mission_checkpoint_path"] if dialect == "sqlite" else None
     )
 
 
