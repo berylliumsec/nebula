@@ -199,6 +199,17 @@ permit sensitive data and needs an explicit confirmation that redacted tool
 output may be sent to it. Each change saves the whole setting with the project's
 revision and is read back from Core.
 
+Opening a conversation summarizes what changed since this terminal last read it,
+as the GUI's catch-up card does: new answers, results, failed responses and actions
+waiting for you. `/catchup` lists them; choosing one opens the answer or the failed
+response's details, and `/catchup read` marks the conversation read on this device.
+Answers you watch arrive in an open conversation count as read, as at the bottom
+of the GUI's transcript; while a catch-up summary waits, they join it instead.
+`/quote` adds a saved message to your draft as a `> ` quote (an answer without its
+progress notes). `/evidence` shows an answer's supporting evidence: retrieved
+sources, observed tool results, artifacts and stated limitations. `/turn` shows a
+response's status, model, timing and error, and opens its source message.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
