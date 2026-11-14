@@ -734,7 +734,14 @@ class RuntimeSupervisor:
                 await client.call("execution.attach/v1", asdict(lease), timeout=5)
                 async with asyncio.timeout(timeout):
                     while True:
-                        status = await client.call("execution.status/v1", {}, timeout=5)
+                        try:
+                            status = await client.call(
+                                "execution.status/v1", {}, timeout=5
+                            )
+                        except httpx.TimeoutException:
+                            # diagnostic-expected: a worker loading its project can miss one status read; keep polling within the attach bound.
+                            await asyncio.sleep(0.05)
+                            continue
                         if status.get("lease") != asdict(lease):
                             raise RuntimeIpcError(
                                 "Execution attachment does not match the committed grant"
