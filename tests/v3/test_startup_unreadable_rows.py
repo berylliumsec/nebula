@@ -17,7 +17,7 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -92,18 +92,22 @@ DIGEST = "sha256:" + "0" * 64
 HEX = "0" * 64
 
 
+async def _nothing(_store: NebulaStore) -> None:
+    return None
+
+
 @dataclass
 class Case:
     """Records to store, which of them to make unreadable, and what recovery must do."""
 
     records: Callable[[], list]
     unreadable: list[str]
-    recovered: Callable[[NebulaStore], None] = lambda _store: None
+    recovered: Callable[[NebulaStore], Awaitable[None]] = _nothing
     # A scan reports each row it skips; a record read by id fails only the
     # recovery of the item that needed it.
     scanned: bool = True
     # State outside the entity table that makes startup read the records.
-    seed: Callable[[NebulaStore], None] = lambda _store: None
+    seed: Callable[[NebulaStore], Awaitable[None]] = _nothing
 
 
 def _chat(session_id: str, **changes) -> ChatSession:
@@ -129,7 +133,9 @@ def _turn(turn_id: str, session_id: str, status: ChatTurnStatus, **changes):
     )
 
 
-def _status(model, entity_id: str, expected) -> Callable[[NebulaStore], None]:
+def _status(
+    model, entity_id: str, expected
+) -> Callable[[NebulaStore], Awaitable[None]]:
     async def check(store: NebulaStore) -> None:
         assert (await store.get(model, entity_id)).status == expected
 
@@ -392,7 +398,7 @@ def _schedule(schedule_id: str, session_id: str) -> ChatSchedule:
     )
 
 
-def _removed(model, entity_id: str) -> Callable[[NebulaStore], None]:
+def _removed(model, entity_id: str) -> Callable[[NebulaStore], Awaitable[None]]:
     async def check(store: NebulaStore) -> None:
         with pytest.raises(NotFoundError):
             (await store.get(model, entity_id))
@@ -670,7 +676,7 @@ async def test_core_starts_and_recovers_beside_an_unreadable_record(
         (await store.create(_chat(session_id)))
     for record in case.records():
         (await store.create(record))
-    case.seed(store)
+    (await case.seed(store))
     for entity_id in case.unreadable:
         (await _make_unreadable(store, entity_id))
 
@@ -704,8 +710,8 @@ async def test_core_starts_and_recovers_beside_an_unreadable_record(
 
     async with TestClient(app) as client:
         # The periodic pass reads the same kinds again every 15 seconds.
-        client.portal.call(services[0].fire_due_schedules)
-        client.portal.call(services[0].recovery_tick)
+        (await services[0].fire_due_schedules())
+        (await services[0].recovery_tick())
         # The sweep runs beside recovery; wait for its durable result.
         if name == "chat_sessions":
 
@@ -718,13 +724,13 @@ async def test_core_starts_and_recovers_beside_an_unreadable_record(
                             return
                         await asyncio.sleep(0.02)
 
-            client.portal.call(wait_for_popup_cleanup)
+            (await wait_for_popup_cleanup())
         else:
-            client.portal.call(asyncio.sleep, 0.2)
+            await asyncio.sleep(0.2)
         assert (
             await client.get("/api/v1/setup/status", headers=AUTH)
         ).status_code == 200
-        case.recovered(store)
+        (await case.recovered(store))
 
     if case.scanned:
         assert set(case.unreadable) <= set(skipped)
