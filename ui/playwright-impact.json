@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name": "real-core-harness", "patterns": ["ui/tests/fixtures/core-api.ts", "ui/tests/fixtures/core-harness.ts", "ui/tests/fixtures/owned-cleanup.ts"], "areas": ["real-core-harness"]},
     {"name": "authentication-recovery", "patterns": ["ui/src/api/runtime.ts", "ui/src/components/PairingGate.tsx", "ui/src/components/AppShell.tsx", "ui/src/state/WorkspaceContext.tsx", "src/nebula/v3/authentication.py", "src/nebula/v3/authentication_api.py"], "areas": ["authentication-recovery"]},
     {"name": "openai-daybreak", "patterns": ["src/nebula/v3/providers.py", "src/nebula/v3/domain.py", "ui/src/pages/SettingsPage.tsx", "ui/src/components/ProviderHealthCard.tsx", "ui/src/settingsCatalog.ts"], "areas": ["openai-daybreak"]},
     {"name":"runtime-continuity","patterns":["src/nebula/v3/runtime_*.py","src/nebula/v3/supervisor.py","src/nebula/v3/api_worker.py","ui/src/api/durableRequests.ts","ui/tests/runtime-continuity.spec.ts"],"areas":["runtime-continuity"]},
@@ -949,6 +950,16 @@
         "project": "assistant-real-webkit-390",
         "test_match": "tests/real-core.spec.ts",
         "grep": "stabilization failure crash_after_progress",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
+    "real-core-harness": [
+      {
+        "area": "real-core-harness",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "owned cleanup",
         "runtime": "real-core",
         "shard": "1/1"
       }

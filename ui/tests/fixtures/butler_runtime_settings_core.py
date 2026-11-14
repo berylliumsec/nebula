@@ -6,15 +6,13 @@ from typing import Any
 
 import httpx
 
-from nebula.v3 import cli
+from nebula.v3.api import create_app as _create_app
 from nebula.v3 import api as core_api
 from nebula.v3.domain import Engagement, RunnerProfile
 from nebula.v3.environments import SshEnvironmentService, SshEnvironmentSettings
 from nebula.v3.harnesses import HarnessCapabilities, HarnessHealth
 from nebula.v3.ssh_environments import SshProbeResult
 from nebula.v3.web_search import EXPECTED_REPOSITORY, SearchRuntime, WebSearchResult
-
-_create_app = cli.create_app
 
 
 def public_directory_transport():
@@ -141,10 +139,10 @@ class MetadataHarnessAdapter:
 async def create_fixture_app(*args: Any, **kwargs: Any):
     store = args[0] if args else kwargs["store"]
     platform = kwargs["tool_platform"]
-    project = store.create(
+    project = await store.create(
         Engagement(name="Runtime administration fixture", status="active")
     )
-    workspace = platform.workspace_for(project.id)
+    workspace = await platform.workspace_for(project.id)
     skill = workspace / ".agents" / "skills" / "fixture-selected-skill"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
@@ -170,7 +168,7 @@ async def create_fixture_app(*args: Any, **kwargs: Any):
         )
     )
     kwargs["ssh_environment_service"] = service
-    store.create(
+    await store.create(
         RunnerProfile(
             id="fixture-runner",
             name="Runner metadata fixture",
@@ -188,7 +186,7 @@ async def create_fixture_app(*args: Any, **kwargs: Any):
 
     async def metadata_only(identity):
         if identity == "fixture-runner":
-            return store.get(RunnerProfile, identity)
+            return await store.get(RunnerProfile, identity)
         return await verify(identity)
 
     platform.verify_runner = metadata_only
@@ -203,5 +201,7 @@ async def create_fixture_app(*args: Any, **kwargs: Any):
 
 
 if __name__ == "__main__":
-    cli.create_app = create_fixture_app
-    cli.main()
+    # Run as a script, so the helper beside this file is importable by name.
+    from in_process_core import serve_fixture
+
+    serve_fixture(create_fixture_app)

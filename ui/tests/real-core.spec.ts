@@ -7,12 +7,18 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { expect, request as playwrightRequest, test, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { expect, request as unkeyedRequest, test, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
 import {startTerminalCore} from "./fixtures/terminal-core";
 import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
+import {coreMutation, removeCoreData, waitForCoreApi} from "./fixtures/core-api";
 import {settingCatalog} from "../src/settingsCatalog";
 import {assistantDestinations, assistantDestinationPath} from "../src/assistantDestinations";
+import {keyedCoreRequests, removeCoreSockets, stopCoreWorkers} from "./fixtures/core-harness";
+
+// Core's API process refuses a mutation without a client Idempotency-Key. Every request context in
+// this file sends post, put, patch and delete through coreMutation and returns Core's final answer.
+const playwrightRequest = keyedCoreRequests(unkeyedRequest);
 
 interface RealCore {
   process: ChildProcessWithoutNullStreams;
@@ -190,6 +196,83 @@ for (const bodyFails of [false, true]) {
     if (process.env.NEBULA_TEST_KEEP_DATA !== "1") expect(existsSync(dataDir)).toBe(false);
   });
 }
+
+test("assistant upgrade owned cleanup keyed requests send a fresh key and follow a saved request to its answer", async () => {
+  // An inert stand-in for Core's API process: it refuses unkeyed mutations and saves one request.
+  const seen: Array<{method: string; url: string; key?: string; note?: string; body: string}> = [];
+  let follows = 0;
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const key = request.headers["idempotency-key"] as string | undefined;
+    seen.push({method: request.method!, url: request.url!, key, note: request.headers["x-fixture-note"] as string | undefined, body: Buffer.concat(chunks).toString("utf8")});
+    const answer = (status: number, body: unknown, headers: Record<string, string> = {}) => {
+      response.writeHead(status, {"Content-Type": "application/json", ...headers});
+      response.end(JSON.stringify(body));
+    };
+    if (request.method !== "GET" && !key) return answer(428, {detail: "A client-generated Idempotency-Key is required for this mutation"});
+    if (request.url === "/api/v1/saved") return answer(202, {state: "accepted", receipt: {command_id: "saved-1"}}, {"X-Nebula-Command-Id": "saved-1", "X-Nebula-Request-State": "pending"});
+    if (request.url === "/api/v1/runtime/requests/saved-1/response") {
+      return ++follows < 2
+        ? answer(202, {state: "running", command_id: "saved-1"}, {"X-Nebula-Request-State": "pending"})
+        : answer(201, {id: "made"}, {"X-Nebula-Command-Id": "saved-1", "X-Nebula-Request-State": "complete"});
+    }
+    if (request.url === "/api/v1/final") return answer(202, {id: "started"}, {"X-Nebula-Request-State": "complete"});
+    if (request.url === "/api/v1/in-process") return answer(202, {id: "unmarked"});
+    return answer(200, {});
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const api = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/`});
+  await withOwnedCleanup(async () => {
+    const saved = await api.post("saved", {data: {name: "one"}, headers: {"X-Fixture-Note": "kept"}});
+    expect(saved.status(), await saved.text()).toBe(201);
+    expect(await saved.json()).toEqual({id: "made"});
+    expect(follows).toBe(2);
+    // A 202 that Core marks complete, or that an in-process fixture Core leaves unmarked, is the answer itself.
+    const final = await api.post("final", {data: {}});
+    expect([final.status(), await final.json()]).toEqual([202, {id: "started"}]);
+    const unmarked = await api.put("in-process", {data: {}});
+    expect([unmarked.status(), await unmarked.json()]).toEqual([202, {id: "unmarked"}]);
+    expect((await api.patch("plain", {data: {}, headers: {"idempotency-key": "the-callers-own-key"}})).status()).toBe(200);
+    expect((await api.delete("plain")).status()).toBe(200);
+    const mutations = seen.filter(entry => entry.method !== "GET");
+    expect(mutations.map(entry => `${entry.method} ${entry.url}`)).toEqual([
+      "POST /api/v1/saved", "POST /api/v1/final", "PUT /api/v1/in-process", "PATCH /api/v1/plain", "DELETE /api/v1/plain",
+    ]);
+    expect(mutations.every(entry => /^[!-~]{1,200}$/.test(entry.key ?? ""))).toBe(true);
+    expect(new Set(mutations.map(entry => entry.key)).size).toBe(mutations.length);
+    expect(mutations[3].key).toBe("the-callers-own-key");
+    expect([mutations[0].note, mutations[0].body]).toEqual(["kept", JSON.stringify({name: "one"})]);
+    expect(seen.filter(entry => entry.method === "GET").map(entry => entry.key)).toEqual([undefined, undefined]);
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "inert HTTP server", dispose: () => stopLocalModelStub({origin: "", requests: [], server, fail: false})},
+  ]);
+});
+
+test("assistant upgrade owned cleanup ends a stopped Core's workers and removes its sockets and data", async () => {
+  test.setTimeout(120_000);
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const runtime = path.join(core.dataDir, "runtime") + path.sep;
+  const workers = () => spawnSync("ps", ["-Awwo", "args="], {encoding: "utf8"}).stdout.split("\n").filter(line => line.includes(runtime));
+  let sockets = "";
+  await withOwnedCleanup(async () => {
+    // The API worker is running; a project command also asks Core for that project's worker.
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const note = await api.post("observations", {data: {engagement_id: projects[0].id, observation_type: "note", title: "Owned", body: "Owned by this fixture.", source: "operator-note", confidence: 1}});
+    expect(note.status(), await note.text()).toBe(201);
+    expect(workers().length).toBeGreaterThan(0);
+    sockets = (JSON.parse(await readFile(path.join(runtime, "process-origin.json"), "utf8")) as {socket_root: string}).socket_root;
+    expect(existsSync(sockets)).toBe(true);
+  }, [
+    {name: "API", dispose: () => api.dispose()},
+    {name: "Core", dispose: () => stopRealCore(core)},
+  ]);
+  expect(workers()).toEqual([]);
+  expect(existsSync(sockets)).toBe(false);
+  if (process.env.NEBULA_TEST_KEEP_DATA !== "1") expect(existsSync(core.dataDir)).toBe(false);
+});
 
 test("assistant upgrade approval fixture reclaims its data after stop and failed startup", async () => {
   test.setTimeout(60_000);
@@ -580,6 +663,20 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
     }
   }
   const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
+  const coreEnvironment = {
+    ...process.env,
+    ...options.env,
+    PYTHONUNBUFFERED: "1",
+    ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
+    PYTHONPATH: embedded ? "" : [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+  };
+  // A database a journey seeded before Core's first start is an existing root to Core, which starts on
+  // it only after the operator's coordinated adoption. Adoption also saves this fixture's token.
+  if (!options.fixtureScript && !embedded && existsSync(path.join(dataDir, "nebula.db")) && !existsSync(path.join(dataDir, "runtime"))) {
+    const adopted = spawnSync(coreBinary, ["runtime-adopt", "--confirm-core-stopped", "--data-dir", dataDir],
+      {cwd: repository, env: {...coreEnvironment, NEBULA_V3_API_TOKEN: token}, encoding: "utf8"});
+    if (adopted.status !== 0) throw new Error(`Seeded Core data could not be adopted: ${adopted.stderr || adopted.stdout || adopted.error}`);
+  }
   const child = spawn(
     options.fixtureScript ? path.join(path.dirname(coreBinary), "python") : coreBinary,
     [...(options.fixtureScript ? [options.fixtureScript] : []), ...(embedded ? [
@@ -600,20 +697,13 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
     ])],
-    {
-      cwd: repository,
-      env: {
-        ...process.env,
-        ...options.env,
-        PYTHONUNBUFFERED: "1",
-        ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
-        PYTHONPATH: embedded ? "" : [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
-      },
-    },
+    {cwd: repository, env: coreEnvironment},
   );
   let output = "";
+  // A slow host can raise every Core startup wait at once, as the approval fixture already allows.
+  const startupTimeout = Math.max(options.startupTimeoutMs ?? 30_000, Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS) || 0);
   const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), options.startupTimeoutMs ?? 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), startupTimeout);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = output.match(/"url"\s*:\s*"(https?):\/\/[^:\"]+:(\d+)"/);
@@ -636,7 +726,15 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   }).catch(error => withOwnedCleanup(async () => {throw error;}, [
     {name: "failed Core startup", dispose: () => stopRealCore({process: child, dataDir, origin: "", token}, {keepData: Boolean(options.dataDir)})},
   ]));
-  return { process: child, dataDir, origin, token };
+  const core = { process: child, dataDir, origin, token };
+  // Core prints its address before its API process is admitted; a read sent before that is a reconnecting 503.
+  const probe = await unkeyedRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${token}`}, ignoreHTTPSErrors: true});
+  await withOwnedCleanup(() => waitForCoreApi(probe, startupTimeout), [
+    {name: "Core readiness probe", dispose: () => probe.dispose()},
+  ]).catch(error => withOwnedCleanup(async () => {throw new Error(`Real Core did not answer an API read.\n${output}`, {cause: error});}, [
+    {name: "Core that never became ready", dispose: () => stopRealCore(core, {keepData: Boolean(options.dataDir)})},
+  ]));
+  return core;
 }
 
 function localNetworkIpv4(): string {
@@ -2629,9 +2727,12 @@ async function stopRealCore(core: RealCore, options: { keepData?: boolean } = {}
         await wait("SIGKILL");
       }
     }},
+    // Stopping Core means its whole runtime: the supervisor alone would leave its detached workers running.
+    {name: "Core workers", dispose: () => stopCoreWorkers(core.dataDir)},
+    {name: "Core sockets", dispose: async () => { if (!options.keepData) await removeCoreSockets(core.dataDir); }},
     {name: "Core data", dispose: async () => {
       if (!options.keepData && process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
-        await rm(core.dataDir, {recursive: true, force: true});
+        await removeCoreData(core.dataDir);
       }
     }},
   ]);
@@ -7041,7 +7142,7 @@ async def _seed():
             raw = random.Random(index).randbytes(9600).hex()
             return f"Saved research message {index} " + " ".join(raw[offset:offset + 16] for offset in range(0, len(raw), 16))
         messages = [ChatMessage(id=f"perf-message-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=index, role="user" if index % 2 else "assistant", content=content(index), reasoning=("Private reasoning details. " * 1040) if index % 2 == 0 else "", provider_profile_id=sys.argv[4], model="security-model") for index in range(3, 455)]
-        async with (await store.transaction()) as transaction:
+        async with store.transaction() as transaction:
             (await transaction.add_chat_messages(messages))
     finally:
         await close_store_resources([item for item in [store] if item is not None])
@@ -10779,7 +10880,7 @@ async def _seed():
         store = NebulaStore(sys.argv[1])
         start = int(sys.argv[4])
         messages = [ChatMessage(id=f"butler-scroll-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=start + index, role="user" if index % 2 else "assistant", content=f"Saved Butler message {index}. " + "A detailed project update. " * 5, provider_profile_id=sys.argv[5], model="security-model") for index in range(80)]
-        async with (await store.transaction()) as transaction:
+        async with store.transaction() as transaction:
             (await transaction.add_chat_messages(messages))
     finally:
         await close_store_resources([item for item in [store] if item is not None])
@@ -13266,7 +13367,7 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
       "        record = ChatSubagent(id=subagent_id, engagement_id=project_id, parent_session_id=parent_session_id, parent_turn_id=parent_turn_id, child_session_id=child_session_id, child_turn_id=child_turn_id, provider_profile_id=provider_id, model='security-model', name='Restart investigator', task='Finish after Core restart.', status=ChatSubagentStatus.INTERRUPTED, finished_at=now, error='Core shut down while this subagent was running.', result_message_id=false_message_id, reported_at=now)",
       "        record = record.model_copy(update={'parent_request': {'capabilities': {'tool_names': [], 'mcp_server_ids': [], 'skills': []}}})",
       "        false_message = ChatMessage(id=false_message_id, engagement_id=project_id, session_id=parent_session_id, sequence=sequence, role=ChatRole.ASSISTANT, content='Subagent interrupted: Restart investigator\\n\\nError: Core shut down while this subagent was running.', provider_profile_id=provider_id, model='security-model', metadata={'kind': 'subagent_result', 'subagent_id': subagent_id, 'subagent_name': 'Restart investigator', 'child_session_id': child_session_id, 'subagent_status': 'interrupted', 'subagent_round': 1})",
-      "        async with (await store.transaction()) as transaction:",
+      "        async with store.transaction() as transaction:",
       "            (await transaction.add(parent_turn))",
       "            (await transaction.add(child_session))",
       "            (await transaction.add(child_turn))",
