@@ -3,6 +3,7 @@
 import asyncio
 from datetime import timedelta
 import hashlib
+import json
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -62,9 +63,7 @@ async def boundary(location, tmp_path):
             operator_token=_TOKEN,
             project_for=project_for,
             upstream_for=upstream_for,
-            command_start_timeout=0.03,
-            poll_interval=0.01,
-            **options,
+            **{"command_start_timeout": 0.03, "poll_interval": 0.01, **options},
         )
         apps.append(app)
         client = httpx.AsyncClient(
@@ -423,6 +422,16 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
             "/api/v1/storage/events", headers=sender, json=_storage_report()
         )
     assert plain.status_code == 403
+    # Core refuses a report it could not record before saving or acknowledging it.
+    for path, body in (
+        (
+            "/api/v1/storage/events",
+            {**_storage_report(), "observed_at": "2026-11-14T10:00:00"},
+        ),
+        ("/api/v1/storage/inventory", {}),
+    ):
+        refused = await client.post(path, headers=sender, json=body)
+        assert refused.status_code == 422, refused.text
     async with boundary.host.database.session() as session:
         assert await session.scalar(select(func.count(RuntimeCommandRow.id))) == 0
 
@@ -436,7 +445,7 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
     async with boundary.host.database.session() as session:
         command = await session.get(RuntimeCommandRow, saved.json()["command_id"])
     assert command.project_id == "project"
-    assert command.chat_start is True
+    assert command.name == "storage.report/v1" and command.chat_start is False
     assert command.actor_id == f"storage-source:{source.id}:{source.token_sha256}"
     intent, _ = await boundary.delivery.request(
         SimpleNamespace(
@@ -475,8 +484,9 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
     assert replay.json() == {"accepted": True, "duplicate": False, "current": True}
 
     # Revoking the source before a saved report runs stops that report.
+    later_report = _storage_report("observation-2")
     later = await client.post(
-        "/api/v1/storage/events", headers=sender, json=_storage_report("observation-2")
+        "/api/v1/storage/events", headers=sender, json=later_report
     )
     assert later.status_code == 202
     current = await boundary.host.get(StorageSource, source.id)
@@ -490,7 +500,286 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
     assert len(seen) == 1
     async with boundary.host.database.session() as session:
         stopped = await session.get(RuntimeCommandRow, later.json()["command_id"])
+        saved = await session.scalar(select(func.count(RuntimeCommandRow.id)))
     assert stopped.result == {"http_status": 401}
+    # A disabled source is refused before anything is saved.
+    for path, body in (
+        ("/api/v1/storage/events", _storage_report("observation-3")),
+        ("/api/v1/storage/inventory", {"schema_version": 1, "devices": []}),
+    ):
+        disabled = await client.post(path, headers=sender, json=body)
+        assert disabled.status_code == 403, disabled.text
+    async with boundary.host.database.session() as session:
+        assert await session.scalar(select(func.count(RuntimeCommandRow.id))) == saved
+    # Enabled again, the same report runs again instead of replaying that refusal.
+    current = await boundary.host.get(StorageSource, source.id)
+    await boundary.host.update(
+        StorageSource,
+        source.id,
+        {"enabled": True},
+        expected_revision=current.revision,
+    )
+    again = await client.post(
+        "/api/v1/storage/events", headers=sender, json=later_report
+    )
+    assert again.status_code == 202, again.text
+    assert again.json()["command_id"] != later.json()["command_id"]
+    assert await runner.run_one(boundary.lease, lane="work")
+    assert len(seen) == 2
+
+
+async def _storage_source(boundary, *, project="project", secret=b"sender-secret"):
+    from nebula.v3.domain import StorageSource
+
+    source = await boundary.host.create(
+        StorageSource(
+            name="Synthetic NAS",
+            engagement_id=project,
+            profile_id="provider",
+            model="model",
+            enabled=True,
+            token_sha256=hashlib.sha256(secret).hexdigest(),
+        )
+    )
+    return source, {"Authorization": f"Bearer {source.id}.{secret.decode()}"}
+
+
+async def _accepted(
+    status=202, body=b'{"accepted":true,"duplicate":false,"current":true}'
+):
+    async def execution(_scope, _receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    return execution
+
+
+async def test_storage_senders_never_take_operator_viewer_capacity(
+    boundary, monkeypatch
+):
+    import nebula.v3.api_worker as api_worker
+
+    # Senders wait this long for the project's worker, in their own pool.
+    monkeypatch.setattr(api_worker, "STORAGE_ACK_WAIT_SECONDS", 3.0)
+    _, fast = boundary.api()
+    operator = await fast.post("/api/v1/synthetic", headers=_AUTH, json={"text": "x"})
+    command = operator.json()["receipt"]["command_id"]
+    _, headers = await _storage_source(boundary)
+    _, client = boundary.api(maximum_waiting_views=2, command_start_timeout=3.5)
+    reports = [
+        asyncio.create_task(
+            client.post(
+                "/api/v1/storage/events",
+                headers=headers,
+                json=_storage_report(f"observation-{index}"),
+            )
+        )
+        for index in range(6)
+    ]
+    # Once every report is saved, the senders that wait are holding a slot.
+    for _ in range(400):
+        async with boundary.host.database.session() as session:
+            saved = await session.scalar(
+                select(func.count(RuntimeCommandRow.id)).where(
+                    RuntimeCommandRow.name == "storage.report/v1"
+                )
+            )
+        if saved == len(reports):
+            break
+        await asyncio.sleep(0.02)
+    assert saved == len(reports)
+    # Every operator viewer slot is still the operator's.
+    viewed = await client.get(
+        f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+    )
+    assert viewed.status_code != 429, viewed.text
+    for answer in await asyncio.gather(*reports):
+        assert answer.status_code == 202, answer.text
+        assert answer.json()["accepted"] is True and answer.json()["queued"] is True
+
+
+async def test_a_storage_report_is_acknowledged_well_before_a_sender_gives_up(
+    boundary, monkeypatch
+):
+    import nebula.v3.api_worker as api_worker
+
+    monkeypatch.setattr(api_worker, "STORAGE_ACK_WAIT_SECONDS", 0.5)
+    _, headers = await _storage_source(boundary)
+    # Operator viewers keep the long wait; a sender gets the short one.
+    _, client = boundary.api(command_start_timeout=30)
+    started = asyncio.get_running_loop().time()
+    saved = await asyncio.wait_for(
+        client.post("/api/v1/storage/events", headers=headers, json=_storage_report()),
+        timeout=5,
+    )
+    assert asyncio.get_running_loop().time() - started < 3
+    assert saved.status_code == 202 and saved.json()["queued"] is True
+
+
+async def test_an_interrupted_or_failed_storage_report_runs_again_without_blocking_work(
+    boundary,
+):
+    from nebula.v3.runtime_coordination import STORAGE_REPORT_INTERRUPTED
+
+    _, headers = await _storage_source(boundary)
+    _, client = boundary.api()
+    report = _storage_report()
+    first = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    assert first.status_code == 202, first.text
+
+    async def stopped(_scope, _receive, _send):
+        raise RuntimeError("the execution worker stopped mid-report")
+
+    with pytest.raises(RuntimeError):
+        await DurableHttpRunner(
+            boundary.delivery, stopped, operator_token=_TOKEN
+        ).run_one(boundary.lease, lane="work")
+    async with boundary.host.database.session() as session:
+        interrupted = await session.get(RuntimeCommandRow, first.json()["command_id"])
+    # Re-running a report is safe, so it fails retryably instead of uncertain.
+    assert interrupted.state == "failed"
+    assert interrupted.result == STORAGE_REPORT_INTERRUPTED
+    resent = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    assert resent.status_code == 202
+    assert resent.json()["command_id"] != first.json()["command_id"]
+    broken = DurableHttpRunner(
+        boundary.delivery,
+        await _accepted(500, b'{"detail":"boom"}'),
+        operator_token=_TOKEN,
+    )
+    assert await broken.run_one(boundary.lease, lane="work")
+    # A saved 500 is not replayed to the sender either; the retry runs again.
+    third = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    assert third.json()["command_id"] not in {
+        first.json()["command_id"],
+        resent.json()["command_id"],
+    }
+    good = DurableHttpRunner(
+        boundary.delivery, await _accepted(), operator_token=_TOKEN
+    )
+    assert await good.run_one(boundary.lease, lane="work")
+    settled = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    assert settled.status_code == 202
+    assert settled.json() == {"accepted": True, "duplicate": False, "current": True}
+
+    # A report left running by a lost owner fails retryably; the lane moves on.
+    fourth = await client.post(
+        "/api/v1/storage/events", headers=headers, json=_storage_report("observation-4")
+    )
+    async with boundary.host.database.session() as session:
+        row = await session.get(RuntimeCommandRow, fourth.json()["command_id"])
+        row.state, row.runtime_id, row.fencing_token = "running", "lost-owner", 999
+        await session.commit()
+    assert await boundary.coordination.claim_next(boundary.lease, lane="work") is None
+    async with boundary.host.database.session() as session:
+        lost = await session.get(RuntimeCommandRow, fourth.json()["command_id"])
+    assert (lost.state, lost.result) == ("failed", STORAGE_REPORT_INTERRUPTED)
+    operator = await client.post("/api/v1/synthetic", headers=_AUTH, json={"text": "x"})
+    assert operator.status_code == 202
+    claimed = await boundary.coordination.claim_next(boundary.lease, lane="work")
+    assert claimed is not None
+    assert claimed.receipt.command_id == operator.json()["receipt"]["command_id"]
+
+
+async def test_storage_reports_wait_for_a_worker_release_that_can_run_them(boundary):
+    _, headers = await _storage_source(boundary)
+    asked = []
+
+    async def unsupported(project_id):
+        asked.append(project_id)
+        return False
+
+    _, client = boundary.api(storage_reports_for=unsupported)
+    for path, body in (
+        ("/api/v1/storage/events", _storage_report()),
+        ("/api/v1/storage/inventory", {"schema_version": 1, "devices": []}),
+    ):
+        held = await client.post(path, headers=headers, json=body)
+        assert held.status_code == 503, held.text
+        assert held.headers["retry-after"]
+    assert asked == ["project", "project"]
+    async with boundary.host.database.session() as session:
+        assert await session.scalar(select(func.count(RuntimeCommandRow.id))) == 0
+    tested = await client.post(
+        "/api/v1/storage/test", headers=headers, json=_storage_report()
+    )
+    assert tested.status_code == 200
+
+
+async def test_storage_report_keys_follow_the_source_project_and_inventory_is_admitted(
+    boundary,
+):
+    from nebula.v3.domain import StorageSource
+    from nebula.v3.runtime_coordination import project_worker_commands
+
+    source, headers = await _storage_source(boundary)
+    await boundary.host.create(Engagement(id="other", name="Synthetic other project"))
+    _, client = boundary.api()
+    report = _storage_report()
+    first = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    current = await boundary.host.get(StorageSource, source.id)
+    await boundary.host.update(
+        StorageSource,
+        source.id,
+        {"engagement_id": "other"},
+        expected_revision=current.revision,
+    )
+    # The same report for the source's new project is its own command there.
+    moved = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    assert moved.status_code == 202, moved.text
+    assert moved.json()["command_id"] != first.json()["command_id"]
+    inventory = {"schema_version": 1, "devices": [{"id": "nas", "label": "NAS"}]}
+    listed = [
+        (
+            await client.post(
+                "/api/v1/storage/inventory", headers=headers, json=inventory
+            )
+        )
+        for _ in range(2)
+    ]
+    # Inventory has no report identity; each request runs, and safely so.
+    assert listed[0].json()["command_id"] != listed[1].json()["command_id"]
+    async with boundary.host.database.session() as session:
+        rows = {
+            row.id: row
+            for row in (await session.scalars(select(RuntimeCommandRow))).all()
+        }
+        # A queued report demands its project's worker like any project command.
+        assert await session.scalar(select(project_worker_commands("other")))
+    assert rows[moved.json()["command_id"]].project_id == "other"
+    assert {rows[item.json()["command_id"]].project_id for item in listed} == {"other"}
+
+
+async def test_a_storage_principal_submits_only_storage_reports(boundary):
+    from nebula.v3.runtime_delivery import HttpIntent
+    from nebula.v3.storage_sender import storage_source_actor
+
+    source, _ = await _storage_source(boundary)
+    actor = storage_source_actor(source)
+    report = json.dumps(_storage_report()).encode()
+    for method, path, options in (
+        ("POST", "/api/v1/chat/completions", {}),
+        ("POST", "/api/v1/storage/test", {}),
+        ("DELETE", "/api/v1/storage/events", {}),
+        ("POST", "/api/v1/storage/events", {"chat_start": True}),
+    ):
+        intent = HttpIntent.capture(method, path, b"", [], report)
+        with pytest.raises(ValueError, match="storage reports|chat start"):
+            await boundary.delivery.accept(
+                intent,
+                project_id="project",
+                actor_id=actor,
+                idempotency_key="refused-" + method + path,
+                **options,
+            )
+    async with boundary.host.database.session() as session:
+        assert await session.scalar(select(func.count(RuntimeCommandRow.id))) == 0
 
 
 def test_api_role_import_does_not_import_the_execution_factory_or_chat_runtime():

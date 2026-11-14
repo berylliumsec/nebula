@@ -42,7 +42,7 @@ async def test_actual_api_factory_keeps_receipts_and_global_writes_atomic(
     context = SimpleNamespace(
         database=database,
         coordinator=DeploymentCoordinator(database),
-        manifest=SimpleNamespace(ui_directory="ui"),
+        manifest=SimpleNamespace(ui_directory="ui", features=["storage.report/v1"]),
         # run_worker supplies this authenticated peer metadata before selecting
         # the API factory. These global SQL routes never contact the host socket.
         secret=b"c" * 32,

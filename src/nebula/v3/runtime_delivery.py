@@ -47,8 +47,8 @@ from .runtime_chat_acceptance import (
     ChatBinding,
 )
 from .storage import NebulaStore, NotFoundError
+from .runtime_coordination import STORAGE_REPORT_COMMAND, STORAGE_REPORT_INTERRUPTED
 from .storage_sender import (
-    STORAGE_EVENTS_PATH,
     STORAGE_REPORT_PATHS,
     parse_storage_source_actor,
     revalidate_storage_source,
@@ -239,10 +239,6 @@ class RuntimeDelivery:
             return True
         if re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path):
             return intent.body() in (b"", b"{}")
-        if intent.path == STORAGE_EVENTS_PATH:
-            # A storage alert opens or continues its incident chat in the
-            # source's project, so its owner must be admitted to run it.
-            return True
         return False
 
     async def accept(
@@ -285,8 +281,13 @@ class RuntimeDelivery:
             ):
                 raise ValueError("Chat acceptance requires a streaming chat intent")
         purpose = self._intent_purpose(actor_id)
-        if parse_storage_source_actor(actor_id) is not None and (
-            intent.method != "POST" or intent.path not in STORAGE_REPORT_PATHS
+        storage_report = parse_storage_source_actor(actor_id) is not None
+        if storage_report and (
+            intent.method != "POST"
+            or intent.path not in STORAGE_REPORT_PATHS
+            or chat_acceptance
+            or chat_resume
+            or chat_start
         ):
             raise ValueError("A storage source can only submit storage reports")
         # Project and revision also participate in the immutable identity.
@@ -296,7 +297,9 @@ class RuntimeDelivery:
             project_id=project_id,
             actor_id=actor_id,
             idempotency_key=idempotency_key,
-            name=CHAT_ACCEPT_COMMAND
+            name=STORAGE_REPORT_COMMAND
+            if storage_report
+            else CHAT_ACCEPT_COMMAND
             if chat_acceptance
             else (CHAT_RESUME_COMMAND if chat_resume else HTTP_INVOKE_COMMAND),
             payload={"format": 1, "request_reference": reference},
@@ -310,9 +313,14 @@ class RuntimeDelivery:
             row = await session.get(RuntimeCommandRow, command.receipt.command_id)
             if (
                 row is None
-                or row.name not in CHAT_COMMANDS | {HTTP_INVOKE_COMMAND}
+                or row.name
+                not in CHAT_COMMANDS | {HTTP_INVOKE_COMMAND, STORAGE_REPORT_COMMAND}
                 or row.name != command.name
                 or row.payload != command.payload
+                # Only a storage source runs a storage report, and it runs
+                # nothing else.
+                or (row.name == STORAGE_REPORT_COMMAND)
+                != (parse_storage_source_actor(row.actor_id) is not None)
             ):
                 raise CoordinationConflict(
                     "durable HTTP invocation does not match its receipt"
@@ -328,7 +336,12 @@ class RuntimeDelivery:
             command.payload["request_reference"],
             purpose=self._intent_purpose(actor),
         )
-        return HttpIntent.model_validate_json(raw), actor
+        intent = HttpIntent.model_validate_json(raw)
+        if command.name == STORAGE_REPORT_COMMAND and (
+            intent.method != "POST" or intent.path not in STORAGE_REPORT_PATHS
+        ):
+            raise CoordinationConflict("a storage report must be a storage report")
+        return intent, actor
 
     async def append(
         self,
@@ -524,7 +537,17 @@ class DurableHttpRunner:
         except BaseException:
             # A controller failure can follow a committed external effect.
             # Keep the receipt, mark uncertainty and never replay automatically.
+            # A storage report has no external effect and records atomically,
+            # so it fails retryably instead of holding the lane as uncertain.
             async def uncertain():
+                if command.name == STORAGE_REPORT_COMMAND:
+                    await self.delivery.coordination.finish_command(
+                        lease,
+                        command.receipt.command_id,
+                        state="failed",
+                        result=dict(STORAGE_REPORT_INTERRUPTED),
+                    )
+                    return
                 await self.delivery.coordination.finish_command(
                     lease,
                     command.receipt.command_id,

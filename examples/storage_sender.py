@@ -60,6 +60,10 @@ def prepare(path: Path) -> bytes:
     return json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
 
 
+# Core acknowledges a saved report within a few seconds; wait well past that.
+TIMEOUT_SECONDS = 30
+
+
 def send(url: str, token: str, payload: bytes, *, attempts: int = 6) -> dict:
     for attempt in range(attempts):
         request = Request(url, data=payload, headers={
@@ -68,7 +72,7 @@ def send(url: str, token: str, payload: bytes, *, attempts: int = 6) -> dict:
             "User-Agent": "nebula-storage-reference-sender/1",
         }, method="POST")
         try:
-            with urlopen(request, timeout=15) as response:
+            with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
                 if response.status != 202:
                     raise ValueError(f"unexpected Nebula status {response.status}")
                 result = json.loads(response.read(65536))
@@ -79,7 +83,9 @@ def send(url: str, token: str, payload: bytes, *, attempts: int = 6) -> dict:
             if exc.code not in {429, 500, 502, 503, 504}:
                 raise
             last_error = exc
-        except URLError as exc:
+        except (URLError, TimeoutError) as exc:
+            # A read timeout is not a URLError. Resending the identical body is
+            # safe: Core dedupes it by event ID.
             last_error = exc
         if attempt + 1 < attempts:
             time.sleep(min(30, 2 ** attempt) + random.random())

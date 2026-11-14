@@ -48,6 +48,14 @@ COMMAND_LANES = ("work", "control")
 TICK_PHASES = frozenset({"requested", "finishing", "transferable"})
 _DISPATCH_STATES = ("queued", "running", "uncertain")
 _BATCH_BARRIER = "work.batch.barrier/v1"
+# A storage sender's report, saved by an API worker under a storage-source
+# principal. Its execution is idempotent by event ID, so an interrupted run
+# fails retryably instead of holding its lane as uncertain work.
+STORAGE_REPORT_COMMAND = "storage.report/v1"
+STORAGE_REPORT_INTERRUPTED = {
+    "http_status": 503,
+    "detail": "The storage report was interrupted; the sender may retry it",
+}
 
 
 class CoordinationConflict(RuntimeError):
@@ -680,7 +688,11 @@ class RuntimeCoordination:
                 return None
             assert row is not None
             if action == "uncertain":
-                row.state = "uncertain"
+                if row.name == STORAGE_REPORT_COMMAND:
+                    # Re-running a storage report is safe; never block the lane.
+                    row.state, row.result = "failed", dict(STORAGE_REPORT_INTERRUPTED)
+                else:
+                    row.state = "uncertain"
                 return None
             row.state, row.runtime_id, row.fencing_token = (
                 "running",

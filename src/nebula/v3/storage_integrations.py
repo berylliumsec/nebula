@@ -55,6 +55,8 @@ from .storage_sender import (  # noqa: F401 - the sender contract is re-exported
 )
 
 MAX_CALLBACK_BYTES = 64 * 1024
+# One bound for a whole callback exchange, not each socket operation.
+CALLBACK_DEADLINE_SECONDS = 15.0
 SEVERITY = {"healthy": 0, "warning": 1, "critical": 2, "unavailable": 3}
 EntityT = TypeVar("EntityT", bound=Entity)
 
@@ -159,6 +161,7 @@ class StorageIntegrationService:
         self.credentials = credentials
         self._task: asyncio.Task | None = None
         self._dispatch_lock = asyncio.Lock()
+        self._dispatch_wake = asyncio.Event()
 
     async def startup(self) -> None:
         self._task = create_diagnostic_task(
@@ -191,7 +194,17 @@ class StorageIntegrationService:
                     exc,
                     stage="dispatch",
                 )
-            await asyncio.sleep(10)
+            # A recorded report wakes the scan early; otherwise it runs every 10 s.
+            try:
+                await asyncio.wait_for(self._dispatch_wake.wait(), timeout=10)
+            except TimeoutError:
+                # diagnostic-expected: the periodic scan runs without a wake.
+                pass
+            self._dispatch_wake.clear()
+
+    def wake_dispatch(self) -> None:
+        """Ask the dispatch loop to scan now, without waiting for its callbacks."""
+        self._dispatch_wake.set()
 
     async def _validate_runtime(
         self, engagement_id: str, backend: ChatBackend, profile_id: str, model: str
@@ -583,27 +596,43 @@ class StorageIntegrationService:
                 source.callback_credential_ref
             ).get_secret_value()
         }
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            async with client.stream(
-                "POST", source.callback_url + path, json=body, headers=headers
-            ) as response:
-                chunks = bytearray()
-                async for chunk in response.aiter_bytes():
-                    chunks.extend(chunk)
-                    if len(chunks) > MAX_CALLBACK_BYTES:
-                        raise ValueError("callback response exceeds 64 KiB")
-                if response.status_code == 409 and path.endswith("/preview"):
-                    try:
-                        refusal = json.loads(chunks)
-                    except ValueError:  # diagnostic-expected: source refusal may be non-JSON; use the generic refusal.
-                        refusal = None
-                    reason = refusal.get("error") if isinstance(refusal, dict) else None
-                    if isinstance(reason, str):
-                        reason = " ".join(reason.split())[:500]
-                    if not reason:
-                        reason = "the selected source is no longer available; choose another offer"
-                    raise ConflictError(f"Storage source refused preview: {reason}")
-                response.raise_for_status()
+        # The per-operation timeout cannot bound a source that trickles bytes;
+        # the whole exchange gets one deadline, reported like any timeout.
+        try:
+            async with asyncio.timeout(CALLBACK_DEADLINE_SECONDS):
+                async with httpx.AsyncClient(
+                    timeout=10.0, follow_redirects=False
+                ) as client:
+                    async with client.stream(
+                        "POST", source.callback_url + path, json=body, headers=headers
+                    ) as response:
+                        chunks = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            chunks.extend(chunk)
+                            if len(chunks) > MAX_CALLBACK_BYTES:
+                                raise ValueError("callback response exceeds 64 KiB")
+                        if response.status_code == 409 and path.endswith("/preview"):
+                            try:
+                                refusal = json.loads(chunks)
+                            except ValueError:  # diagnostic-expected: source refusal may be non-JSON; use the generic refusal.
+                                refusal = None
+                            reason = (
+                                refusal.get("error")
+                                if isinstance(refusal, dict)
+                                else None
+                            )
+                            if isinstance(reason, str):
+                                reason = " ".join(reason.split())[:500]
+                            if not reason:
+                                reason = "the selected source is no longer available; choose another offer"
+                            raise ConflictError(
+                                f"Storage source refused preview: {reason}"
+                            )
+                        response.raise_for_status()
+        except TimeoutError as exc:
+            raise httpx.ReadTimeout(
+                "storage source callback exceeded its overall deadline"
+            ) from exc
         value = json.loads(chunks)
         if not isinstance(value, dict):
             raise ValueError("callback response must be an object")
@@ -1138,7 +1167,12 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
             outcome = await service.ingest(source, event)
         except ConflictError as exc:
             raise HTTPException(409, str(exc)) from exc
-        await service.dispatch_pending()
+        if parse_storage_source_actor(current_runtime_principal()) is not None:
+            # A report replayed from a supervisor API worker holds its project's
+            # work lane; the source's callbacks run in the dispatch loop instead.
+            service.wake_dispatch()
+        else:
+            await service.dispatch_pending()
         return outcome
 
     @router.post("/inventory", status_code=202, openapi_extra=inventory_body)
