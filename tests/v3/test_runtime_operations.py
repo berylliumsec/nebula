@@ -3,6 +3,7 @@
 import asyncio
 import pytest
 from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_ipc import RuntimeIpcError
 from nebula.v3.runtime_operations import DeploymentOperations
 from nebula.v3.database import DeploymentOperationRow
 from tests.v3.test_deployment_lifecycle import host as host
@@ -82,6 +83,51 @@ async def test_failed_dispatch_remains_uncertain_after_replacement(host):
     assert calls == ["promote_api"]
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeIpcError(
+            'Project "Synthetic" (project): Project cleanup is unverified; '
+            "its ownership is retained"
+        ),
+        CoordinationConflict("deployment changed before shutdown"),
+    ],
+)
+async def test_uncertain_receipt_keeps_a_refusal_reason(host, error):
+    async def dispatch(_action, _parameters):
+        raise error
+
+    receipt = await DeploymentOperations(host[0]).execute(
+        operation_id="refused",
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": 1},
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "uncertain"
+    assert receipt["result"] == {
+        "detail": "The operation did not report a confirmed result. Read deployment status before reconciliation.",
+        "error_type": type(error).__name__,
+        "reason": str(error),
+    }
+
+
+async def test_uncertain_receipt_never_copies_unclassified_error_text(host):
+    async def dispatch(_action, _parameters):
+        raise OSError("synthetic-private-path")
+
+    receipt = await DeploymentOperations(host[0]).execute(
+        operation_id="lost",
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": 1},
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "uncertain"
+    assert "reason" not in receipt["result"]
+    assert "synthetic-private-path" not in str(receipt)
+
+
 async def test_get_after_host_replacement_classifies_abandoned_operation_without_dispatch(
     host,
 ):
@@ -110,3 +156,36 @@ async def test_get_after_host_replacement_classifies_abandoned_operation_without
     first = await new.status("abandoned", actor_id="operator")
     assert first["state"] == "uncertain"
     assert await new.status("abandoned", actor_id="operator") == first
+
+
+async def test_unconfirmed_operation_is_diagnosed_without_its_text(
+    host, tmp_path, monkeypatch
+):
+    import json
+
+    from nebula.v3 import diagnostics
+    from nebula.v3.diagnostics import DiagnosticManager
+
+    manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+    try:
+
+        async def dispatch(_action, _parameters):
+            raise OSError("synthetic-private-path")
+
+        await DeploymentOperations(host[0]).execute(
+            operation_id="lost",
+            actor_id="operator",
+            action="shutdown",
+            parameters={"expected_revision": 1},
+            dispatch=dispatch,
+        )
+        assert manager.flush()
+        encoded = (manager.log_dir / "errors.log").read_text()
+    finally:
+        manager.close()
+    assert "synthetic-private-path" not in encoded
+    events = [json.loads(line) for line in encoded.splitlines()]
+    assert [event["event_code"] for event in events] == [
+        "runtime.deployment_operation.unconfirmed"
+    ]

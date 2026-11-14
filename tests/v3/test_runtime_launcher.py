@@ -224,3 +224,173 @@ def test_shutdown_requires_success_receipt_and_exact_service_exit(
 
     monkeypatch.setattr(launcher.httpx, "Client", Client)
     assert launcher.shutdown_runtime(tmp_path)["observed_state"] == "stopped"
+
+
+def test_shutdown_failure_leads_with_the_refusal_reason(tmp_path, monkeypatch):
+    launcher.operator_token(tmp_path)
+    launcher.write_private(
+        tmp_path / "runtime/connection.json",
+        json.dumps(
+            {
+                "protocol": launcher.DESKTOP_PROTOCOL,
+                "data_root": str(tmp_path),
+                "pid": 12345,
+                "process_birth": "original",
+                "endpoint": "http://127.0.0.1:54321/api/v1",
+            }
+        ).encode(),
+    )
+    monkeypatch.setattr(launcher, "same_process", lambda *_a: True)
+    from types import SimpleNamespace
+
+    reason = 'Project "Alpha" (alpha): Project cleanup is unverified'
+    result = {
+        "detail": "unconfirmed",
+        "error_type": "RuntimeIpcError",
+        "reason": reason,
+    }
+
+    def response(payload):
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def get(self, *_args, **_kwargs):
+            return response({"revision": 7})
+
+        def post(self, _url, **_kwargs):
+            return response(
+                {"state": "uncertain", "operation_id": "refused", "result": result}
+            )
+
+    monkeypatch.setattr(launcher.httpx, "Client", Client)
+    with pytest.raises(RuntimeError) as failed:
+        launcher.shutdown_runtime(tmp_path)
+    assert str(failed.value) == (
+        f"Core shutdown needs attention: {reason} Receipt refused: "
+        + json.dumps(result)
+    )
+
+
+def test_shutdown_rereads_status_while_workers_move_the_revision(tmp_path, monkeypatch):
+    launcher.operator_token(tmp_path)
+    launcher.write_private(
+        tmp_path / "runtime/connection.json",
+        json.dumps(
+            {
+                "protocol": launcher.DESKTOP_PROTOCOL,
+                "data_root": str(tmp_path),
+                "pid": 12345,
+                "process_birth": "original",
+                "endpoint": "http://127.0.0.1:54321/api/v1",
+            }
+        ).encode(),
+    )
+    states = iter([True, False])
+    monkeypatch.setattr(launcher, "same_process", lambda *_a: next(states))
+    monkeypatch.setattr(launcher.time, "sleep", lambda _seconds: None)
+    from types import SimpleNamespace
+
+    revisions, posted = iter([7, 9]), []
+
+    def response(payload):
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def get(self, *_args, **_kwargs):
+            return response({"revision": next(revisions)})
+
+        def post(self, _url, **kwargs):
+            posted.append(kwargs["json"])
+            if len(posted) == 1:
+                return response(
+                    {
+                        "state": "failed",
+                        "operation_id": kwargs["json"]["operation_id"],
+                        "result": {
+                            "detail": "deployment changed before shutdown",
+                            "error_type": "DeploymentChanged",
+                        },
+                    }
+                )
+            return response(
+                {"state": "succeeded", "operation_id": "second", "result": {}}
+            )
+
+    monkeypatch.setattr(launcher.httpx, "Client", Client)
+    assert launcher.shutdown_runtime(tmp_path)["observed_state"] == "stopped"
+    assert [item["parameters"] for item in posted] == [
+        {"expected_revision": 7},
+        {"expected_revision": 9},
+    ]
+    assert posted[0]["operation_id"] != posted[1]["operation_id"]
+
+
+def test_shutdown_reports_a_deployment_that_never_settles(tmp_path, monkeypatch):
+    launcher.operator_token(tmp_path)
+    launcher.write_private(
+        tmp_path / "runtime/connection.json",
+        json.dumps(
+            {
+                "protocol": launcher.DESKTOP_PROTOCOL,
+                "data_root": str(tmp_path),
+                "pid": 12345,
+                "process_birth": "original",
+                "endpoint": "http://127.0.0.1:54321/api/v1",
+            }
+        ).encode(),
+    )
+    monkeypatch.setattr(launcher, "same_process", lambda *_a: True)
+    from types import SimpleNamespace
+
+    result = {
+        "detail": "deployment changed before shutdown",
+        "error_type": "DeploymentChanged",
+    }
+
+    def response(payload):
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def get(self, *_args, **_kwargs):
+            return response({"revision": 7})
+
+        def post(self, _url, **_kwargs):
+            return response(
+                {"state": "failed", "operation_id": "changed", "result": result}
+            )
+
+    monkeypatch.setattr(launcher.httpx, "Client", Client)
+    with pytest.raises(RuntimeError) as failed:
+        launcher.shutdown_runtime(tmp_path, settle_timeout=0)
+    assert str(failed.value) == (
+        "Core shutdown needs attention: deployment changed before shutdown "
+        "(Core workers kept starting or stopping for 0 s; retry once they "
+        "settle.) Receipt changed: " + json.dumps(result)
+    )

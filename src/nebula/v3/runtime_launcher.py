@@ -322,7 +322,27 @@ def connection_frame(value: dict, token: str) -> dict:
     }
 
 
-def shutdown_runtime(data_root: Path, *, timeout: float = 30) -> dict:
+# Workers that start or retire move the deployment revision while a shutdown
+# waits for the host. Such a refusal proves nothing changed, so runtime-stop
+# reads the new revision and asks again until the deployment settles.
+SHUTDOWN_SETTLE_SECONDS = 60
+
+
+def _changed_before_shutdown(receipt: dict) -> bool:
+    result = receipt.get("result")
+    return (
+        receipt.get("state") == "failed"
+        and isinstance(result, dict)
+        and result.get("error_type") == "DeploymentChanged"
+    )
+
+
+def shutdown_runtime(
+    data_root: Path,
+    *,
+    timeout: float = 30,
+    settle_timeout: float = SHUTDOWN_SETTLE_SECONDS,
+) -> dict:
     value = discovery(data_root)
     if value is None or not same_process(value["pid"], value["process_birth"]):
         raise RuntimeError(
@@ -331,31 +351,59 @@ def shutdown_runtime(data_root: Path, *, timeout: float = 30) -> dict:
     token = operator_token(data_root)
     with httpx.Client(trust_env=False, timeout=timeout) as client:
         headers = {"Authorization": "Bearer " + token}
-        status = client.get(value["endpoint"] + "/deployment/status", headers=headers)
-        status.raise_for_status()
-        response = client.post(
-            value["endpoint"] + "/deployment/operations",
-            headers=headers,
-            json={
-                "operation_id": str(uuid4()),
-                "action": "shutdown",
-                "parameters": {"expected_revision": status.json()["revision"]},
-            },
-        )
-        response.raise_for_status()
-        receipt = response.json()
-        deadline = time.monotonic() + timeout
-        while receipt.get("state") == "running" and time.monotonic() < deadline:
-            time.sleep(0.1)
-            response = client.get(
-                value["endpoint"] + "/deployment/operations/" + receipt["operation_id"],
+        settled = time.monotonic() + settle_timeout
+        while True:
+            status = client.get(
+                value["endpoint"] + "/deployment/status", headers=headers
+            )
+            status.raise_for_status()
+            response = client.post(
+                value["endpoint"] + "/deployment/operations",
                 headers=headers,
+                json={
+                    "operation_id": str(uuid4()),
+                    "action": "shutdown",
+                    "parameters": {"expected_revision": status.json()["revision"]},
+                },
             )
             response.raise_for_status()
             receipt = response.json()
+            deadline = time.monotonic() + timeout
+            while receipt.get("state") == "running" and time.monotonic() < deadline:
+                time.sleep(0.1)
+                response = client.get(
+                    value["endpoint"]
+                    + "/deployment/operations/"
+                    + receipt["operation_id"],
+                    headers=headers,
+                )
+                response.raise_for_status()
+                receipt = response.json()
+            if not _changed_before_shutdown(receipt) or time.monotonic() >= settled:
+                break
+            time.sleep(0.5)
         if receipt.get("state") != "succeeded":
+            result = receipt.get("result")
+            reason = None
+            if isinstance(result, dict):
+                # An uncertain receipt keeps a refusal's text as its reason; a
+                # rejected one proved no effect and states it as its detail.
+                reason = result.get("reason") or (
+                    result.get("detail") if receipt.get("state") == "failed" else None
+                )
             raise RuntimeError(
-                "Core shutdown needs attention: " + json.dumps(receipt.get("result"))
+                "Core shutdown needs attention: "
+                + (f"{reason} " if isinstance(reason, str) and reason else "")
+                + (
+                    f"(Core workers kept starting or stopping for {settle_timeout:g} s; "
+                    "retry once they settle.) "
+                    if _changed_before_shutdown(receipt)
+                    else ""
+                )
+                + "Receipt "
+                + str(receipt.get("operation_id"))
+                + ": "
+                + json.dumps(result)
             )
         while same_process(value["pid"], value["process_birth"]):
             if time.monotonic() >= deadline:

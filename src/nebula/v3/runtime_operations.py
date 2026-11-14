@@ -10,7 +10,9 @@ from uuid import uuid4
 
 from .database import DeploymentOperationRow
 from .deployments import DeploymentCoordinator, _checkpoint
-from .runtime_coordination import CoordinationConflict
+from .diagnostics import record_caught_exception
+from .runtime_coordination import CoordinationConflict, OperationRejected
+from .runtime_ipc import RuntimeIpcError
 
 
 def _document(value: dict) -> dict:
@@ -18,10 +20,6 @@ def _document(value: dict) -> dict:
     if len(json.dumps(value, sort_keys=True).encode()) > 64 * 1024:
         raise ValueError("deployment operation document exceeds its bound")
     return value
-
-
-class OperationRejected(CoordinationConflict):
-    """A dispatcher proved that no effect was admitted before refusing."""
 
 
 class DeploymentOperations:
@@ -95,10 +93,37 @@ class DeploymentOperations:
         except BaseException as error:
             error_type = type(error).__name__
             rejected = isinstance(error, OperationRejected)
+            # The receipt below is what the operator reads; this keeps the
+            # failure's type and chain, never its text, in Core diagnostics.
+            record_caught_exception(
+                "runtime",
+                "runtime.deployment_operation.rejected"
+                if rejected
+                else "runtime.deployment_operation.unconfirmed",
+                "A deployment operation was refused before any effect."
+                if rejected
+                else "A deployment operation did not confirm its result.",
+                error,
+                stage="deployment",
+                metadata={
+                    "action": action,
+                    "entity_id": operation_id,
+                    "kind": "deployment-operation",
+                },
+            )
             detail = (
                 str(error)[:4000]
                 if rejected
                 else "The operation did not report a confirmed result. Read deployment status before reconciliation."
+            )
+            # Refusals carry operator-facing text; keep it beside the uncertain
+            # outcome so the operator learns why. Other errors may embed
+            # private values and stay classified by type only.
+            reason = (
+                (str(error) or error_type)[:4000]
+                if not rejected
+                and isinstance(error, (RuntimeIpcError, CoordinationConflict))
+                else None
             )
 
             async def uncertain():
@@ -108,6 +133,7 @@ class DeploymentOperations:
                     {
                         "detail": detail,
                         "error_type": error_type,
+                        **({"reason": reason} if reason else {}),
                     },
                 )
 

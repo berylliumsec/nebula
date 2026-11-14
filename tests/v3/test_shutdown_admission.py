@@ -83,3 +83,109 @@ async def test_shutdown_replays_existing_receipt_but_rejects_new_intent(host):
     assert await coordinator.coordination.submit(**arguments) == receipt
     with pytest.raises(CoordinationConflict, match="shutdown"):
         await coordinator.coordination.submit(**{**arguments, "idempotency_key": "new"})
+
+
+async def test_revision_change_before_shutdown_is_rejected_without_effect(host):
+    from nebula.v3.runtime_operations import DeploymentOperations
+
+    coordinator = host[0]
+    stale = (await coordinator.status()).revision
+    # A worker starting while the request waits for the host moves the revision.
+    await coordinator.abort_shutdown(detail="A worker became ready.")
+
+    async def dispatch(_action, values):
+        return {"leases": len(await coordinator.prepare_shutdown(**values))}
+
+    receipt = await DeploymentOperations(coordinator).execute(
+        operation_id="stale-stop",
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": stale},
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "failed"
+    assert receipt["result"] == {
+        "detail": "deployment changed before shutdown",
+        "error_type": "DeploymentChanged",
+    }
+    async with coordinator.database.session() as session:
+        saved = await session.get(DeploymentHostRow, "host")
+        assert not saved.shutdown_requested
+        assert saved.revision == stale + 1
+
+
+async def test_project_label_is_one_bounded_line(host):
+    from nebula.v3.domain import Engagement
+
+    coordinator, store = host
+    await store.create(
+        Engagement(id="shaped", name='Red "Team"\n\tShutdown blocked: ' + "x" * 200)
+    )
+    label = await coordinator.project_label("shaped")
+    assert label == (
+        "Project \"Red 'Team' Shutdown blocked: " + "x" * 51 + '" (shaped)'
+    )
+    assert await coordinator.project_label("missing") == "Project missing"
+
+
+async def test_shutdown_names_a_project_whose_owner_is_no_longer_live(host):
+    from sqlalchemy import update
+
+    from nebula.v3.database import RuntimeInstanceRow
+    from nebula.v3.runtime_coordination import LeaseLost
+
+    coordinator = host[0]
+    await coordinator.coordination.register_runtime("lost", "v1")
+    await coordinator.coordination.claim_project("one", "lost")
+    async with coordinator.database.session() as session:
+        await session.execute(
+            update(RuntimeInstanceRow)
+            .where(RuntimeInstanceRow.id == "lost")
+            .values(lease_expires_at_ms=0)
+        )
+    with pytest.raises(LeaseLost) as refused:
+        await coordinator.prepare_shutdown(
+            expected_revision=(await coordinator.status()).revision
+        )
+    assert str(refused.value) == (
+        "Project one is owned by execution worker lost, which is no longer live "
+        "(a live execution runtime is required); its recovery must finish before "
+        "shutdown"
+    )
+    async with coordinator.database.session() as session:
+        assert not (await session.get(DeploymentHostRow, "host")).shutdown_requested
+
+
+async def test_blocked_shutdown_is_rejected_without_effect_and_names_the_work(host):
+    from nebula.v3.runtime_operations import DeploymentOperations
+
+    coordinator = host[0]
+    # A chat start waiting for host pressure keeps its command on the lane.
+    receipt = await coordinator.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="queued-chat",
+        name="http.invoke/v1",
+        payload={},
+    )
+    revision = (await coordinator.status()).revision
+
+    async def dispatch(_action, values):
+        return {"leases": len(await coordinator.prepare_shutdown(**values))}
+
+    result = await DeploymentOperations(coordinator).execute(
+        operation_id="blocked-stop",
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": revision},
+        dispatch=dispatch,
+    )
+    assert result["state"] == "failed"
+    assert result["result"] == {
+        "detail": "Shutdown is waiting for this work to finish, pause or stop: "
+        f"Command {receipt.command_id} remains active or unresolved",
+        "error_type": "ShutdownBlocked",
+    }
+    async with coordinator.database.session() as session:
+        saved = await session.get(DeploymentHostRow, "host")
+        assert not saved.shutdown_requested and saved.revision == revision
