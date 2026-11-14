@@ -399,7 +399,12 @@ class StoreTransaction:
         if not engagement_id:
             return
         connection = await self.session.connection()
-        execution_owned = connection.sync_connection.info.get("execution_owned")
+        sync_connection = connection.sync_connection
+        if sync_connection is None:
+            raise ConflictError(
+                "The project chat transaction has no database connection."
+            )
+        execution_owned = sync_connection.info.get("execution_owned")
         if execution_owned is not None:
             retirement_requested = await self.session.scalar(
                 select(ProjectOwnershipRow.retirement_requested).where(
