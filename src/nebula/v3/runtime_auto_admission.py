@@ -444,6 +444,28 @@ class RuntimeAutoAdmission:
             )
         return receipt["result"]
 
+    async def _legacy_chat_start_for(self, intent, project_id: str) -> bool:
+        """Accept a legacy chat start only when it names this exact project."""
+        from .runtime_delivery import RuntimeDelivery
+
+        if not RuntimeDelivery.is_chat_start_intent(intent):
+            return False
+        if intent.path == "/api/v1/chat/goal-conversations":
+            return json.loads(intent.body()).get("engagement_id") == project_id
+        if intent.method == "PATCH":
+            # An unarchive names only its chat. Promote it for that chat's
+            # project, never for whichever project the command row claims.
+            chat_id = intent.path.rsplit("/", 1)[1]
+            async with self.supervisor.coordinator.database.session() as session:
+                owner = await session.scalar(
+                    select(EntityRow.engagement_id).where(
+                        EntityRow.id == chat_id,
+                        EntityRow.kind == "chat_sessions",
+                    )
+                )
+            return owner == project_id
+        return False
+
     async def _recover_legacy_chat_starts(self):
         """Promote queued legacy HTTP requests after authenticating their intent."""
         host = getattr(self.supervisor, "host", None)
@@ -567,14 +589,7 @@ class RuntimeAutoAdmission:
                     purpose=RuntimeDelivery._intent_purpose(actor_id),
                 )
                 intent = HttpIntent.model_validate_json(raw)
-                if (
-                    not RuntimeDelivery.is_chat_start_intent(intent)
-                    or intent.path != "/api/v1/chat/goal-conversations"
-                ):
-                    self._legacy_chat_retry.pop(command_id, None)
-                    continue
-                request_body = json.loads(intent.body())
-                if request_body.get("engagement_id") != project_id:
+                if not await self._legacy_chat_start_for(intent, project_id):
                     self._legacy_chat_retry.pop(command_id, None)
                     continue
                 marked = await self.supervisor.coordinator.coordination.mark_queued_chat_start(

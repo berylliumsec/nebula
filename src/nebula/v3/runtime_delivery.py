@@ -181,8 +181,8 @@ class RuntimeDelivery:
 
     @staticmethod
     def is_chat_start_intent(intent: HttpIntent) -> bool:
-        """Recognize a real chat submission or explicit resume from its route."""
-        if intent.method != "POST":
+        """Recognize a chat submission, explicit resume or restore from its route."""
+        if intent.method not in {"POST", "PATCH"}:
             return False
 
         try:
@@ -191,6 +191,17 @@ class RuntimeDelivery:
             # diagnostic-expected: malformed bodies cannot establish a chat-start intent.
             body = None
 
+        if intent.method == "PATCH":
+            # Unarchiving reopens an exact-project chat. Storage already guards
+            # this transition against retirement like a new chat; admission
+            # must also see it, or the restore waits for a worker that only an
+            # open chat would admit.
+            return (
+                re.fullmatch(r"/api/v1/chat-sessions/[^/]{1,200}", intent.path)
+                is not None
+                and isinstance(body, dict)
+                and body.get("archived") is False
+            )
         if intent.path == "/api/v1/chat/completions":
             return (
                 isinstance(body, dict)
