@@ -366,6 +366,8 @@ class StoreTransaction:
         self.deleted_event_owners: list[str] = []
         self.chat_activity_changed = False
         self.chat_activity_session_ids: set[str] = set()
+        # Follow-up queues written in this unit; their dispatcher wakes on commit.
+        self.chat_queue_changed = False
         self.oversight_projects_changed: set[str] = set()
         self.provider_usage_profiles_changed: set[str] = set()
         self._locked_operation_streams: set[str] = set()
@@ -510,6 +512,8 @@ class StoreTransaction:
         (await self.session.flush())
         if entity.entity_kind in {"chat_sessions", "chat_turns"}:
             self.chat_activity_changed = True
+        if entity.entity_kind == ChatQueue.entity_kind:
+            self.chat_queue_changed = True
         if isinstance(entity, (Approval, HarnessInteraction, ChatQueue)):
             from .butler_attention import record_attention_transition
 
@@ -688,6 +692,8 @@ class StoreTransaction:
             and previous_title != payload.get("title")
         ):
             self.chat_activity_changed = True
+        if model.entity_kind == ChatQueue.entity_kind:
+            self.chat_queue_changed = True
         if goal_transition and updated_goal is not None:
             from .butler_oversight import record_goal_transition
 
@@ -758,6 +764,8 @@ class StoreTransaction:
         (await self.session.flush())
         if model.entity_kind in {"chat_sessions", "chat_turns"}:
             self.chat_activity_changed = True
+        if model.entity_kind == ChatQueue.entity_kind:
+            self.chat_queue_changed = True
         if model.entity_kind in EVENT_OWNER_ENTITY_KINDS:
             self.deleted_event_owners.append(entity_id)
 
@@ -903,11 +911,44 @@ class NebulaStore:
         # Removes a deleted record's event history off the deleting thread.
         self.event_history = EventHistoryPurger(self.database)
         self._chat_activity_listeners: list[Callable[[], None]] = []
+        self._follow_up_listeners: list[Callable[[bool, frozenset[str]], None]] = []
         self._oversight_listeners: list[Callable[[str], None]] = []
         self._provider_usage_listeners: list[Callable[[str], None]] = []
 
     def on_chat_activity_change(self, listener: Callable[[], None]) -> None:
         self._chat_activity_listeners.append(listener)
+
+    def on_follow_up_change(
+        self, listener: Callable[[bool, frozenset[str]], None]
+    ) -> None:
+        """Signal follow-up dispatch when a unit of work through this store ends.
+
+        ``listener(queue_written, sessions)`` runs synchronously: whether a
+        follow-up queue was written, and the conversations whose turns or
+        sessions started, ended or changed status.
+        """
+
+        self._follow_up_listeners.append(listener)
+
+    def _signal_follow_ups(self, transaction: StoreTransaction) -> None:
+        sessions = (
+            frozenset(transaction.chat_activity_session_ids)
+            if transaction.chat_activity_changed
+            else frozenset()
+        )
+        if not transaction.chat_queue_changed and not sessions:
+            return
+        for listener in self._follow_up_listeners:
+            try:
+                listener(transaction.chat_queue_changed, sessions)
+            except Exception as exc:
+                record_caught_exception(
+                    "storage",
+                    "storage.chat_queue_signal_failed",
+                    "A follow-up queue change could not be signaled.",
+                    exc,
+                    stage="storage",
+                )
 
     def on_project_oversight_change(self, listener: Callable[[str], None]) -> None:
         self._oversight_listeners.append(listener)
@@ -943,18 +984,25 @@ class NebulaStore:
     ) -> AsyncIterator[StoreTransaction]:
         if self.database.task_session() is not None:
             raise RuntimeError("nested writes must use the existing StoreTransaction")
-        async with self.database.session() as session:
-            if (
-                immediate
-                and self.database.engine.dialect.name == "sqlite"
-                and self.database.execution_runtime_id is None
-            ):
-                # Report ingestion reads an absent incident before writing it.
-                # Take SQLite's writer lock first so concurrent agents cannot
-                # both conclude that they need to create the same incident.
-                (await session.execute(text("BEGIN IMMEDIATE")))
-            transaction = StoreTransaction(session)
-            yield transaction
+        transaction: StoreTransaction | None = None
+        try:
+            async with self.database.session() as session:
+                if (
+                    immediate
+                    and self.database.engine.dialect.name == "sqlite"
+                    and self.database.execution_runtime_id is None
+                ):
+                    # Report ingestion reads an absent incident before writing it.
+                    # Take SQLite's writer lock first so concurrent agents cannot
+                    # both conclude that they need to create the same incident.
+                    (await session.execute(text("BEGIN IMMEDIATE")))
+                transaction = StoreTransaction(session)
+                yield transaction
+        finally:
+            # Even when the writer is cancelled after commit. A wake for a
+            # unit that rolled back only costs the follow-up worker one read.
+            if transaction is not None:
+                self._signal_follow_ups(transaction)
         if self.runtime_switch_service is not None:
             self.runtime_switch_service.schedule(transaction.chat_activity_session_ids)
         if transaction.chat_activity_changed:

@@ -35,6 +35,21 @@ RETIRED_ITEM_STATUSES = {"complete", "cancelled"}
 # of the same idempotency key is still recognized and the transcript can link
 # a recent item to its turn. Older settled items are dropped.
 RETAINED_SETTLED_ITEMS = 20
+# Follow-up dispatch is driven by events. Every queue write and turn change a
+# project's queues depend on is made by the worker that owns the project,
+# through its store, which signals each unit of work as it ends. A queue write
+# wakes the dispatcher at once; a turn starting, ending or changing status wakes
+# it only for a conversation whose queue waits on that turn. While a queue waits
+# on a running response the dispatcher also rechecks at the old half-second
+# cadence. Otherwise a safety pass rereads queue versions, so liveness never
+# rests on a signal alone.
+ACTIVE_POLL_SECONDS = 0.5
+SAFETY_POLL_SECONDS = 30.0
+# Lets one burst of writes (a claim, then its linked turn) share one pass.
+WAKE_COALESCE_SECONDS = 0.05
+FAILURE_RETRY_MAX_SECONDS = 5.0
+# A sent follow-up whose response waits on one of these rests until it changes.
+RESTING_TURNS = {"waiting_approval", "waiting_callback"}
 
 
 def _request_digest(request: object) -> str | None:
@@ -85,18 +100,26 @@ def retire_settled_items(items: list[dict]) -> list[dict]:
     return retained
 
 
-def queue_is_dormant(queue: ChatQueue) -> bool:
+def queue_is_dormant(queue: ChatQueue, *, reviews_resting: bool = False) -> bool:
     """True when ``step`` cannot act on this queue until the queue itself changes.
 
     This mirrors ``step``: it reads other records only for a reviewed item
     linked to a turn, a claiming or sending item, or the latest turn when the
     next editable item is ready to dispatch. Otherwise nothing but a write to
     the queue (which bumps its revision) can give it work.
+
+    With ``reviews_resting``, a reviewed item linked to a turn does not count:
+    ``step`` settles it only once that turn's status changes, which is chat
+    activity in the conversation rather than time passing.
     """
 
     if any(
         item["status"] in {"claiming", "sending"}
-        or (item["status"] == "needs_review" and item.get("turn_id"))
+        or (
+            item["status"] == "needs_review"
+            and item.get("turn_id")
+            and not reviews_resting
+        )
         for item in queue.items
     ):
         return False
@@ -178,6 +201,33 @@ class ChatQueueService:
         self._inflight = set()
         # Queue id -> revision at which ``step`` found nothing to act on.
         self._dormant = {}
+        # Queue id -> (revision, session id) whose open work waits only for a
+        # turn of its conversation to change status: a review linked to a turn,
+        # or a follow-up behind a response (its own or the conversation's latest)
+        # that waits for an approval or callback. Chat activity in that
+        # conversation or a safety pass rereads it.
+        self._parked = {}
+        # Session id -> latest turn header ``step`` read during this pass.
+        self._latest_seen = {}
+        # Conversations whose queue waits on a running response.
+        self._watched = set()
+        # Conversations with chat activity during the current pass.
+        self._pass_activity = None
+        self._wake = asyncio.Event()
+        store.on_follow_up_change(self._signal)
+
+    def _signal(self, queue_written, sessions):
+        """A unit of work ended: wake for queue writes and waited-on turns."""
+        if self._pass_activity is not None:
+            self._pass_activity.update(sessions)
+        if queue_written or self._reopen(sessions) or sessions & self._watched:
+            self._wake.set()
+
+    def _reopen(self, sessions):
+        stale = [key for key, seen in self._parked.items() if seen[1] in sessions]
+        for key in stale:
+            del self._parked[key]
+        return bool(stale)
 
     async def get(self, session_id):
         session = await self.store.get(ChatSession, session_id)
@@ -201,7 +251,9 @@ class ChatQueueService:
         """The conversation's newest turn, as a header: the worker asks every
         half second and needs only its identity and status."""
         async with self.store.database.session() as database:
-            return await latest_turn_header(database, session_id)
+            latest = await latest_turn_header(database, session_id)
+        self._latest_seen[session_id] = latest
+        return latest
 
     async def turn(self, session_id, turn_id):
         async with self.store.database.session() as database:
@@ -768,10 +820,17 @@ class ChatQueueService:
                 for key, revision in self._dormant.items()
                 if key in versions
             }
+            self._parked = {
+                key: seen for key, seen in self._parked.items() if key in versions
+            }
             wanted = [
                 key
                 for key, revision in versions.items()
-                if not skip_dormant or self._dormant.get(key) != revision
+                if not skip_dormant
+                or (
+                    self._dormant.get(key) != revision
+                    and self._parked.get(key, (None,))[0] != revision
+                )
             ]
             if not wanted:
                 return []
@@ -789,10 +848,45 @@ class ChatQueueService:
             )
 
     def _remember_dormancy(self, queue):
+        """True, and remembered, when only a write to the queue gives it work."""
+        self._parked.pop(queue.id, None)
         if queue_is_dormant(queue):
             self._dormant[queue.id] = queue.revision
-        else:
-            self._dormant.pop(queue.id, None)
+            return True
+        self._dormant.pop(queue.id, None)
+        return False
+
+    async def _waits_on_turn(self, queue):
+        """True while ``queue`` waits on a response that is still running.
+
+        A queue that waits only for a turn of its conversation to change
+        status is parked instead: chat activity in that conversation, a write
+        to the queue or a safety pass reads it again.
+        """
+        if self._remember_dormancy(queue):
+            return False
+        if any(item["status"] == "claiming" for item in queue.items):
+            return True
+        sending = next(
+            (item for item in queue.items if item["status"] == "sending"), None
+        )
+        if sending is not None:
+            if not sending.get("turn_id"):
+                return True
+            turn = await self.turn(queue.session_id, sending["turn_id"])
+            if turn.status not in RESTING_TURNS:
+                return True
+        elif not queue_is_dormant(queue, reviews_resting=True):
+            # The next follow-up is ready; step dispatches it once the latest
+            # turn ends. One waiting for an approval or callback can take hours.
+            if queue.session_id in self._latest_seen:
+                latest = self._latest_seen[queue.session_id]
+            else:
+                latest = await self.latest_turn(queue.session_id)
+            if latest is None or latest.status not in RESTING_TURNS:
+                return True
+        self._parked[queue.id] = (queue.revision, queue.session_id)
+        return False
 
     async def startup(self):
         for queue in await self.queues():
@@ -820,26 +914,84 @@ class ChatQueueService:
             name="nebula-chat-follow-ups",
         )
 
+    async def reconcile(self):
+        """Step every queue that can act; return conversations waiting on a turn."""
+        watched = set()
+        for queue in await self.queues(skip_dormant=True):
+            try:
+                self._latest_seen.pop(queue.session_id, None)
+                await self.step(queue)
+                if await self._waits_on_turn(queue):
+                    watched.add(queue.session_id)
+            except (
+                ConflictError,
+                NotFoundError,
+            ):  # diagnostic-expected: reload concurrent queue changes on the next poll
+                # Concurrent edits/deletion are re-read on the next iteration.
+                watched.add(queue.session_id)
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.queue.poll_failed",
+                    "Follow-up reconciliation failed",
+                    exc,
+                    stage="queue",
+                )
+                watched.add(queue.session_id)
+        self._latest_seen.clear()
+        return watched
+
     async def run(self):
+        loop = asyncio.get_running_loop()
+        safety_at = loop.time() + SAFETY_POLL_SECONDS
+        failures = 0
         while True:
-            for queue in await self.queues(skip_dormant=True):
-                try:
-                    await self.step(queue)
-                    self._remember_dormancy(queue)
-                except (
-                    ConflictError,
-                    NotFoundError,
-                ):  # diagnostic-expected: reload concurrent queue changes on the next poll
-                    continue  # Concurrent edits/deletion are re-read on the next iteration.
-                except Exception as exc:
+            if loop.time() >= safety_at:
+                self._parked.clear()
+                safety_at = loop.time() + SAFETY_POLL_SECONDS
+            # Clear before reading so a write during this pass wakes the next.
+            self._wake.clear()
+            self._pass_activity = set()
+            try:
+                self._watched = await self.reconcile()
+                failures = 0
+            except Exception as exc:
+                # An unavailable database must not end dispatch for good.
+                failures += 1
+                if failures == 1:
                     record_caught_exception(
                         "chat",
-                        "chat.queue.poll_failed",
-                        "Follow-up reconciliation failed",
+                        "chat.queue.read_failed",
+                        "Follow-up queues could not be read; dispatch keeps retrying.",
                         exc,
                         stage="queue",
                     )
-            await asyncio.sleep(0.5)
+                await asyncio.sleep(
+                    min(
+                        FAILURE_RETRY_MAX_SECONDS,
+                        ACTIVE_POLL_SECONDS * 2 ** min(failures, 10),
+                    )
+                )
+                continue
+            finally:
+                activity, self._pass_activity = self._pass_activity, None
+            # A turn that changed while this pass read it is read again.
+            if self._reopen(activity) or activity & self._watched:
+                self._wake.set()
+            deadline = (
+                min(safety_at, loop.time() + ACTIVE_POLL_SECONDS)
+                if self._watched
+                else safety_at
+            )
+            try:
+                # asyncio.timeout never swallows the cancellation that stops
+                # this task, unlike wait_for on Python 3.11.
+                async with asyncio.timeout_at(deadline):
+                    await self._wake.wait()
+            except TimeoutError:
+                # diagnostic-expected: the poll interval elapsed without a wake; the next pass rereads queue versions.
+                continue
+            await asyncio.sleep(WAKE_COALESCE_SECONDS)
 
     async def shutdown(self):
         if self.task:
