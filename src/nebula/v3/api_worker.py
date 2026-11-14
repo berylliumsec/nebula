@@ -11,12 +11,15 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from functools import partial
+import hashlib
 import json
 from pathlib import Path
 import re
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
+from fastapi.encoders import jsonable_encoder
 from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import ValidationError
 from starlette.responses import JSONResponse, StreamingResponse
 
 from .authentication import CoreAuthentication
@@ -32,6 +35,16 @@ from .runtime_routes import command_lane
 from .runtime_identity import mount_runtime_identity
 from .runtime_static import RuntimeStatic
 from .storage import NebulaStore, NotFoundError
+from .storage_sender import (
+    MAX_EVENT_BYTES,
+    STORAGE_EVENTS_PATH,
+    STORAGE_INVENTORY_PATH,
+    STORAGE_TEST_PATH,
+    StorageEvent,
+    authenticate_storage_source,
+    sender_transport_allowed,
+    storage_source_actor,
+)
 
 
 class _Forward(Response):
@@ -197,14 +210,15 @@ def create_api_worker(
         )
 
     async def response_view(
-        actor, command_id, *, after=0, slots=work_slots, receipt=None
+        actor, command_id, *, after=0, slots=work_slots, receipt=None, pending=None
     ):
+        pending = pending or receipt_response
         if slots.locked():
             if receipt is None:
                 raise HTTPException(
                     429, "Viewer capacity is busy; reconnect using the saved request ID"
                 )
-            return receipt_response(receipt)
+            return pending(receipt)
         await slots.acquire()
         handed_off = False
         try:
@@ -251,7 +265,7 @@ def create_api_worker(
                     )
                 if asyncio.get_running_loop().time() >= deadline:
                     if receipt is not None:
-                        return receipt_response(receipt)
+                        return pending(receipt)
                     return JSONResponse(
                         {"state": page.state, "command_id": command_id},
                         status_code=202,
@@ -372,6 +386,90 @@ def create_api_worker(
             slots=work_slots,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    def storage_report_saved(receipt):
+        # The sender contract acknowledges a durably saved report; whether it
+        # is a duplicate or current is known once the project's worker runs it.
+        return JSONResponse(
+            {
+                "accepted": True,
+                "queued": True,
+                "duplicate": None,
+                "current": None,
+                "command_id": receipt.command_id,
+                "detail": "Saved; Core records it when the project's worker runs",
+            },
+            status_code=202,
+            headers={"X-Nebula-Command-Id": receipt.command_id},
+        )
+
+    @app.post(STORAGE_TEST_PATH)
+    @app.post(STORAGE_EVENTS_PATH)
+    @app.post(STORAGE_INVENTORY_PATH)
+    async def storage_sender(request: Request):
+        """A storage sender authenticates with its source token, not the operator's.
+
+        The token never enters the durable command: this worker checks it and
+        the sender's transport, then saves the report for the source's project
+        under a principal that names the source and the token digest it used.
+        """
+        path = request.url.path
+        client = request.client.host if request.client else ""
+        if not sender_transport_allowed(request.url.scheme, client):
+            raise HTTPException(403, "remote storage senders require HTTPS")
+        source = await authenticate_storage_source(
+            store,
+            request.headers.get("authorization"),
+            allow_disabled=path == STORAGE_TEST_PATH,
+        )
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_EVENT_BYTES:
+                raise HTTPException(413, "storage request exceeds 64 KiB")
+        if path == STORAGE_TEST_PATH:
+            try:
+                StorageEvent.model_validate_json(bytes(body))
+            except ValidationError as error:
+                raise HTTPException(
+                    422, jsonable_encoder(error.errors(include_url=False))
+                ) from None
+            return {"valid": True, "source_id": source.id}
+        intent = HttpIntent.capture(
+            "POST",
+            path,
+            b"",
+            [(b"content-type", b"application/json")],
+            bytes(body),
+        )
+        actor = storage_source_actor(source)
+        try:
+            receipt = await delivery.accept(
+                intent,
+                project_id=source.engagement_id,
+                actor_id=actor,
+                # Senders retry the same report; the event ID dedupes it again
+                # in Core, and a changed body is a different report.
+                idempotency_key="storage-"
+                + hashlib.sha256(path.encode() + b"\0" + bytes(body)).hexdigest(),
+                lane=command_lane(path),
+                chat_start=delivery.is_chat_start_intent(intent),
+            )
+        except CoordinationConflict:
+            # A closing or draining owner is temporary; 409 means a changed
+            # duplicate to senders, which they must not retry.
+            raise HTTPException(
+                503,
+                "Core is switching this project's worker; retry the report",
+                headers={"Retry-After": "5"},
+            ) from None
+        return await response_view(
+            actor,
+            receipt.command_id,
+            receipt=receipt,
+            slots=work_slots,
+            pending=storage_report_saved,
         )
 
     @app.api_route(
