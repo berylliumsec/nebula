@@ -1,32 +1,23 @@
 {
-  "reviewed_by": "Claude Code",
-  "reason": "After #987, archiving a project's only chat retires its execution worker, and a later unarchive (PATCH /api/v1/chat-sessions/{id} {\"archived\": false}) stayed queued until another chat message admitted the project, because ingress did not classify the unarchive as a chat start. The unarchive PATCH is now a chat-start intent, and the legacy queued-command scan promotes an older unclassified unarchive only when the named chat belongs to the command's project. Selection covers the classifier (positive, negative and malformed bodies), the unchanged session-creation intents, exact-project admission, archive retirement, unarchive admission through real API ingress, RuntimeRouting, retirement and auto-admission without a message, legacy promotion for the exact chat project, and the refactored legacy goal-conversation promotion. Rebased onto #1028 (queued project commands admit their worker): test_project_admission_requires_a_chat_start_or_queued_project_command (renamed from ..._requires_an_exact_chat_start) now expects a legacy ordinary command to admit its project like a chat start, while reads and barriers still do not; the legacy-unarchive test still requires promotion only for the chat's own project and now also checks that each project's owner claims only its own head. #1028's three admission tests are selected to guard the combined behaviour.",
-  "exclusions": "tests/v3/test_chat_unarchive_readmission.py (real Core: first chat, archive, real retirement, unarchive) is not selected: its shared Core fixture needs the already-cached local embedding model and a host name that resolves to a non-loopback LAN address, which CI does not have, so it now skips with that reason instead of erroring. It passed locally on Python 3.12 against this rebased branch (see the PR). No UI, native or frontend code changed, so no frontend, native or Playwright tests; the UI journey was checked in desktop Chromium and phone WebKit against a scratch supervisor Core (see the PR). PostgreSQL parametrizations are collected but skip in CI because these files are not in the workflow's PostgreSQL list; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
+  "reviewed_by": "Claude",
+  "reason": "Ask Nebula could not open over any conversation or with a harness assistant: #939 made ChatService.session_messages and HarnessRuntimeService.create_session async but POST /chat/temporary-sessions still called both without await (TypeError 'coroutine' object is not subscriptable / AttributeError on harness.model/.id). The fix awaits both. Selected: the popup route suite (its create() helper now awaits the client, the harness fork test awaits an AsyncMock, and two new tests drive the real route over a real HarnessRuntimeService), the execution-scope suite with the new worker-context Ask Nebula route test (provider and harness, the route a project worker runs for this chat-start command), and the expired-popup collector case of the same router.",
+  "exclusions": "test_chat_workspace.py and test_chat_decisions.py exercise neighbouring side-chat/fork code but each has a test-only unawaited call that fails identically on pristine main (_walk does not await client.get; test_chat_decisions does not await fork_session), so they are not selected. Only the popup-collector case of test_control_plane_reads.py is selected: its other cases do not use this route and test_mixed_settings_read_burst_retains_capacity_after_cancellation is load-sensitive on this host (fails on pristine main under PostgreSQL, passes alone). test_runtime_delivery.py passes on main and branch but its chat-start classification is unchanged. PostgreSQL variants of test_execution_scope.py were run locally (all pass); CI runs the SQLite variants. No UI, native or Playwright cases: no frontend code changed; the real-Core Playwright popup journey in real-core.spec.ts is not run on main. Scratch supervisor Core evidence (provider popup, harness popup with and without an open harness chat, discard) is in the PR body.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 44,
+    "python": 96,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_work_batch_contracts.py::test_session_creation_routes_are_explicit_chat_start_intents",
-    "tests/v3/test_work_batch_contracts.py::test_only_unarchive_patch_is_a_chat_session_start_intent",
-    "tests/v3/test_work_batch_contracts.py::test_malformed_unarchive_body_is_not_a_chat_start_intent",
-    "tests/v3/test_work_batch_contracts.py::test_project_admission_requires_a_chat_start_or_queued_project_command",
-    "tests/v3/test_runtime_work_batches.py::test_unarchive_after_final_chat_retirement_admits_its_project_without_a_message",
-    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_unarchive_is_promoted_only_for_its_chat_project",
-    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
-    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
-    "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
-    "tests/v3/test_runtime_work_batches.py::test_project_edit_and_archived_delete_without_a_chat_admit_their_workers",
-    "tests/v3/test_runtime_work_batches.py::test_retirement_does_not_strand_queued_project_work",
-    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker"
+    "tests/v3/test_temporary_chat.py",
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_control_plane_reads.py::test_cleanup_yields_and_only_discards_expired_detached_popups"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "f8d9aefc3dc9be4896c61e3f8748cd5c34eb5ec06e57ef65aa6893055322c238"
+  "change_digest": "f814ae22b9ba738b6755e9f941df4b361233023e9292a8780bd9c3229eee3e4b"
 }
