@@ -1,29 +1,37 @@
 {
   "reviewed_by": "Claude",
-  "reason": "The generic CRUD routes called after_write without awaiting it. Since #939 made HarnessQuotaObserver.schedule_read async, every harness profile create/put/patch through the execution kernel's routes dropped a never-awaited coroutine and no Butler quota read ran. The routes now await a maybe-async after_write via call_async. Selected: the harness and OpenRouter Butler resource suites (including the new regression test and the provider-setup credit check through the same route), the generic CRUD exposure guard, harness quota reads, and the SQL-only global API that serves production profile writes.",
-  "exclusions": "test_butler_resources.py::test_ordinary_openrouter_completion_checks_credits_after_exchange_commit and ::test_native_mission_attempt_usage_signals_account_check_after_commit fail identically on pristine origin/main (fixture leftovers from #939, repaired separately in #1011) and are excluded. No UI, native or Playwright cases: no frontend code changed. In production, profile writes go api_worker -> GlobalSqlDelivery -> RuntimeGlobalApi, whose CRUD routes register no after_write, so this change does not alter production behaviour; see the PR's limitations.",
+  "reason": "After a host reboot a supervisor Core crash-looped: process-origin.json pointed at a /tmp socket directory emptied at boot, and every origin gate (rediscover, spawn, retire, reconcile_dead_project) compared the previous boot id with the current one, so nothing recorded under the old boot could be retired or recovered. RuntimeProcessHost.start now replaces the marker atomically with a fresh mkdtemp socket directory when the recorded origin names another kernel boot, after every recorded heartbeat lease has lapsed; a missing directory on the same origin gets a fresh directory without any death verdict; a same-boot PID-namespace change stays refused. Rows born on another boot need an expired lease before rediscovery reports them gone or retire() treats them as exited, and the HTTP proxy forwards viewer credentials only into a private socket directory. Selected suites cover host start/rediscovery/retirement with real detached workers (reconciliation, processes, worker features), origin parsing (process identity), orphan recovery and automatic recovery that consume rediscovery, and the proxy (runtime_http, diagnostic boundaries). The test supervisor in test_runtime_processes.py now publishes its ready file atomically; CI read it between creation and write.",
+  "exclusions": "test_runtime_processes.py::test_two_failed_real_starts_do_not_prevent_a_later_version is left out: it times out on worker startup on pristine main as well as with this change (both SQLite and PostgreSQL, run sequentially on this host), so the rest of that file is selected by name. Under a shared host at load average ~30-40, two other spawn-heavy cases there each timed out once in one run (test_real_api_role_requires_both_private_channel_and_public_auth with this change, test_actual_supervisor_process_exit_leaves_worker_reachable on main); each passed when rerun, and no selected test fails only with this change. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set; every new regression passed locally on both SQLite and PostgreSQL 16. No UI, native or Playwright cases: no frontend code or API contract changed; the operator journey (Core returns after a reboot and chats resume) was exercised on a disposable LAN Core and is recorded in the PR. Memory-runner reconciliation of jobs owned by the previous boot is out of scope.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 73,
+    "python": 178,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_harness_resources.py",
-    "tests/v3/test_butler_resources.py::test_low_credit_is_guaranteed_at_boundary_and_deduped_across_projects",
-    "tests/v3/test_butler_resources.py::test_credit_reader_is_coalesced_by_management_ref_and_saved_after_read",
-    "tests/v3/test_butler_resources.py::test_provider_setup_schedules_credit_check_and_overview_shows_saved_state",
-    "tests/v3/test_butler_resources.py::test_durable_provider_usage_calls_credit_observer_without_failing_turn",
-    "tests/v3/test_butler_resources.py::test_use_of_a_provider_without_account_credits_schedules_no_failed_check",
-    "tests/v3/test_generic_crud_exposure.py",
-    "tests/v3/test_harness_quota.py",
-    "tests/v3/test_runtime_global_api.py"
+    "tests/v3/test_runtime_reconciliation.py",
+    "tests/v3/test_process_identity.py",
+    "tests/v3/test_runtime_processes.py::test_invalid_private_bootstrap_is_bounded_and_does_not_report_credentials",
+    "tests/v3/test_runtime_processes.py::test_only_one_supervisor_holds_a_data_directory",
+    "tests/v3/test_runtime_processes.py::test_worker_survives_host_close_and_is_rediscovered_with_retained_assets",
+    "tests/v3/test_runtime_processes.py::test_graceful_retirement_reaps_only_an_empty_worker",
+    "tests/v3/test_runtime_processes.py::test_real_api_role_requires_both_private_channel_and_public_auth",
+    "tests/v3/test_runtime_processes.py::test_real_api_promotion_keeps_old_worker_until_replacement_is_ready",
+    "tests/v3/test_runtime_processes.py::test_published_worker_survives_cancellation_after_committed_readiness",
+    "tests/v3/test_runtime_processes.py::test_refused_third_version_does_not_create_an_orphan_credential",
+    "tests/v3/test_runtime_processes.py::test_nonreading_bootstrap_child_cannot_block_supervisor_timeouts",
+    "tests/v3/test_runtime_processes.py::test_actual_supervisor_process_exit_leaves_worker_reachable",
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_runtime_worker_features.py",
+    "tests/v3/test_runtime_http.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_runtime_auto_recovery.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4ad70238c526d780b4017f32b9c6d648e2215514ae39888faa35514a8c27562e"
+  "change_digest": "6a223db539732c6d77ab09a5635d6fa33f9475a2e5f450f47d6ccffdac611be7"
 }

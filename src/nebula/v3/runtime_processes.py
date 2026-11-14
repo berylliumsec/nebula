@@ -23,6 +23,7 @@ from sqlalchemy import select
 from .database import (
     DeploymentReceiptRow,
     ProjectOwnershipRow,
+    RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
 )
@@ -31,18 +32,37 @@ from .database_pool import PoolSettings
 from .deployment_protocol import IPC_PROTOCOL, ReleaseManifest, WorkerIdentity
 from .deployments import DeploymentCoordinator
 from .domain import NebulaModel
+from .diagnostics import record_diagnostic
 from .process_identity import (
+    birth_boot,
+    origin_boot,
+    origin_from_previous_boot,
     process_birth,
     process_origin,
     same_process,
     signal_process,
 )
 from .release_store import ReleaseStore
-from .runtime_coordination import CoordinationConflict, ProjectLease
+from .runtime_coordination import LEASE_MS, CoordinationConflict, ProjectLease
 from .runtime_ipc import RuntimeCredentials, RuntimeIpcError, RuntimeRpcClient
 
 if TYPE_CHECKING:
     from .runtime_host_services import HostSharedServices
+
+ORIGIN_MARKER = "process-origin.json"
+# A worker that died with the previous boot stops renewing within one lease.
+PREVIOUS_BOOT_LEASE_WAIT_SECONDS = LEASE_MS / 1000 + 5
+
+
+def _new_socket_root() -> Path:
+    """Create a fresh owner-only socket directory; never reuse a recorded path.
+
+    It stays under /tmp: socket paths must fit AF_UNIX's ~108-byte limit, which
+    arbitrary data roots can exceed, and $XDG_RUNTIME_DIR disappears at logout
+    without linger while detached workers keep running. Losing /tmp contents
+    at boot is handled by replacing this directory, never by recreating it.
+    """
+    return Path(tempfile.mkdtemp(prefix="nebula-ipc-", dir="/tmp"))
 
 
 class WorkerBootstrap(NebulaModel):
@@ -275,48 +295,152 @@ class RuntimeProcessHost:
             try:
                 await self.coordinator.database.initialize()
                 await self.coordinator.resume_after_shutdown()
-                marker = self.root / "process-origin.json"
-                if not marker.exists():
-                    sockets = Path(tempfile.mkdtemp(prefix="nebula-ipc-", dir="/tmp"))
-                    document = {
-                        "process_origin": process_origin(),
-                        "socket_root": str(sockets),
-                    }
-                    descriptor, temporary = tempfile.mkstemp(
-                        prefix=".origin-", dir=self.root
-                    )
-                    try:
-                        with os.fdopen(descriptor, "w") as output:
-                            json.dump(document, output)
-                            output.flush()
-                            os.fsync(output.fileno())
-                        os.link(temporary, marker)
-                    finally:
-                        os.unlink(temporary)
-                descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                with os.fdopen(descriptor, "r") as source:
-                    details = os.fstat(source.fileno())
-                    if (
-                        not stat.S_ISREG(details.st_mode)
-                        or details.st_uid != os.getuid()
-                        or details.st_mode & 0o077
-                    ):
-                        raise ValueError("the process-origin marker is not private")
-                    document = json.loads(source.read(4096))
-                self.launch_origin = document["process_origin"]
-                sockets = Path(document["socket_root"])
-                details = sockets.stat()
-                if (
-                    sockets.is_symlink()
-                    or not sockets.is_dir()
-                    or details.st_uid != os.getuid()
-                    or details.st_mode & 0o077
-                ):
-                    raise ValueError("worker sockets require an owner-only directory")
-                self.socket_root = sockets
+                self.launch_origin, self.socket_root = await self._adopt_origin()
             except BaseException:
                 self.lock.close()
                 raise
+
+    async def _adopt_origin(self) -> tuple[str | None, Path]:
+        """Read, create, or replace this data root's launch origin under the lock.
+
+        The marker names the process namespace in which recorded worker PIDs
+        are meaningful and the private directory that holds worker sockets.
+        Only a different kernel boot with no live recorded lease replaces the
+        recorded origin; a missing socket directory alone is replaced without
+        inferring any worker death.
+        """
+        marker = self.root / ORIGIN_MARKER
+        current = process_origin()
+        if not marker.exists():
+            self._publish_origin(
+                {"process_origin": current, "socket_root": str(_new_socket_root())},
+                replace=False,
+            )
+        descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "r") as source:
+            details = os.fstat(source.fileno())
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.getuid()
+                or details.st_mode & 0o077
+            ):
+                raise ValueError("the process-origin marker is not private")
+            document = json.loads(source.read(4096))
+        recorded = document["process_origin"]
+        sockets = Path(document["socket_root"])
+        socket_details: os.stat_result | None
+        try:
+            socket_details = os.lstat(sockets)
+        except FileNotFoundError:
+            # diagnostic-expected: a missing socket directory is classified below and never proves worker death.
+            socket_details = None
+        if origin_from_previous_boot(recorded, current):
+            # Every worker launched on that boot ended with its kernel, unless
+            # this data root was copied to a host sharing the database or the
+            # boot id is virtualised; a live lease shows either case.
+            await self._await_recorded_leases()
+            reason = "previous_boot"
+        elif socket_details is None and recorded == current:
+            # Boot cleanup or /tmp ageing removed it. Live same-boot workers
+            # stay unreachable and retained; only new workers use the new root.
+            # An unreadable origin (None on both sides) stays None.
+            reason = "socket_root_missing"
+        elif socket_details is None:
+            raise CoordinationConflict(
+                "Worker sockets are missing and this supervisor runs in another "
+                "process namespace on the same boot; start Core in its original "
+                "namespace. Recorded workers are retained for trusted recovery"
+            )
+        else:
+            reason = None
+        if reason is not None:
+            fresh = _new_socket_root()
+            try:
+                self._publish_origin(
+                    {
+                        "process_origin": current,
+                        "socket_root": str(fresh),
+                        "replaced": {
+                            "reason": reason,
+                            "process_origin": recorded,
+                            "socket_root": str(sockets),
+                        },
+                    },
+                    replace=True,
+                )
+            except BaseException:
+                fresh.rmdir()
+                raise
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.process_origin_replaced",
+                "The supervisor replaced its worker socket directory after "
+                + (
+                    "a host restart."
+                    if reason == "previous_boot"
+                    else "the previous directory was removed."
+                ),
+                stage="startup",
+                outcome="success",
+                operator_detail=(
+                    "Workers recorded under the previous kernel boot are "
+                    "recovered after their leases expire."
+                    if reason == "previous_boot"
+                    else "Workers that are still running stay retained until "
+                    "they are verified."
+                ),
+                # The marker keeps both origins; diagnostics allow only the kind.
+                metadata={"kind": reason},
+            )
+            recorded, sockets = current, fresh
+            socket_details = os.lstat(sockets)
+        assert socket_details is not None
+        if (
+            not stat.S_ISDIR(socket_details.st_mode)
+            or socket_details.st_uid != os.getuid()
+            or socket_details.st_mode & 0o077
+        ):
+            raise ValueError("worker sockets require an owner-only directory")
+        return recorded, sockets
+
+    async def _await_recorded_leases(self) -> None:
+        """Wait up to one lease period for every recorded worker's lease to lapse."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + PREVIOUS_BOOT_LEASE_WAIT_SECONDS
+        while live := await self._live_leases():
+            if loop.time() >= deadline:
+                raise CoordinationConflict(
+                    f"{len(live)} recorded worker(s) still renew their leases "
+                    "although the host boot changed; another host may share "
+                    "this database. Recorded workers are retained"
+                )
+            await asyncio.sleep(1)
+
+    def _publish_origin(self, document: dict, *, replace: bool) -> None:
+        """Write a private marker; rename keeps either the old or new version."""
+        marker = self.root / ORIGIN_MARKER
+        descriptor, temporary = tempfile.mkstemp(prefix=".origin-", dir=self.root)
+        published = False
+        try:
+            with os.fdopen(descriptor, "w") as output:
+                json.dump(document, output)
+                output.flush()
+                os.fsync(output.fileno())
+            if replace:
+                os.replace(temporary, marker)
+                published = True
+            else:
+                # Only the first supervisor of a data root creates its origin.
+                os.link(temporary, marker)
+        finally:
+            if not published:
+                os.unlink(temporary)
+        directory = os.open(self.root, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     async def close(self):
         self.closed = True
@@ -801,6 +925,12 @@ class RuntimeProcessHost:
             async with asyncio.timeout(timeout):
                 while same_process(identity.pid, identity.process_birth):
                     await asyncio.sleep(0.05)
+                # A birth from another boot is never found on this kernel;
+                # only its lapsed lease shows that no other host still runs it.
+                while birth_boot(identity.process_birth) != origin_boot(
+                    self.launch_origin
+                ) and await self._live_leases([identity.runtime_id]):
+                    await asyncio.sleep(0.5)
             child = self.children.get(runtime_id)
             if child is not None:
                 await asyncio.to_thread(child.wait, timeout=5)
@@ -885,6 +1015,29 @@ class RuntimeProcessHost:
                     )
             return {"retired_runtime_ids": retired, "retained": retained}
 
+    async def _live_leases(self, runtime_ids: list[str] | None = None) -> set[str]:
+        """Unretired runtimes whose heartbeat lease is live on the database clock.
+
+        Heartbeats never renew an expired lease, so an expired answer stays
+        true; it is the only cross-host evidence for a birth from another boot.
+        """
+        async with self.coordinator.database.session() as session:
+            now = await self.coordinator.coordination._clock_ms(session)
+            query = (
+                select(RuntimeInstanceRow.id)
+                .join(
+                    RuntimeProcessRow,
+                    RuntimeProcessRow.runtime_id == RuntimeInstanceRow.id,
+                )
+                .where(
+                    RuntimeProcessRow.state != "retired",
+                    RuntimeInstanceRow.lease_expires_at_ms > now,
+                )
+            )
+            if runtime_ids is not None:
+                query = query.where(RuntimeInstanceRow.id.in_(runtime_ids))
+            return set(await session.scalars(query))
+
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:
             raise RuntimeError("rediscovery requires the active supervisor host lock")
@@ -900,6 +1053,8 @@ class RuntimeProcessHost:
         comparable = (
             self.launch_origin is not None and self.launch_origin == process_origin()
         )
+        boot = origin_boot(self.launch_origin) if comparable else None
+        leases: set[str] | None = None
         for row in rows:
             if not row.pid:
                 result.append(
@@ -955,6 +1110,25 @@ class RuntimeProcessHost:
                 )
             else:
                 alive = same_process(row.pid, row.process_birth)
+                if not alive and birth_boot(row.process_birth) != boot:
+                    # Another boot's birth is absent from this kernel, but a
+                    # live heartbeat lease means a worker is still renewing it
+                    # somewhere, such as a host sharing this database.
+                    if leases is None:
+                        leases = await self._live_leases(
+                            [item.runtime_id for item in rows]
+                        )
+                    if row.runtime_id in leases:
+                        result.append(
+                            ObservedWorker(
+                                identity,
+                                row.runtime_id,
+                                False,
+                                "unknown",
+                                "Recorded under an earlier kernel boot, but its heartbeat lease is still live; retain it until the lease expires.",
+                            )
+                        )
+                        continue
                 result.append(
                     ObservedWorker(
                         identity,

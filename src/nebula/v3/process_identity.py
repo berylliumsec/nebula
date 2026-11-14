@@ -120,6 +120,40 @@ def process_origin() -> str | None:
         return None
 
 
+def origin_boot(origin: str | None) -> str | None:
+    """The kernel boot named by a ``process_origin()`` value, if it is one."""
+    parts = origin.split(":") if isinstance(origin, str) else ()
+    if (
+        len(parts) == 4
+        and parts[0] == "linux"
+        and parts[1]
+        and parts[2] == "pidns"
+        and parts[3].isdigit()
+    ):
+        return parts[1]
+    return None
+
+
+def birth_boot(birth: str | None) -> str | None:
+    """The kernel boot named by a Linux ``process_birth()`` value, if it is one."""
+    parts = birth.split(":") if isinstance(birth, str) else ()
+    if len(parts) == 3 and parts[0] == "linux" and parts[1] and parts[2].isdigit():
+        return parts[1]
+    return None
+
+
+def origin_from_previous_boot(recorded: str | None, current: str | None) -> bool:
+    """Whether every process launched under ``recorded`` ended with an older boot.
+
+    The boot id is kernel-global rather than per-namespace, changes on every
+    boot, and no process survives its kernel. A different PID namespace on the
+    same boot proves nothing: the old namespace and its workers can still run.
+    An origin that cannot be read (``None``) never proves anything either.
+    """
+    old, new = origin_boot(recorded), origin_boot(current)
+    return old is not None and new is not None and old != new
+
+
 def signal_process(pid: int, birth: str, selected_signal: int = signal.SIGTERM) -> bool:
     if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
         # Other platforms use authenticated IPC for graceful exit. Never use a
