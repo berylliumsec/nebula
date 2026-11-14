@@ -640,6 +640,40 @@ class RuntimeCoordination:
             row.chat_start = True
             return True
 
+    async def retype_chat_start(
+        self, lease: ProjectLease, command_id: str, *, name: str
+    ) -> bool:
+        """Carry a claimed HTTP chat start on the typed transport its owner serves.
+
+        An API with no live project owner cannot tell which release will run a
+        chat start, so it sends the generic ``http.invoke/v1`` command, whose
+        streamed response would hold the project's work lane for the whole
+        turn. The owner that claimed it knows its own features. Under its
+        fence it may rename that running command to ``chat.accept/v1`` or
+        ``chat.resume/v1``; the request identity ignores the transport name.
+        """
+        if name not in {"chat.accept/v1", "chat.resume/v1"}:
+            raise ValueError("only a typed chat transport can replace a chat start")
+        async with self.fenced(lease) as session:
+            row = await session.get(
+                RuntimeCommandRow,
+                command_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.project_id != lease.project_id
+                or row.state != "running"
+                or (row.runtime_id, row.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+                or row.name != "http.invoke/v1"
+                or not row.chat_start
+            ):
+                return False
+            row.name = name
+            return True
+
     async def claim_next(
         self, lease: ProjectLease, *, lane: Literal["work", "control"] | None = None
     ) -> ClaimedCommand | None:

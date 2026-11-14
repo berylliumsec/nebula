@@ -15,9 +15,20 @@ from nebula.v3.database import (
 )
 from nebula.v3.domain import ChatMessage, ChatSession, ChatTurn, ProviderProfile
 from nebula.v3.execution_scope import execution_context
-from nebula.v3.runtime_chat_acceptance import CHAT_ACCEPT_COMMAND, bind_chat_command
+from nebula.v3.runtime_chat_acceptance import (
+    CHAT_ACCEPT_COMMAND,
+    CHAT_RESUME_COMMAND,
+    HTTP_INVOKE_COMMAND,
+    bind_chat_command,
+)
 from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
-from nebula.v3.runtime_delivery import HttpIntent
+from dataclasses import replace
+
+from nebula.v3.runtime_delivery import (
+    DurableHttpRunner,
+    HttpIntent,
+    typed_chat_command,
+)
 from nebula.v3.storage import NotFoundError
 from tests.v3.test_chat import FakeProvider
 from tests.v3.test_execution_worker import runtime as runtime
@@ -288,3 +299,209 @@ async def test_stream_end_and_provider_resource_release_share_one_fenced_commit(
     assert (
         await runtime.coordination.coordination.stream_head("turn")
     ).event_type == SEGMENT_END
+
+
+TYPED = frozenset({CHAT_ACCEPT_COMMAND, CHAT_RESUME_COMMAND})
+
+
+async def cold_start(runtime, request=None, *, key="cold"):
+    """A chat start the API accepted while the project had no owner."""
+    return await runtime.delivery.accept(
+        request or intent(),
+        project_id="project",
+        actor_id="operator",
+        idempotency_key=key,
+        chat_start=True,
+    )
+
+
+async def rename(runtime):
+    return await runtime.delivery.accept(
+        HttpIntent.capture(
+            "PATCH",
+            "/api/v1/chat-sessions/other",
+            b"",
+            [(b"content-type", b"application/json")],
+            b'{"title": "Renamed while another chat runs"}',
+        ),
+        project_id="project",
+        actor_id="operator",
+        idempotency_key="rename",
+    )
+
+
+async def command_row(runtime, command_id):
+    async with runtime.coordination.database.session() as session:
+        return await session.get(RuntimeCommandRow, command_id)
+
+
+class KernelLikeApp:
+    """Answers a typed chat start at acceptance and streams any other one."""
+
+    def __init__(self):
+        self.states = []
+        self.finish_stream = asyncio.Event()
+
+    async def __call__(self, scope, receive, send):
+        await receive()
+        self.states.append(dict(scope["state"]))
+        typed = (
+            scope["state"]["runtime_chat_acceptance"]
+            or scope["state"]["runtime_chat_resume"]
+        )
+        content_type = b"application/json" if typed else b"text/event-stream"
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 202 if typed else 200,
+                "headers": [(b"content-type", content_type)],
+            }
+        )
+        if typed or scope["method"] != "POST" or "chat" not in scope["path"]:
+            await send({"type": "http.response.body", "body": b"{}"})
+            return
+        # The HTTP transport follows the turn until it ends.
+        await send(
+            {"type": "http.response.body", "body": b"data: {}\n\n", "more_body": True}
+        )
+        await self.finish_stream.wait()
+        await send({"type": "http.response.body", "body": b""})
+
+
+async def test_an_owner_types_a_cold_chat_start_and_frees_the_work_lane(runtime):
+    started = await cold_start(runtime)
+    renamed = await rename(runtime)
+    app = KernelLikeApp()
+    runner = DurableHttpRunner(
+        runtime.delivery, app, operator_token="synthetic", typed_chat_commands=TYPED
+    )
+
+    # The chat start ends at acceptance instead of holding the lane for the
+    # whole streamed turn; the rename behind it runs while the turn would.
+    assert await asyncio.wait_for(runner.run_one(runtime.lease, lane="work"), 5)
+    assert app.states[0]["runtime_chat_acceptance"] is True
+    row = await command_row(runtime, started.command_id)
+    assert (row.name, row.state) == (CHAT_ACCEPT_COMMAND, "succeeded")
+    assert await asyncio.wait_for(runner.run_one(runtime.lease, lane="work"), 5)
+    assert (await command_row(runtime, renamed.command_id)).state == "succeeded"
+    # Retrying the original request still returns its one receipt.
+    assert await cold_start(runtime) == started
+
+
+async def test_an_owner_without_typed_chat_keeps_the_streamed_transport(runtime):
+    started = await cold_start(runtime)
+    app = KernelLikeApp()
+    runner = DurableHttpRunner(runtime.delivery, app, operator_token="synthetic")
+    running = asyncio.create_task(runner.run_one(runtime.lease, lane="work"))
+    try:
+        await asyncio.sleep(0.3)
+        assert not running.done()
+        assert app.states[0]["runtime_chat_acceptance"] is False
+        assert (await command_row(runtime, started.command_id)).name == (
+            HTTP_INVOKE_COMMAND
+        )
+    finally:
+        app.finish_stream.set()
+        assert await asyncio.wait_for(running, 5)
+
+
+async def test_a_cold_resume_is_typed_as_a_resume(runtime):
+    request = HttpIntent.capture(
+        "POST", "/api/v1/chat/turns/turn-1/resume", b"", [], b""
+    )
+    started = await cold_start(runtime, request, key="resume")
+    app = KernelLikeApp()
+    runner = DurableHttpRunner(
+        runtime.delivery, app, operator_token="synthetic", typed_chat_commands=TYPED
+    )
+    assert await asyncio.wait_for(runner.run_one(runtime.lease, lane="work"), 5)
+    assert app.states[0]["runtime_chat_resume"] is True
+    assert (await command_row(runtime, started.command_id)).name == (
+        CHAT_RESUME_COMMAND
+    )
+
+
+async def test_a_typed_cold_chat_start_binds_its_turn(runtime, chat):
+    receipt = await cold_start(runtime)
+    claimed = await runtime.coordination.coordination.claim_next(
+        runtime.lease, lane="work"
+    )
+    assert claimed is not None and claimed.name == HTTP_INVOKE_COMMAND
+    # Untyped, the claimed HTTP request cannot carry a chat binding.
+    with pytest.raises(CoordinationConflict, match="does not match"):
+        await prepare(runtime, chat, receipt)
+    assert await runtime.coordination.coordination.retype_chat_start(
+        runtime.lease, receipt.command_id, name=CHAT_ACCEPT_COMMAND
+    )
+    prepared = await prepare(runtime, chat, receipt)
+    async with runtime.coordination.database.session() as session:
+        binding = await session.get(RuntimeChatBindingRow, receipt.command_id)
+    assert binding is not None and binding.turn_id == prepared.turn.id
+
+
+async def test_only_its_owner_can_type_a_running_chat_start(runtime):
+    coordination = runtime.coordination.coordination
+    renamed = await rename(runtime)
+    started = await cold_start(runtime)
+    # Queued (unclaimed) work is not this owner's to change.
+    assert not await coordination.retype_chat_start(
+        runtime.lease, started.command_id, name=CHAT_ACCEPT_COMMAND
+    )
+    with pytest.raises(ValueError, match="typed chat transport"):
+        await coordination.retype_chat_start(
+            runtime.lease, started.command_id, name=HTTP_INVOKE_COMMAND
+        )
+    claimed = await coordination.claim_next(runtime.lease, lane="work")
+    assert claimed.receipt.command_id == renamed.command_id
+    # A running request that is not a chat start keeps its transport.
+    assert not await coordination.retype_chat_start(
+        runtime.lease, renamed.command_id, name=CHAT_ACCEPT_COMMAND
+    )
+    with pytest.raises(LeaseLost):
+        await coordination.retype_chat_start(
+            replace(runtime.lease, fencing_token=runtime.lease.fencing_token + 1),
+            renamed.command_id,
+            name=CHAT_ACCEPT_COMMAND,
+        )
+    assert (await command_row(runtime, renamed.command_id)).name == (
+        HTTP_INVOKE_COMMAND
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "expected"),
+    [
+        ("POST", "/api/v1/chat/completions", {"stream": True}, CHAT_ACCEPT_COMMAND),
+        (
+            "POST",
+            "/api/v1/chat/completions",
+            {"stream": True, "backend": "provider"},
+            CHAT_ACCEPT_COMMAND,
+        ),
+        ("POST", "/api/v1/chat/completions", {"stream": False}, None),
+        (
+            "POST",
+            "/api/v1/chat/completions",
+            {"stream": True, "backend": "harness"},
+            None,
+        ),
+        ("POST", "/api/v1/chat/completions", None, None),
+        ("POST", "/api/v1/chat/turns/turn-1/resume", "", CHAT_RESUME_COMMAND),
+        ("POST", "/api/v1/chat/turns/turn-1/resume", {"x": 1}, None),
+        ("PUT", "/api/v1/chat/completions", {"stream": True}, None),
+    ],
+)
+def test_typed_chat_transport_matches_what_the_api_would_choose(
+    method, path, body, expected
+):
+    raw = (
+        b""
+        if body == ""
+        else b"{not json"
+        if body is None
+        else json.dumps(body).encode()
+    )
+    request = HttpIntent.capture(
+        method, path, b"", [(b"content-type", b"application/json")], raw
+    )
+    assert typed_chat_command(request) == expected

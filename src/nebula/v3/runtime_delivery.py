@@ -499,11 +499,50 @@ class RuntimeDelivery:
         )
 
 
+def typed_chat_command(intent: HttpIntent) -> str | None:
+    """The typed chat transport this request could use, as the API chooses it.
+
+    A streaming provider submission can be accepted as ``chat.accept/v1`` and
+    an empty explicit resume as ``chat.resume/v1``. Anything else, including
+    harness and non-streaming submissions, keeps the HTTP transport.
+    """
+
+    if intent.method != "POST":
+        return None
+    if intent.path == "/api/v1/chat/completions":
+        try:
+            body = json.loads(intent.body())
+        except (ValueError, UnicodeError, RecursionError):
+            # diagnostic-expected: a malformed body keeps the HTTP transport, whose route reports it.
+            return None
+        if (
+            isinstance(body, dict)
+            and body.get("stream") is True
+            and body.get("backend", "provider") == "provider"
+        ):
+            return CHAT_ACCEPT_COMMAND
+        return None
+    if re.fullmatch(
+        r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path
+    ) and intent.body() in (b"", b"{}"):
+        return CHAT_RESUME_COMMAND
+    return None
+
+
 class DurableHttpRunner:
     """Execution-owned ASGI delivery; viewer cancellation has no task to cancel."""
 
-    def __init__(self, delivery: RuntimeDelivery, app, *, operator_token: str):
+    def __init__(
+        self,
+        delivery: RuntimeDelivery,
+        app,
+        *,
+        operator_token: str,
+        typed_chat_commands: frozenset[str] = frozenset(),
+    ):
         self.delivery, self.app, self.operator_token = delivery, app, operator_token
+        # The typed chat transports this owner's application serves.
+        self.typed_chat_commands = typed_chat_commands & CHAT_COMMANDS
 
     async def run_one(
         self, lease: ProjectLease, *, lane: Literal["work", "control"]
@@ -558,6 +597,18 @@ class DurableHttpRunner:
             )
             await self.delivery.complete(lease, command_id, status_code=401)
             return
+        name = command.name
+        if (
+            name == HTTP_INVOKE_COMMAND
+            and (typed := typed_chat_command(intent)) in self.typed_chat_commands
+            and await self.delivery.coordination.retype_chat_start(
+                lease, command_id, name=typed
+            )
+        ):
+            # A chat start accepted while the project had no owner. This owner
+            # serves the typed transport, so the command ends at acceptance
+            # and the turn's journal feeds the viewer; the work lane is free.
+            name = typed
         body = intent.body()
         headers = [
             (key.encode(), value.encode("latin-1")) for key, value in intent.headers
@@ -584,8 +635,8 @@ class DurableHttpRunner:
             "client": None,
             "state": {
                 "runtime_command_id": command_id,
-                "runtime_chat_acceptance": command.name == CHAT_ACCEPT_COMMAND,
-                "runtime_chat_resume": command.name == CHAT_RESUME_COMMAND,
+                "runtime_chat_acceptance": name == CHAT_ACCEPT_COMMAND,
+                "runtime_chat_resume": name == CHAT_RESUME_COMMAND,
             },
         }
         consumed, started, ended, status_code = False, False, False, 0
