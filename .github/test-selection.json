@@ -1,23 +1,21 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Core follow-up dispatch: ChatQueueService.step now awaits start_provider_turn, harness prepare_chat and start_chat_turn, which #939 made async; the storage alert path awaits ChatQueueService.get/exists/write and harness create_session. test_chat_queue.py covers provider and harness dispatch, sequential draining, model/effort picked after queueing, the reclaimed provider turn, the direct-send race and stuck claims (8 of its 24 tests failed on main from these defects and stale test calls). test_storage_integrations.py covers storage dispatch into the queue and the dashboard's queue status (9 of 11 failed on main because its enroll helper never awaited the request, which also hid the product defect); its new harness-source test covers create_session. The selected harness goal test steps the queue through a reviewed harness follow-up.",
-  "exclusions": "No UI, native or frontend code changed. Playwright area storage-integrations matches storage_integrations.py but is excluded: its real-Core fixture spawns a Core whose provider admission is held by this shared host's CPU pressure gate (load ~40 on 8 CPUs from parallel agents), so it cannot complete here, and real-core.spec.ts is not run on main. assistant-queue-core keeps its queue paused and never dispatches; assistant-queue-reconciliation and chat-provider-queue are mocked. The real-Core dispatch journey was checked instead on scratch Postgres Cores through the same queue API the UI uses (main: follow-up stuck at sending with a never-started turn; this branch: two follow-ups queued during a running response sent in order afterwards and the queue drained). Other suites that import the queue helpers (test_chat_decisions, test_chat_catchup, test_chat_polling_cost, the rest of test_harness_chat_goals) fail identically or only on main at 5ae5b88 for unrelated reasons (un-awaited fork_session in a test, un-awaited AsyncSession.scalar in chat_catchup.py, harness goal runtime switch preconditions).",
+  "reason": "Test-only repair of two #939 leftovers in test_butler_resources.py that fail on main: one passed an async function as ChatService's synchronous provider_usage_observer (never awaited), the other read the async store.get inside a synchronous storage listener lambda (raised and was swallowed). The product wires only the synchronous OpenRouterCreditObserver.schedule and storage awaits listeners via call_async, so product behaviour is unchanged; the tests now exercise those contracts again. The whole file is selected.",
+  "exclusions": "No product code changed, so no other Python suites, UI, native or Playwright cases are selected, and no real-Core check applies.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 37,
+    "python": 7,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_storage_integrations.py",
-    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
+    "tests/v3/test_butler_resources.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "7e1a00a1edadb5fe6c3344d6c6abe11841681aed5b25f5550ed9207d3798ea25"
+  "change_digest": "9746cd73824dcc0bab17a4fd35f460ccc96d7d53ed0fd2c27cb9f7afdd91f312"
 }
