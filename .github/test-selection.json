@@ -1,30 +1,23 @@
 {
   "reviewed_by": "Claude",
-  "reason": "The Application Model service became async in #939, but its callers did not change. ModelBroker's to_thread calls returned coroutines (7 model.* tools failed), the sync route handlers returned coroutines (422), and reset never awaited service.project and read with an async connection (500). Execution workers also refused its Core-table graph and edit reads. The fix maps the existing tables (no schema change), reads through the mapped columns, awaits the service in tools and routes, and awaits/run_syncs in reset. Selected: the six Application Model suites (nine of their tests fail on main because of this defect and pass here), the new worker round trip in test_execution_scope_application_model.py (API, tools, reset and project isolation on sqlite and PostgreSQL), test_execution_scope.py (the guard still refuses a Core select over the now-mapped graphs table), and the browser companion and assistant viewer suites that build the same service and tools. test_browser_companion.py includes a real-Chromium capture test, so the receipt requests the Python browser layer.",
-  "exclusions": "test_archived_project_deletion.py (11 cases) and test_migrations.py (4 cases) fail identically on pristine origin/main (un-awaited test client calls / unrelated migration failures), so they are not selected even though archived deletion touches these tables. Playwright areas working-knowledge and assistant-browser-viewer match application_model/** but are excluded: their fixture tests/v3/application_model_fixture.py crashes at startup on main (un-awaited store.create), and the GUI is retired. The supervisor-mode API and model-tool chat round trip was checked on a scratch PostgreSQL Core instead (422/500 and tool failures on main, 200 and successful tools on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
-  "python_browser": true,
+  "reason": "chat_catchup.source_message is awaited again: #939 made Database.session() yield an AsyncSession but left this helper sync, so the catch-up card (once a failed, interrupted or cancelled turn is newer than the device cursor) and GET /chat/sessions/{id}/turns/{turn_id}/summary raised AttributeError and returned 500. test_chat_catchup.py covers the catch-up projection with failures and outputs plus a new summary-route test for both the final-message and prompt-fallback branches; test_chat_polling_cost's catch-up test checks only failures are linked; the Butler inspection projections include turn_summary. Three of these failed on main from this defect.",
+  "exclusions": "No UI, native or frontend code changed. Playwright area catch-up matches chat_catchup.py but is excluded: its fixture (tests/v3/workspace_recovery_fixture.py) has no chat turn that failed after a device read cursor, and the spec mocks a 503 and then recovers on the no-failure path that already worked on main, so it does not reach the changed branch. That branch is covered by the selected Python route tests, and the real-Core journey was checked on scratch Postgres Cores (main: catch-up 500 and turn summary 500 for both a failed and a completed turn; this branch: catch-up 200 with the failure linked to its prompt, summary 200 linking the prompt and the final answer).",
+  "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 198,
+    "python": 20,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_application_model_admission.py",
-    "tests/v3/test_application_model_api.py",
-    "tests/v3/test_application_model.py",
-    "tests/v3/test_application_model_registry.py",
-    "tests/v3/test_application_model_reset.py",
-    "tests/v3/test_application_model_views.py",
-    "tests/v3/test_execution_scope_application_model.py",
-    "tests/v3/test_execution_scope.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_assistant_browser_viewer.py"
+    "tests/v3/test_chat_catchup.py",
+    "tests/v3/test_chat_polling_cost.py::test_catch_up_reads_headers_and_links_only_failures",
+    "tests/v3/test_butler_inspection.py::test_butler_inspection_uses_owned_core_conversation_projections"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "5d48b8d0ab54731b162cf035fb4590c5d6c6f0d3eb49a70eae780053d4c01aac"
+  "change_digest": "da99e1f86c77126ce8431f6633da219c9004ccd821d54ea325d58de4b2377670"
 }

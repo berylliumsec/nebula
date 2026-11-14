@@ -312,6 +312,64 @@ async def test_fork_evidence_retains_provenance_and_explains_deleted_history(tmp
     assert response.json()["retrieved"][0]["excerpt"] == "Recorded citation"
 
 
+async def test_turn_summary_links_its_answer_or_the_prompt_that_started_it(tmp_path):
+    store, client = await setup(tmp_path)
+    provider = (await store.get(ChatSession, "s")).provider_profile_id
+    answered = await store.create(
+        ChatTurn(
+            id="answered",
+            model="fixture",
+            provider_profile_id=provider,
+            engagement_id="p",
+            session_id="s",
+            status="complete",
+            final_message_id="answer",
+        )
+    )
+    (
+        await store.create(
+            ChatMessage(
+                id="answer",
+                engagement_id="p",
+                session_id="s",
+                role="assistant",
+                sequence=2,
+                content="Recorded answer",
+            )
+        )
+    )
+    failed = await store.create(
+        ChatTurn(
+            id="failed",
+            model="fixture",
+            provider_profile_id=provider,
+            engagement_id="p",
+            session_id="s",
+            status="failed",
+            error="Provider timed out",
+        )
+    )
+    (
+        await store.create(
+            ChatMessage(
+                id="prompt",
+                engagement_id="p",
+                session_id="s",
+                role="user",
+                sequence=3,
+                content="Try again",
+            )
+        )
+    )
+    summary = await client.get(f"/chat/sessions/s/turns/{answered.id}/summary")
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["message_id"] == "answer"
+    summary = await client.get(f"/chat/sessions/s/turns/{failed.id}/summary")
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["message_id"] == "prompt"
+    assert summary.json()["error"] == "Provider timed out"
+
+
 async def test_conversation_deletion_removes_only_its_device_read_cursors(tmp_path):
     store, client = await setup(tmp_path)
     response = (await client.get("/chat/sessions/s/catch-up?device_id=phone")).json()

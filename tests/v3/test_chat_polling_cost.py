@@ -326,9 +326,9 @@ async def test_catch_up_reads_headers_and_links_only_failures(
     linked: list[str] = []
     real = chat_catchup.source_message
 
-    def counting(database, owner, turn):
+    async def counting(database, owner, turn):
         linked.append(turn.id)
-        return real(database, owner, turn)
+        return await real(database, owner, turn)
 
     monkeypatch.setattr(chat_catchup, "source_message", counting)
 
