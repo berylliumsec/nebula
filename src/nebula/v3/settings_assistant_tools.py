@@ -400,25 +400,32 @@ async def set_notebook_settings(
         raise ValueError(
             "set mode, mcp_enabled, or network_enabled using listed values"
         )
-    current = notebooks.policy(engagement_id)
+    current = await notebooks.policy(engagement_id)
     if mode == "host" and not current.host_access_acknowledged:
         raise ValueError(
             "Host notebook execution needs the operator's one-time acknowledgement in Project settings"
         )
+    changing_mode = False
     if mode is not None:
-        await notebooks.prepare_policy_change(engagement_id, mode)
-    if mode is not None or network is not None:
-        notebooks.automation_runtime.update_project_policy(
-            engagement_id,
-            execution_mode=mode or current.execution_mode,
-            host_access_acknowledged=False,
-            approval_policy=current.approval_policy,
-            network_enabled=current.network_enabled if network is None else network,
-            runner_profile_id=current.runner_profile_id,
-            vpn_profile_id=current.vpn_profile_id,
-            max_timeout_ms=current.max_timeout_ms,
-            expected_revision=current.revision,
-        )
+        changing_mode = await notebooks.prepare_policy_change(engagement_id, mode)
+    try:
+        if mode is not None or network is not None:
+            await notebooks.automation_runtime.update_project_policy(
+                engagement_id,
+                execution_mode=mode or current.execution_mode,
+                host_access_acknowledged=False,
+                approval_policy=current.approval_policy,
+                network_enabled=current.network_enabled if network is None else network,
+                runner_profile_id=current.runner_profile_id,
+                vpn_profile_id=current.vpn_profile_id,
+                max_timeout_ms=current.max_timeout_ms,
+                expected_revision=current.revision,
+            )
+    finally:
+        # Like the Project settings route: a mode change pauses notebook
+        # admission for this project only until the saved policy is decided.
+        if changing_mode:
+            notebooks.finish_policy_change(engagement_id)
     if enabled is not None:
         profile = await NotebookMcpTools.ensure_profile(store, engagement_id)
         (
