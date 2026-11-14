@@ -27,6 +27,7 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     ChatWorkingNotes,
+    HarnessProfile,
     HarnessSession,
     HarnessTurn,
     HarnessTurnStatus,
@@ -38,7 +39,12 @@ from nebula.v3.domain import (
 from nebula.v3.harness_core_tools import call_core_tool
 from nebula.v3.harnesses import HarnessEvent, HarnessPermissionRequest
 from nebula.v3.runtime_platform import RuntimeToolComponents
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import (
+    ConflictError,
+    NebulaStore,
+    RevisionConflict,
+    revise_latest,
+)
 from nebula.v3.tools import ToolExecutionResult, ToolSpec
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
@@ -425,6 +431,85 @@ def _native_attacher(store, runtime, engagement, chat, chat_turn, turn):
         attached.append(await runtime._attach_gateway_tool_call(turn, call.id))
 
     return attach, attached
+
+
+async def test_revise_latest_plans_each_attempt_on_the_newest_record(tmp_path):
+    store, _engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    seen: list[int] = []
+
+    async def other_writer(record) -> None:
+        await store.update(
+            HarnessProfile,
+            record.id,
+            {"default_model": "model-from-another-writer"},
+            expected_revision=record.revision,
+        )
+
+    _land_after_read(store, HarnessProfile, other_writer, armed=lambda: True)
+
+    def plan(latest: HarnessProfile) -> dict[str, Any]:
+        seen.append(latest.revision)
+        return {"name": f"{latest.name} (renamed)"}
+
+    saved = await revise_latest(store, HarnessProfile, profile.id, plan)
+    # The first plan lost to the other writer; the second saw its write.
+    assert seen == [profile.revision, profile.revision + 1]
+    assert (saved.name, saved.default_model) == (
+        f"{profile.name} (renamed)",
+        "model-from-another-writer",
+    )
+    assert saved.revision == profile.revision + 2
+    # Nothing to save leaves the record alone.
+    assert (await revise_latest(store, HarnessProfile, profile.id, lambda _: None)) == (
+        saved
+    )
+    await runtime.shutdown()
+
+
+async def test_revise_latest_is_bounded_and_keeps_other_conflicts(tmp_path):
+    store, _engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    original_get = store.get
+
+    async def always_moved(model, entity_id):
+        value = await original_get(model, entity_id)
+        if model is HarnessProfile:
+            await store.update(
+                HarnessProfile,
+                value.id,
+                {"default_model": f"model-{value.revision}"},
+                expected_revision=value.revision,
+            )
+        return value
+
+    store.get = always_moved  # type: ignore[method-assign]
+    attempts = 0
+
+    def plan(latest: HarnessProfile) -> dict[str, Any]:
+        nonlocal attempts
+        attempts += 1
+        return {"name": "never saved"}
+
+    with pytest.raises(RevisionConflict, match="revision conflict"):
+        await revise_latest(store, HarnessProfile, profile.id, plan, attempts=3)
+    assert attempts == 3
+    store.get = original_get  # type: ignore[method-assign]
+
+    class Guarded:
+        calls = 0
+
+        async def get(self, model, entity_id):
+            return await store.get(model, entity_id)
+
+        async def update(self, model, entity_id, changes, *, expected_revision):
+            self.calls += 1
+            raise ConflictError("this project worker no longer owns the record")
+
+    guarded = Guarded()
+    with pytest.raises(ConflictError, match="no longer owns"):
+        await revise_latest(guarded, HarnessProfile, profile.id, plan)
+    # Only a stale revision is planned again; any other refusal is final.
+    assert guarded.calls == 1
+    await runtime.shutdown()
 
 
 async def test_native_permission_request_waits_while_a_core_tool_records(tmp_path):

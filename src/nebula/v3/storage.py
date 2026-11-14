@@ -191,8 +191,58 @@ class ConflictError(StorageError):
     pass
 
 
+class RevisionConflict(ConflictError):
+    """The record changed after the writer read the revision it expected.
+
+    Rereading the record and planning the change again can resolve it, as
+    ``revise_latest`` does for bookkeeping; any other conflict cannot.
+    """
+
+
 class CorruptRecordError(StorageError):
     pass
+
+
+# Bookkeeping writers on one busy record, such as a running turn's tool
+# recorders, rarely collide more than once in a row.
+REVISE_ATTEMPTS = 5
+
+
+async def revise_latest(
+    store: Any,
+    model: type[EntityT],
+    entity_id: str,
+    plan: Callable[[EntityT], Mapping[str, Any] | None],
+    *,
+    attempts: int = REVISE_ATTEMPTS,
+) -> EntityT:
+    """Save ``plan(latest)`` on the newest revision of one record.
+
+    For bookkeeping that several writers add to one record at nearly the same
+    time, such as a running turn's tool ids and counters. ``plan`` receives
+    the newest saved record and returns the changes to save, derived from
+    that record (append, increment, merge) and never from an older read, or
+    ``None`` when nothing needs saving. A write that loses to another writer
+    reads the record again and plans again, so the other writer's fields are
+    kept. Only the plan is repeated, never the work it records. The revision
+    check stays: after ``attempts`` losses the last ``RevisionConflict``
+    reaches the caller. Returns the saved, or unchanged, record.
+    """
+
+    for attempt in range(1, attempts + 1):
+        current = await store.get(model, entity_id)
+        changes = plan(current)
+        if not changes:
+            return current
+        try:
+            return await store.update(
+                model, entity_id, dict(changes), expected_revision=current.revision
+            )
+        except RevisionConflict:  # diagnostic-expected: another writer saved first; plan again on its revision, the last loss reaches the caller
+            if attempt == attempts:
+                raise
+            await asyncio.sleep(0)
+    raise AssertionError("revise_latest needs at least one attempt")
 
 
 class RunBudgetExceededError(StorageError):
@@ -592,7 +642,7 @@ class StoreTransaction:
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictError(
+            raise RevisionConflict(
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
         # The stored payload is the entity's own JSON form, so the change is
@@ -676,7 +726,7 @@ class StoreTransaction:
             )
         )
         if result.rowcount != 1:
-            raise ConflictError(
+            raise RevisionConflict(
                 f"entity {entity_id} changed while the update was in progress"
             )
         (await self.session.flush())
@@ -747,7 +797,7 @@ class StoreTransaction:
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictError(
+            raise RevisionConflict(
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
         self._runtime_activity(row.kind, row.id, row.payload)
@@ -2317,7 +2367,7 @@ class NebulaStore:
                 raise NotFoundError(f"engagements entity not found: {engagement_id}")
             project = _row_to_entity(row, Engagement)
             if project.revision != expected_revision:
-                raise ConflictError(
+                raise RevisionConflict(
                     f"revision conflict: expected {expected_revision}, found {project.revision}"
                 )
             if project.workspace_path == workspace_path:
@@ -2482,7 +2532,7 @@ class NebulaStore:
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
             if int(row["revision"]) != expected_revision:
-                raise ConflictError(
+                raise RevisionConflict(
                     f"revision conflict: expected {expected_revision}, found {row['revision']}"
                 )
             payload = dict(row["payload"])
@@ -2585,7 +2635,7 @@ class NebulaStore:
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
             if int(row["revision"]) != expected_revision:
-                raise ConflictError(
+                raise RevisionConflict(
                     f"revision conflict: expected {expected_revision}, "
                     f"found {row['revision']}"
                 )
@@ -2694,7 +2744,7 @@ class NebulaStore:
                         )
                     )
                     if current_revision is not None:
-                        raise ConflictError(
+                        raise RevisionConflict(
                             "revision conflict: expected "
                             f"{expected_revision}, found {current_revision}"
                         )
@@ -2740,7 +2790,7 @@ class NebulaStore:
         if row is None:
             raise NotFoundError(f"chat_sessions entity not found: {session_id}")
         if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictError(
+            raise RevisionConflict(
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
         # Subagent conversations belong to their parent and go with it.
@@ -2992,7 +3042,7 @@ class NebulaStore:
             if row is None:
                 raise NotFoundError(f"runs entity not found: {run_id}")
             if expected_revision is not None and row.revision != expected_revision:
-                raise ConflictError(
+                raise RevisionConflict(
                     f"revision conflict: expected {expected_revision}, found {row.revision}"
                 )
 
