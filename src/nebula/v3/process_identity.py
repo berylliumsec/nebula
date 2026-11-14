@@ -154,6 +154,20 @@ def origin_from_previous_boot(recorded: str | None, current: str | None) -> bool
     return old is not None and new is not None and old != new
 
 
+def launch_owner_ended(origin: str | None, pid: int, birth: str) -> bool:
+    """Kernel-level proof that a recorded launching process has ended.
+
+    In its own PID namespace the exact birth is checked; a parseable earlier
+    kernel boot proves it ended with that kernel on this host (callers need
+    lease evidence for hosts sharing the database). A foreign namespace or an
+    unreadable origin proves nothing.
+    """
+    current = process_origin()
+    if origin_from_previous_boot(origin, current):
+        return True
+    return current is not None and origin == current and not same_process(pid, birth)
+
+
 def signal_process(pid: int, birth: str, selected_signal: int = signal.SIGTERM) -> bool:
     if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
         # Other platforms use authenticated IPC for graceful exit. Never use a

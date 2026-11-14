@@ -17,7 +17,12 @@ from .memory_policy import (
     MemoryEnforcementUnavailable,
     MemoryLimits,
 )
-from .process_identity import same_process, process_origin
+from .process_identity import (
+    launch_owner_ended,
+    origin_boot,
+    origin_from_previous_boot,
+    process_origin,
+)
 
 
 def runner_fingerprint(runner) -> str:
@@ -54,8 +59,14 @@ class MemoryReconciler:
         self,
         service: MemoryBudgetService,
         resolve_runner: Callable[[MemoryJob], Awaitable[Any]],
+        *,
+        previous_boot_ended: Callable[[str], Awaitable[bool]] | None = None,
     ):
+        """`previous_boot_ended(boot)` must confirm that no runtime born on that
+        boot still renews a lease; without it, owners from an earlier boot are
+        left to a reconciler that can check (the supervisor's)."""
         self.service, self.resolve_runner = service, resolve_runner
+        self.previous_boot_ended = previous_boot_ended
         self.task: asyncio.Task | None = None
         self.cursor = ""
 
@@ -105,13 +116,20 @@ class MemoryReconciler:
 
     async def _reconcile(self, job: MemoryJob) -> bool:
         owner, groups = job.launch_owner, job.launch_groups
-        if (
-            owner is None
-            or owner.process_origin is None
-            or owner.process_origin != process_origin()
-            or same_process(owner.process_id, owner.process_birth)
+        if owner is None or not launch_owner_ended(
+            owner.process_origin, owner.process_id, owner.process_birth
         ):
             return False
+        if origin_from_previous_boot(owner.process_origin, process_origin()):
+            # Its kernel is gone on this host, but a live lease from that boot
+            # means another host sharing this database may still run it.
+            boot = origin_boot(owner.process_origin)
+            if (
+                boot is None
+                or self.previous_boot_ended is None
+                or not await self.previous_boot_ended(boot)
+            ):
+                return False
         if job.state == "reserved" and groups is None and job.evidence is None:
             # No external create can precede the committed STARTING transition.
             # Recheck the exact owner and revision inside the release transaction.

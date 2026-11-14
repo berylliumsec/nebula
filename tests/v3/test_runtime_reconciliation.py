@@ -500,3 +500,15 @@ async def test_untrusted_socket_directory_in_another_namespace_is_refused(manage
         await replacement.start()
     assert marker.read_bytes() == recorded
     assert replacement.socket_root is None
+
+
+async def test_boot_ended_only_after_every_runtime_from_that_boot_lapses(managed):
+    await managed.stage("v1")
+    execution = await managed.host.spawn("v1", "execution")
+    await _kill(managed, execution)
+    await _born_in_earlier_boot(managed, execution)
+    await _renewing(managed, execution)
+    assert not await managed.host.boot_ended(EARLIER_BOOT)
+    assert await managed.host.boot_ended("another-boot")
+    await _expire(managed, execution.runtime_id)
+    assert await managed.host.boot_ended(EARLIER_BOOT)
