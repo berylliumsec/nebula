@@ -744,9 +744,15 @@ class RuntimeProcessHost:
                 if aborted and isinstance(error, Exception):
                     # The process is confirmed gone and its reservation
                     # retired, so this start had no effect and may be retried.
+                    # Keep the operator-facing reason (for example "worker
+                    # startup exited"); other errors are named by type only.
+                    reason = (
+                        str(error)
+                        if isinstance(error, (CoordinationConflict, RuntimeIpcError))
+                        else f"The worker did not become ready ({type(error).__name__})"
+                    )
                     raise StartAborted(
-                        "The worker did not become ready and its start was "
-                        f"aborted cleanly ({type(error).__name__}); nothing was started"
+                        f"{reason}; its start was aborted cleanly and nothing was started"
                     ) from error
                 raise
 

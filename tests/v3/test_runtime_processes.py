@@ -21,7 +21,7 @@ from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.domain import Engagement
 from nebula.v3.process_identity import process_birth, same_process, signal_process
 from nebula.v3.release_store import ReleaseStore
-from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_coordination import CoordinationConflict, StartAborted
 from nebula.v3.runtime_ipc import RuntimeIpcError
 from nebula.v3.runtime_http import internal_headers
 from nebula.v3.runtime_processes import RuntimeProcessHost, read_worker_bootstrap
@@ -319,7 +319,7 @@ async def test_real_api_promotion_keeps_old_worker_until_replacement_is_ready(ma
 async def test_two_failed_real_starts_do_not_prevent_a_later_version(managed):
     for version in ("fail-one", "fail-two"):
         await managed.stage(version)
-        with pytest.raises(CoordinationConflict, match="startup exited"):
+        with pytest.raises(StartAborted, match="startup exited"):
             await managed.host.spawn(version, "execution", timeout=5)
     await managed.stage("v3")
     assert await managed.host.spawn("v3", "execution") is not None
@@ -382,8 +382,11 @@ async def test_nonreading_bootstrap_child_cannot_block_supervisor_timeouts(
     before = time.monotonic()
     tick = asyncio.create_task(asyncio.sleep(0.05))
     try:
-        with pytest.raises(TimeoutError):
+        # The timed-out start is aborted and proven gone, so it is reported
+        # as a no-effect refusal that callers may retry.
+        with pytest.raises(StartAborted) as aborted:
             await managed.host.spawn("slow", "execution", timeout=0.2)
+        assert isinstance(aborted.value.__cause__, TimeoutError)
         await tick
         assert time.monotonic() - before < 2
         assert (await managed.coordinator.status()).resident_versions == []
