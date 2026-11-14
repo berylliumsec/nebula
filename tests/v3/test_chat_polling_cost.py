@@ -13,13 +13,15 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+import asyncio
+import contextlib
 from datetime import timedelta
 
 import pytest
 from fastapi import FastAPI
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 
-from nebula.v3 import chat_catchup, chat_turn_headers
+from nebula.v3 import chat_catchup, chat_queue, chat_turn_headers
 from nebula.v3.api import create_app
 from nebula.v3.chat_catchup import catchup_projection
 from nebula.v3.chat_queue import (
@@ -552,6 +554,456 @@ async def test_worker_skips_a_dormant_queue_until_it_changes(tmp_path, monkeypat
 
     await enqueue(service, request, queue.revision, "after-dormancy")
     assert [item.id for item in (await service.queues(skip_dormant=True))] == [queue.id]
+
+
+async def _until(predicate, timeout=10.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not await predicate():
+        assert loop.time() < deadline, "condition not reached"
+        await asyncio.sleep(0.02)
+
+
+async def _value(value):
+    return value
+
+
+def _count_passes(service):
+    passes = []
+    real = service.queues
+
+    async def counting(*, skip_dormant=False):
+        passes.append(skip_dormant)
+        return await real(skip_dormant=skip_dormant)
+
+    service.queues = counting
+    return passes
+
+
+async def _stop(task):
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+def _hold_dispatched_turns(service):
+    """Leave each dispatched turn queued so the test settles it explicitly."""
+
+    async def hold(prepared, **_):
+        return prepared.turn.id
+
+    service.chat.start_provider_turn = hold
+
+
+async def _dispatched_turn(service, *, other_than=None):
+    item = (await service.get("s")).items[0]
+    if item["status"] == "sending" and item.get("turn_id") != other_than:
+        return item["turn_id"]
+    return None
+
+
+async def _finish(store, turn_id):
+    turn = await store.get(ChatTurn, turn_id)
+    await store.update(
+        ChatTurn,
+        turn_id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+
+
+async def test_units_of_work_signal_queue_writes_and_turn_activity(tmp_path):
+    store, service, request = await setup_queue(tmp_path)
+    signals = []
+    store.on_follow_up_change(
+        lambda written, sessions: signals.append((written, sessions))
+    )
+
+    queue = await enqueue(service, request, paused=True)
+    assert signals == [(True, frozenset())]
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    await store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+    assert signals[1:] == [(False, frozenset({"s"}))] * 2
+    # A turn write that keeps its status, or another record, signals nothing.
+    signals.clear()
+    current = await store.get(ChatTurn, turn.id)
+    await store.update(
+        ChatTurn, turn.id, {"error": "note"}, expected_revision=current.revision
+    )
+    project = await store.get(Engagement, "p")
+    await store.update(
+        Engagement, "p", {"description": "x"}, expected_revision=project.revision
+    )
+    assert signals == []
+    # A unit that ends without committing still wakes the dispatcher, which
+    # then reads an unchanged queue; a missed wake would cost a safety pass.
+    with pytest.raises(RuntimeError):
+        async with store.transaction() as transaction:
+            await transaction.update(
+                ChatQueue, queue.id, {"paused": False}, expected_revision=queue.revision
+            )
+            raise RuntimeError("abandon this unit of work")
+    assert signals == [(True, frozenset())]
+
+
+async def test_dispatcher_survives_a_failed_queue_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    _hold_dispatched_turns(service)
+    queue = await enqueue(service, request, paused=True)
+    real = service.queues
+    failures = []
+
+    async def flaky(*, skip_dormant=False):
+        if len(failures) < 2:
+            failures.append(1)
+            raise RuntimeError("database unavailable")
+        return await real(skip_dormant=skip_dormant)
+
+    service.queues = flaky
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(len(failures) == 2))
+        await service.write(
+            "s", QueueWrite(action="resume", expected_revision=queue.revision)
+        )
+        await _until(lambda: _dispatched_turn(service))
+    finally:
+        await _stop(task)
+        await service.chat.shutdown()
+
+
+async def test_idle_dispatcher_sleeps_until_a_write_then_dispatches_at_once(
+    tmp_path, monkeypatch
+):
+    # No poll interval elapses during this test: only wakes make progress.
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 60.0)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    _hold_dispatched_turns(service)
+    queue = await enqueue(service, request, paused=True)
+    passes = _count_passes(service)
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(len(passes) == 1))
+        await asyncio.sleep(0.3)
+        assert len(passes) == 1, "an idle dispatcher must not poll"
+
+        await service.write(
+            "s", QueueWrite(action="resume", expected_revision=queue.revision)
+        )
+        await _until(lambda: _dispatched_turn(service))
+        turn_id = await _dispatched_turn(service)
+
+        # The response settling, not a poll, retires the follow-up.
+        await _finish(store, turn_id)
+
+        async def settled():
+            return (await service.get("s")).items[0]["status"] == "complete"
+
+        await _until(settled)
+        assert (await store.count(ChatTurn)) == 1
+        await asyncio.sleep(0.2)
+        quiet = len(passes)
+        await asyncio.sleep(0.3)
+        assert len(passes) == quiet, "a settled queue must not keep it awake"
+    finally:
+        await _stop(task)
+        await service.chat.shutdown()
+
+
+async def test_follow_up_dispatches_when_the_blocking_turn_settles(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 60.0)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    # An operator's direct Send is still running when the follow-up is saved.
+    direct = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    _hold_dispatched_turns(service)
+    await enqueue(service, request)
+    passes = _count_passes(service)
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(len(passes) == 1))
+        await asyncio.sleep(0.2)
+        assert (await service.get("s")).items[0]["status"] == "queued"
+        await _finish(store, direct.id)
+        await _until(lambda: _dispatched_turn(service, other_than=direct.id))
+    finally:
+        await _stop(task)
+        await service.chat.shutdown()
+
+
+async def test_run_answers_a_follow_up_after_the_response_it_waited_for(
+    tmp_path, monkeypatch
+):
+    # End to end through run(): the follow-up's own turn is answered by the
+    # provider and settles the queue, with no poll interval elapsing.
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 60.0)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    direct = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    await enqueue(service, request)
+    task = asyncio.create_task(service.run())
+    try:
+        await asyncio.sleep(0.2)
+        assert (await service.get("s")).items[0]["status"] == "queued"
+        await _finish(store, direct.id)
+
+        async def answered():
+            item = (await service.get("s")).items[0]
+            return item["status"] == "complete" and item["turn_id"] != direct.id
+
+        await _until(answered)
+        follow_up = await store.get(
+            ChatTurn, (await service.get("s")).items[0]["turn_id"]
+        )
+        assert follow_up.status == ChatTurnStatus.COMPLETE
+    finally:
+        await _stop(task)
+        await service.chat.shutdown()
+
+
+async def test_review_of_an_ended_turn_rests_until_that_turn_changes(
+    tmp_path, monkeypatch
+):
+    # A fast active cadence would expose any polling of the parked review.
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    queue = await enqueue(service, request)
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.INTERRUPTED,
+        )
+    )
+    items = queue.items
+    items[0].update(status="needs_review", turn_id=turn.id, detail="Interrupted")
+    await store.update(
+        ChatQueue,
+        queue.id,
+        {"items": items, "paused": True},
+        expected_revision=queue.revision,
+    )
+    reads = []
+    real_turn = service.turn
+
+    async def counting_turn(session_id, turn_id):
+        reads.append(turn_id)
+        return await real_turn(session_id, turn_id)
+
+    service.turn = counting_turn
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(service._parked != {}))
+        seen = len(reads)
+        await asyncio.sleep(0.3)
+        assert len(reads) == seen, "a review of an ended turn must not be polled"
+
+        # Resuming the interrupted turn to completion settles the review.
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=turn.revision,
+        )
+
+        async def reconciled():
+            return (await service.get("s")).items[0]["status"] == "complete"
+
+        await _until(reconciled)
+    finally:
+        await _stop(task)
+
+
+async def test_activity_in_another_conversation_leaves_a_parked_queue_alone(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    queue = await enqueue(service, request)
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.FAILED,
+        )
+    )
+    items = queue.items
+    items[0].update(status="needs_review", turn_id=turn.id, detail="Failed")
+    await store.update(
+        ChatQueue,
+        queue.id,
+        {"items": items, "paused": True},
+        expected_revision=queue.revision,
+    )
+    other = await store.create(
+        ChatSession(
+            engagement_id="p",
+            provider_profile_id="provider-a",
+            model="model-a",
+            title="Busy conversation",
+        )
+    )
+    passes = _count_passes(service)
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(service._parked != {}))
+        quiet = len(passes)
+        for _ in range(10):
+            busy = await store.create(
+                ChatTurn(
+                    engagement_id="p",
+                    session_id=other.id,
+                    provider_profile_id="provider-a",
+                    model="model-a",
+                    status=ChatTurnStatus.ROUTING,
+                )
+            )
+            await store.update(
+                ChatTurn,
+                busy.id,
+                {"status": ChatTurnStatus.COMPLETE},
+                expected_revision=busy.revision,
+            )
+        await asyncio.sleep(0.2)
+        assert len(passes) == quiet, "another conversation's turns woke the queue"
+    finally:
+        await _stop(task)
+
+
+async def test_sent_follow_up_waiting_for_approval_rests_until_its_turn_moves(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    queue = await enqueue(service, request)
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+    items = queue.items
+    items[0].update(status="sending", turn_id=turn.id)
+    await store.update(
+        ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+    )
+    passes = _count_passes(service)
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(service._parked != {}))
+        quiet = len(passes)
+        await asyncio.sleep(0.3)
+        assert len(passes) == quiet, "a turn waiting for approval must not be polled"
+        await _finish(store, turn.id)
+
+        async def settled():
+            return (await service.get("s")).items[0]["status"] == "complete"
+
+        await _until(settled)
+    finally:
+        await _stop(task)
+
+
+async def test_follow_up_behind_a_response_awaiting_approval_rests_until_it_moves(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 60.0)
+    store, service, request = await setup_queue(tmp_path)
+    _hold_dispatched_turns(service)
+    # The operator's direct Send waits for an approval when the follow-up is saved.
+    direct = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+    await enqueue(service, request)
+    passes = _count_passes(service)
+    task = asyncio.create_task(service.run())
+    try:
+        await _until(lambda: _value(service._parked != {}))
+        quiet = len(passes)
+        await asyncio.sleep(0.3)
+        assert len(passes) == quiet, (
+            "a response waiting for approval must not be polled"
+        )
+        await _finish(store, direct.id)
+        await _until(lambda: _dispatched_turn(service, other_than=direct.id))
+    finally:
+        await _stop(task)
+        await service.chat.shutdown()
+
+
+async def test_safety_pass_finds_a_queue_written_by_another_store(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(chat_queue, "ACTIVE_POLL_SECONDS", 60.0)
+    monkeypatch.setattr(chat_queue, "SAFETY_POLL_SECONDS", 0.3)
+    store, service, request = await setup_queue(tmp_path)
+    _hold_dispatched_turns(service)
+    queue = await enqueue(service, request, paused=True)
+    passes = _count_passes(service)
+    task = asyncio.create_task(service.run())
+    other = NebulaStore(tmp_path / "queue.db")
+    try:
+        await _until(lambda: _value(len(passes) == 1))
+        # This write never signals the dispatcher's own store.
+        await other.update(
+            ChatQueue, queue.id, {"paused": False}, expected_revision=queue.revision
+        )
+        await _until(lambda: _dispatched_turn(service))
+    finally:
+        await _stop(task)
+        await service.chat.shutdown()
+        await other.database.dispose()
 
 
 async def test_queue_route_answers_not_modified(tmp_path):
