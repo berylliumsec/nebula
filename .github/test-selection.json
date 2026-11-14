@@ -1,30 +1,35 @@
 {
   "reviewed_by": "Claude",
-  "reason": "The Application Model service became async in #939, but its callers did not change. ModelBroker's to_thread calls returned coroutines (7 model.* tools failed), the sync route handlers returned coroutines (422), and reset never awaited service.project and read with an async connection (500). Execution workers also refused its Core-table graph and edit reads. The fix maps the existing tables (no schema change), reads through the mapped columns, awaits the service in tools and routes, and awaits/run_syncs in reset. Selected: the six Application Model suites (nine of their tests fail on main because of this defect and pass here), the new worker round trip in test_execution_scope_application_model.py (API, tools, reset and project isolation on sqlite and PostgreSQL), test_execution_scope.py (the guard still refuses a Core select over the now-mapped graphs table), and the browser companion and assistant viewer suites that build the same service and tools. test_browser_companion.py includes a real-Chromium capture test, so the receipt requests the Python browser layer.",
-  "exclusions": "test_archived_project_deletion.py (11 cases) and test_migrations.py (4 cases) fail identically on pristine origin/main (un-awaited test client calls / unrelated migration failures), so they are not selected even though archived deletion touches these tables. Playwright areas working-knowledge and assistant-browser-viewer match application_model/** but are excluded: their fixture tests/v3/application_model_fixture.py crashes at startup on main (un-awaited store.create), and the GUI is retired. The supervisor-mode API and model-tool chat round trip was checked on a scratch PostgreSQL Core instead (422/500 and tool failures on main, 200 and successful tools on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
-  "python_browser": true,
+  "reason": "runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
+  "exclusions": "Process-level suites (test_runtime_processes, test_execution_worker_process, test_runtime_host_services, test_runtime_memory_control, test_runtime_browser_bridge, test_runtime_worker_features, test_runtime_management, test_recovery_reconciliation, test_shutdown_readmission) need a pidfd-capable interpreter or a non-loopback LAN Core fixture; locally the same 76 cases fail identically on pristine main and on this branch (no new failures), so they are not selected. No UI, native or Playwright cases: no frontend code changed (the desktop Stop control only prints runtime-stop stderr). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core scratch evidence (injected service stop failures, six-project startup races, LAN-bound status reads) is recorded in the PR body, not executed by CI.",
+  "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 198,
+    "python": 334,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_application_model_admission.py",
-    "tests/v3/test_application_model_api.py",
-    "tests/v3/test_application_model.py",
-    "tests/v3/test_application_model_registry.py",
-    "tests/v3/test_application_model_reset.py",
-    "tests/v3/test_application_model_views.py",
-    "tests/v3/test_execution_scope_application_model.py",
-    "tests/v3/test_execution_scope.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_assistant_browser_viewer.py"
+    "tests/v3/test_runtime_quiescence.py",
+    "tests/v3/test_runtime_ipc.py",
+    "tests/v3/test_runtime_operations.py",
+    "tests/v3/test_runtime_launcher.py",
+    "tests/v3/test_async_core.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_shutdown_admission.py",
+    "tests/v3/test_runtime_host_search.py",
+    "tests/v3/test_shared_butler_memory.py",
+    "tests/v3/test_shared_knowledge.py",
+    "tests/v3/test_handoff_participants.py",
+    "tests/v3/test_runtime_auto_recovery.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "5d48b8d0ab54731b162cf035fb4590c5d6c6f0d3eb49a70eae780053d4c01aac"
+  "change_digest": "29b84677818c6dac88dc9372ad367bf65065bdd6616158c4fd8ccad83d10352a"
 }

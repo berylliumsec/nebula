@@ -832,8 +832,9 @@ class DeploymentCoordinator:
                         or "project.quiesce/v1"
                         not in ReleaseManifest.model_validate(release.manifest).features
                     ):
-                        raise CoordinationConflict(
-                            "Migrate this idle project to a version supporting verified quiescence before shutdown"
+                        raise ShutdownBlocked(
+                            f"Project {lease.project_id}: migrate this idle project "
+                            "to a version supporting verified quiescence before shutdown"
                         )
             host.shutdown_requested = True
             host.revision += 1
