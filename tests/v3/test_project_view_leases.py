@@ -233,9 +233,7 @@ async def test_a_closed_view_spends_no_grace_while_another_project_waits(batch):
     _database_clock(batch)
     await _api_host(batch)
     prepared, retired, refusals = [], [], []
-    automatic = _admission(
-        batch, prepared=prepared, retired=retired, refusals=refusals
-    )
+    automatic = _admission(batch, prepared=prepared, retired=retired, refusals=refusals)
     automatic.idle_grace_ms = 60_000
     leases = ProjectViewLeases(batch.database, batch.coordination)
     await leases.hold("operator", "two", "view-lease-0002")
