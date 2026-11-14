@@ -79,7 +79,8 @@ async def test_storage_dispatch_stops_after_a_swallowed_cancel():
 
 async def test_chat_follow_ups_stop_after_a_swallowed_cancel():
     unit_of_work, swallowed = swallow_first_cancel()
-    service = ChatQueueService(SimpleNamespace(), chat=None, harness=None)
+    store = SimpleNamespace(on_follow_up_change=lambda _signal: None)
+    service = ChatQueueService(store, chat=None, harness=None)
     service.queues = unit_of_work
     service.task = asyncio.create_task(service.run())
     await asyncio.sleep(0.01)

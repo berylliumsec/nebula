@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Three shutdown hangs and one log flood. (1) After any supervisor restart, verified handoff/recovery rows whose target no longer owns the project were re-advanced every 0.5 s, failing LeaseLost and logging runtime.project_restore.waiting at ERROR forever; the loop now selects verified rows only while their target still owns the project, logs a waiting transfer once per reason, and writes blockers only when they change. (2) SIGTERM or a confirmed shutdown waited without limit for open viewer streams relayed from workers; the stable listener now has a 5 s graceful shutdown bound. (3) A cancellation swallowed below a loop (Python 3.11 wait_for in the SQLAlchemy pool, or a driver error during cancel cleanup) left storage dispatch and chat follow-ups running after their single cancel(); they now stop on a flag and are re-cancelled until done. Selected tests cover each mechanism directly.",
-  "exclusions": "Other test_recovery_reconciliation cases need a non-loopback LAN Core fixture and fail identically on main; only the handoff-loop cases are selected. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (SIGTERM with an open /api/v1/work/events stream: >90 s on main, 5.5 s here; restore-waiting flood: ~320/min on main, 0 here on the same database) is in the PR body.",
+  "reason": "Three shutdown hangs and one log flood. (1) After any supervisor restart, verified handoff/recovery rows whose target no longer owns the project were re-advanced every 0.5 s, failing LeaseLost and logging runtime.project_restore.waiting at ERROR forever; the loop now selects verified rows only while their target still owns the project, logs a waiting transfer once per reason, and writes blockers only when they change. (2) SIGTERM or a confirmed shutdown waited without limit for open viewer streams relayed from workers; the stable listener now has a 5 s graceful shutdown bound. (3) A cancellation swallowed below a loop (Python 3.11 wait_for in the SQLAlchemy pool, or a driver error during cancel cleanup) left storage dispatch and chat follow-ups running after their single cancel(); they now stop on a flag and are re-cancelled until done; inside #1024's event-driven follow-up loop the flag is checked before each step and after each pass, and shutdown also wakes the waiter. Selected tests cover each mechanism directly.",
+  "exclusions": "No UI, native or Playwright cases: no frontend code changed. test_recovery_reconciliation.py spawns real processes; it was run with a per-worktree Python 3.12 venv (nebula resolving to this worktree) and passes in full, as on main. test_runtime_processes.py has 4 failures that are identical on main 936b5d5 (from #1022's StartAborted; fixed separately), so it is not selected. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core evidence (SIGTERM with an open /api/v1/work/events stream: >90 s on main, 5.5 s here; restore-waiting flood: ~320/min on main, 0 here on the same database) is in the PR body.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 51,
+    "python": 101,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,13 +15,12 @@
     "tests/v3/test_swallowed_cancellation.py",
     "tests/v3/test_storage_integrations.py",
     "tests/v3/test_chat_queue.py",
-    "tests/v3/test_recovery_reconciliation.py::test_finished_recovery_is_not_retried_after_its_target_retires",
-    "tests/v3/test_recovery_reconciliation.py::test_waiting_transfer_is_recorded_once_per_reason",
-    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work"
+    "tests/v3/test_chat_polling_cost.py",
+    "tests/v3/test_recovery_reconciliation.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4eee16114682b463d240c6c32ad8caa1617908ea05bdd445bb987f412cc18582"
+  "change_digest": "edf6700a8de845497c6769bc41527dce3ad66ea2699cc960e3171212afa71aba"
 }
