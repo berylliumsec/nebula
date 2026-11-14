@@ -83,3 +83,32 @@ async def test_shutdown_replays_existing_receipt_but_rejects_new_intent(host):
     assert await coordinator.coordination.submit(**arguments) == receipt
     with pytest.raises(CoordinationConflict, match="shutdown"):
         await coordinator.coordination.submit(**{**arguments, "idempotency_key": "new"})
+
+
+async def test_revision_change_before_shutdown_is_rejected_without_effect(host):
+    from nebula.v3.runtime_operations import DeploymentOperations
+
+    coordinator = host[0]
+    stale = (await coordinator.status()).revision
+    # A worker starting while the request waits for the host moves the revision.
+    await coordinator.abort_shutdown(detail="A worker became ready.")
+
+    async def dispatch(_action, values):
+        return {"leases": len(await coordinator.prepare_shutdown(**values))}
+
+    receipt = await DeploymentOperations(coordinator).execute(
+        operation_id="stale-stop",
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": stale},
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "failed"
+    assert receipt["result"] == {
+        "detail": "deployment changed before shutdown",
+        "error_type": "DeploymentChanged",
+    }
+    async with coordinator.database.session() as session:
+        saved = await session.get(DeploymentHostRow, "host")
+        assert not saved.shutdown_requested
+        assert saved.revision == stale + 1

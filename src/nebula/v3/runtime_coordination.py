@@ -57,6 +57,18 @@ class LeaseLost(CoordinationConflict):
     """The caller must stop admitting work and discard authoritative writes."""
 
 
+class OperationRejected(CoordinationConflict):
+    """A dispatcher proved that no effect was admitted before refusing."""
+
+
+class DeploymentChanged(OperationRejected):
+    """The deployment revision moved after the caller read it; nothing changed.
+
+    A caller whose request depends only on the current state, not on what it
+    reviewed, may read the new revision and ask again.
+    """
+
+
 @dataclass(frozen=True)
 class ProjectLease:
     project_id: str

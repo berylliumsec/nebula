@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from .database import DeploymentOperationRow
 from .deployments import DeploymentCoordinator, _checkpoint
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, OperationRejected
 from .runtime_ipc import RuntimeIpcError
 
 
@@ -19,10 +19,6 @@ def _document(value: dict) -> dict:
     if len(json.dumps(value, sort_keys=True).encode()) > 64 * 1024:
         raise ValueError("deployment operation document exceeds its bound")
     return value
-
-
-class OperationRejected(CoordinationConflict):
-    """A dispatcher proved that no effect was admitted before refusing."""
 
 
 class DeploymentOperations:

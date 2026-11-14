@@ -47,6 +47,7 @@ from .deployment_protocol import (
 )
 from .runtime_coordination import (
     CoordinationConflict,
+    DeploymentChanged,
     LEASE_MS,
     ProjectLease,
     RuntimeCoordination,
@@ -783,7 +784,9 @@ class DeploymentCoordinator:
         async with self.coordination._write() as session:
             host = await self._host(session)
             if host.revision != expected_revision:
-                raise CoordinationConflict("deployment changed before shutdown")
+                # Starting or retiring workers move the revision while this
+                # request waits for the host; nothing has changed yet.
+                raise DeploymentChanged("deployment changed before shutdown")
             owners = list(
                 await session.scalars(
                     select(ProjectOwnershipRow)
