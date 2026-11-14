@@ -1,37 +1,29 @@
 {
   "reviewed_by": "Claude",
-  "reason": "A worker statement interrupted mid-flight (cancellation, timeout or lost backend) leaves its SQLAlchemy connection invalidated; ExecutionSQLScope's rollback listener then read connection.info, which raised PendingRollbackError in place of the original exception. At shutdown this hit the chat follow-up poll, so the worker recorded its cleanup as failed, kept the project and every later Core shutdown or idle retirement was refused. The listener now skips invalidated connections. Selected suites cover the execution scope (new cancellation/timeout and follow-up shutdown regressions on PostgreSQL), execution workers, deployment lifecycle, orphan recovery, project handoff and admission, runtime capacity, chat acceptance, delivery, diagnostics boundaries, memory, host search, index attempts and work-batch contracts.",
-  "exclusions": "Only suites that pass on pristine main are selected. test_runtime_quiescence.py, test_shutdown_readmission.py, test_chat_queue.py, test_shared_butler_memory.py, test_shared_knowledge.py, test_shared_memory_import.py and twelve other related files already fail on main (process-level suites needing a pidfd-capable interpreter, a cached model or a production UI build, plus #939 async leftovers in the chat queue); run sequentially, their failure sets are identical with and without this change. The new regressions are PostgreSQL-only because SQLite cannot hold a statement open to interrupt it. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (runtime-stop after chats failing 2/2 before, 4/4 clean after) is recorded in the PR.",
+  "reason": "Execution workers refuse a project table seen only inside a subquery or bare EXISTS. has_entity_with_metadata (first use of every command approval), engagement_has_dependents (DELETE of a non-archived project) and Butler search's private-chat filter used that shape and failed in supervisor mode. They now select a mapped id with LIMIT 1, and Butler search outer-joins the chat on its primary key so the guard scopes it. New worker regression tests in test_execution_scope_probes.py (sqlite and PostgreSQL, using the execution fixture) cover both probes, the fenced answer for another project's approval, and a crafted document that names another project's chat. The other selected suites cover the same helpers and search outside workers: storage and guarded-delete semantics, session record lookups, federated search, the read-responsiveness search path, and Butler's private-chat search contract.",
+  "exclusions": "test_butler_administration.py is selected only for its two search tests: its starter-template tests ([skill], [agents_md]) fail identically on pristine origin/main. Playwright area project-deletion matches storage.py but is excluded: its fixture (tests/v3/application_model_fixture.py) crashes at startup on main since the async store change (un-awaited store.create), and it runs a single-process Core that never had the worker guard. The supervisor-mode journey was checked on a scratch Postgres Core instead (DELETE of a project with a chat: 500 on main, 409 'archive it instead' on this branch; Butler search_resources tool: CoordinationConflict on main, results on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 447,
+    "python": 140,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_runtime_capacity.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_execution_memory.py",
+    "tests/v3/test_execution_scope_probes.py",
     "tests/v3/test_execution_scope.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_index_attempts.py",
-    "tests/v3/test_memory_prelaunch.py",
-    "tests/v3/test_project_handoff_admission.py",
-    "tests/v3/test_provider_tool_manifest.py",
-    "tests/v3/test_runtime_capacity.py",
-    "tests/v3/test_runtime_chat_acceptance.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_runtime_host_search.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_work_batch_contracts.py"
+    "tests/v3/test_butler_administration.py::test_butler_search_excludes_private_and_foreign_chats_before_pagination",
+    "tests/v3/test_butler_administration.py::test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions",
+    "tests/v3/test_session_record_lookups.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_guarded_delete.py",
+    "tests/v3/test_federated_search.py",
+    "tests/v3/test_load_read_responsiveness.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4c58995a935b4203dfb8f1463c5d58c7dc1dc575086b31ff7e6db9206161d4d5"
+  "change_digest": "fba325860bc9996783b079251fdd5766bb0582db8583539660edf57ad538681e"
 }
