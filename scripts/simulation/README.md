@@ -96,8 +96,15 @@ current database and files. It never restores a snapshot or stops pinned work.
 Projects with unsupported resources keep their current runtime; a third execution
 version stays staged until a resident version retires. Interrupted operation IDs
 and their original arguments remain in `deployer-state.json`; retry reads their
-durable receipts. An uncertain operation needs explicit reconciliation, and an
-incomplete cleanup is reported separately from a healthy API promotion.
+durable receipts. If a promotion is blocked specifically by an uncertain
+`prepare_api` operation whose exact Core receipt records `MemoryBudgetError`, use
+`reconcile-runtime-deployment --deployment-id <journal-id>`. This guarded path
+re-reads the Core stage, migration, and API receipts; verifies the active host,
+authenticated health, old API version, target, and resident versions; then archives
+the journal as a proven pre-spawn rejection while preserving the accepted pending
+candidate. It does not retry the operation or edit Core's operation ledger. Other
+uncertain outcomes remain blocked for separate reconciliation. An incomplete
+cleanup is reported separately from a healthy API promotion.
 `offline-rollback` refuses to run in supervisor mode. Coherent legacy snapshots
 remain a separate disaster-recovery artifact, outside the code rollback path.
 Legacy mutations also verify the live protocol before stopping a service. A
