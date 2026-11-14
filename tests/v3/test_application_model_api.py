@@ -300,4 +300,148 @@ async def test_browser_and_project_tools_expose_same_graph(tmp_path):
     (await journey())
 
 
+async def test_a_chat_model_learns_why_its_model_edit_was_refused(tmp_path):
+    """A refused model edit reaches the chat model as Core's guided failure."""
+    from nebula.v3.application_model.tools import project_components
+    from nebula.v3.chat import ChatService
+    from nebula.v3.domain import (
+        ChatSession,
+        ChatTurn,
+        Engagement,
+        ScopePolicy,
+        ToolCallOrigin,
+    )
+    from nebula.v3.tools import ToolInvocation
+    import json
+
+    store = NebulaStore(tmp_path / "refusal.db")
+    project = await store.create(Engagement(name="Refusals"))
+    chat = await store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Model",
+            model="fixture",
+            provider_profile_id="fixture",
+        )
+    )
+    turn = await store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            model="fixture",
+            provider_profile_id="fixture",
+            tools_enabled=True,
+        )
+    )
+    scope = ScopePolicy(engagement_id=project.id)
+    runtime = project_components(store, project.id, scope, tmp_path)
+    service = ChatService(store)
+
+    async def model_sees(name, arguments, call_id):
+        invocation = ToolInvocation(
+            engagement_id=project.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=chat.id,
+            chat_turn_id=turn.id,
+            tool_name=name,
+            arguments=arguments,
+            workspace=tmp_path,
+        )
+        result = await runtime.broker.execute(invocation, scope)
+        assert result.exit_code == 1 and result.output["recovery"]
+        entry, waiting = await service._tool_result_entry(
+            result,
+            invocation=invocation,
+            spec=runtime.specs[name],
+            arguments=arguments,
+            call_id=call_id,
+        )
+        assert not waiting and entry["status"] == "failed"
+        # What the provider replays to the model for this call.
+        return json.loads(entry["provider_result"])
+
+    unknown = await model_sees(
+        "model.transact",
+        {
+            "expected_revision": 0,
+            "idempotency_key": "unknown-type",
+            "operations": [
+                {
+                    "op": "put_object",
+                    "id": "entry",
+                    "label": "Entry",
+                    "authentication_context": "anonymous",
+                    "properties": {
+                        "purpose": {"value": "Where an anonymous visitor signs in."}
+                    },
+                    "classification": {"value": "not-a-schema-type"},
+                }
+            ],
+        },
+        "call-1",
+    )
+    # Before, every refusal read "The tool could not complete." with no way
+    # to tell a schema mistake from a stale revision.
+    assert unknown["problem"] != "The tool could not complete."
+    assert unknown["category"] == "invalid_arguments"
+    assert unknown["side_effects"] == "none"
+    assert "Nothing was saved" in unknown["problem"]
+    assert "not-a-schema-type" not in str(unknown)
+    assert "model.discover_schema" in unknown["next_action"]
+
+    unlinked = await model_sees(
+        "model.transact",
+        {
+            "expected_revision": 0,
+            "idempotency_key": "unlinked",
+            "operations": [
+                {
+                    "op": "put_relationship",
+                    "id": "a-b",
+                    "type": "contains",
+                    "source": "absent-a",
+                    "target": "absent-b",
+                    "claim": {"value": True},
+                }
+            ],
+        },
+        "call-4",
+    )
+    # Core's own fixed sentence is shown as written.
+    assert unlinked["problem"].startswith("Both endpoints must exist in this project")
+    assert "model.relationship_options" in unlinked["next_action"]
+
+    stale = await model_sees(
+        "model.transact",
+        {
+            "expected_revision": 7,
+            "idempotency_key": "stale",
+            "operations": [
+                {
+                    "op": "put_object",
+                    "id": "page",
+                    "label": "Page",
+                    "authentication_context": "anonymous",
+                    "properties": {
+                        "purpose": {"value": "Where an anonymous visitor signs in."}
+                    },
+                    "classification": {"value": "Page"},
+                }
+            ],
+        },
+        "call-2",
+    )
+    assert stale["category"] == "conflict"
+    assert "revision 0" in stale["next_action"]
+    assert stale["error_code"] == "application_model.conflict"
+
+    missing = await model_sees(
+        "model.neighborhood", {"object_id": "missing-object"}, "call-3"
+    )
+    assert missing["category"] == "unavailable_resource"
+    assert "Nothing changed" in missing["problem"]
+    await service.shutdown()
+
+
 pytestmark = pytest.mark.anyio
