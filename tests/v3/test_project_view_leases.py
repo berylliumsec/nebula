@@ -14,12 +14,16 @@ from nebula.v3.database import (
 from nebula.v3.domain import Engagement
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.memory_policy import MemoryBudgetError
-from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
+from nebula.v3.runtime_auto_admission import (
+    MAX_IDLE_WORKER_GRACE_SECONDS,
+    RuntimeAutoAdmission,
+)
 from nebula.v3.runtime_coordination import CoordinationConflict, RuntimeCoordination
 from nebula.v3.runtime_ipc import ProjectRuntimeUnavailable
 from nebula.v3.runtime_routing import RuntimeRouting
 from nebula.v3.runtime_view_leases import (
     MAX_VIEW_LEASES_PER_ACTOR,
+    VIEW_LEASE_RETAIN_MS,
     ProjectViewLeases,
     ViewLeaseRefused,
 )
@@ -58,10 +62,12 @@ async def _expire(value, lease_id, *, ago_ms=1_000):
         )
 
 
-def _admission(value, *, prepared, retired, prepare_error=None):
+def _admission(value, *, prepared, retired, prepare_error=None, refusals=None):
     async def prepare(_version):
         if prepare_error is not None:
             raise prepare_error
+        if refusals:
+            raise refusals[0]
         runtime_id = f"viewed-worker-{len(prepared)}"
         prepared.append(runtime_id)
         await runtime(value, runtime_id)
@@ -121,10 +127,27 @@ async def test_hold_expires_on_database_time_and_a_replayed_put_renews_or_recrea
         rows = list(await session.scalars(select(ProjectViewLeaseRow)))
     assert len(rows) == 1 and rows[0].expires_at_ms > await _db_now(batch) + 50_000
     assert again["ttl_seconds"] == 60
-    await leases.release("operator", "one", "view-lease-0001")
+    # Release ends the lease now (the idle grace runs from here); a repeat
+    # changes nothing.
     await leases.release("operator", "one", "view-lease-0001")
     async with batch.database.session() as session:
-        assert list(await session.scalars(select(ProjectViewLeaseRow))) == []
+        ended = (await session.scalars(select(ProjectViewLeaseRow))).one()
+    assert ended.expires_at_ms <= await _db_now(batch)
+    await leases.release("operator", "one", "view-lease-0001")
+    async with batch.database.session() as session:
+        repeat = (await session.scalars(select(ProjectViewLeaseRow))).one()
+    assert repeat.expires_at_ms == ended.expires_at_ms
+    # A new view of the project supersedes the lapsed one, and leases no
+    # idle grace can read any more are pruned.
+    await leases.hold("device:phone", "two", "view-lease-0003")
+    await _expire(batch, "view-lease-0003", ago_ms=VIEW_LEASE_RETAIN_MS + 1_000)
+    await leases.hold("operator", "one", "view-lease-0002")
+    async with batch.database.session() as session:
+        kept = list(await session.scalars(select(ProjectViewLeaseRow)))
+    assert [(row.actor_id, row.lease_id) for row in kept] == [
+        ("operator", "view-lease-0002")
+    ]
+    assert VIEW_LEASE_RETAIN_MS >= MAX_IDLE_WORKER_GRACE_SECONDS * 1000
 
 
 async def test_lease_refusals_are_bounded_and_explained(batch):
@@ -196,14 +219,38 @@ async def test_a_live_view_admits_the_project_and_a_lapsed_one_lets_it_retire(ba
     # While the view stays open the worker is not idle.
     await automatic.reconcile()
     assert retired == []
-    # The host's idle grace (#1062) still applies after the view closes.
+    # Closing the view starts the host's idle grace (#1062); it retires after.
     automatic.idle_grace_ms = 60_000
-    await _expire(batch, "view-lease-0001", ago_ms=1_000)
+    await leases.release("operator", "one", "view-lease-0001")
     await automatic.reconcile()
     assert retired == []
     await _expire(batch, "view-lease-0001", ago_ms=61_000)
     await automatic.reconcile()
     assert retired == ["one"]
+
+
+async def test_a_closed_view_spends_no_grace_while_another_project_waits(batch):
+    _database_clock(batch)
+    await _api_host(batch)
+    prepared, retired, refusals = [], [], []
+    automatic = _admission(
+        batch, prepared=prepared, retired=retired, refusals=refusals
+    )
+    automatic.idle_grace_ms = 60_000
+    leases = ProjectViewLeases(batch.database, batch.coordination)
+    await leases.hold("operator", "two", "view-lease-0002")
+    await automatic.reconcile()
+    assert len(prepared) == 1
+    await leases.release("operator", "two", "view-lease-0002")
+    await automatic.reconcile()
+    assert retired == []
+    # Another viewed project cannot get a worker: like #1062's command grace,
+    # a closed view's grace gives its worker's memory back at once.
+    refusals.append(MemoryBudgetError("Core reserve is below the minimum."))
+    await leases.hold("operator", "one", "view-lease-0001")
+    await automatic.reconcile()
+    await automatic.reconcile()
+    assert retired == ["two"]
 
 
 async def test_a_view_lease_never_bypasses_the_memory_budget(batch):
@@ -261,7 +308,8 @@ async def test_lease_routes_need_authentication_but_no_idempotency_key(batch):
     released = await client.delete(path, headers={"Authorization": "Bearer " + TOKEN})
     assert released.status_code == 204
     async with batch.database.session() as session:
-        assert list(await session.scalars(select(ProjectViewLeaseRow))) == []
+        ended = (await session.scalars(select(ProjectViewLeaseRow))).one()
+    assert ended.expires_at_ms <= await _db_now(batch)
 
 
 async def test_a_project_worker_cannot_write_view_leases_or_holds(execution):
