@@ -1278,11 +1278,13 @@ def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
                 content=frame("started", turn_id="selected-turn", sequence=1)
                 + frame("done", message={"content": "Saved answer"}, sequence=2),
             )
+        if path == "/api/v1/chat/sessions/chat-a/subagents":
+            return response({"session_id": "chat-a", "subagents": []})
         pytest.fail(f"Unexpected approval request: {request.method} {path}")
 
     async def run():
         nonlocal decided, pending_id
-        shell = make_shell(tmp_path, handler, ui=UI(choices=["approval-a", "approve"]))
+        shell = make_shell(tmp_path, handler, ui=UI(choices=["main:approval-a", "approve"]))
         shell.current().session["backend"] = (
             "provider" if backend == "harness" else "harness"
         )
@@ -1300,7 +1302,7 @@ def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
         assert shell.current().draft is draft
         decided = False
         pending_id = "newer-turn"
-        shell.ui = UI(choices=["approval-a"])
+        shell.ui = UI(choices=["main:approval-a"])
         with pytest.raises(ClientError, match="pending turn changed"):
             await workflows.approvals(shell, [])
         assert not decided
