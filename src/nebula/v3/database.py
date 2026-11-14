@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Callable, cast
 
 from alembic import command
 from alembic.config import Config
@@ -42,10 +42,17 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import AsyncAdaptedQueuePool
-from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from sqlalchemy.exc import (
+    DBAPIError,
+    DisconnectionError,
+    InterfaceError,
+    OperationalError,
+    TimeoutError as PoolTimeoutError,
+)
 
 from .database_pool import ConnectionBudget, PoolSettings, connection_budget
 from .async_utils import finish_cleanup
+from .diagnostics import record_caught_exception, record_diagnostic
 from .query_predicates import visible_harness_chat_title
 
 from .domain import utc_now
@@ -1036,6 +1043,24 @@ class DatabaseBusyError(PoolTimeoutError):
     """Bounded capacity was unavailable; no automatic write replay is implied."""
 
 
+# Waiting for SQL to return backs off to this interval.
+OUTAGE_RETRY_MAX_SECONDS = 1.0
+
+
+def transient_database_error(error: BaseException) -> bool:
+    """True for a connection-level SQL failure that proves nothing about data.
+
+    Refused, reset or closed connections and driver timeouts say only that SQL
+    was unreachable. Constraint, programming and coordination errors are
+    answers from SQL and are never transient.
+    """
+    if isinstance(error, DBAPIError):
+        return bool(error.connection_invalidated) or isinstance(
+            error, (OperationalError, InterfaceError)
+        )
+    return isinstance(error, (DisconnectionError, OSError, TimeoutError))
+
+
 class Database:
     """One async engine per Core process and task-owned units of work."""
 
@@ -1058,6 +1083,11 @@ class Database:
         self.execution_runtime_id = execution_runtime_id
         self._initialized = False
         self._initialize_lock = asyncio.Lock()
+        # Seconds this process may keep waiting for an unreachable SQL server;
+        # unset, a failed connection is raised at once.
+        self._outage_remaining: Callable[[], float] | None = None
+        # One report per outage, from whichever session waits first.
+        self._outage_reported = False
         self._active_session: ContextVar[
             tuple[asyncio.Task | None, AsyncSession] | None
         ] = ContextVar("nebula_database_session", default=None)
@@ -1383,12 +1413,7 @@ class Database:
         started = time.perf_counter()
         try:
             try:
-                await session.connection()
-            except (PoolTimeoutError, asyncio.CancelledError):
-                raise
-            except BaseException:
-                self.pool_state["connection_failures"] += 1
-                raise
+                await self._connect(session)
             finally:
                 self.pool_state["waiters"] -= 1
                 self.performance.record(
@@ -1409,6 +1434,72 @@ class Database:
             self._active_session.reset(owner)
             # Repeated caller cancellation must still join connection cleanup.
             await finish_cleanup(session.close())
+
+    def ride_out_outages(self, remaining: Callable[[], float]) -> None:
+        """Wait for SQL to return while ``remaining()`` seconds are left.
+
+        A worker installs its lease bound here: while it can still prove its
+        lease is live, a session waits for a refused or reset connection to
+        come back instead of failing the work that opened it. Only binding
+        the connection is retried, before any statement runs, so no write is
+        ever replayed. Once the bound is spent a failure is raised as before.
+        """
+        self._outage_remaining = remaining
+
+    def _outage_seconds(self) -> float:
+        remaining = self._outage_remaining
+        return max(0.0, remaining()) if remaining is not None else 0.0
+
+    async def _connect(self, session: AsyncSession) -> None:
+        delay = 0.1
+        waiting_since: float | None = None
+        while True:
+            bound = self._outage_seconds()
+            try:
+                if bound > 0:
+                    # A silently dropped server must not hold a connect past
+                    # the bound; past it this process may no longer wait.
+                    async with asyncio.timeout(bound):
+                        await session.connection()
+                else:
+                    await session.connection()
+                if waiting_since is not None and self._outage_reported:
+                    self._outage_reported = False
+                    record_diagnostic(
+                        "info",
+                        "runtime",
+                        "runtime.sql.reconnected",
+                        "SQL returned while this worker could still prove its "
+                        "leases; waiting work continued.",
+                        outcome="recovered",
+                        stage="database",
+                        duration_ms=(time.monotonic() - waiting_since) * 1000,
+                    )
+                return
+            except (PoolTimeoutError, asyncio.CancelledError):
+                raise
+            except BaseException as error:
+                self.pool_state["connection_failures"] += 1
+                if not transient_database_error(error):
+                    raise
+                left = self._outage_seconds()
+                if left <= delay:
+                    raise
+                if waiting_since is None:
+                    waiting_since = time.monotonic()
+                if not self._outage_reported:
+                    self._outage_reported = True
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.sql.waiting",
+                        "SQL is unreachable; work waits while this worker can "
+                        "prove its leases, and the worker stops before they expire.",
+                        error,
+                        stage="database",
+                        metadata={"seconds_left": round(left, 1)},
+                    )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, OUTAGE_RETRY_MAX_SECONDS)
 
     def task_session(self) -> AsyncSession | None:
         current = self._active_session.get()

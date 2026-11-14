@@ -1,24 +1,42 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Fixes a semantic merge conflict from batch 3 (#1063): #1021 made serve's listener go through stable_listener_config, which always passes timeout_graceful_shutdown, and #1023 passed the same keyword at the serve call, so every `nebula-core serve` exited with a TypeError right after its ready line. Selection: the listener and serve-config tests (new cases build serve's config inherited and not, and reject an unbounded listener), the runtime service tests, and the two tests that start a real serve end to end.",
-  "exclusions": "test_runtime_host_knowledge_bootstrap's serve test needs a non-loopback LAN address and test_shutdown_readmission's needs the cached embedding model; both are selected so CI runs them where available. Verified locally by starting a real `nebula-core serve` on 8fe806a (exits 1 with the TypeError) and on this branch (alive, /api/v1/health 200, stops on SIGTERM).",
+  "reason": "API and execution workers exited on the first failed heartbeat when PostgreSQL refused or reset connections, though their 30 s leases were still valid; the execution lease watcher fenced the project on any SQL error (wedging it if the heartbeat kept renewing), each streamed chat frame failed on the first lost connection, and the memory reconciler and chat schedule loop died on one failed read. Workers now keep a local monotonic lease bound (LeaseRenewal: last acknowledged renewal start + LEASE_MS - LEASE_SAFETY_MS); inside it the heartbeat retries transient SQL errors (runtime_worker.keep_lease), worker sessions wait to bind a connection before any statement (Database.ride_out_outages, opt-in), the watcher and prepared-restoration wait do not fence, and stream publication retries under the same batch key; past the bound the worker stops with LeaseLost as before, and a definite LeaseLost or SQL answer still stops it at once. Selected: the new outage suite (keeper bound, session wait, real heartbeat on SQLite/PostgreSQL that never resurrects an expired lease); the execution worker suite with the new watcher regression; the worker features suite with the in-process run_worker regression; the memory recovery suite with the loop regression; the journal retry regression and the chat stream cases that pass on main; the coordination, async database/PostgreSQL/auxiliary database, API worker composition, write-lock, runtime memory recovery and diagnostic boundary suites that exercise Database.session, heartbeats and the lease watcher.",
+  "exclusions": "test_runtime_chat_stream.py: test_started_segment_seeds_legacy_prefix_once_and_default_follow_excludes_prior_segments, test_new_segment_waits_until_the_prior_segment_end_commits, test_stop_before_first_producer_step_persists_cancelled_end_once and test_api_replacement_replays_sql_without_contacting_an_execution_process fail identically on pristine origin/main and on this branch (SimpleNamespace source_request / global transaction owner ValueError), so they are not selected. test_execution_worker.py::test_idle_worker_makes_no_fenced_claims_and_still_picks_up_work[postgresql] fails 3/3 locally on both pristine origin/main and this branch on this saturated host (statement count / timing); its SQLite variant passes on both and PostgreSQL variants skip in CI. test_runtime_worker_features.py spawn cases need a pidfd-capable 3.12 interpreter; they passed 16/16 on main and 18/18 here with per-worktree venvs at load ~40 and both failed identically at load 55 (20 s spawn readiness bound). Process-level suites (test_execution_worker_process.py) are not selected: they spawn whole Cores and are dominated by host-load readiness here. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (scratch supervisor PostgreSQL Cores on origin/main and on this branch behind a TCP proxy whose listener was stopped and sockets reset, 12-13 s and 45 s outages during a slow streaming chat) is in the PR, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 38,
+    "python": 285,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_stable_listener_shutdown.py",
-    "tests/v3/test_runtime_service.py",
-    "tests/v3/test_runtime_host_knowledge_bootstrap.py",
-    "tests/v3/test_shutdown_readmission.py::test_actual_core_shutdown_reopen_readmits_existing_project_and_preserves_pauses"
+    "tests/v3/test_worker_sql_outage.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_worker_features.py",
+    "tests/v3/test_memory_recovery.py",
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_async_database.py",
+    "tests/v3/test_async_postgresql.py",
+    "tests/v3/test_async_auxiliary_database.py",
+    "tests/v3/test_api_worker_composition.py",
+    "tests/v3/test_execution_worker_write_locks.py",
+    "tests/v3/test_runtime_memory_recovery.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_runtime_chat_stream.py::test_committed_batch_replays_on_independent_connection_with_stable_cursors",
+    "tests/v3/test_runtime_chat_stream.py::test_cancellation_joins_publication_and_never_undoes_acknowledged_frames",
+    "tests/v3/test_runtime_chat_stream.py::test_batch_whose_commit_was_not_acknowledged_is_retried_once_by_key",
+    "tests/v3/test_runtime_chat_stream.py::test_handoff_keeps_one_epoch_and_never_hides_the_next_segment",
+    "tests/v3/test_runtime_chat_stream.py::test_end_marker_at_page_boundary_does_not_skip_a_resumed_segment",
+    "tests/v3/test_runtime_chat_stream.py::test_terminal_turn_commit_does_not_hide_its_later_final_frame",
+    "tests/v3/test_runtime_chat_stream.py::test_publication_without_exact_project_authority_is_rejected",
+    "tests/v3/test_runtime_chat_stream.py::test_cursor_after_the_committed_end_returns_without_waiting",
+    "tests/v3/test_runtime_chat_stream.py::test_cursor_ahead_of_the_journal_requires_reload",
+    "tests/v3/test_runtime_chat_stream.py::test_actual_chat_producer_persists_frames_before_viewers_and_settles_failure"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "b8626a13fab5e071331744b16b2739733157a70782aed15dd95984e5b93b0cd6"
+  "change_digest": "b8936ab3e4f56e13bba9f35d589737ab7820f23b1068b7c390ba4e7f6dc484e1"
 }

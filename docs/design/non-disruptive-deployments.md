@@ -67,6 +67,18 @@ An expired ID cannot be revived. Workers must heartbeat every five seconds;
 leases expire after thirty seconds according to the database clock. Registration
 and heartbeat primitives do not start a heartbeat loop on behalf of a worker.
 
+A worker rides out a short database outage instead of exiting. Expiry is set
+from the database clock after a renewal request leaves the worker, so an
+acknowledged renewal proves the leases live for thirty seconds from the local
+monotonic moment that request started. For twenty of those seconds (ten are a
+margin for stopping, scheduling and clock drift) refused, reset or timed-out
+connections are retried: heartbeats back off, sessions wait to bind a
+connection before any statement runs, and the lease watcher neither fences nor
+stops the project. When that bound is spent, an attempt still unanswered is
+abandoned and the worker stops as before. LeaseLost and any other answer from
+SQL still stop it at once, and a renewal after reconnection cannot extend a
+lease the database has already expired.
+
 Project counters never reset. Claiming requires expiry or no owner. Every
 authoritative mutation must use `fenced`, which acquires the project write lock
 and checks both leases before and after the transaction. Keep these transactions

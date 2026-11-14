@@ -11,9 +11,9 @@ from pathlib import Path
 from starlette.responses import JSONResponse
 
 from .async_utils import ServiceCleanupError, finish_cleanup
-from .database import Database
+from .database import Database, transient_database_error
 from .database_pool import PoolSettings
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 from .execution_memory import ExecutionMemoryBudget
 from .execution_scope import execution_context
 from .runtime_capacity import RuntimeCapacity
@@ -98,6 +98,10 @@ async def project_application(context, lease) -> AsyncIterator[object]:
         pool_settings=settings,
         execution_runtime_id=lease.runtime_id,
     )
+    renewal = getattr(context, "renewal", None)
+    if renewal is not None:
+        # Project writes wait out a short SQL outage, bounded like the heartbeat.
+        database.ride_out_outages(renewal.remaining)
     store = NebulaStore(database)
     knowledge = None
     try:
@@ -154,7 +158,11 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             memory_budget_service=ExecutionMemoryBudget(
                 context.coordinator.coordination, lease
             ),
-            stream_journal=RuntimeChatJournal(context.coordinator.coordination, store),
+            stream_journal=RuntimeChatJournal(
+                context.coordinator.coordination,
+                store,
+                outage_remaining=renewal.remaining if renewal is not None else None,
+            ),
             durable_chat_acceptance=CHAT_ACCEPT_FEATURE in context.manifest.features,
             durable_chat_resume="chat.resume/v1" in context.manifest.features,
             settings_memory_request=RemoteMemorySettings(client).request
@@ -237,6 +245,27 @@ class ProjectExecution:
         context.rpc.register("execution.activate/v1", self.activate)
         context.rpc.register("execution.relinquish/v1", self.relinquish)
         context.rpc.register("execution.quiesce/v1", self.quiesce)
+
+    def _lease_provable(self) -> bool:
+        renewal = getattr(self.context, "renewal", None)
+        return renewal is not None and renewal.remaining() > 0
+
+    async def _recheck(self, lease) -> bool:
+        """Recheck ownership in SQL; False while SQL is unreachable but provable.
+
+        The heartbeat stops this whole process once the leases can no longer
+        be proven live, so an unreachable database inside that bound neither
+        fences nor fails the project. LeaseLost and any answer from SQL raise.
+        """
+        try:
+            async with self.context.coordinator.coordination.fenced(lease):
+                pass
+        except Exception as error:
+            if not transient_database_error(error) or not self._lease_provable():
+                raise
+            # diagnostic-expected: the caller reports the wait once; the heartbeat ends it at the lease bound.
+            return False
+        return True
 
     async def status(self, payload):
         if payload:
@@ -422,10 +451,7 @@ class ProjectExecution:
                                     timeout=HEARTBEAT_SECONDS,
                                     return_when=asyncio.FIRST_COMPLETED,
                                 )
-                                async with self.context.coordinator.coordination.fenced(
-                                    lease
-                                ):
-                                    pass
+                                await self._recheck(lease)
                         finally:
                             activate_wait.cancel()
                             stop_wait.cancel()
@@ -578,13 +604,23 @@ class ProjectExecution:
                             )
 
                     async def watch_lease():
+                        waiting = False
                         while not self._stop.is_set():
                             await asyncio.sleep(HEARTBEAT_SECONDS)
                             try:
-                                async with self.context.coordinator.coordination.fenced(
-                                    lease
-                                ):
-                                    pass
+                                if await self._recheck(lease):
+                                    waiting = False
+                                elif not waiting:
+                                    waiting = True
+                                    record_diagnostic(
+                                        "warning",
+                                        "runtime",
+                                        "runtime.project.lease_waiting",
+                                        "SQL is unreachable; the project keeps running while its lease is provably live.",
+                                        outcome="waiting",
+                                        stage="lease",
+                                        retryable=True,
+                                    )
                             except LeaseLost:
                                 # diagnostic-expected: ordinary lease loss fences and stops the owned project.
                                 self.state = "fenced"

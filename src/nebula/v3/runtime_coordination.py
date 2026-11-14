@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -40,6 +41,10 @@ from .domain import utc_now
 
 HEARTBEAT_SECONDS = 5
 LEASE_MS = 30_000
+# A worker that cannot reach SQL keeps acting only while a renewal SQL
+# acknowledged still proves its lease live, less this margin for stopping its
+# own effects, scheduling delay on a loaded host and drift between clocks.
+LEASE_SAFETY_MS = 10_000
 MAX_STREAM_BATCH = 256
 STREAM_EPOCH = "durable-v1"
 _STREAM_PREFIX = "chat_stream."
@@ -80,6 +85,37 @@ class DeploymentChanged(OperationRejected):
 
 class ProjectRetiring(CoordinationConflict):
     """The project's worker is releasing it; the same request can be retried."""
+
+
+class LeaseRenewal:
+    """The local monotonic bound of this incarnation's last proven renewal.
+
+    ``heartbeat`` sets expiry from the database clock, read after the request
+    leaves this process, so an acknowledged renewal proves the runtime and
+    project leases live for at least ``LEASE_MS`` after the local moment the
+    request started. Nothing is proven before the first acknowledgement.
+    """
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self.renewed_at: float | None = None
+
+    def renewed(self, started: float) -> None:
+        """Record a renewal SQL acknowledged; ``started`` is its local start."""
+        if self.renewed_at is None or started > self.renewed_at:
+            self.renewed_at = started
+
+    def remaining(self) -> float:
+        """Seconds this process may still act without reaching SQL."""
+        if self.renewed_at is None:
+            return 0.0
+        window = (LEASE_MS - LEASE_SAFETY_MS) / 1000
+        return max(0.0, self.renewed_at + window - self.clock())
+
+    @property
+    def spent(self) -> bool:
+        """A renewal was proven once and its bound has since run out."""
+        return self.renewed_at is not None and self.remaining() <= 0
 
 
 def project_worker_commands(project_id, states: Sequence[str] = ("queued",)) -> Any:
