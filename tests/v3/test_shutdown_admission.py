@@ -154,3 +154,38 @@ async def test_shutdown_names_a_project_whose_owner_is_no_longer_live(host):
     )
     async with coordinator.database.session() as session:
         assert not (await session.get(DeploymentHostRow, "host")).shutdown_requested
+
+
+async def test_blocked_shutdown_is_rejected_without_effect_and_names_the_work(host):
+    from nebula.v3.runtime_operations import DeploymentOperations
+
+    coordinator = host[0]
+    # A chat start waiting for host pressure keeps its command on the lane.
+    receipt = await coordinator.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="queued-chat",
+        name="http.invoke/v1",
+        payload={},
+    )
+    revision = (await coordinator.status()).revision
+
+    async def dispatch(_action, values):
+        return {"leases": len(await coordinator.prepare_shutdown(**values))}
+
+    result = await DeploymentOperations(coordinator).execute(
+        operation_id="blocked-stop",
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": revision},
+        dispatch=dispatch,
+    )
+    assert result["state"] == "failed"
+    assert result["result"] == {
+        "detail": "Shutdown is waiting for this work to finish, pause or stop: "
+        f"Command {receipt.command_id} remains active or unresolved",
+        "error_type": "ShutdownBlocked",
+    }
+    async with coordinator.database.session() as session:
+        saved = await session.get(DeploymentHostRow, "host")
+        assert not saved.shutdown_requested and saved.revision == revision

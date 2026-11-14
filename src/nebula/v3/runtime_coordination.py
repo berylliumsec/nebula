@@ -61,6 +61,10 @@ class OperationRejected(CoordinationConflict):
     """A dispatcher proved that no effect was admitted before refusing."""
 
 
+class ShutdownBlocked(OperationRejected):
+    """Durable work refused shutdown before anything changed; the text names it."""
+
+
 class DeploymentChanged(OperationRejected):
     """The deployment revision moved after the caller read it; nothing changed.
 

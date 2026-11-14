@@ -52,6 +52,7 @@ from .runtime_coordination import (
     LeaseLost,
     ProjectLease,
     RuntimeCoordination,
+    ShutdownBlocked,
 )
 from .process_identity import same_process
 
@@ -802,7 +803,13 @@ class DeploymentCoordinator:
             )
             blockers = await self._shutdown_blockers(session)
             if blockers:
-                raise CoordinationConflict("; ".join(blockers[:20]))
+                # Nothing is held yet, so the receipt can say the refusal had
+                # no effect and name what must finish, pause or stop first.
+                raise ShutdownBlocked(
+                    "Shutdown is waiting for this work to finish, pause or stop: "
+                    + "; ".join(blockers[:20])
+                    + (f"; and {len(blockers) - 20} more" if len(blockers) > 20 else "")
+                )
             leases = [
                 ProjectLease(row.project_id, row.runtime_id, row.fencing_token)
                 for row in owners
