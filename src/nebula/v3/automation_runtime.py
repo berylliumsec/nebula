@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .async_utils import MaybeAsync
 
-from .async_utils import resolve_workspace
+from .async_utils import call_async, resolve_workspace
 
 import asyncio
 import hashlib
@@ -855,7 +855,9 @@ class _ManagedSession:
 SessionFactory = Callable[[SessionLaunch], Awaitable[RuntimeBackendSession]]
 RuntimeResolver = Callable[[str], Awaitable[Any]]
 CachedRuntimeProvider = Callable[[], dict[str, Any] | None]
-ProcessTerminalObserver = Callable[[str], object]
+# Product binds ChatService.continue_after_tool_callback (a coroutine
+# function); tests may bind a plain function. Both are awaited to completion.
+ProcessTerminalObserver = MaybeAsync[[str], object]
 
 
 def resolve_callback_origin(*, host: str, port: int, tls: bool = False) -> str:
@@ -2560,7 +2562,11 @@ class AutomationRuntimeManager:
                 and status != CommandExecutionStatus.INTERRUPTED
             ):
                 try:
-                    self.process_terminal_observer(process.execution.process_id)
+                    # Awaited here, so the owner's resume runs (or its failure
+                    # is recorded below) before finalization completes.
+                    await call_async(
+                        self.process_terminal_observer, process.execution.process_id
+                    )
                 except Exception as exc:
                     record_caught_exception(
                         "runtime",

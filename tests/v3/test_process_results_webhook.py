@@ -2,6 +2,7 @@ from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -12,6 +13,7 @@ import httpx
 import pytest
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 
+from nebula.v3 import automation_runtime as automation_runtime_module
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import (
     MAX_RESULTS_OUTPUT_BYTES,
@@ -362,10 +364,16 @@ async def test_terminal_background_process_without_callback_becomes_unknown_fail
         assert notified == [started.process_id]
 
         resumed: list[str] = []
-        chat.prepare_resume = lambda turn_id: turn_id  # type: ignore[method-assign]
-        chat.start_provider_turn = (  # type: ignore[method-assign]
-            lambda prepared, **_kwargs: resumed.append(prepared) or prepared
-        )
+
+        async def prepare_resume(turn_id: str) -> str:
+            return turn_id
+
+        async def start_provider_turn(prepared: str, **_kwargs: object) -> str:
+            resumed.append(prepared)
+            return prepared
+
+        chat.prepare_resume = prepare_resume  # type: ignore[method-assign,assignment]
+        chat.start_provider_turn = start_provider_turn  # type: ignore[method-assign,assignment]
         assert (await chat.reconcile_waiting_callbacks()) == [turn.id]
         assert resumed == [turn.id]
         latest = await store.get(ChatTurn, turn.id)
@@ -560,6 +568,15 @@ async def _approved_background_command_chat(
     return manager, store, chat, turn, provider, prepared_for
 
 
+def _resume_from_store(chat: ChatService, store, prepared_for) -> None:
+    """Resume a parked turn from its stored state through the test provider."""
+
+    async def prepare_resume(turn_id: str) -> PreparedChat:
+        return prepared_for(await store.get(ChatTurn, turn_id))
+
+    chat.prepare_resume = prepare_resume  # type: ignore[method-assign]
+
+
 def _results_key(manager, process_id: str) -> str:
     """The results key, which only the process receives, in its environment."""
 
@@ -631,7 +648,7 @@ async def test_approved_background_command_waits_for_its_callback(tmp_path):
         results_api_key = _results_key(manager, process_id)
 
         # The webhook now lands on a turn that is actually waiting for it.
-        manager.accept_results(
+        await manager.accept_results(
             process_id,
             results_api_key,
             ProcessResultsRequest(status="complete", summary="ports enumerated"),
@@ -666,15 +683,13 @@ async def test_approval_and_results_webhook_resume_through_provider_admission(tm
             provider,
             prepared_for,
         ) = await _approved_background_command_chat(tmp_path)
-        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
-            store.get(ChatTurn, turn_id)
-        )
-        chat.start_provider_turn(prepared_for(turn))
+        _resume_from_store(chat, store, prepared_for)
+        await chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "approval_required"
         (await _approve_pending(store, turn.id))
 
-        chat.start_provider_turn(chat.prepare_resume(turn.id))
+        await chat.start_provider_turn(await chat.prepare_resume(turn.id))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         # The approved command ran and now waits for its results callback.
         assert events == ["queued", "admitted", "started", "callback_required"]
@@ -683,19 +698,19 @@ async def test_approval_and_results_webhook_resume_through_provider_admission(tm
         entry = waiting.tool_history[-1]
         results_api_key = _results_key(manager, entry["process_id"])
 
-        manager.accept_results(
+        await manager.accept_results(
             entry["process_id"],
             results_api_key,
             ProcessResultsRequest(status="complete", summary="ports enumerated"),
         )
-        assert chat.continue_after_tool_callback(entry["process_id"]) == turn.id
+        assert (await chat.continue_after_tool_callback(entry["process_id"])) == turn.id
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
 
         assert events[:4] == ["queued", "admitted", "started", "tool_completed"]
         assert events[-1] == "done"
         finished = await store.get(ChatTurn, turn.id)
         assert finished.status == ChatTurnStatus.COMPLETE
-        (step,) = chat._turn_history(finished)
+        (step,) = await chat._turn_history(finished)
         assert step["status"] == "complete"
         assert step["result_summary"] == "ports enumerated"
         # The model routed on the callback's outcome, not the accepted receipt
@@ -813,10 +828,8 @@ async def test_callback_result_reaches_the_model_through_the_results_webhook(
             approval_policy=AutomationApprovalPolicy.NEVER,
             provider=provider,
         )
-        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
-            store.get(ChatTurn, turn_id)
-        )
-        chat.start_provider_turn(prepared_for(turn))
+        _resume_from_store(chat, store, prepared_for)
+        await chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "callback_required", events
         waiting = await store.get(ChatTurn, turn.id)
@@ -927,14 +940,12 @@ async def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
                 ]
             ),
         )
-        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
-            store.get(ChatTurn, turn_id)
-        )
-        chat.start_provider_turn(prepared_for(turn))
+        _resume_from_store(chat, store, prepared_for)
+        await chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "callback_required", events
         entry = (await store.get(ChatTurn, turn.id)).tool_history[-1]
-        manager.accept_results(
+        await manager.accept_results(
             entry["process_id"],
             _results_key(manager, entry["process_id"]),
             ProcessResultsRequest(
@@ -944,7 +955,7 @@ async def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
                 stdout="probe 1 refused\nprobe 2 refused\n",
             ),
         )
-        assert chat.continue_after_tool_callback(entry["process_id"]) == turn.id
+        assert (await chat.continue_after_tool_callback(entry["process_id"])) == turn.id
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "done", events
 
@@ -958,7 +969,7 @@ async def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
         assert receipt.exit_code == 2
         assert receipt.summary == "target 203.0.113.7 refused every probe"
         assert [item.kind for item in receipt.artifacts] == ["stdout"]
-        (step,) = chat._turn_history((await store.get(ChatTurn, turn.id)))
+        (step,) = await chat._turn_history((await store.get(ChatTurn, turn.id)))
         assert step["status"] == "failed"
         call = await store.get(DurableToolCall, receipt.tool_call_id)
         assert call.status == ToolCallStatus.FAILED
@@ -997,11 +1008,9 @@ async def test_producer_that_ends_without_its_callback_reaches_the_model_as_unkn
                 ]
             ),
         )
-        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
-            store.get(ChatTurn, turn_id)
-        )
+        _resume_from_store(chat, store, prepared_for)
         manager.bind_process_terminal_observer(chat.continue_after_tool_callback)
-        chat.start_provider_turn(prepared_for(turn))
+        await chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "callback_required", events
         entry = (await store.get(ChatTurn, turn.id)).tool_history[-1]
@@ -1011,6 +1020,8 @@ async def test_producer_that_ends_without_its_callback_reaches_the_model_as_unkn
         assert managed.final_task is not None
         execution = await managed.final_task
         assert execution.metadata.get("results_received") is not True
+        # No recovery pass runs here: only finalization's own wake can have
+        # resumed the turn this follow reads to its end.
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "done", events
 
@@ -1033,6 +1044,152 @@ async def test_producer_that_ends_without_its_callback_reaches_the_model_as_unkn
         assert call.status == ToolCallStatus.FAILED
         assert call.result == failure
         await chat.shutdown()
+
+    (await scenario())
+
+
+async def test_kernel_wakes_the_turn_when_its_producer_ends_without_a_callback(
+    tmp_path, monkeypatch
+):
+    """Core's own terminal-process binding resumes the waiting chat at once.
+
+    The kernel binds the automation runtime's terminal observer to the chat
+    service's coroutine wake. A background command that exits without posting
+    its results must resume the parked turn when its finalization completes,
+    not only on a later periodic recovery pass.
+    """
+
+    async def scenario():
+        (
+            manager,
+            store,
+            chat,
+            turn,
+            provider,
+            prepared_for,
+        ) = await _approved_background_command_chat(
+            tmp_path,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            provider=_ReactiveProvider(
+                [
+                    _RUN_IN_BACKGROUND,
+                    _response(),
+                    _response(text="The command ended without results."),
+                ]
+            ),
+        )
+        _resume_from_store(chat, store, prepared_for)
+        await chat.start_provider_turn(prepared_for(turn))
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "callback_required", events
+        entry = (await store.get(ChatTurn, turn.id)).tool_history[-1]
+
+        # The app's wake is the one this test's chat serves; the binding
+        # itself is the kernel's, made while the app is built.
+        wake = ChatService.continue_after_tool_callback
+        woken: list[tuple[str, str | None]] = []
+
+        async def forward(_self, process_id: str) -> str | None:
+            resumed = await wake(chat, process_id)
+            woken.append((process_id, resumed))
+            return resumed
+
+        monkeypatch.setattr(ChatService, "continue_after_tool_callback", forward)
+        manager.bind_process_terminal_observer(None)
+        create_app(
+            store,
+            artifact_store=manager.artifact_store,
+            auth_token="test-token",
+            automation_runtime=manager,
+        )
+        assert manager.process_terminal_observer is not None
+
+        managed = manager._processes[entry["process_id"]]
+        await managed.backend.terminate()
+        assert managed.final_task is not None
+        execution = await managed.final_task
+        assert execution.status == CommandExecutionStatus.FAILED
+        assert execution.metadata.get("results_received") is not True
+        # The wake ran to completion within finalization and restarted the
+        # parked turn; no periodic recovery pass was needed.
+        assert woken == [(entry["process_id"], turn.id)]
+
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "done", events
+        assert isinstance(provider, _ReactiveProvider)
+        failure = provider.routed()[1].tool_results[-1].output
+        assert isinstance(failure, dict)
+        assert failure["category"] == "missing_callback"
+        assert failure["side_effects"] == "unknown"
+        finished = await store.get(ChatTurn, turn.id)
+        assert finished.status == ChatTurnStatus.COMPLETE
+        await chat.shutdown()
+
+    (await scenario())
+
+
+async def test_terminal_observer_failure_is_recorded_for_reconciliation(
+    tmp_path, monkeypatch
+):
+    """A coroutine observer that fails is reported, and finalization still ends.
+
+    The owner's wake runs to completion inside finalization, so its failure
+    reaches the runtime diagnostic instead of vanishing with an un-run
+    coroutine, and the process record stays terminal for reconciliation.
+    """
+
+    async def scenario():
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        manager.callback_origin = "http://10.0.0.8:8765"
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
+        )
+        recorded: list[tuple[str, str, BaseException]] = []
+
+        def record(feature, event_code, _message, exc, **_details):
+            recorded.append((feature, event_code, exc))
+
+        monkeypatch.setattr(
+            automation_runtime_module, "record_caught_exception", record
+        )
+        attempted: list[str] = []
+
+        async def failing_wake(process_id: str) -> None:
+            await asyncio.sleep(0)
+            attempted.append(process_id)
+            raise RuntimeError("owner wake failed")
+
+        manager.bind_process_terminal_observer(failing_wake)
+        started = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="chat",
+            owner_id="session-1",
+            request=RunCommandRequest(command="wait-forever", background=True),
+            tool_call_id="tool-failing-wake",
+            chat_session_id="session-1",
+            chat_turn_id="turn-1",
+        )
+        managed = manager._processes[started.process_id]
+        await managed.backend.terminate()
+        assert managed.final_task is not None
+        finished = await managed.final_task
+
+        assert finished.status == CommandExecutionStatus.FAILED
+        assert attempted == [started.process_id]
+        assert [(feature, code) for feature, code, _ in recorded] == [
+            ("runtime", "runtime.background_process_owner_notify_failed")
+        ]
+        assert str(recorded[0][2]) == "owner wake failed"
+        stored = await store.get(CommandExecution, finished.id)
+        assert stored.status == CommandExecutionStatus.FAILED
 
     (await scenario())
 
@@ -1081,13 +1238,11 @@ async def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
             approval_policy=AutomationApprovalPolicy.NEVER,
             provider=provider,
         )
-        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
-            store.get(ChatTurn, turn_id)
-        )
-        chat.start_provider_turn(prepared_for(turn))
+        _resume_from_store(chat, store, prepared_for)
+        await chat.start_provider_turn(prepared_for(turn))
         parked = [item async for item in chat.follow_provider_turn(turn.id)]
         assert parked[-1][0] == "callback_required", parked
-        (step,) = chat._turn_history((await store.get(ChatTurn, turn.id)))
+        (step,) = await chat._turn_history((await store.get(ChatTurn, turn.id)))
         process_id = step["process_id"]
         key = _results_key(manager, process_id)
         assert key

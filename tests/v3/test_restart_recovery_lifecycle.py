@@ -716,12 +716,17 @@ async def test_operator_stop_terminates_the_background_command_holding_its_callb
         manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         chat, turn, call = await _callback_wait(tmp_path, manager, store, engagement)
         chat.automation_tool_platform = SimpleNamespace(manager=manager)  # type: ignore[assignment]
+        # Core binds the chat's coroutine wake as the terminal observer, and
+        # finalization awaits it. Stopping waits for that finalization, so the
+        # wake must see the cancelled turn and return rather than block it.
+        manager.bind_process_terminal_observer(chat.continue_after_tool_callback)
         started = await _start_background(manager, engagement, turn, call)
         (await _park_on_callback(store, turn, call, started))
 
-        stopped = await chat.stop_provider_turn(turn.id)
+        stopped = await asyncio.wait_for(chat.stop_provider_turn(turn.id), timeout=60)
 
         assert stopped.status == ChatTurnStatus.CANCELLED
+        assert not chat.has_active_provider_turn(turn.id)
         assert (await store.get(ToolCall, call.id)).status == ToolCallStatus.CANCELLED
         execution = await store.get(
             CommandExecution, manager._execution_id(started.process_id)
