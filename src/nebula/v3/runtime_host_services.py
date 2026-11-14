@@ -10,6 +10,7 @@ import re
 import stat
 from typing import TYPE_CHECKING
 
+import httpx
 import uvicorn
 from sqlalchemy import select
 from starlette.responses import JSONResponse
@@ -24,14 +25,24 @@ from .diagnostics import (
 from .knowledge_index import KnowledgeIndexError
 from .provider_scheduler import ProviderSchedulerConfig
 from .runtime_capacity import RuntimeCapacity
-from .runtime_ipc import RPC_PATH, RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
+from .runtime_ipc import (
+    RPC_PATH,
+    UNDISPATCHED_HEADER,
+    RuntimeIpcError,
+    RuntimeIpcUndispatched,
+    RuntimeRpcClient,
+    RuntimeRpcServer,
+)
 from .runtime_memory_recovery import HostMemoryRecovery
 from .runtime_memory_control import HostMemoryControl
-from .runtime_browser_bridge import HostBrowserBridge
+from .runtime_browser_bridge import BRIDGE_OPERATION, HostBrowserBridge
 from .runtime_host_settings import HostSettings
-from .runtime_host_credentials import register_session_credentials
-from .runtime_host_pressure import register_host_pressure
-from .runtime_integration_credentials import register_integration_credentials
+from .runtime_host_credentials import SESSION_CREDENTIAL, register_session_credentials
+from .runtime_host_pressure import HOST_PRESSURE, register_host_pressure
+from .runtime_integration_credentials import (
+    INTEGRATION_CREDENTIAL,
+    register_integration_credentials,
+)
 from .runtime_host_search import register_host_search
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
@@ -54,11 +65,56 @@ def create_host_knowledge_index(data_root: Path):
     return ChromaKnowledgeIndex(Path(path) if path else data_root / "knowledge-index")
 
 
+class HostServiceClient(RuntimeRpcClient):
+    """A worker's host observations wait out a supervisor replacement.
+
+    Replacing the supervisor removes its host-services socket until the next
+    generation listens again. Starting project work reads host observations
+    (admission pressure, the browser bridge, credentials, capabilities); those
+    calls wait for the host rather than fail the work. Only read-only calls
+    are resent, and only after failures proving the host never dispatched
+    them: a connection that was never established, and the gateway's explicit
+    undispatched 503. Every other operation, a lost response after delivery
+    and every operation error reach the caller unchanged.
+    """
+
+    reconnect_seconds = 120.0
+    resendable = frozenset(
+        {
+            "host.services/v1",
+            HOST_PRESSURE,
+            BRIDGE_OPERATION,
+            SESSION_CREDENTIAL,
+            INTEGRATION_CREDENTIAL,
+        }
+    )
+
+    async def call(self, operation, payload, *, request_id=None, timeout=30):
+        if operation not in self.resendable:
+            return await super().call(
+                operation, payload, request_id=request_id, timeout=timeout
+            )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.reconnect_seconds
+        delay = 0.1
+        while True:
+            try:
+                return await super().call(
+                    operation, payload, request_id=request_id, timeout=timeout
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout, RuntimeIpcUndispatched):
+                # diagnostic-expected: the host is being replaced; the bounded wait re-raises once its window ends.
+                if loop.time() + delay > deadline:
+                    raise
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 2.0)
+
+
 def host_service_client(bootstrap, secret: bytes) -> RuntimeRpcClient:
     if not bootstrap.identity.endpoint.startswith("unix:///"):
         raise RuntimeIpcError("Host services require a private local runtime endpoint")
     endpoint = Path(bootstrap.identity.endpoint[7:]).parent / HOST_SOCKET_NAME
-    client = RuntimeRpcClient("unix://" + str(endpoint), secret)
+    client = HostServiceClient("unix://" + str(endpoint), secret)
     client.client.headers[PEER_HEADER.decode()] = bootstrap.identity.runtime_id
     return client
 
@@ -259,6 +315,7 @@ class HostSharedServices:
             await JSONResponse(
                 {"detail": "Shared host services are reconnecting or busy"},
                 status_code=503,
+                headers={UNDISPATCHED_HEADER: "1"},
             )(scope, receive, send)
             return
         peers = [
@@ -280,7 +337,9 @@ class HostSharedServices:
             except (RuntimeIpcError, OSError):
                 # diagnostic-expected: a missing or rejected private peer yields a bounded unavailable response.
                 await JSONResponse(
-                    {"detail": "Shared host peer is unavailable"}, status_code=503
+                    {"detail": "Shared host peer is unavailable"},
+                    status_code=503,
+                    headers={UNDISPATCHED_HEADER: "1"},
                 )(scope, receive, send)
                 return
             if peer is None:

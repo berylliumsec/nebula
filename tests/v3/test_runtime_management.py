@@ -1,5 +1,7 @@
 """Management envelopes keep auth, replay and post-response shutdown on the host."""
 
+import asyncio
+
 import httpx
 import pytest
 from sqlalchemy import func, select
@@ -88,6 +90,41 @@ async def test_stage_and_recovery_selection_replay_authoritative_result(
             await other.post("/api/v1/auth/pairings/redeem", json=redeem(offer))
         ).status_code == 200
         assert (await other.get(PATH + "/stage-one")).status_code == 409
+
+
+async def test_operation_finishes_its_receipt_when_a_stopping_host_cancels_the_request(
+    recovery, tmp_path
+):
+    # A supervisor generation that is being replaced stops relaying requests
+    # after its drain window. An accepted operation still completes, records
+    # a definite receipt, and is joined before host authority is released.
+    source = tmp_path / "slow-source"
+    digest = bundle(source, version="slow")
+    original = recovery.root.stage
+    entered = asyncio.Event()
+
+    async def slow_stage(*args, **kwargs):
+        entered.set()
+        await asyncio.sleep(0.5)
+        return await original(*args, **kwargs)
+
+    recovery.root.stage = slow_stage
+    body = {
+        "operation_id": "stage-during-drain",
+        "action": "stage",
+        "parameters": {"source": str(source), "manifest_sha256": digest},
+    }
+    request = asyncio.create_task(recovery.client.post(PATH, headers=AUTH, json=body))
+    await asyncio.wait_for(entered.wait(), 10)
+    request.cancel()
+    await asyncio.gather(request, return_exceptions=True)
+    pending = set(recovery.root.management.inflight)
+    assert pending
+    await recovery.root.close()
+    assert not recovery.root.management.inflight
+    async with recovery.managed.database.session() as session:
+        row = await session.get(DeploymentOperationRow, "stage-during-drain")
+    assert row is not None and row.state == "succeeded"
 
 
 @pytest.mark.parametrize("refused", [False, True])

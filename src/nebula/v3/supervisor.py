@@ -62,7 +62,7 @@ class _Availability:
         if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
-        if owner.closed or not owner.started:
+        if owner.closing or owner.closed or not owner.started:
             if scope["type"] == "websocket":
                 await send(
                     {
@@ -133,7 +133,7 @@ class RuntimeSupervisor:
         self._recovery_version = recovery_version
         self._shutdown_requested = shutdown_requested
         self._shutdown_committed = False
-        self.started, self.closed = False, False
+        self.started, self.closed, self.closing = False, False, False
         self._operations = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._handoff_task = None
@@ -868,12 +868,20 @@ class RuntimeSupervisor:
 
     async def close(self):
         if self._close_task is None:
-            self.closed, self.started = True, False
+            # Refuse new requests immediately. Deployment operations already
+            # accepted, including those whose request a stopping generation
+            # cancelled, finish with a definite receipt before host authority
+            # is released; only then do later operations fail as closed.
+            self.closing = True
+            pending = set(self.management.inflight)
             caller = asyncio.current_task()
 
             async def cleanup():
-                # Stop admitting operations immediately, then drain every
-                # accepted copy/RPC/preparation before releasing host authority.
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                self.closed, self.started = True, False
+                # Drain every accepted copy/RPC/preparation before releasing
+                # host authority.
                 async with self._operations:
                     await self._detach_resources(caller)
 

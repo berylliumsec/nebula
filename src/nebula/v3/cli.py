@@ -424,6 +424,18 @@ def _browser_diagnostic_ingress_allowed(
     )
 
 
+def probe_listen_address(host: str, port: int) -> None:
+    """Refuse an occupied address the way the real Core listener would.
+
+    Like that listener, the probe sets SO_REUSEADDR: connections a previous
+    Core closed stay in TIME_WAIT for about a minute and must not block its
+    restart, while a live listener on the address is still refused.
+    """
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind((host, port))
+
+
 @app.command()
 @_async_command(server_loop=True)
 async def serve(
@@ -479,6 +491,16 @@ async def serve(
             help="Explicitly expose the complete API without authentication (unsafe)."
         ),
     ] = False,
+    listen_fd: Annotated[
+        int | None,
+        typer.Option(
+            min=3,
+            help=(
+                "Serve on this inherited listening socket, held by a socket unit "
+                "across Core restarts, instead of binding --host/--port."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run the versioned REST/WebSocket API."""
 
@@ -497,7 +519,7 @@ async def serve(
     ):
         raise typer.BadParameter("TLS certificate and key must be readable files")
     from .runtime_launcher import retain_bundle
-    from .runtime_service import serve_runtime
+    from .runtime_service import inherited_listener, serve_runtime
 
     root = _data_dir(data_dir)
     if not sys.platform.startswith("linux"):
@@ -512,9 +534,13 @@ async def serve(
         raise typer.BadParameter(
             "independent Core requires authentication; use normal device pairing"
         )
-    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as probe:
+    try:
+        listener = inherited_listener(host, port, descriptor=listen_fd)
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    if listener is None:
         try:
-            probe.bind((host, port))
+            probe_listen_address(host, port)
         except OSError as error:
             typer.echo(
                 f"cannot bind {host}:{port}: {error.strerror or error}", err=True
@@ -535,6 +561,7 @@ async def serve(
         open_browser=open_browser,
         print_ready=True,
         diagnostics_level=diagnostics_level,
+        listener=listener,
     )
 
 

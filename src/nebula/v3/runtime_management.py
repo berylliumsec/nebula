@@ -107,6 +107,9 @@ class RuntimeManagement:
         self.operations = None
         self.slots = asyncio.Semaphore(8)
         self._shutdown_ready: set[str] = set()
+        # Operations whose request a stopping generation may cancel; the
+        # supervisor joins them before releasing host authority.
+        self.inflight: set[asyncio.Future] = set()
 
         async def principal(request):
             await authentication.require_auth(
@@ -146,13 +149,21 @@ class RuntimeManagement:
                         self._shutdown_ready.add(command.operation_id)
                     return result
 
-                result = await self.ledger().execute(
-                    operation_id=command.operation_id,
-                    actor_id=actor,
-                    action=command.action,
-                    parameters=parameters.model_dump(mode="json"),
-                    dispatch=dispatch,
+                execution = asyncio.ensure_future(
+                    self.ledger().execute(
+                        operation_id=command.operation_id,
+                        actor_id=actor,
+                        action=command.action,
+                        parameters=parameters.model_dump(mode="json"),
+                        dispatch=dispatch,
+                    )
                 )
+                self.inflight.add(execution)
+                execution.add_done_callback(self.inflight.discard)
+                # A supervisor generation that stops relaying this request
+                # still completes the operation and its receipt; the caller
+                # reads that receipt again with the same operation ID.
+                result = await asyncio.shield(execution)
             response = JSONResponse(
                 result, headers={"Cache-Control": "private, no-store"}
             )

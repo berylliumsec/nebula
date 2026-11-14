@@ -1,14 +1,21 @@
 """Startup migrations require a new database or explicit offline adoption."""
 
 import json
+import os
+from pathlib import Path
+import socket
 import sqlite3
+import subprocess
+import sys
 
 import pytest
 
+from nebula.v3.cli import probe_listen_address
 from nebula.v3.database import Database
 from nebula.v3.runtime_launcher import runtime_root, write_private
 from nebula.v3.runtime_service import (
     OFFLINE_ADOPTION,
+    inherited_listener,
     initialize_database,
     runtime_pool_settings,
 )
@@ -112,3 +119,131 @@ async def test_offline_adoption_preserves_legacy_data_and_consumes_marker(tmp_pa
             connection.execute("SELECT value FROM legacy_saved_work").fetchone()[0]
             == "saved"
         )
+
+
+_GENERATION = """
+import os, socket, sys
+from nebula.v3.runtime_service import inherited_listener
+try:
+    listener = inherited_listener("127.0.0.1", int(sys.argv[1]))
+except ValueError as error:
+    print("refused:", error, flush=True)
+    raise SystemExit(3)
+assert listener is not None and not listener.get_inheritable()
+assert "LISTEN_FDS" not in os.environ and "LISTEN_PID" not in os.environ
+connection, _ = listener.accept()
+connection.sendall(sys.argv[2].encode())
+connection.close()
+"""
+
+
+def _generation(holder, port, name):
+    """Start one supervisor-like generation the way a socket unit does."""
+    descriptor = holder.fileno()
+    source = str(Path(__file__).resolve().parents[2] / "src")
+    return subprocess.Popen(
+        [
+            "/bin/bash",
+            "-c",
+            f'exec 3<&{descriptor} {descriptor}<&-; LISTEN_PID=$$ LISTEN_FDS=1 exec "$0" -c "$1" "$2" "$3"',
+            sys.executable,
+            _GENERATION,
+            str(port),
+            name,
+        ],
+        pass_fds=(descriptor,),
+        env={**os.environ, "PYTHONPATH": source},
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _held_listener():
+    holder = socket.socket()
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(16)
+    return holder, holder.getsockname()[1]
+
+
+def _read(port):
+    with socket.create_connection(("127.0.0.1", port), timeout=30) as client:
+        return client.recv(16).decode()
+
+
+def test_inherited_listener_queues_connections_between_supervisor_generations():
+    holder, port = _held_listener()
+    try:
+        first = _generation(holder, port, "first")
+        assert _read(port) == "first"
+        assert first.wait(30) == 0
+        # No generation is accepting now. The connection is still accepted by
+        # the kernel and waits instead of being refused.
+        waiting = socket.create_connection(("127.0.0.1", port), timeout=30)
+        second = _generation(holder, port, "second")
+        assert waiting.recv(16).decode() == "second"
+        waiting.close()
+        assert second.wait(30) == 0
+    finally:
+        holder.close()
+
+
+def test_inherited_listener_must_match_the_requested_address():
+    holder, port = _held_listener()
+    try:
+        wrong = _generation(holder, port + 1 if port < 65535 else port - 1, "wrong")
+        output, _ = wrong.communicate(timeout=30)
+        assert wrong.returncode == 3 and "does not match" in output
+    finally:
+        holder.close()
+
+
+def test_listener_is_not_adopted_by_another_process(monkeypatch):
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid() + 1))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    assert inherited_listener("127.0.0.1", 8000) is None
+    # Never passed on to workers or tools started by this process.
+    assert "LISTEN_FDS" not in os.environ and "LISTEN_PID" not in os.environ
+
+
+def test_explicit_descriptor_requires_the_exact_requested_address():
+    # A launcher between the socket unit and Core hides LISTEN_PID; the
+    # operator passes --listen-fd instead, and exposure is checked from the
+    # bound address itself.
+    holder, port = _held_listener()
+    wildcard = socket.socket()
+    wildcard.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    wildcard.bind(("0.0.0.0", 0))
+    wildcard.listen(1)
+    try:
+        adopted = inherited_listener(
+            "127.0.0.1", port, descriptor=os.dup(holder.fileno())
+        )
+        assert adopted.getsockname() == ("127.0.0.1", port)
+        assert not adopted.get_inheritable()
+        adopted.close()
+        with pytest.raises(ValueError, match="IP address"):
+            inherited_listener("localhost", port, descriptor=os.dup(holder.fileno()))
+        with pytest.raises(ValueError, match="does not match"):
+            inherited_listener(
+                "127.0.0.1",
+                wildcard.getsockname()[1],
+                descriptor=os.dup(wildcard.fileno()),
+            )
+    finally:
+        holder.close()
+        wildcard.close()
+
+
+def test_restart_probe_ignores_closed_connections_but_refuses_a_live_listener():
+    server, port = _held_listener()
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _ = server.accept()
+    # The server side closes first, leaving its end in TIME_WAIT on the port.
+    accepted.close()
+    client.recv(1)
+    client.close()
+    with pytest.raises(OSError):
+        probe_listen_address("127.0.0.1", port)
+    server.close()
+    probe_listen_address("127.0.0.1", port)
