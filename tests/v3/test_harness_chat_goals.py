@@ -30,7 +30,7 @@ from nebula.v3.chat_goals import (
     GoalWrite,
 )
 from nebula.v3.chat import ChatCompletionRequest, ChatService
-from nebula.v3.chat_queue import ChatQueueService, QueueWrite
+from nebula.v3.chat_queue import ChatQueueService, QueueWrite, runtime_authorization
 from nebula.v3.domain import (
     ChatBackend,
     ChatGoalStatus,
@@ -679,10 +679,23 @@ async def test_reviewed_follow_up_releases_completed_harness_goal_handoff(tmp_pa
         ] == "queued"
 
         # A successful turn updates profile health evidence and its revision.
-        # The queued operator request must be reviewed, while the goal resumes.
-        assert (await store.get(HarnessProfile, profile.id)).revision > queued.items[0][
-            "profile_revision"
-        ]
+        # That bookkeeping alone no longer parks the queued request (a
+        # deliberate contract change: only security-relevant runtime fields do).
+        # Here the operator also changes the harness permissions, so the queued
+        # request must be reviewed, while the goal resumes.
+        current = await store.get(HarnessProfile, profile.id)
+        assert current.revision > queued.items[0]["profile_revision"]
+        assert (
+            runtime_authorization(current) == queued.items[0]["profile_authorization"]
+        )
+        (
+            await store.update(
+                HarnessProfile,
+                profile.id,
+                {"permission_mode": "unrestricted"},
+                expected_revision=current.revision,
+            )
+        )
         await queue_service.step((await queue_service.get(created.session.id)))
         reviewed = await queue_service.get(created.session.id)
         assert reviewed.paused
@@ -1701,6 +1714,141 @@ async def test_harness_goal_time_limit_is_enforced_before_dispatch(tmp_path):
             await goals.get(created.session.id)
         ).blocked_reason == "Goal active-time budget is exhausted."
         assert (await store.list_session_entities(ChatTurn, created.session.id)) == []
+        await runtime.shutdown()
+
+    (await scenario())
+
+
+async def _follow_up_queued_behind_a_finished_turn(tmp_path):
+    """Queue a follow-up while a harness turn runs, then let that turn finish."""
+    store, _engagement, profile, _mcp, adapter, runtime = await _runtime(tmp_path)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class WaitingConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            async for event in super().run_turn(prompt, model=model, images=images):
+                yield event
+                if event.type == "started" and len(self.prompts) == 1:
+                    first_started.set()
+                    await release_first.wait()
+
+    async def open_waiting(request):
+        connection = WaitingConnection(request)
+        adapter.connections.append(connection)
+        return connection
+
+    adapter.open = open_waiting
+    _session, _chat_turn, harness_turn = await runtime.prepare_chat(
+        engagement_id="eng-a",
+        profile_id=profile.id,
+        model="test-model",
+        prompt="First work",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=None,
+        include_knowledge=False,
+    )
+    (await runtime.start_chat_turn(harness_turn.id))
+    first = runtime._chat_turn_tasks[harness_turn.id]
+    await asyncio.wait_for(first_started.wait(), timeout=5)
+    session_id = harness_turn.chat_session_id
+    queue_service = ChatQueueService(store, None, runtime)
+    queued = await queue_service.write(
+        session_id,
+        QueueWrite(
+            action="enqueue",
+            expected_revision=0,
+            idempotency_key="while-first-turn-runs",
+            request=ChatCompletionRequest(
+                backend="harness",
+                harness_profile_id=profile.id,
+                engagement_id="eng-a",
+                session_id=session_id,
+                model="test-model",
+                messages=[{"role": "user", "content": "Queued operator follow-up"}],
+                include_knowledge=False,
+            ),
+        ),
+    )
+    release_first.set()
+    await asyncio.wait_for(first, 10)
+    # The finished turn recorded its run on the profile.
+    assert (await store.get(HarnessProfile, profile.id)).revision > queued.items[0][
+        "profile_revision"
+    ]
+    return store, profile, adapter, runtime, queue_service, session_id
+
+
+async def _settle_queue(queue_service, session_id):
+    for _ in range(300):
+        queue = await queue_service.get(session_id)
+        if queue.paused or all(
+            item["status"] in {"complete", "cancelled", "needs_review"}
+            for item in queue.items
+        ):
+            return queue
+        await queue_service.step(queue)
+        await asyncio.sleep(0.02)
+    pytest.fail("queued follow-up did not settle")
+
+
+async def test_a_turns_own_profile_bookkeeping_does_not_park_a_queued_follow_up(
+    tmp_path,
+):
+    async def scenario() -> None:
+        (
+            store,
+            profile,
+            adapter,
+            runtime,
+            queue_service,
+            session_id,
+        ) = await _follow_up_queued_behind_a_finished_turn(tmp_path)
+        queue = await _settle_queue(queue_service, session_id)
+        assert not queue.paused
+        assert queue.items[0]["status"] == "complete"
+        assert "Queued operator follow-up" in adapter.connections[0].prompts[-1]
+        await runtime.shutdown()
+
+    (await scenario())
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"permission_mode": "unrestricted"},
+        {"default_model": "other-model"},
+        {"privacy": {"local_only": True, "permits_sensitive_data": False}},
+    ],
+)
+async def test_a_security_relevant_profile_change_still_parks_a_follow_up(
+    tmp_path, change
+):
+    async def scenario() -> None:
+        (
+            store,
+            profile,
+            adapter,
+            runtime,
+            queue_service,
+            session_id,
+        ) = await _follow_up_queued_behind_a_finished_turn(tmp_path)
+        current = await store.get(HarnessProfile, profile.id)
+        (
+            await store.update(
+                HarnessProfile, profile.id, change, expected_revision=current.revision
+            )
+        )
+        queue = await _settle_queue(queue_service, session_id)
+        assert queue.paused
+        assert queue.items[0]["status"] == "needs_review"
+        assert all(
+            "Queued operator follow-up" not in prompt
+            for prompt in adapter.connections[0].prompts
+        )
         await runtime.shutdown()
 
     (await scenario())
