@@ -643,7 +643,7 @@ class DeploymentCoordinator:
         ):
             result = row.result if isinstance(row.result, dict) else {}
             project_id = result.get("project_id")
-            if current.get(project_id) == (
+            if isinstance(project_id, str) and current.get(project_id) == (
                 result.get("runtime_id"),
                 result.get("fencing_token"),
             ):
