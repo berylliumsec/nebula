@@ -422,6 +422,15 @@ class ProjectHandoffAgent:
         # checkpointed revisions and transfer refuses the stale proof.
         if self.queue is not None and getattr(self.queue, "_inflight", None):
             blockers.append("A queued follow-up is being dispatched")
+        # A Butler action between its dispatching commit and its saved outcome
+        # keeps its only receipt in this process; a new owner could record it
+        # only as uncertain. Read after the checkpoint: a dispatch that ended
+        # before this read either ended before the checkpoint or changed the
+        # revisions that transfer re-checks, and one starting later is refused
+        # by that check or fenced before its action leaves planned.
+        butler = getattr(self.app.state, "butler_authority", None)
+        if butler is not None and getattr(butler, "_dispatching", None):
+            blockers.append("A Butler action is being dispatched")
         return await self.coordinator.checkpoint(
             self.lease, checkpoint=checkpoint, blockers=blockers
         )
