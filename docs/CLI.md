@@ -47,7 +47,12 @@ unsent text. Press it again within four seconds to stop a supported selected
 turn; typing or submitting a new draft resets the sequence. In a full-screen
 menu, Ctrl-C closes the menu.
 The view updates as Core accepts, queues, and works on a turn, before the first
-answer text arrives. Progress and requests for action stay visible during input.
+answer text arrives. A Core whose project worker is still starting may save a
+message or change before running it; the client then shows **Saved in Core;
+waiting for its execution owner**, keeps the message out of the draft, and follows
+the saved request for up to two minutes. If it has not started by then, nothing is
+resent: `/follow` attaches when it starts and `/status` reads its state. A saved
+change such as a rename is read back the same way before it is reported. Progress and requests for action stay visible during input.
 The activity strip and header animate while connecting, opening a project or
 conversation, reading a catalog page, sending a turn, reconnecting, or following
 active Core work. They show the current step and local elapsed time where known;
