@@ -1184,6 +1184,8 @@ function WorkbenchGuideAction({ onOpen, assistantSettingsOpen, view, refreshCata
   return null;
 }
 
+const SIDE_CHAT_RESTORE_ERROR = "Could not restore this conversation's side chat. Retry from the side chat button.";
+
 export function SessionsPage() {
   const workbench = useWorkbenchState();
   return <ConversationPane workbench={workbench} />;
@@ -2950,6 +2952,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const controller = new AbortController();
     void api.listConversationSideChats(parentId, controller.signal).then((items) => {
       if (controller.signal.aborted || activeEngagementIdRef.current !== engagementId) return;
+      // A later successful restore retires this effect's own earlier failure.
+      setChatError((current: unknown) => current === SIDE_CHAT_RESTORE_ERROR ? undefined : current);
       setSideChatLookup({engagementId, parentId, items});
       const current = latestSearchParams();
       if (current.get("session") !== parentId) return;
@@ -2968,7 +2972,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       // diagnostic-expected: the client recorded this read; side chats restore when the project runtime answers.
       if (isProjectRuntimeUnavailable(error)) { setSideChatRuntimeWait(value => value || 1); return; }
       void logCaughtDiagnostic("interface.sessions_page.side_chat_restore", "The side chat for this conversation could not be loaded.", error, "sessions_page");
-      setChatError("Could not restore this conversation's side chat. Retry from the side chat button.");
+      setChatError(SIDE_CHAT_RESTORE_ERROR);
     });
     return () => controller.abort();
   }, [api, coreState, embeddedSideChat, engagement?.id, requestedSessionId, sessionId, sideChatRestoreAttempt, updateSearchParams, view]);
