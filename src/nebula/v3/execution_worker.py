@@ -659,12 +659,25 @@ class ProjectExecution:
             raise
         except Exception as error:
             self.failure = failure_summary(error)
-            if self.state != "fenced":
+            # Quiescence already proved the project idle and stopped every
+            # controller. A stop error from services that live only in this
+            # process leaves nothing that can act for the project once the
+            # worker's own teardown below finishes; any other error fails.
+            contained = (
+                self.state == "quiescing"
+                and type(error) is ServiceCleanupError
+                and error.contained
+            )
+            if self.state != "fenced" and not contained:
                 self.state = "failed"
             record_caught_exception(
                 "runtime",
-                "runtime.project.unavailable",
-                "The project execution process could not continue.",
+                "runtime.project.stop_incomplete"
+                if contained
+                else "runtime.project.unavailable",
+                "A project service did not stop cleanly while the project quiesced."
+                if contained
+                else "The project execution process could not continue.",
                 error,
                 stage="execution",
             )
@@ -673,6 +686,9 @@ class ProjectExecution:
             self.cleanup_complete = bool(
                 getattr(self.context, "restore_cleanup_completed", False)
             )
+            if self.state == "quiescing" and self.failure and not self.cleanup_complete:
+                # The worker's own pools or clients did not close: unverified.
+                self.state = "failed"
             if self.state not in {"failed", "fenced"}:
                 self.state = "closed"
             if self.state == "failed":

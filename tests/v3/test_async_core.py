@@ -220,19 +220,35 @@ async def test_settings_assistant_actions_await_reads_and_preserve_pending_apply
 pytestmark = pytest.mark.anyio
 
 
-async def test_core_names_each_service_whose_stop_failed(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("owner", "service", "contained"),
+    [
+        ("nebula.v3.chat_queue.ChatQueueService", "chat.follow-ups", True),
+        (
+            "nebula.v3.storage_integrations.StorageIntegrationService",
+            "storage.integrations",
+            False,
+        ),
+    ],
+)
+async def test_core_names_each_service_whose_stop_failed(
+    tmp_path, monkeypatch, owner, service, contained
+):
+    import importlib
+
     from sqlalchemy.exc import PendingRollbackError
 
     from nebula.v3.async_utils import ServiceCleanupError
-    from nebula.v3.chat_queue import ChatQueueService
 
-    original = ChatQueueService.shutdown
+    module, name = owner.rsplit(".", 1)
+    target = getattr(importlib.import_module(module), name)
+    original = target.shutdown
 
     async def failed_stop(self):
         await original(self)
         raise PendingRollbackError("synthetic-private-statement")
 
-    monkeypatch.setattr(ChatQueueService, "shutdown", failed_stop)
+    monkeypatch.setattr(target, "shutdown", failed_stop)
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(
         store,
@@ -242,6 +258,8 @@ async def test_core_names_each_service_whose_stop_failed(tmp_path, monkeypatch):
     with pytest.raises(ServiceCleanupError) as failed:
         async with app.router.lifespan_context(app):
             pass
-    assert failed.value.components == ("chat.follow-ups (PendingRollbackError)",)
+    assert failed.value.components == (f"{service} (PendingRollbackError)",)
+    assert failed.value.services == (service,)
+    assert failed.value.contained is contained
     assert "synthetic-private-statement" not in str(failed.value)
     assert isinstance(failed.value.__cause__, PendingRollbackError)

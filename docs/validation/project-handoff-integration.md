@@ -154,6 +154,15 @@ and reopens admission so its blocker can be resolved; an unknown RPC outcome or
 unverified cleanup retains the hold and ownership. The final process-retirement
 step follows only after every project relinquishes its grant.
 
+Cleanup is verified when the worker's own pools and clients close. If, in
+addition, a service that runs only inside the worker (follow-up dispatch, chat
+schedules, the event-loop monitor or event-history pruning) reports a failed
+stop, the project still closes: the shutdown receipt lists it under
+`cleanup_warnings` and the same SQL rechecks gate the release. A failed stop of
+any other service, such as a browser, harness, terminal or search owner, leaves
+the worker failed with its ownership retained, and deployment status lists it as
+a project blocker with its reason.
+
 Forty focused cases passed across SQLite/PostgreSQL for quiescence, shutdown
 admission, operation receipts and source boundaries. They include a previously
 used idle project, paused-state preservation, cleanup failure, local-handle
