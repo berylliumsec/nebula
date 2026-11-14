@@ -7,7 +7,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 import dataclasses
 import json
 
@@ -30,6 +29,8 @@ from nebula.v3.knowledge_search import (
     KNOWLEDGE_SEARCH_TOOL_NAME,
     knowledge_search_spec,
 )
+from nebula.v3.providers import ModelRequest, ModelResponse, ModelUsage
+from nebula.v3.providers import ToolCall as ModelToolCall
 from nebula.v3.tools import RETRIEVAL_TOOL_NAMES, ToolInvocation
 from tests.v3.test_chat import FakeProvider, _profile
 from tests.v3.test_knowledge_rerank import (
@@ -76,7 +77,14 @@ def maintenance_scorer(pairs):
     return scores
 
 
-async def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_scorer):
+async def _tool_turns(
+    tmp_path,
+    monkeypatch,
+    *,
+    local=True,
+    scorer=maintenance_scorer,
+    provider_class=FakeProvider,
+):
     store, index, _, ids = await _knowledge_project(tmp_path, FakeReranker(scorer))
     workspace = tmp_path / "workspace"
     skill_path = workspace / ".agents" / "skills" / "review" / "SKILL.md"
@@ -97,7 +105,7 @@ async def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_s
         "model-a": {"model": "model-a", "status": "verified"}
     }
     profile = await store.create(ProviderProfile.model_validate(payload))
-    provider = FakeProvider(profile.id, local=local)
+    provider = provider_class(profile.id, local=local)
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
@@ -120,7 +128,7 @@ async def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_s
     return store, service, prepare, ids
 
 
-def _search(store, prepared, query: str):
+async def _search(store, prepared, query: str):
     invocation = ToolInvocation(
         engagement_id="eng-a",
         run_id=prepared.turn.id,
@@ -132,8 +140,8 @@ def _search(store, prepared, query: str):
         workspace=prepared.tool_components.workspace,
         requested_by="chat-assistant",
     )
-    return asyncio.run(
-        prepared.tool_components.broker.execute(
+    return (
+        await prepared.tool_components.broker.execute(
             invocation, prepared.tool_components.scope
         )
     ).output
@@ -151,14 +159,14 @@ async def test_a_turn_whose_attachment_missed_recovers_the_document_by_searching
     assert KNOWLEDGE_SEARCH_TOOL_NAME in prepared.tool_components.specs
     assert not any(c.source_id in ids.values() for c in prepared.citations)
     assert prepared.turn.request_snapshot["knowledge_search"] is True
-    output = _search(store, prepared, "maintenance window")
+    output = await _search(store, prepared, "maintenance window")
     match = output["matches"][0]
     assert match["source_id"] == ids["harbor.md"]
     assert match["relevance"] == "strong"
     assert "Tuesday from 02:00 to 04:00 UTC" in match["text"]
     assert match["chunk_id"] and match["citation"]
     # A search is ranked, not gated: nothing answers this, and it says so.
-    unrelated = _search(store, prepared, RUNNER_QUESTION)
+    unrelated = await _search(store, prepared, RUNNER_QUESTION)
     assert {item["relevance"] for item in unrelated["matches"]} == {"weak"}
     calls = await store.list_entities(ToolCall, engagement_id="eng-a")
     assert {call.status for call in calls} == {ToolCallStatus.COMPLETE}
@@ -173,6 +181,92 @@ async def test_a_turn_whose_attachment_missed_recovers_the_document_by_searching
     )
     resumed = await service.prepare_resume(turn.id)
     assert KNOWLEDGE_SEARCH_TOOL_NAME in resumed.tool_components.specs
+
+
+class _SearchingProvider(FakeProvider):
+    """A model that searches the project's knowledge, then answers from it."""
+
+    _AUXILIARY = {
+        "agentic_knowledge_retrieval",
+        "context_compaction",
+        "conversation_naming",
+    }
+
+    def __init__(self, provider_id: str, *, local: bool) -> None:
+        super().__init__(provider_id, local=local)
+        self.turn_requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.metadata.get("operation") in self._AUXILIARY:
+            return await super().complete(request)
+        self.turn_requests.append(request)
+        if len(self.turn_requests) == 1:
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                tool_calls=[
+                    ModelToolCall(
+                        id="call-search",
+                        name=KNOWLEDGE_SEARCH_TOOL_NAME,
+                        arguments={"query": "maintenance window"},
+                    )
+                ],
+                usage=ModelUsage(input_tokens=4, output_tokens=3, total_tokens=7),
+                finish_reason="tool_calls",
+            )
+        # Cite what the search delivered, as the routing guidance asks.
+        delivered = [
+            match
+            for result in request.tool_results
+            if result.name == KNOWLEDGE_SEARCH_TOOL_NAME and not result.is_error
+            for match in (
+                json.loads(result.output)
+                if isinstance(result.output, str)
+                else result.output
+            ).get("matches", [])
+        ]
+        cited = " ".join(
+            f"[{match['source_id']}:{match['chunk_id']}]" for match in delivered
+        )
+        return ModelResponse(
+            provider_id=self.config.id,
+            model=request.model or "model-a",
+            text=f"Maintenance is Tuesday 02:00-04:00 UTC {cited}".strip(),
+            usage=ModelUsage(input_tokens=4, output_tokens=3, total_tokens=7),
+            finish_reason="stop",
+        )
+
+
+async def test_a_provider_turn_searches_the_project_knowledge_and_cites_it(
+    tmp_path, monkeypatch
+):
+    """The routing loop runs the model's knowledge.search through Core's search.
+
+    The searcher is ``ChatService.harness_knowledge_search``, which is async:
+    a search that only created its coroutine failed every call, and the model
+    answered without the excerpts.
+    """
+
+    store, service, prepare, ids = await _tool_turns(
+        tmp_path, monkeypatch, provider_class=_SearchingProvider
+    )
+    provider = chat_module.provider_from_profile(None)
+    prepared = await prepare(DOWNTIME_QUESTION)
+    assert KNOWLEDGE_SEARCH_TOOL_NAME in prepared.tool_components.specs
+
+    completion = await service.complete(prepared)
+
+    [call] = await store.list_entities(ToolCall, engagement_id="eng-a")
+    assert call.tool_name == KNOWLEDGE_SEARCH_TOOL_NAME
+    assert call.status == ToolCallStatus.COMPLETE, call.error
+    # The model received the runbook's excerpt, not a failed tool result.
+    [_, answering] = provider.turn_requests
+    [searched] = answering.tool_results
+    assert searched.call_id == "call-search" and searched.is_error is False
+    assert "Tuesday from 02:00 to 04:00 UTC" in str(searched.output)
+    # The searched excerpt it used is cited on the answer.
+    assert ids["harbor.md"] in {c.source_id for c in completion.citations}
+    assert f"[{ids['harbor.md']}:" in completion.message.content
 
 
 async def test_the_tool_list_does_not_change_with_the_message(tmp_path, monkeypatch):
@@ -209,7 +303,7 @@ async def test_a_cloud_turn_needs_knowledge_consent_and_never_reads_local_only_s
     assert KNOWLEDGE_SEARCH_TOOL_NAME not in unconfirmed.tool_components.specs
     assert KNOWLEDGE_SEARCH_TOOL_NAME in confirmed.tool_components.specs
     # The runbook is local-only: a cloud model's search never returns it.
-    found = _search(store, confirmed, "maintenance window")["matches"]
+    found = (await _search(store, confirmed, "maintenance window"))["matches"]
     assert found and ids["harbor.md"] not in {item["source_id"] for item in found}
     assert await store.get(ChatSession, confirmed.turn.session_id)
 
@@ -241,9 +335,10 @@ async def test_a_search_returns_only_what_reaches_the_model(tmp_path):
     from nebula.v3.knowledge_search import KnowledgeSearchTool
     from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 
-    tool = KnowledgeSearchTool(
-        "eng-a", lambda *args: _long_matches(5), allow_local_only=True
-    )
+    async def searcher(*args):
+        return _long_matches(5)
+
+    tool = KnowledgeSearchTool("eng-a", searcher, allow_local_only=True)
     invocation = ToolInvocation(
         engagement_id="eng-a",
         run_id="turn",
@@ -347,11 +442,10 @@ class _SearchBroker:
     def __init__(self, workspace):
         from nebula.v3.knowledge_search import KnowledgeSearchTool
 
-        self.knowledge = KnowledgeSearchTool(
-            "project",
-            lambda *args: _long_matches(3, ["possible", "weak", "weak"]),
-            allow_local_only=True,
-        )
+        async def searcher(*args):
+            return _long_matches(3, ["possible", "weak", "weak"])
+
+        self.knowledge = KnowledgeSearchTool("project", searcher, allow_local_only=True)
         self.workspace = workspace
 
     async def execute(self, invocation, scope, *, approval=None):

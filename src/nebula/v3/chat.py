@@ -17191,6 +17191,17 @@ class ChatService:
         engagement_id: str,
         provider: ModelProvider,
     ) -> RuntimeToolComponents:
+
+        async def searcher(
+            engagement: str, query: str, allow_local_only: bool, budget: int
+        ) -> HarnessKnowledgeSearchResult:
+            return await self.harness_knowledge_search(
+                engagement,
+                query,
+                allow_local_only=allow_local_only,
+                token_budget=budget,
+            )
+
         # Only a model on this host may read local-only sources; a cloud
         # model's searches leave them out and redact secrets.
         return knowledge_search_components(
@@ -17198,14 +17209,7 @@ class ChatService:
             Path(components.workspace),
             self.store,
             engagement_id=engagement_id,
-            searcher=lambda engagement, query, allow_local_only, budget: (
-                self.harness_knowledge_search(
-                    engagement,
-                    query,
-                    allow_local_only=allow_local_only,
-                    token_budget=budget,
-                )
-            ),
+            searcher=searcher,
             allow_local_only=provider.config.local,
         )
 
