@@ -589,7 +589,11 @@ from .writing_ai import (
     WritingTransformResponse,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
-from .runtime_chat_acceptance import CHAT_RESUME_COMMAND, bind_chat_command
+from .runtime_chat_acceptance import (
+    CHAT_ACCEPT_COMMAND,
+    CHAT_RESUME_COMMAND,
+    bind_chat_command,
+)
 from .relations import (
     ResourceRelationService,
     resolve_resource_ref,
@@ -2680,6 +2684,16 @@ def create_execution_kernel(
     harness_runtime.host_load = host_load
     missions.host_load = host_load
     app.state.openrouter_credit_observer = openrouter_credit_observer
+    # The typed chat transports this application serves; its command runner
+    # carries a chat start accepted before the project had an owner on them.
+    app.state.typed_chat_commands = frozenset(
+        command
+        for command, served in (
+            (CHAT_ACCEPT_COMMAND, durable_chat_acceptance),
+            (CHAT_RESUME_COMMAND, durable_chat_resume),
+        )
+        if served
+    )
     app.state.harness_quota_observer = harness_quota_observer
     app.state.butler_memory_service = butler_memory_service
     app.state.control_assistant_work = control_assistant_work
