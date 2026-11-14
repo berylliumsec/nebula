@@ -54,6 +54,7 @@ from .runtime_coordination import (
 from .process_identity import same_process
 
 _RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
+EXECUTION_FAILED_RECEIPT = "project.execution_failed"
 _UNFINISHED = ("queued", "running", "uncertain")
 
 
@@ -573,6 +574,86 @@ class DeploymentCoordinator:
             await self._receipt(
                 session, "execution.code_rollback", {"version": version}
             )
+
+    async def project_label(self, project_id: str) -> str:
+        """Name a project for operator-facing refusals without loading its model."""
+        async with self.database.session() as session:
+            name = await session.scalar(
+                select(EntityRow.payload["name"].as_string()).where(
+                    EntityRow.id == project_id, EntityRow.kind == "engagements"
+                )
+            )
+        if isinstance(name, str) and name.strip():
+            return f'Project "{name.strip()[:120]}" ({project_id})'
+        return f"Project {project_id}"
+
+    async def record_execution_failure(
+        self, lease: ProjectLease, *, detail: str, cleanup_complete: bool
+    ) -> None:
+        """Keep a failed owner's operator-safe reason for deployment status.
+
+        Only the exact current grant is recorded; a moved grant has no failure
+        to report. The receipt is evidence only and changes no ownership.
+        """
+        async with self.coordination._write() as session:
+            owner = await session.get(ProjectOwnershipRow, lease.project_id)
+            if owner is None or (owner.runtime_id, owner.fencing_token) != (
+                lease.runtime_id,
+                lease.fencing_token,
+            ):
+                return
+            await self._receipt(
+                session,
+                EXECUTION_FAILED_RECEIPT,
+                {
+                    "project_id": lease.project_id,
+                    "runtime_id": lease.runtime_id,
+                    "fencing_token": lease.fencing_token,
+                    "detail": str(detail)[:1000],
+                    "cleanup_complete": bool(cleanup_complete),
+                },
+            )
+
+    async def _owner_failures(self, session, owners) -> dict[str, dict]:
+        """The latest recorded failure of each project's exact current owner."""
+        current = {
+            owner.project_id: (owner.runtime_id, owner.fencing_token)
+            for owner in owners
+            if owner.runtime_id is not None
+        }
+        failures: dict[str, dict] = {}
+        if not current:
+            return failures
+        for row in await session.scalars(
+            select(DeploymentReceiptRow)
+            .where(
+                DeploymentReceiptRow.action == EXECUTION_FAILED_RECEIPT,
+                DeploymentReceiptRow.result["project_id"]
+                .as_string()
+                .in_(sorted(current)),
+            )
+            .order_by(DeploymentReceiptRow.occurred_at_ms)
+        ):
+            result = row.result if isinstance(row.result, dict) else {}
+            project_id = result.get("project_id")
+            if current.get(project_id) == (
+                result.get("runtime_id"),
+                result.get("fencing_token"),
+            ):
+                failures[project_id] = result
+        return failures
+
+    @staticmethod
+    def _failure_blocker(failure: dict) -> str:
+        detail = str(failure.get("detail") or "The project application stopped")
+        outcome = (
+            "its own cleanup finished, but it still owns the project"
+            if failure.get("cleanup_complete") is True
+            else "its cleanup is unverified, so it keeps the project's ownership"
+        )
+        return (
+            f"Execution worker {failure.get('runtime_id')} failed: {detail}; " + outcome
+        )
 
     async def shutdown_preflight(self, *, expected_revision: int) -> dict:
         """Refuse shutdown while project work, effects or charges remain."""
@@ -2278,13 +2359,17 @@ class DeploymentCoordinator:
                 for row in await session.scalars(select(ProjectHandoffRow))
             }
             projects = []
-            for owner in await session.scalars(select(ProjectOwnershipRow)):
+            owners = list(await session.scalars(select(ProjectOwnershipRow)))
+            # A failed worker keeps its grant alive; say so instead of ready.
+            failures = await self._owner_failures(session, owners)
+            for owner in owners:
                 process, handoff = (
                     processes.get(owner.runtime_id)
                     if owner.runtime_id is not None
                     else None,
                     handoffs.get(owner.project_id),
                 )
+                failure = failures.get(owner.project_id)
                 projects.append(
                     ProjectDeploymentStatus(
                         project_id=owner.project_id,
@@ -2293,7 +2378,10 @@ class DeploymentCoordinator:
                         fencing_token=owner.fencing_token,
                         phase=HandoffPhase(handoff.phase) if handoff else None,
                         target_version=handoff.target_version if handoff else None,
-                        blockers=handoff.blockers if handoff else [],
+                        blockers=[
+                            *(handoff.blockers if handoff else []),
+                            *([self._failure_blocker(failure)] if failure else []),
+                        ],
                         admission_held=handoff.admission_held if handoff else False,
                     )
                 )
@@ -2317,7 +2405,7 @@ class DeploymentCoordinator:
                     )
                 )
             )
-            degraded = any(
+            degraded = bool(failures) or any(
                 row.state == "unreachable"
                 or (row.state in _RESIDENT and row.runtime_id not in live_runtimes)
                 for row in processes.values()

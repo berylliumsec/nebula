@@ -205,3 +205,72 @@ async def test_client_rejects_forged_response_and_oversized_messages():
             await client.call("host.promote", {"data": "x" * MAX_RPC_BYTES})
     finally:
         await client.close()
+
+
+async def test_handler_refusal_reaches_the_caller_as_its_signed_reason():
+    from nebula.v3.runtime_coordination import CoordinationConflict
+
+    key = secrets.token_bytes(32)
+    server = RuntimeRpcServer(key)
+
+    async def unverified(_payload):
+        raise RuntimeIpcError(
+            "Project cleanup is unverified; its ownership is retained"
+        )
+
+    async def conflicted(_payload):
+        raise CoordinationConflict("Previously paused work changed during quiescence")
+
+    async def private(_payload):
+        raise ValueError("synthetic-private-statement")
+
+    server.register("execution.quiesce/v1", unverified)
+    server.register("execution.release/v1", conflicted)
+    server.register("execution.private/v1", private)
+    # A real worker serves through uvicorn: an unexpected handler failure is a
+    # bare 500 to the caller, never a raised server exception.
+    client = RuntimeRpcClient(
+        "unix:///isolated/worker.sock",
+        key,
+        transport=httpx.ASGITransport(app=server.app, raise_app_exceptions=False),
+    )
+    try:
+        with pytest.raises(RuntimeIpcError) as refused:
+            await client.call("execution.quiesce/v1", {})
+        assert str(refused.value) == (
+            "Project cleanup is unverified; its ownership is retained"
+        )
+        with pytest.raises(RuntimeIpcError) as conflict:
+            await client.call("execution.release/v1", {})
+        assert str(conflict.value) == "Previously paused work changed during quiescence"
+        with pytest.raises(RuntimeIpcError) as hidden:
+            await client.call("execution.private/v1", {})
+        assert str(hidden.value) == "runtime IPC operation failed (500)"
+    finally:
+        await client.close()
+
+
+async def test_unsigned_or_forged_refusal_is_only_a_transport_failure():
+    async def forged(request):
+        body = json.loads(request.content)
+        return httpx.Response(
+            409,
+            json={
+                "protocol": IPC_PROTOCOL,
+                "request_id": body["request_id"],
+                "refusal": {"type": "RuntimeIpcError", "detail": "forged reason"},
+            },
+            headers={"X-Nebula-IPC-MAC": "c" * 64},
+        )
+
+    client = RuntimeRpcClient(
+        "unix:///isolated/worker.sock",
+        secrets.token_bytes(32),
+        transport=httpx.MockTransport(forged),
+    )
+    try:
+        with pytest.raises(RuntimeIpcError) as failed:
+            await client.call("execution.quiesce/v1", {})
+        assert str(failed.value) == "runtime IPC operation failed (409)"
+    finally:
+        await client.close()

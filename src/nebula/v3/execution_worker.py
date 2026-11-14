@@ -10,7 +10,7 @@ from pathlib import Path
 
 from starlette.responses import JSONResponse
 
-from .async_utils import finish_cleanup
+from .async_utils import ServiceCleanupError, finish_cleanup
 from .database import Database
 from .database_pool import PoolSettings
 from .diagnostics import record_caught_exception
@@ -40,6 +40,20 @@ ACTIVE_WINDOW_SECONDS = 30.0
 # without a probe hint, so liveness never depends on the probe alone.
 SAFETY_CLAIM_SECONDS = 30.0
 PROBE_FAILURE_MAX_SECONDS = 5.0
+MAX_FAILURE_CHARS = 1000
+
+
+def failure_summary(error: BaseException) -> str:
+    """Operator-safe reason a project application stopped.
+
+    Refusal texts and named service failures are written for operators. Any
+    other exception may carry private values, so only its type is reported.
+    """
+    if isinstance(error, (RuntimeIpcError, CoordinationConflict, ServiceCleanupError)):
+        text = str(error) or type(error).__name__
+    else:
+        text = f"{type(error).__name__} stopped the project application"
+    return text[:MAX_FAILURE_CHARS]
 
 
 @asynccontextmanager
@@ -217,6 +231,7 @@ class ProjectExecution:
         self.activation_started = False
         self.cleanup_complete = False
         self.quiesce_proof = None
+        self.failure: str | None = None
         context.rpc.register("execution.attach/v1", self.attach)
         context.rpc.register("execution.status/v1", self.status)
         context.rpc.register("execution.activate/v1", self.activate)
@@ -235,6 +250,7 @@ class ProjectExecution:
             "activation_started": self.activation_started,
             "cleanup_complete": self.cleanup_complete,
             "quiesce_checkpoint": self.quiesce_proof,
+            "failure": self.failure,
         }
 
     async def quiesce(self, payload):
@@ -263,17 +279,32 @@ class ProjectExecution:
             if self.task is not None:
                 await asyncio.gather(self.task, return_exceptions=True)
             if not self.cleanup_complete or self.state != "closed":
-                raise RuntimeIpcError(
-                    "Project cleanup is unverified; its ownership is retained"
-                )
+                raise RuntimeIpcError(self._retained_reason())
             await self.context.coordinator.release_quiesced_project(
                 self.lease, checkpoint=self.quiesce_proof
             )
             return await self.status({})
 
+    def _retained_reason(self) -> str:
+        cause = f" ({self.failure})" if self.failure else ""
+        if not self.cleanup_complete:
+            return f"Project cleanup is unverified{cause}; its ownership is retained"
+        return (
+            f"The project worker stopped in state {self.state}{cause}; "
+            "its ownership is retained"
+        )
+
     async def _prepare_quiescence(self):
+        if self.state == "failed":
+            raise RuntimeIpcError(
+                "The project worker failed"
+                + (f" ({self.failure})" if self.failure else "")
+                + " and cannot quiesce; its ownership is retained"
+            )
         if self.state != "ready" or self.application is None:
-            raise RuntimeIpcError("Only a ready idle project can quiesce")
+            raise RuntimeIpcError(
+                f"Only a ready idle project can quiesce; its worker is {self.state}"
+            )
         agent = getattr(
             getattr(self.application, "state", None), "runtime_handoff", None
         )
@@ -626,6 +657,7 @@ class ProjectExecution:
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            self.failure = failure_summary(error)
             if self.state != "fenced":
                 self.state = "failed"
             record_caught_exception(
@@ -642,6 +674,27 @@ class ProjectExecution:
             )
             if self.state not in {"failed", "fenced"}:
                 self.state = "closed"
+            if self.state == "failed":
+                await self._record_failure(lease)
+
+    async def _record_failure(self, lease) -> None:
+        """Publish why this owner failed, so deployment status can show it."""
+        try:
+            await finish_cleanup(
+                self.context.coordinator.record_execution_failure(
+                    lease,
+                    detail=self.failure or "The project application stopped",
+                    cleanup_complete=self.cleanup_complete,
+                )
+            )
+        except Exception as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.project.failure_unrecorded",
+                "A failed project worker could not publish its reason to deployment status.",
+                error,
+                stage="execution",
+            )
 
     async def app(self, scope, receive, send):
         if self.state != "ready" or self.lease is None:

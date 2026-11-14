@@ -2249,9 +2249,9 @@ def create_execution_kernel(
             if automation_runtime is not None:
                 automation_runtime.begin_stopping()
 
-        async def stop_components() -> list[BaseException]:
+        async def stop_components() -> list[tuple[str, BaseException]]:
             mark_core_stopping()
-            failures: list[BaseException] = []
+            failures: list[tuple[str, BaseException]] = []
             while started:
                 feature, component, shutdown = started.pop()
                 try:
@@ -2259,7 +2259,7 @@ def create_execution_kernel(
                     if asyncio.iscoroutine(result):
                         await result
                 except BaseException as exc:
-                    failures.append(exc)
+                    failures.append((f"{feature}.{component}", exc))
                     emit_diagnostic(
                         "error",
                         feature,
@@ -2534,9 +2534,9 @@ def create_execution_kernel(
 
             failures = await finish_cleanup(stop_components())
             if failures:
-                raise RuntimeError(
-                    f"{len(failures)} Nebula Core service cleanup operation(s) failed"
-                ) from failures[0]
+                from .async_utils import ServiceCleanupError
+
+                raise ServiceCleanupError(failures) from failures[0][1]
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):

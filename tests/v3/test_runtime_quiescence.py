@@ -1,16 +1,22 @@
 """Used idle projects release ownership only after verified controller cleanup."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+import httpx
 import pytest
+from sqlalchemy.exc import PendingRollbackError
 
+from nebula.v3.async_utils import ServiceCleanupError
 from nebula.v3.database import DeploymentHostRow, ProjectOwnershipRow
 from nebula.v3.domain import ChatGoal, ChatSchedule, ChatTurn, utc_now
 from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
-from nebula.v3.runtime_ipc import RuntimeIpcError
+from nebula.v3.runtime_ipc import RuntimeIpcError, RuntimeRpcClient
+from nebula.v3.runtime_operations import DeploymentOperations
+from nebula.v3.runtime_processes import RuntimeProcessHost
 from tests.v3.test_execution_worker import runtime as runtime, until
 from tests.v3.test_runtime_coordination import location as location
 
@@ -22,7 +28,17 @@ def anyio_backend():
     return "asyncio"
 
 
-async def ready(runtime, *, fail_cleanup=False, change_pause=False):
+PRIVATE = "synthetic-private-statement"
+LABEL = 'Project "Synthetic project" (project)'
+SERVICE_FAILURE = (
+    "1 Nebula Core service cleanup operation(s) failed: "
+    "chat.follow-ups (PendingRollbackError)"
+)
+
+
+async def ready(
+    runtime, *, fail_cleanup=False, change_pause=False, fail_component=False
+):
     @asynccontextmanager
     async def application(context, lease):
         app = FastAPI()
@@ -46,6 +62,12 @@ async def ready(runtime, *, fail_cleanup=False, change_pause=False):
                     ChatGoal, "paused-goal", {"status": "cancelled"}
                 )
             context.restore_cleanup_completed = True
+            if fail_component:
+                # The kernel attempted every service stop and the worker's own
+                # pools and clients closed; one service's stop still raised.
+                raise ServiceCleanupError(
+                    [("chat.follow-ups", PendingRollbackError(PRIVATE))]
+                )
 
     runtime.execution.application_factory = application
     await runtime.execution.attach(asdict(runtime.lease))
@@ -56,6 +78,48 @@ async def prepare(runtime):
     status = await runtime.coordination.status()
     return await runtime.coordination.prepare_shutdown(
         expected_revision=status.revision
+    )
+
+
+async def host_shutdown(runtime, operation_id):
+    """Run the host's real shutdown operation against the worker's IPC server."""
+
+    async def rpc(runtime_id):
+        assert runtime_id == runtime.lease.runtime_id
+        return RuntimeRpcClient(
+            "unix:///isolated/worker.sock",
+            b"k" * 32,
+            transport=httpx.ASGITransport(
+                app=runtime.context.rpc.app, raise_app_exceptions=False
+            ),
+        )
+
+    async def retire(runtime_id):
+        runtime.retired.append(runtime_id)
+
+    runtime.retired = getattr(runtime, "retired", [])
+    host = SimpleNamespace(
+        _launch=asyncio.Lock(),
+        closed=False,
+        lock=SimpleNamespace(descriptor=1),
+        coordinator=runtime.coordination,
+        rpc=rpc,
+        retire=retire,
+    )
+    status = await runtime.coordination.status()
+    return await DeploymentOperations(runtime.coordination).execute(
+        operation_id=operation_id,
+        actor_id="operator",
+        action="shutdown",
+        parameters={"expected_revision": status.revision},
+        dispatch=lambda _action, values: RuntimeProcessHost.shutdown(host, **values),
+    )
+
+
+async def project_status(runtime):
+    status = await runtime.coordination.status()
+    return status, next(
+        item for item in status.projects if item.project_id == "project"
     )
 
 
@@ -191,3 +255,48 @@ async def test_local_handle_refusal_keeps_controller_ready_for_resolution(runtim
     await runtime.coordination.abort_shutdown()
     async with runtime.coordination.coordination.fenced(runtime.lease):
         pass
+
+
+async def test_unverified_cleanup_reason_reaches_receipt_and_status(runtime):
+    await ready(runtime, fail_cleanup=True)
+    receipt = await host_shutdown(runtime, "stop")
+    assert receipt["state"] == "uncertain"
+    assert receipt["result"]["reason"] == (
+        f"{LABEL}: Project cleanup is unverified (RuntimeError stopped the "
+        "project application); its ownership is retained"
+    )
+    status, project = await project_status(runtime)
+    assert status.health == "degraded"
+    assert project.runtime_id == "old"
+    assert project.blockers == [
+        "Execution worker old failed: RuntimeError stopped the project "
+        "application; its cleanup is unverified, so it keeps the project's ownership"
+    ]
+    async with runtime.coordination.database.session() as session:
+        assert (await session.get(DeploymentHostRow, "host")).shutdown_requested
+
+
+async def test_failed_service_stop_is_named_in_receipt_and_status(runtime):
+    await ready(runtime, fail_component=True)
+    first = await host_shutdown(runtime, "stop-1")
+    assert first["state"] == "uncertain"
+    assert first["result"]["reason"] == (
+        f"{LABEL}: The project worker stopped in state failed "
+        f"({SERVICE_FAILURE}); its ownership is retained"
+    )
+    assert PRIVATE not in str(first)
+    status, project = await project_status(runtime)
+    assert status.health == "degraded"
+    assert project.blockers == [
+        f"Execution worker old failed: {SERVICE_FAILURE}; its own cleanup "
+        "finished, but it still owns the project"
+    ]
+    retry = await host_shutdown(runtime, "stop-2")
+    assert retry["result"]["reason"] == (
+        f"{LABEL}: The project worker failed ({SERVICE_FAILURE}) and cannot "
+        "quiesce; its ownership is retained"
+    )
+    async with runtime.coordination.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        assert host.detail == "Shutdown is blocked: " + retry["result"]["reason"]
+        assert (await session.get(ProjectOwnershipRow, "project")).runtime_id == "old"

@@ -29,6 +29,21 @@ class RuntimeIpcError(RuntimeError):
     pass
 
 
+# A handler that refuses with RuntimeIpcError or CoordinationConflict wrote its
+# text for operators. The server signs that reason instead of failing with a
+# bare 500, so the caller can say why. Older clients still see an error status.
+REFUSED_STATUS = 409
+MAX_REFUSAL_CHARS = 4000
+
+
+def _refusal_detail(error: Exception) -> str | None:
+    from .runtime_coordination import CoordinationConflict
+
+    if not isinstance(error, (RuntimeIpcError, CoordinationConflict)):
+        return None
+    return (str(error) or type(error).__name__)[:MAX_REFUSAL_CHARS]
+
+
 def _encode(value) -> bytes:
     encoded = json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -171,16 +186,26 @@ class RuntimeRpcServer:
         operation = self.operations.get(envelope["operation"])
         if operation is None:
             raise HTTPException(404, "runtime operation is unavailable")
-        result = await operation(envelope["payload"])
+        status_code = 200
+        try:
+            document = {"result": await operation(envelope["payload"])}
+        except Exception as error:
+            detail = _refusal_detail(error)
+            if detail is None:
+                raise
+            # diagnostic-expected: a signed refusal returns the handler's operator-safe reason; the caller records its outcome.
+            status_code = REFUSED_STATUS
+            document = {"refusal": {"type": type(error).__name__, "detail": detail}}
         response = _encode(
             {
                 "protocol": IPC_PROTOCOL,
                 "request_id": envelope["request_id"],
-                "result": result,
+                **document,
             }
         )
         return Response(
             response,
+            status_code=status_code,
             media_type="application/json",
             headers={
                 "Cache-Control": "no-store",
@@ -242,10 +267,17 @@ class RuntimeRpcClient:
                 ),
             },
         ) as response:
-            if response.is_error:
-                raise RuntimeIpcError(
-                    f"runtime IPC operation failed ({response.status_code})"
-                )
+            failed = RuntimeIpcError(
+                f"runtime IPC operation failed ({response.status_code})"
+            )
+            # Only an authenticated envelope can explain a refusal; any other
+            # error status stays a bare transport failure.
+            refused = (
+                response.status_code == REFUSED_STATUS
+                and "X-Nebula-IPC-MAC" in response.headers
+            )
+            if response.is_error and not refused:
+                raise failed
             if response.headers.get("Content-Encoding", "identity") != "identity":
                 raise RuntimeIpcError(
                     "runtime IPC compressed responses are unsupported"
@@ -270,13 +302,34 @@ class RuntimeRpcClient:
                 supplied, _mac(self.secret, "response", nonce, raw)
             )
         ):
-            raise RuntimeIpcError("runtime IPC response authentication failed")
+            raise (
+                failed
+                if refused
+                else RuntimeIpcError("runtime IPC response authentication failed")
+            )
         try:
             result = json.loads(raw)
         except (ValueError, UnicodeError) as error:
+            if refused:
+                raise failed from error
             raise RuntimeIpcError(
                 "runtime IPC response is not a valid envelope"
             ) from error
+        if refused:
+            refusal = result.get("refusal") if isinstance(result, dict) else None
+            if (
+                not isinstance(result, dict)
+                or set(result) != {"protocol", "request_id", "refusal"}
+                or result.get("protocol") != IPC_PROTOCOL
+                or result.get("request_id") != identity
+                or not isinstance(refusal, dict)
+                or not isinstance(refusal.get("detail"), str)
+                or not refusal["detail"]
+            ):
+                raise failed
+            # The handler explained its refusal. That alone never proves the
+            # operation had no effect; callers keep their own uncertainty.
+            raise RuntimeIpcError(refusal["detail"][:MAX_REFUSAL_CHARS])
         if (
             not isinstance(result, dict)
             or set(result) != {"protocol", "request_id", "result"}

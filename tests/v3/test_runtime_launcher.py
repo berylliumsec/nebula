@@ -224,3 +224,57 @@ def test_shutdown_requires_success_receipt_and_exact_service_exit(
 
     monkeypatch.setattr(launcher.httpx, "Client", Client)
     assert launcher.shutdown_runtime(tmp_path)["observed_state"] == "stopped"
+
+
+def test_shutdown_failure_leads_with_the_refusal_reason(tmp_path, monkeypatch):
+    launcher.operator_token(tmp_path)
+    launcher.write_private(
+        tmp_path / "runtime/connection.json",
+        json.dumps(
+            {
+                "protocol": launcher.DESKTOP_PROTOCOL,
+                "data_root": str(tmp_path),
+                "pid": 12345,
+                "process_birth": "original",
+                "endpoint": "http://127.0.0.1:54321/api/v1",
+            }
+        ).encode(),
+    )
+    monkeypatch.setattr(launcher, "same_process", lambda *_a: True)
+    from types import SimpleNamespace
+
+    reason = 'Project "Alpha" (alpha): Project cleanup is unverified'
+    result = {
+        "detail": "unconfirmed",
+        "error_type": "RuntimeIpcError",
+        "reason": reason,
+    }
+
+    def response(payload):
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def get(self, *_args, **_kwargs):
+            return response({"revision": 7})
+
+        def post(self, _url, **_kwargs):
+            return response(
+                {"state": "uncertain", "operation_id": "refused", "result": result}
+            )
+
+    monkeypatch.setattr(launcher.httpx, "Client", Client)
+    with pytest.raises(RuntimeError) as failed:
+        launcher.shutdown_runtime(tmp_path)
+    assert str(failed.value) == (
+        f"Core shutdown needs attention: {reason} Receipt refused: "
+        + json.dumps(result)
+    )

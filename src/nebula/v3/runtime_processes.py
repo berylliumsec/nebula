@@ -949,22 +949,35 @@ class RuntimeProcessHost:
         # A lost reply retains the durable admission hold. Explicit retries
         # inspect the same worker grant instead of restarting its application.
         for lease in leases:
+            # Every refusal names its project so the receipt says what to fix.
+            label = await self.coordinator.project_label(lease.project_id)
             client = await self.rpc(lease.runtime_id)
             try:
-                status = await client.call("execution.quiesce/v1", {}, timeout=30)
+                try:
+                    status = await client.call("execution.quiesce/v1", {}, timeout=30)
+                except RuntimeIpcError as error:
+                    raise RuntimeIpcError(f"{label}: {error}") from error
+                except (httpx.HTTPError, OSError) as error:
+                    raise RuntimeIpcError(
+                        f"{label}: its worker did not confirm quiescence "
+                        f"({type(error).__name__}); the shutdown hold is retained"
+                    ) from error
                 if status.get("quiesce_blockers"):
+                    reason = f"{label}: " + "; ".join(status["quiesce_blockers"])
                     await self.coordinator.abort_shutdown(
-                        detail="Shutdown is blocked: "
-                        + "; ".join(status["quiesce_blockers"])
+                        detail="Shutdown is blocked: " + reason
                     )
-                    raise CoordinationConflict("; ".join(status["quiesce_blockers"]))
+                    raise CoordinationConflict(reason)
                 if (
                     status.get("lease") != asdict(lease)
                     or status.get("state") != "closed"
                     or status.get("cleanup_complete") is not True
                 ):
+                    failure = status.get("failure")
                     raise CoordinationConflict(
-                        "Idle project cleanup was not verified; retain its shutdown hold"
+                        f"{label}: idle project cleanup was not verified"
+                        + (f" ({failure})" if isinstance(failure, str) else "")
+                        + "; retain its shutdown hold"
                     )
             finally:
                 await client.close()

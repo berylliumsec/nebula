@@ -11,6 +11,7 @@ from uuid import uuid4
 from .database import DeploymentOperationRow
 from .deployments import DeploymentCoordinator, _checkpoint
 from .runtime_coordination import CoordinationConflict
+from .runtime_ipc import RuntimeIpcError
 
 
 def _document(value: dict) -> dict:
@@ -100,6 +101,15 @@ class DeploymentOperations:
                 if rejected
                 else "The operation did not report a confirmed result. Read deployment status before reconciliation."
             )
+            # Refusals carry operator-facing text; keep it beside the uncertain
+            # outcome so the operator learns why. Other errors may embed
+            # private values and stay classified by type only.
+            reason = (
+                (str(error) or error_type)[:4000]
+                if not rejected
+                and isinstance(error, (RuntimeIpcError, CoordinationConflict))
+                else None
+            )
 
             async def uncertain():
                 await self._finish(
@@ -108,6 +118,7 @@ class DeploymentOperations:
                     {
                         "detail": detail,
                         "error_type": error_type,
+                        **({"reason": reason} if reason else {}),
                     },
                 )
 

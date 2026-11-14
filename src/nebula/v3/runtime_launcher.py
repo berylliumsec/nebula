@@ -354,8 +354,15 @@ def shutdown_runtime(data_root: Path, *, timeout: float = 30) -> dict:
             response.raise_for_status()
             receipt = response.json()
         if receipt.get("state") != "succeeded":
+            result = receipt.get("result")
+            reason = result.get("reason") if isinstance(result, dict) else None
             raise RuntimeError(
-                "Core shutdown needs attention: " + json.dumps(receipt.get("result"))
+                "Core shutdown needs attention: "
+                + (f"{reason} " if isinstance(reason, str) and reason else "")
+                + "Receipt "
+                + str(receipt.get("operation_id"))
+                + ": "
+                + json.dumps(result)
             )
         while same_process(value["pid"], value["process_birth"]):
             if time.monotonic() >= deadline:

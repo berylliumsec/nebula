@@ -84,6 +84,24 @@ async def drain_callback_tasks():
         raise BaseExceptionGroup("Persistence callback cleanup failed", failures)
 
 
+class ServiceCleanupError(RuntimeError):
+    """Every service stop was attempted; these named services reported failure.
+
+    The message names each service and its exception type only, so a worker
+    can report it to operators without exception text that may hold private
+    values. The first failure remains the cause for diagnostics.
+    """
+
+    def __init__(self, failures: list[tuple[str, BaseException]]):
+        self.components = tuple(
+            f"{name} ({type(error).__name__})" for name, error in failures
+        )
+        super().__init__(
+            f"{len(failures)} Nebula Core service cleanup operation(s) failed: "
+            + ", ".join(self.components)
+        )
+
+
 async def finish_cleanup(operation: Coroutine[Any, Any, _T]) -> _T:
     """Join owned cleanup even when its caller is cancelled repeatedly."""
     task = asyncio.create_task(
