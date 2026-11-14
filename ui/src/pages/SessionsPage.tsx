@@ -1,4 +1,6 @@
 import { sameJson, startVisiblePoll, type PollOutcome, type VisiblePoll } from "../api/visiblePoll";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
 import { rememberToolSharing, sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
 import { HarnessReasoningDetails } from "../components/HarnessReasoningDetails";
@@ -1690,6 +1692,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [providerGoal, setProviderGoal] = useState<ChatGoal>();
   const [liveGoalTokenEstimate, setLiveGoalTokenEstimate] = useState(0);
   const [providerGoalLoading, setProviderGoalLoading] = useState(false);
+  // Nonzero while the goal read waits for the project's idle or starting worker.
+  const [goalRuntimeWait, setGoalRuntimeWait] = useState(0);
+  const goalLoading = providerGoalLoading || goalRuntimeWait > 0;
   const [providerGoalError, setProviderGoalError] = useState<string>();
   const [expandedContextIndex, setExpandedContextIndex] = useState<number>();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
@@ -1719,6 +1724,19 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [olderHistoryLoading, setOlderHistoryLoading] = useState(false);
   const [olderHistoryError, setOlderHistoryError] = useState<string>();
+  // Nonzero while the open conversation waits for its project's idle or starting
+  // worker; it reads again, keeping any cached messages, when the worker answers.
+  const [transcriptRuntimeWait, setTranscriptRuntimeWait] = useState(0);
+  const transcriptRuntimeSessionRef = useRef<string | undefined>(undefined);
+  const [sideChatRuntimeWait, setSideChatRuntimeWait] = useState(0);
+  const [sideChatRestoreAttempt, setSideChatRestoreAttempt] = useState(0);
+  // Project catalogs (skills, hooks, command runtime, context, capabilities)
+  // read once per project. A read that found the worker away re-runs them all
+  // once it answers, instead of showing a discovery error.
+  const [projectReadsRuntimeWait, setProjectReadsRuntimeWait] = useState(0);
+  const [projectReadsEpoch, setProjectReadsEpoch] = useState(0);
+  const awaitProjectReads = useCallback(() => setProjectReadsRuntimeWait(value => value + 1), []);
+  useProjectRuntimeRecovery(api, projectReadsRuntimeWait, () => { setProjectReadsRuntimeWait(0); setProjectReadsEpoch(value => value + 1); });
   const olderHistoryReadRef = useRef(false);
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
@@ -1840,6 +1858,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         setProviderGoal(undefined); // diagnostic-expected: this conversation has no goal yet
         return undefined;
       }
+      // diagnostic-expected: the client recorded this read; the goal reads again when the project runtime answers.
+      if (isProjectRuntimeUnavailable(caught)) { setGoalRuntimeWait(value => value + 1); return undefined; }
       void logCaughtDiagnostic("interface.sessions.goal_load_failed", "The conversation goal could not be loaded.", caught, "goal");
       setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
       return undefined;
@@ -1851,7 +1871,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setProviderGoal(undefined); setLiveGoalTokenEstimate(0); setProviderGoalError(undefined); setProviderGoalLoading(false); return;
     }
     const controller = new AbortController();
-    setProviderGoalLoading(true); setProviderGoalError(undefined);
+    setProviderGoalLoading(true); setProviderGoalError(undefined); setGoalRuntimeWait(0);
     void readProviderGoal(controller.signal).finally(() => { if (!controller.signal.aborted) setProviderGoalLoading(false); });
     return () => controller.abort();
   }, [api, readProviderGoal, runtimeKind, sessionId]);
@@ -2395,13 +2415,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setCommandRuntimeReady(runtime.ready);
       setToolRuntimeReason(runtime.ready ? undefined : runtime.detail);
     }).catch((caughtError) => {
-      void logCaughtDiagnostic("interface.sessions_page.caught_failure_02", "A handled interface operation failed.", caughtError, "sessions_page");
       if (!active) return;
       setCommandRuntimeReady(false);
+      // diagnostic-expected: the client recorded this read; the runtime configuration reads again when the project's worker answers.
+      if (isProjectRuntimeUnavailable(caughtError)) { awaitProjectReads(); return; }
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_02", "A handled interface operation failed.", caughtError, "sessions_page");
       setToolRuntimeReason("Command runtime configuration is unavailable.");
     });
     return () => { active = false; };
-  }, [api, coreState, embeddedSideChat, engagement]);
+  }, [api, awaitProjectReads, coreState, embeddedSideChat, engagement, projectReadsEpoch]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2694,6 +2716,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
+        // diagnostic-expected: the client recorded this read; skills are discovered again when the project's worker answers.
+        if (isProjectRuntimeUnavailable(error)) { awaitProjectReads(); return; }
         logCaughtDiagnostic("interface.chat.skills_list_failed", "Skills could not be discovered.", error, "chat-skills");
         setHarnessSkills([]);
         setHarnessSkillError(error instanceof Error ? error.message : "Skills could not be discovered.");
@@ -2702,7 +2726,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         if (!controller.signal.aborted) setHarnessSkillsLoading(false);
       });
     return () => controller.abort();
-  }, [api, embeddedSideChat, engagement, runtimeKind, selectedHarness, projectCatalogKey]);
+  }, [api, awaitProjectReads, embeddedSideChat, engagement, runtimeKind, selectedHarness, projectCatalogKey, projectReadsEpoch]);
   useEffect(() => {
     if (embeddedSideChat || !api || !engagement) {
       setNativeHooks([]);
@@ -2717,12 +2741,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setNativeHookError(undefined);
     }).catch(error => {
       if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
+      // diagnostic-expected: the client recorded this read; hooks are discovered again when the project's worker answers.
+      if (isProjectRuntimeUnavailable(error)) { awaitProjectReads(); return; }
       void logCaughtDiagnostic("interface.sessions.hooks_load_failed", "Project lifecycle hooks could not be discovered.", error, "hooks");
       setNativeHooks([]);
       setNativeHookError(error instanceof Error ? error.message : "Hooks could not be discovered.");
     });
     return () => controller.abort();
-  }, [api, embeddedSideChat, engagement, runtimeKind, projectCatalogKey]);
+  }, [api, awaitProjectReads, embeddedSideChat, engagement, runtimeKind, projectCatalogKey, projectReadsEpoch]);
   useEffect(() => {
     if (runtimeKind !== "provider") return;
     if (!enabledProviders.length) {
@@ -2823,13 +2849,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setContextStatus(status);
     }).catch((error) => {
       if (controller.signal.aborted) return;
+      // diagnostic-expected: the client recorded this read; context status reads again when the project's worker answers.
+      if (isProjectRuntimeUnavailable(error)) { awaitProjectReads(); return; }
       void logCaughtDiagnostic("interface.sessions_page.context_status", "Assistant context status could not be loaded.", error, "sessions_page");
       setContextStatusError(error instanceof Error ? error.message : "Context status is unavailable.");
     }).finally(() => {
       if (!controller.signal.aborted) setContextStatusLoading(false);
     });
     return () => controller.abort();
-  }, [api, contextRefreshKey, coreState, sending, sessionId]);
+  }, [api, awaitProjectReads, contextRefreshKey, coreState, projectReadsEpoch, sending, sessionId]);
 
   useEffect(() => {
     if (embeddedSideChat || !api || coreState !== "online" || !engagement) {
@@ -2839,9 +2867,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const controller = new AbortController();
     void api.executionCapabilities(engagement.id, controller.signal)
       .then(setExecutionCapabilities)
-      .catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_04", "A handled interface operation failed.", caughtError, "sessions_page"); return setExecutionCapabilities(undefined); });
+      .catch((caughtError) => {
+        if (controller.signal.aborted) return;
+        setExecutionCapabilities(undefined);
+        // diagnostic-expected: the client recorded this read; capabilities read again when the project's worker answers.
+        if (isProjectRuntimeUnavailable(caughtError)) { awaitProjectReads(); return; }
+        void logCaughtDiagnostic("interface.sessions_page.caught_failure_04", "A handled interface operation failed.", caughtError, "sessions_page");
+      });
     return () => controller.abort();
-  }, [api, coreState, embeddedSideChat, engagement]);
+  }, [api, awaitProjectReads, coreState, embeddedSideChat, engagement, projectReadsEpoch]);
 
   const sideRequestedSessionId = embeddedSideChat ? requestedSessionId : "";
   useEffect(() => {
@@ -2928,11 +2962,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       }, {replace: true});
     }).catch((error) => {
       if (controller.signal.aborted) return;
+      // diagnostic-expected: the client recorded this read; side chats restore when the project runtime answers.
+      if (isProjectRuntimeUnavailable(error)) { setSideChatRuntimeWait(value => value + 1); return; }
       void logCaughtDiagnostic("interface.sessions_page.side_chat_restore", "The side chat for this conversation could not be loaded.", error, "sessions_page");
       setChatError("Could not restore this conversation's side chat. Retry from the side chat button.");
     });
     return () => controller.abort();
-  }, [api, coreState, embeddedSideChat, engagement?.id, requestedSessionId, sessionId, updateSearchParams, view]);
+  }, [api, coreState, embeddedSideChat, engagement?.id, requestedSessionId, sessionId, sideChatRestoreAttempt, updateSearchParams, view]);
+  useProjectRuntimeRecovery(api, sideChatRuntimeWait, () => { setSideChatRuntimeWait(0); setSideChatRestoreAttempt(value => value + 1); });
 
   useEffect(() => {
     return () => {
@@ -4267,6 +4304,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHistoryBeforeId(undefined);
     setHasOlderHistory(false);
     setOlderHistoryError(undefined);
+    setTranscriptRuntimeWait(0);
+    transcriptRuntimeSessionRef.current = undefined;
     setChatError(undefined);
     setFailedProviderRecovery(undefined);
     setHarnessProgress(undefined);
@@ -4609,6 +4648,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     } catch (error) {
       if (!selectionIsCurrent() || loadController.signal.aborted) return;
       setSessionReadReady(false);
+      if (isProjectRuntimeUnavailable(error)) {
+        // diagnostic-expected: the client recorded this read. The project's worker is idle or starting;
+        // nothing failed. Keep any cached messages and read again when it answers.
+        transcriptRuntimeSessionRef.current = id;
+        setTranscriptRuntimeWait(value => value + 1);
+        return;
+      }
       if (!authoritativeHistoryLoaded || (error instanceof ApiError && [401, 403, 404].includes(error.status))) {
         chatPreviews.delete(id);
         chatImagePreviews.delete(id);
@@ -4627,6 +4673,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       }
     }
   };
+
+  useProjectRuntimeRecovery(api, transcriptRuntimeWait, () => {
+    setTranscriptRuntimeWait(0);
+    const waiting = transcriptRuntimeSessionRef.current;
+    transcriptRuntimeSessionRef.current = undefined;
+    if (waiting && waiting === sessionId) void selectSession(waiting, false, true);
+  });
 
   async function loadOlderHistory(targetMessageId?: string) {
     if (!api || !sessionId || !hasOlderHistory || !historyBeforeId || olderHistoryReadRef.current) return;
@@ -6770,7 +6823,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             <Target size={18} aria-hidden="true" />
           </button>;
   const conversationTitle = sessions.find(session => session.id === sessionId)?.title
-    ?? (loadingHistory ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
+    ?? (loadingHistory || transcriptRuntimeWait > 0 ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
   const studioRailAvailable = Boolean(sessionId && !shellOnly && !fullScreen && !embeddedSideChat && !sidePanelOpen
     && !chatTerminalOpen && !sessionInspectorOpen && !sideView);
   const reloadGoal = () => {
@@ -6778,6 +6831,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setProviderGoalError(undefined);
     void readProviderGoal().finally(() => setProviderGoalLoading(false));
   };
+  useProjectRuntimeRecovery(api, goalRuntimeWait, () => { setGoalRuntimeWait(0); reloadGoal(); });
   const goalEditor = api && !embeddedSideChat && <ProviderGoalPanel
     api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills}
     liveTokenEstimate={liveGoalTokenEstimate}
@@ -6993,7 +7047,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 </div>
               </section>, document.body)}
               <div className="chat-thread" key={sessionId || "new-conversation"}>
-                  {loadingHistory && messages.length > 0 && <div className="chat-thinking chat-syncing" role="status"><LoaderCircle className="spin" size={14} /> Showing saved messages · syncing…</div>}
+                  {(loadingHistory || transcriptRuntimeWait > 0) && messages.length > 0 && <div className="chat-thinking chat-syncing" role="status"><LoaderCircle className="spin" size={14} /> Showing saved messages · syncing…</div>}
                   <div
                     ref={chatViewportRef}
                     className="chat-scroll"
@@ -7045,7 +7099,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 {taskPlans.slice(0, 1).filter(item => item.phase === "blocked").map(item => <div className="chat-task-plan" role="alert" key={item.id}><strong>Previous plan attempt blocked</strong><p>{item.reason ?? "This earlier turn could not finish planning."}</p></div>)}
                 {activeImagePreview ? <div className="chat-image-preview" data-testid="chat-image-preview" role="button" tabIndex={0} aria-label="Conversation image preview. Activate to read, copy, or edit the text." style={{width: activeImagePreview.width, minHeight: activeImagePreview.height}} onClick={revealImageText} onKeyDown={(event) => {if (event.key === "Enter" || event.key === " ") {event.preventDefault(); revealImageText();}}}>
                   {activeImagePreview.tiles.map((tile, index) => <img key={tile.url} src={tile.url} alt="" aria-hidden="true" width={activeImagePreview.width} height={tile.height} loading={index < 2 ? "eager" : "lazy"} decoding="async" />)}
-                </div> : loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
+                </div> : (loadingHistory || transcriptRuntimeWait > 0) && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
                   const itemStyle: CSSProperties = {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)`};
                   if (showHistoryHeader && virtualItem.index === 0) return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
                     {hasOlderHistory && (!embeddedSideChat || showInheritedHistory) && <div className="chat-older-history">
@@ -7128,7 +7182,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               <form className="chat-composer" data-quiet-attention={composerBusy || pendingHarnessRequests > 0 || Boolean(chatError) || Boolean(harnessActivityError) || Boolean(stateSyncError) || Boolean(decisionNotice) || Boolean(pendingResponse) || queuedFollowUps.length > 0 || studioGoalOpen || assistantSettingsOpen || projectSnapshot === "floating" || !runtimeReady ? "true" : undefined} onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <QuietLensHorizontalContour className="chat-composer-lens" />
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
-              {!shellOnly && goalEditor && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <div className="provider-dialog-note error" role="alert">{providerGoalError} <button className="button quiet" type="button" onClick={reloadGoal}>Retry goal</button></div>}{!providerGoalLoading && !providerGoalError && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor">{goalEditor}</div>}</>}
+              {!shellOnly && goalEditor && <>{goalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <div className="provider-dialog-note error" role="alert">{providerGoalError} <button className="button quiet" type="button" onClick={reloadGoal}>Retry goal</button></div>}{!goalLoading && !providerGoalError && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor">{goalEditor}</div>}</>}
               {sessionId && !pendingSubagentApproval && <ChatSubagentRail
                 subagents={subagentState.subagents}
                 open={sessionInspectorOpen && drawerTab === "subagents"}
@@ -7163,7 +7217,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   {pendingRuntimeSwitch.status === "needs_review" ? "Review runtime selection" : `Next runtime: ${pendingRuntimeSwitch.model}.`} {pendingRuntimeSwitch.reason}
                   {pendingRuntimeSwitch.status === "needs_review" && <button className="button quiet" type="button" onClick={() => {setAssistantSettingsOpen(true); if (pendingRuntimeSwitch.backend === "provider") void proposeProviderRuntime(pendingRuntimeSwitch.profileId, pendingRuntimeSwitch.model); else chooseChatRuntime("harness");}}>Review selection</button>}
                 </p>}
-                <footer className="chat-composer-toolbar"><div className="chat-composer-tools">{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{shellOnly && api && <button className="button quiet chat-composer-icon chat-goal-trigger" type="button" aria-label={providerGoal || providerGoalLoading || providerGoalError ? "Open goal" : "Create goal"} title={providerGoal ? `Open ${providerGoal.status} goal` : providerGoalError ? "Goal could not be loaded" : providerGoalLoading ? "Loading goal" : "Create goal"} aria-haspopup="dialog" aria-expanded={studioGoalOpen} data-status={providerGoal?.status} onClick={() => setStudioGoalOpen(true)}><Flag size={18} aria-hidden="true" /></button>}{!embeddedSideChat && !shellOnly && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button>{!shellOnly && <button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} onChooseImageRuntime={() => setAssistantSettingsOpen(true)} imagesSupported={imageInputEnabled} imagesBusy={composerBusy} />}</div><div className="chat-composer-turn-actions">{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</div></footer>
+                <footer className="chat-composer-toolbar"><div className="chat-composer-tools">{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{shellOnly && api && <button className="button quiet chat-composer-icon chat-goal-trigger" type="button" aria-label={providerGoal || goalLoading || providerGoalError ? "Open goal" : "Create goal"} title={providerGoal ? `Open ${providerGoal.status} goal` : providerGoalError ? "Goal could not be loaded" : goalLoading ? "Loading goal" : "Create goal"} aria-haspopup="dialog" aria-expanded={studioGoalOpen} data-status={providerGoal?.status} onClick={() => setStudioGoalOpen(true)}><Flag size={18} aria-hidden="true" /></button>}{!embeddedSideChat && !shellOnly && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button>{!shellOnly && <button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} onChooseImageRuntime={() => setAssistantSettingsOpen(true)} imagesSupported={imageInputEnabled} imagesBusy={composerBusy} />}</div><div className="chat-composer-turn-actions">{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</div></footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div>
                 <strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>
@@ -7572,7 +7626,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       {!shellOnly && mobileMoreOpen && <MobileMorePanel view={view} onSelectView={setView} onFocusMode={() => setFullScreen(true)} onClose={() => setMobileMoreOpen(false)} />}
       {artifactInspector && <ModalSurface as="section" className="provider-dialog resource-dialog" labelledBy="artifact-inspector-title" onClose={() => setArtifactInspector(undefined)}><header><div><small>Untrusted tool data · bounded retrieval</small><h2 id="artifact-inspector-title">{artifactInspector.capability} artifacts</h2></div><button className="icon-button subtle" type="button" aria-label="Close artifact inspector" onClick={() => setArtifactInspector(undefined)}><X size={17} /></button></header>{artifactInspector.receipt && <div className="knowledge-status" role="status"><ShieldCheck size={15} /><span>Receipt {String(artifactInspector.receipt.status ?? artifactInspector.status)} · parser {String((artifactInspector.receipt.parser as Record<string, unknown> | undefined)?.state ?? "not configured")}{Array.isArray(artifactInspector.receipt.warnings) && artifactInspector.receipt.warnings.length ? ` · ${artifactInspector.receipt.warnings.join(" · ")}` : ""}</span></div>}<div className="runtime-resource-list">{artifactInspector.artifacts.length ? artifactInspector.artifacts.map((artifact) => <article className="runtime-resource-card" key={artifact.artifactId}><header><div><strong>{artifact.filename ?? artifact.kind}</strong><code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code></div><span>{artifact.truncated ? "truncated" : artifact.searchable ? "searchable" : "binary"}</span></header><small>{artifact.byteCount.toLocaleString()} retained byte{artifact.byteCount === 1 ? "" : "s"}{artifact.observedByteCount !== artifact.byteCount ? ` · ${artifact.observedByteCount.toLocaleString()} observed` : ""} · {artifact.mediaType}</small><footer>{artifact.searchable && <button className="button quiet" type="button" onClick={() => void readArtifact(artifact.artifactId)} disabled={artifactBusy}>Read excerpt</button>}<button className="button quiet" type="button" onClick={() => void saveRawArtifact(artifact)}>Save acknowledged raw</button></footer></article>) : <p>Artifact references are available through search for this historical or gateway result.</p>}</div><form className="chat-composer" onSubmit={(event) => void searchArtifacts(event)}><label>Search all searchable artifacts<input value={artifactQuery} maxLength={512} placeholder="open 443/tcp" onChange={(event) => setArtifactQuery(event.target.value)} /></label><button className="button primary" type="submit" disabled={artifactBusy || !artifactQuery.trim()}><Search size={14} /> {artifactBusy ? "Searching…" : "Search"}</button></form>{artifactError && <DiagnosticErrorNotice error={artifactError} fallback="Artifact retrieval failed." compact />}{artifactSearch && <section><h3>Search matches</h3>{artifactSearch.matches.length ? artifactSearch.matches.map((match, index) => <article className="panel" key={`${match.artifactId}-${match.line}-${index}`}><header><strong>{match.filename ?? match.artifactId}</strong><button className="button quiet" type="button" onClick={() => void readArtifact(match.artifactId, Math.max(1, match.line - 10))}>Read around line {match.line}</button></header><pre>{match.context.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre></article>) : <p>No matching lines.</p>}{artifactSearch.truncated && <small>More matches are available with the continuation cursor.</small>}</section>}{artifactRead && <section><h3>{artifactRead.filename ?? artifactRead.artifactId}</h3>{artifactRead.searchable ? <pre>{artifactRead.lines.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre> : <p>This binary artifact is retained but not searchable.</p>}{artifactRead.continuationStartingLine && <button className="button quiet" type="button" onClick={() => void readArtifact(artifactRead.artifactId, artifactRead.continuationStartingLine)}>Read next lines</button>}</section>}<footer><span>Excerpts are redacted, line-numbered, and capped at 8 KiB.</span><button className="button secondary" type="button" onClick={() => setArtifactInspector(undefined)}>Close</button></footer></ModalSurface>}
       {shellOnly && handoffUrl && <ModalSurface as="section" className="assistant-shell-handoff" labelledBy="assistant-shell-handoff-title" onClose={() => setHandoffUrl(undefined)}><header><h2 id="assistant-shell-handoff-title">Open in full Nebula</h2><button className="icon-button subtle" type="button" aria-label="Close link details" title="Close" onClick={() => setHandoffUrl(undefined)}><X size={18} aria-hidden="true" /></button></header><p>{handoffUrl.startsWith("File: ") ? "This project file can be opened from the desktop Workbench." : "This link can be opened from a browser."}</p><label>Reference<input readOnly value={handoffUrl} onFocus={event => event.currentTarget.select()} /></label>{/^https?:\/\//i.test(handoffUrl) && <a className="button secondary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open link</a>}</ModalSurface>}
-      {shellOnly && studioGoalOpen && goalEditor && <ModalSurface as="section" className="assistant-goal-dialog" labelledBy="assistant-goal-dialog-title" onClose={() => setStudioGoalOpen(false)}><header><h2 id="assistant-goal-dialog-title">Goal</h2><button className="icon-button subtle" type="button" aria-label="Close goal" title="Close goal" onClick={() => setStudioGoalOpen(false)}><X size={18} aria-hidden="true" /></button></header>{providerGoalLoading ? <p role="status">Loading goal…</p> : providerGoalError ? <div role="alert"><p>{providerGoalError}</p><button className="button secondary" type="button" onClick={reloadGoal}>Retry goal</button></div> : goalEditor}</ModalSurface>}
+      {shellOnly && studioGoalOpen && goalEditor && <ModalSurface as="section" className="assistant-goal-dialog" labelledBy="assistant-goal-dialog-title" onClose={() => setStudioGoalOpen(false)}><header><h2 id="assistant-goal-dialog-title">Goal</h2><button className="icon-button subtle" type="button" aria-label="Close goal" title="Close goal" onClick={() => setStudioGoalOpen(false)}><X size={18} aria-hidden="true" /></button></header>{goalLoading ? <p role="status">Loading goal…</p> : providerGoalError ? <div role="alert"><p>{providerGoalError}</p><button className="button secondary" type="button" onClick={reloadGoal}>Retry goal</button></div> : goalEditor}</ModalSurface>}
       {!shellOnly && runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("activity"); }} />}
     </div>}
     </WorkbenchLayout>

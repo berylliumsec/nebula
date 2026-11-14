@@ -3,6 +3,8 @@ import type { ApiClient } from "../../api/client";
 import { sameJson, startVisiblePoll, type PollOutcome } from "../../api/visiblePoll";
 import type { ChatSubagentView } from "../../api/types";
 import { logCaughtDiagnostic } from "../../diagnostics";
+import { isProjectRuntimeUnavailable } from "../../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../../hooks/useProjectRuntime";
 
 /** How often an active delegation is read back. */
 const POLL_MS = 2_000;
@@ -47,6 +49,10 @@ export function useChatSubagents(
   const errorShown = useRef(false);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
+  // Nonzero while the project's worker is idle or starting: polling pauses
+  // without an error and resumes when the worker answers.
+  const [runtimeWait, setRuntimeWait] = useState(0);
+  useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); refresh(); });
 
   useEffect(() => {
     if (!api || !sessionId || !enabled) {
@@ -87,6 +93,8 @@ export function useChatSubagents(
         return live ? "idle" : "stop";
       } catch (caught) {
         if (controller.signal.aborted || stopped) return "stop";
+        // diagnostic-expected: the client recorded this read; the list reads again when the project runtime answers.
+        if (isProjectRuntimeUnavailable(caught)) { setRuntimeWait((value) => value + 1); return "stop"; }
         failures += 1;
         void logCaughtDiagnostic("interface.chat_subagents.list_failed", "Delegated subagents could not be read.", caught, "chat_subagents");
         errorShown.current = true;

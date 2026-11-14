@@ -3,6 +3,8 @@ import { RefreshCw, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { sameJson } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 interface CatchUpEntry {id: string; message_id?: string; turn_id?: string; text: string; kind: string}
 interface CatchUpRecord {initialized: boolean; revision: number; through_at: string; items: CatchUpEntry[]; pending: CatchUpEntry[]; truncated: boolean}
 function readDeviceId() {
@@ -14,6 +16,10 @@ export function ChatCatchUp({api, sessionId, ready, atLatest, isShown, actionRev
   const [card, setCard] = useState<CatchUpRecord>(); const cardRef = useRef<CatchUpRecord | undefined>(undefined);
   const [pending, setPending] = useState<CatchUpEntry[]>([]); const [error, setError] = useState<string>(); const [refresh, setRefresh] = useState(0);
   const needsCatchupRef = useRef(true);
+  const errorRef = useRef(error); errorRef.current = error;
+  // Nonzero while the project's worker is idle or starting: no error, read again when it answers.
+  const [runtimeWait, setRuntimeWait] = useState(0);
+  useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); setRefresh(value => value + 1); });
   const atLatestRef = useRef(atLatest); atLatestRef.current = atLatest;
   const isShownRef = useRef(isShown); isShownRef.current = isShown;
   const acknowledgeRef = useRef<((record: CatchUpRecord) => Promise<void>) | undefined>(undefined);
@@ -23,7 +29,10 @@ export function ChatCatchUp({api, sessionId, ready, atLatest, isShown, actionRev
     if (!ready) return;
     const controller = new AbortController(); let busy = false; let needsCatchup = needsCatchupRef.current;
     const path = `chat/sessions/${encodeURIComponent(sessionId)}`;
-    const report = (e: unknown) => {if (!controller.signal.aborted) {void logCaughtDiagnostic("interface.assistant_chat.cursor_failed", "The device read cursor could not be synchronized.", e, "assistant_chat"); setError("Read state could not sync. Pending actions remain available.");}};
+    const report = (e: unknown) => {if (!controller.signal.aborted) {
+      // diagnostic-expected: the client recorded this read; the shared reconnecting notice explains the wait.
+      if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value + 1); return; }
+      void logCaughtDiagnostic("interface.assistant_chat.cursor_failed", "The device read cursor could not be synchronized.", e, "assistant_chat"); setError("Read state could not sync. Pending actions remain available.");}};
     let device: string;
     try {device = readDeviceId();} catch(e) {void logCaughtDiagnostic("interface.assistant_chat.cursor_operation_failed", "The read cursor operation failed.", e, "assistant_chat"); report(e); return;}
     const acknowledge = async (record: CatchUpRecord) => {
@@ -47,7 +56,9 @@ export function ChatCatchUp({api, sessionId, ready, atLatest, isShown, actionRev
           // Reading the bottom of the transcript reads only what it renders.
           && record.items.every(item => !item.message_id || (isShownRef.current?.(item.message_id) ?? true))) await acknowledge(record);
         needsCatchup = false; needsCatchupRef.current = false;
-      } catch(e) {void logCaughtDiagnostic("interface.assistant_chat.cursor_operation_failed", "The read cursor operation failed.", e, "assistant_chat"); report(e);} finally {busy = false;}
+        // Read state synchronized again; an earlier sync failure no longer applies.
+        if (errorRef.current) setError(undefined);
+      } catch(e) {if (!isProjectRuntimeUnavailable(e)) void logCaughtDiagnostic("interface.assistant_chat.cursor_operation_failed", "The read cursor operation failed.", e, "assistant_chat"); report(e);} finally {busy = false;}
     };
     const visibility = () => {if (document.hidden) {needsCatchup = true; needsCatchupRef.current = true;} else void check();};
     void check(); const timer = setInterval(() => void check(), 8000); document.addEventListener("visibilitychange", visibility);
