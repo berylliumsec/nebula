@@ -37,6 +37,46 @@ class RuntimeIpcUndispatched(RuntimeIpcError):
     """The peer proved it did not run the operation; sending it again is safe."""
 
 
+# A project read answers 503 with this code while the project's worker is
+# idle (retired), starting or closing. Nothing failed: the same read succeeds
+# once a worker owns the project again, so clients retry it after Retry-After.
+PROJECT_RUNTIME_UNAVAILABLE = "project_runtime_unavailable"
+PROJECT_RUNTIME_RETRY_AFTER_SECONDS = 1
+
+
+# Why no ready worker owns the project: "starting" (Core is admitting or
+# recovering one), "closing" (the worker is retiring or was replaced) or "idle"
+# (nothing will admit one until the operator resumes work in the project).
+PROJECT_RUNTIME_REASONS = ("starting", "closing", "idle")
+
+
+def project_runtime_unavailable_body(
+    detail: str, reason: str = "starting"
+) -> dict[str, Any]:
+    if reason not in PROJECT_RUNTIME_REASONS:
+        raise ValueError("unknown project runtime reason")
+    return {
+        "detail": detail,
+        "code": PROJECT_RUNTIME_UNAVAILABLE,
+        "reason": reason,
+        "retryable": True,
+    }
+
+
+def project_runtime_unavailable_headers() -> dict[str, str]:
+    return {"Retry-After": str(PROJECT_RUNTIME_RETRY_AFTER_SECONDS)}
+
+
+class ProjectRuntimeUnavailable(RuntimeIpcError):
+    """No ready worker owns the project now; a later read can succeed."""
+
+    def __init__(self, message: str, *, reason: str = "starting"):
+        if reason not in PROJECT_RUNTIME_REASONS:
+            raise ValueError("unknown project runtime reason")
+        super().__init__(message)
+        self.reason = reason
+
+
 # A handler that refuses with RuntimeIpcError or CoordinationConflict wrote its
 # text for operators. The server signs that reason instead of failing with a
 # bare 500, so the caller can say why. Older clients still see an error status.

@@ -26,7 +26,11 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from .async_utils import finish_cleanup
 from .deployment_protocol import IPC_PROTOCOL
 from .diagnostics import record_caught_exception, record_diagnostic
-from .runtime_ipc import RuntimeIpcError
+from .runtime_ipc import (
+    RuntimeIpcError,
+    project_runtime_unavailable_body,
+    project_runtime_unavailable_headers,
+)
 
 _PREFIX = b"x-nebula-internal-"
 # Runtime endpoints that may hold forwarding channels at once. Idle endpoints
@@ -71,13 +75,22 @@ def _signature(
     ).hexdigest()
 
 
-async def _runtime_unavailable(scope, receive, send) -> None:
-    await JSONResponse(
-        {
-            "detail": "The runtime connection is unavailable. Reconnect to read durable progress."
-        },
-        status_code=503,
-    )(scope, receive, send)
+async def _runtime_unavailable(scope, receive, send, *, project_read=False) -> None:
+    detail = (
+        "The runtime connection is unavailable. Reconnect to read durable progress."
+    )
+    if project_read and scope.get("method") in {"GET", "HEAD"}:
+        # A project worker's channel closed or is being replaced: the read
+        # can be repeated. Writes and the host's API channel keep the
+        # uncoded response, whose outcome a client must check.
+        response = JSONResponse(
+            project_runtime_unavailable_body(detail, "closing"),
+            status_code=503,
+            headers=project_runtime_unavailable_headers(),
+        )
+    else:
+        response = JSONResponse({"detail": detail}, status_code=503)
+    await response(scope, receive, send)
 
 
 def _hop_headers(headers: list[tuple[bytes, bytes]]) -> set[bytes]:
@@ -317,10 +330,14 @@ class RuntimeHttpProxy:
         *,
         transport_factory: Callable[[str], Any] | None = None,
         max_websockets: int = 64,
+        project_reads: bool = False,
     ):
         if not 1 <= max_websockets <= 256:
             raise ValueError("WebSocket capacity must be between 1 and 256")
         self.select, self.transport_factory = select, transport_factory
+        # Forwards viewer reads to project workers (the API worker's proxy),
+        # not the host's channel to the API worker.
+        self.project_reads = project_reads
         self.clients: dict[tuple[str, bool], httpx.AsyncClient] = {}
         self.websocket_tasks: dict[asyncio.Task, str] = {}
         self.websockets: dict[asyncio.Task, ClientConnection] = {}
@@ -553,7 +570,9 @@ class RuntimeHttpProxy:
                     stage="forward",
                     retryable=True,
                 )
-            await _runtime_unavailable(scope, receive, send)
+            await _runtime_unavailable(
+                scope, receive, send, project_read=self.project_reads
+            )
             return
         try:
             try:
@@ -566,7 +585,9 @@ class RuntimeHttpProxy:
                 response = await client.send(upstream_request, stream=True)
             except (httpx.HTTPError, OSError):
                 # diagnostic-expected: local runtime transport loss becomes the bounded reconnect response.
-                await _runtime_unavailable(scope, receive, send)
+                await _runtime_unavailable(
+                    scope, receive, send, project_read=self.project_reads
+                )
                 return
             try:
                 stream = StreamingResponse(
