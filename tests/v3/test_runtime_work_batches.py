@@ -6,6 +6,7 @@ provider, harness, OCI runtime or external service is invoked.
 
 import asyncio
 from datetime import timedelta
+import time
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from nebula.v3.api_worker import create_api_worker
 from nebula.v3.database import (
@@ -30,6 +31,7 @@ from nebula.v3.database import (
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
+from nebula.v3.execution_scope import execution_context
 from nebula.v3.domain import (
     ChatSession,
     Engagement,
@@ -1849,3 +1851,81 @@ def test_idle_worker_grace_override_is_bounded(monkeypatch):
     ):
         monkeypatch.setenv("NEBULA_IDLE_WORKER_GRACE_SECONDS", raw)
         assert idle_worker_grace_ms() == expected
+
+
+@pytest.mark.parametrize("cause", ["earlier-work", "older-release", "draining-owner"])
+async def test_waiting_batch_never_holds_back_other_projects(batch, cause):
+    if not isinstance(batch.location, str):
+        pytest.skip("Execution advisory keys are PostgreSQL behaviour")
+    # Execution transactions check leases against the database clock.
+    batch.clock[0] = int(time.time() * 1000)
+    await runtime(batch, "worker", supported=cause != "older-release")
+    await runtime(batch, "other-worker")
+    await batch.coordination.claim_project("one", "worker")
+    other = await batch.coordination.claim_project("two", "other-worker")
+    if cause == "earlier-work":
+        await batch.coordination.submit(
+            project_id="one",
+            actor_id="operator",
+            idempotency_key="prior",
+            name="inert",
+            payload={},
+        )
+    receipt = await accepted(batch, body={"project_ids": ["one"], "work_enabled": True})
+    if cause == "draining-owner":
+        async with batch.database.session() as session:
+            row = await session.get(RuntimeProcessRow, "worker")
+            row.state = "draining"
+            await session.commit()
+    await batch.service.reconcile()
+    assert (await page(batch, receipt))[0].state == "queued"
+    elsewhere = NebulaStore(
+        Database(
+            batch.location,
+            bootstrap=False,
+            execution_runtime_id="other-worker",
+            pool_settings=SETTINGS,
+        )
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def busy():
+        with execution_context(other):
+            async with elsewhere.transaction() as transaction:
+                await transaction.update(Engagement, "two", {"description": "busy"})
+                entered.set()
+                await release.wait()
+
+    task = asyncio.create_task(busy())
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        # The batch must still wait. Finding that out must not queue for the
+        # execution key, which would stall this unrelated project, or hold
+        # any row but the batch's own receipt.
+        statements = []
+
+        def record(_connection, _cursor, statement, *_args):
+            statements.append(statement)
+
+        engine = batch.service.coordination.database.engine.sync_engine
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            await asyncio.wait_for(batch.service.reconcile(), 10)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        assert (await page(batch, receipt))[0].state == "queued"
+        locking = [
+            statement
+            for statement in statements
+            if "pg_advisory" in statement
+            or (
+                " FOR " in statement.upper()
+                and "FROM runtime_commands" not in statement
+            )
+        ]
+        assert locking == []
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 10)
+        await elsewhere.event_history.close()
+        await elsewhere.database.dispose()

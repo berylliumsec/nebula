@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 from sqlalchemy import select, text
 
+from .advisory_keys import per_id_key
 from .chat import ChatConfigurationError
 from .database import EntityRow
 from .domain import (
@@ -94,7 +95,7 @@ async def reserve_butler_session(
         elif dialect == "postgresql":
             (
                 await transaction.session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+                    text(f"SELECT pg_advisory_xact_lock({per_id_key('project_id')})"),
                     {"project_id": f"butler-active-session:{request.engagement_id}"},
                 )
             )
