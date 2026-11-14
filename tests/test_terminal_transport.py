@@ -261,3 +261,85 @@ def test_accepted_stream_reports_saved_then_reads_the_saved_turn(tmp_path, no_wa
         ("GET", "/api/v1/runtime/requests/command-a/response"),
     ]
     assert seen[1][2] == b"after=0"
+
+
+@pytest.mark.parametrize(
+    "final",
+    [
+        {"id": "run-a", "status": "queued"},
+        {"state": "queued", "command_id": "command-a"},
+    ],
+)
+def test_a_202_marked_complete_is_the_saved_answer_not_a_receipt(
+    tmp_path, no_wait, final
+):
+    seen = []
+    polls = iter(
+        [
+            httpx.Response(
+                202,
+                json={"state": "running", "command_id": "command-a"},
+                headers={"X-Nebula-Request-State": "pending"},
+            ),
+            httpx.Response(
+                202,
+                json=final,
+                headers={
+                    "X-Nebula-Command-Id": "command-a",
+                    "X-Nebula-Request-State": "complete",
+                },
+            ),
+        ]
+    )
+
+    def handler(request):
+        seen.append(request.method)
+        if request.method == "POST":
+            response = _receipt()
+            response.headers["X-Nebula-Request-State"] = "pending"
+            return response
+        return next(polls)
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            return await api.request("POST", "missions", json={})
+        finally:
+            await api.close()
+
+    assert asyncio.run(run()) == final
+    assert seen == ["POST", "GET", "GET"]
+
+
+@pytest.mark.parametrize("marker", [{"X-Nebula-Request-State": "pending"}, {}])
+def test_saved_chat_acceptance_is_followed_to_its_turn_stream(
+    tmp_path, no_wait, marker
+):
+    seen = []
+
+    def handler(request):
+        seen.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(
+                202,
+                json={"state": "accepted", "turn_id": "turn-a", "session_id": "s"},
+                headers={"X-Nebula-Command-Id": "command-a", **marker},
+            )
+        return httpx.Response(
+            200,
+            text='event: done\ndata: {"type":"done","turn_id":"turn-a"}\n\n',
+            headers={"X-Nebula-Request-State": "complete"},
+        )
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            return [item async for item in api.events("POST", "chat/completions")]
+        finally:
+            await api.close()
+
+    assert asyncio.run(run()) == [
+        ("accepted", {"type": "accepted", "command_id": "command-a"}),
+        ("done", {"type": "done", "turn_id": "turn-a"}),
+    ]
+    assert seen == ["POST", "GET"]
