@@ -98,6 +98,21 @@ class Host:
         if action == "promote_api":
             self.state["api_version"] = values["runtime_id"].removeprefix("worker-api-")
         if action in {"target_execution", "rollback_code"}:
+            resident = self.state["resident_versions"]
+            if values["version"] not in resident and len(resident) >= 2:
+                # Core refuses a target no worker could start as.
+                receipt = {
+                    "operation_id": key,
+                    "action": action,
+                    "state": "failed",
+                    "result": {
+                        "detail": "Release "
+                        + values["version"]
+                        + " cannot become the execution target"
+                    },
+                }
+                self.receipts[key] = receipt
+                return receipt
             self.state["target_execution_version"] = values["version"]
         if action == "handoff":
             project = next(
@@ -201,7 +216,9 @@ def test_host_activation_runs_after_migration_and_before_api_promotion():
     def activate_host(version):
         events.append("activate_host")
         return {
-            "operation_id": record["runtime_deployment"]["host_activation"]["operation_id"],
+            "operation_id": record["runtime_deployment"]["host_activation"][
+                "operation_id"
+            ],
             "status": "host_activated",
             "version": version,
             "health_commit": version,
@@ -299,12 +316,61 @@ def test_lost_handoff_reply_reconciles_before_retiring_or_advancing():
 def test_third_execution_version_stays_staged():
     host, record = Host(), {"active": "v2", "pending": "v3"}
     host.state["resident_versions"] = ["v1", "v2"]
+    host.state["target_execution_version"] = "v2"
     assert (
         host.deployer(record).promote("v3")["status"] == "api_promoted_execution_staged"
     )
     actions = [action for action, _ in host.calls]
+    assert "promote_api" in actions and host.state["api_version"] == "v3"
+    assert "target_execution" not in actions
     assert "prepare_execution" not in actions and "handoff" not in actions
+    assert host.state["target_execution_version"] == "v2"
     assert record["pending"] == "v3"
+    assert "target" not in record["runtime_deployment"]["steps"]
+
+
+def test_staged_promotion_resumes_once_an_older_version_retires():
+    host, record = Host(), {"active": "v2", "pending": "v3"}
+    host.state["projects"].append(
+        {
+            "project_id": "project-2",
+            "runtime_id": "current",
+            "runtime_version": "v2",
+            "fencing_token": 1,
+            "phase": None,
+        }
+    )
+    host.live_runtimes["current"] = "v2"
+    host._refresh_resident_versions()
+    first = host.deployer(record).promote("v3")
+    assert first["status"] == "api_promoted_execution_staged"
+    journal_id = record["runtime_deployment"]["id"]
+
+    # The v1 project goes idle and its worker retires, freeing a slot.
+    host.live_runtimes.pop("old")
+    host.state["projects"][0].update(runtime_id=None, runtime_version=None)
+    host._refresh_resident_versions()
+    assert host.deployer(record).promote("v3")["status"] == "promoted"
+    actions = [action for action, _ in host.calls]
+    assert actions.count("promote_api") == 1
+    assert actions.count("target_execution") == 1
+    assert host.state["target_execution_version"] == "v3"
+    assert host.state["projects"][1]["runtime_version"] == "v3"
+    assert record["runtime_deployment"]["id"] == journal_id
+
+
+def test_code_rollback_to_a_third_version_keeps_the_target():
+    host, record = Host(), {"active": "v3", "previous": "v1"}
+    host.live_runtimes = {"old": "v2", "new": "v3"}
+    host._refresh_resident_versions()
+    host.state["api_version"] = "v3"
+    host.state["target_execution_version"] = "v3"
+    result = host.deployer(record).rollback("v1")
+    assert result["status"] == "api_promoted_execution_staged"
+    actions = [action for action, _ in host.calls]
+    assert "rollback_code" not in actions and "prepare_execution" not in actions
+    assert host.state["api_version"] == "v1"
+    assert host.state["target_execution_version"] == "v3"
 
 
 def test_pinned_project_retains_its_old_execution_owner():
