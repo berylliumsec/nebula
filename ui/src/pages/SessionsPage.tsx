@@ -225,7 +225,7 @@ import {
 import { latestProgressPreview, splitSavedProgress } from "./chatProgressContent";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { readConversationPanelOpen, writeConversationPanelOpen } from "./workbenchPreferences";
-import { ChatDraftStore, chatDraftStorageKey, chatStorageForScope } from "./chatDraftStorage";
+import { ChatDraftStore, chatDraftStorageKey, chatStorageForScope, draftFollowsKeyChange, type ChatDraftIdentity } from "./chatDraftStorage";
 import {
   chatFollowUpStorageKey,
   bindsUnattachedFollowUps,
@@ -1912,6 +1912,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const storageScope = api?.getContinuityScope();
   const scopedChatStorage = useMemo(() => chatStorageForScope(storageScope ?? {key: "unconnected", persistent: false}), [storageScope?.key]);
   const draftStore = useMemo(() => new ChatDraftStore(scopedChatStorage, setDraftStorageNotice), [scopedChatStorage]);
+  // What the composer's current draft key names, and the store it was saved in.
+  const draftIdentityRef = useRef<ChatDraftIdentity | undefined>(undefined);
+  const draftStoreRef = useRef(draftStore);
+  const lastPersistentDraftScopeRef = useRef<string | undefined>(undefined);
+  // The chat this composer's own first send just named, or a failed first
+  // send just gave up; only the next key change may use them.
+  const draftNamedSessionRef = useRef<string | undefined>(undefined);
+  const draftAbandonedSessionRef = useRef<string | undefined>(undefined);
   const followUpStorageKeyRef = useRef("");
   const followUpAutoDrainRef = useRef(false);
   const followUpDrainIdRef = useRef<string | undefined>(undefined);
@@ -2002,6 +2010,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const activeDraftStorageKey = engagement
     ? chatDraftStorageKey(engagement.id, sessionId || undefined, storageScope?.key)
     : "";
+  const activeDraftIdentity: ChatDraftIdentity | undefined = engagement
+    ? { scope: storageScope?.key ?? "unscoped", persistent: Boolean(storageScope?.persistent), engagementId: engagement.id, sessionId: sessionId || "" }
+    : undefined;
   const activeFollowUpStorageKey = engagement
     ? chatFollowUpStorageKey(engagement.id, sessionId || undefined, storageScope?.key)
     : "";
@@ -2011,13 +2022,40 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [activeDraftStorageKey, draft, draftStore]);
   useEffect(() => {
     const previousKey = draftStorageKeyRef.current;
+    const previousStore = draftStoreRef.current;
+    const previous = draftIdentityRef.current;
+    const next = activeDraftIdentity;
+    let nextDraft = activeDraftStorageKey ? draftStore.read(activeDraftStorageKey) : "";
+    let carried = false;
     if (previousKey && previousKey !== activeDraftStorageKey) {
-      draftStore.write(previousKey, draft);
+      carried = Boolean(draft) && draftFollowsKeyChange(previous, next, {
+        lastPersistentScope: lastPersistentDraftScopeRef.current,
+        namedSessionId: draftNamedSessionRef.current,
+        abandonedSessionId: draftAbandonedSessionRef.current,
+      });
+      if (carried) {
+        // The same conversation was re-keyed while it loaded: the text being
+        // typed stays in the composer and is saved under the new key. A new
+        // chat's key gives it up, so it never reappears in the next new chat.
+        if (previous?.sessionId !== next?.sessionId) previousStore.clear(previousKey);
+        draftStore.write(activeDraftStorageKey, draft);
+        nextDraft = draft;
+      } else {
+        // Saved in the store that owns the old key, never in the new scope's.
+        previousStore.write(previousKey, draft);
+      }
+      draftNamedSessionRef.current = undefined;
+      draftAbandonedSessionRef.current = undefined;
     }
+    if (next?.persistent) lastPersistentDraftScopeRef.current = next.scope;
     draftStorageKeyRef.current = activeDraftStorageKey;
-    setDraft(activeDraftStorageKey ? draftStore.read(activeDraftStorageKey) : "");
-    setSkillToken(undefined);
-    setHarnessSkillPath("");
+    draftStoreRef.current = draftStore;
+    draftIdentityRef.current = next;
+    setDraft(nextDraft);
+    if (!carried) {
+      setSkillToken(undefined);
+      setHarnessSkillPath("");
+    }
   // The outgoing draft is intentionally captured at the identity boundary.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDraftStorageKey, draftStore]);
@@ -5174,6 +5212,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       previewOwnerRef.current = streamEvent.sessionId;
+      // A first send names its new chat: text typed meanwhile follows it.
+      draftNamedSessionRef.current = streamEvent.sessionId;
       setSessionId(streamEvent.sessionId);
       openSessionChatView(streamEvent.sessionId, true);
       void refreshSessions();
@@ -5942,7 +5982,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         }
         // A selected context pack is not restored with the words.
         setChatError(notSentMessage(error.message, returnedToComposer && !contextAttachments?.length));
-        if (!initialSessionId) setSessionId("");
+        if (!initialSessionId) {
+          // The returned words follow the composer back to a new chat.
+          draftAbandonedSessionRef.current = previewOwnerRef.current || undefined;
+          setSessionId("");
+        }
         return;
       }
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_13", "A handled interface operation failed.", error, "sessions_page");
@@ -5995,6 +6039,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           setSessionId(initialSessionId ?? "");
         }
       } else if (!initialSessionId) {
+        draftAbandonedSessionRef.current = previewOwnerRef.current || undefined;
         setSessionId("");
       }
     } finally {
