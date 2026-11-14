@@ -1,35 +1,23 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Stacked on the shutdown diagnosability change. A quiesced project whose only failed stop came from a service that runs inside the worker (chat follow-ups, chat schedules, event-loop monitor, event-history pruning) now closes and releases after the worker's own teardown finishes, with the failure reported as a cleanup warning; any other failure still keeps ownership. runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
-  "exclusions": "Process-level suites (test_runtime_processes, test_execution_worker_process, test_runtime_host_services, test_runtime_memory_control, test_runtime_browser_bridge, test_runtime_worker_features, test_runtime_management, test_recovery_reconciliation, test_shutdown_readmission) need a pidfd-capable interpreter or a non-loopback LAN Core fixture; locally the same 76 cases fail identically on pristine main and on this branch (no new failures), so they are not selected. No UI, native or Playwright cases: no frontend code changed (the desktop Stop control only prints runtime-stop stderr). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core scratch evidence (injected service stop failures, six-project startup races, LAN-bound status reads) is recorded in the PR body, not executed by CI.",
+  "reason": "chat_catchup.source_message is awaited again: #939 made Database.session() yield an AsyncSession but left this helper sync, so the catch-up card (once a failed, interrupted or cancelled turn is newer than the device cursor) and GET /chat/sessions/{id}/turns/{turn_id}/summary raised AttributeError and returned 500. test_chat_catchup.py covers the catch-up projection with failures and outputs plus a new summary-route test for both the final-message and prompt-fallback branches; test_chat_polling_cost's catch-up test checks only failures are linked; the Butler inspection projections include turn_summary. Three of these failed on main from this defect.",
+  "exclusions": "No UI, native or frontend code changed. Playwright area catch-up matches chat_catchup.py but is excluded: its fixture (tests/v3/workspace_recovery_fixture.py) has no chat turn that failed after a device read cursor, and the spec mocks a 503 and then recovers on the no-failure path that already worked on main, so it does not reach the changed branch. That branch is covered by the selected Python route tests, and the real-Core journey was checked on scratch Postgres Cores (main: catch-up 500 and turn summary 500 for both a failed and a completed turn; this branch: catch-up 200 with the failure linked to its prompt, summary 200 linking the prompt and the final answer).",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 339,
+    "python": 20,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_runtime_ipc.py",
-    "tests/v3/test_runtime_operations.py",
-    "tests/v3/test_runtime_launcher.py",
-    "tests/v3/test_async_core.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_shutdown_admission.py",
-    "tests/v3/test_runtime_host_search.py",
-    "tests/v3/test_shared_butler_memory.py",
-    "tests/v3/test_shared_knowledge.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_runtime_auto_recovery.py"
+    "tests/v3/test_chat_catchup.py",
+    "tests/v3/test_chat_polling_cost.py::test_catch_up_reads_headers_and_links_only_failures",
+    "tests/v3/test_butler_inspection.py::test_butler_inspection_uses_owned_core_conversation_projections"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "bf9fc60c5ebae9c92944f342807e8d6311ae55dc22099eafeed04a06536ed8b3"
+  "change_digest": "da99e1f86c77126ce8431f6633da219c9004ccd821d54ea325d58de4b2377670"
 }

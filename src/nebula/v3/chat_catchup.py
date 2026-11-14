@@ -31,12 +31,12 @@ def cursor_id(session_id, device_id):
     return "chat-read-" + sha256(f"{session_id}:{device_id}".encode()).hexdigest()
 
 
-def source_message(database, session, turn):
+async def source_message(database, session, turn):
     if turn.final_message_id:
-        row = database.get(EntityRow, turn.final_message_id)
+        row = await database.get(EntityRow, turn.final_message_id)
         if row and row.payload.get("session_id") == session.id:
             return ChatMessage.model_validate(row.payload)
-    row = database.scalar(
+    row = await database.scalar(
         select(EntityRow)
         .where(
             EntityRow.kind == "chat_messages",
@@ -70,7 +70,7 @@ async def catchup_projection(store, session, cursor):
                 and turn.status in {"failed", "interrupted", "cancelled"}
             ):
                 continue
-            message = source_message(database, session, turn)
+            message = await source_message(database, session, turn)
             items.append(
                 {
                     "id": turn.id,
@@ -223,7 +223,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
         if turn.session_id != session_id:
             raise HTTPException(404, "Response does not belong to this conversation")
         async with store.database.session() as database:
-            message = source_message(database, session, turn)
+            message = await source_message(database, session, turn)
         return {
             "id": turn.id,
             "status": turn.status,
