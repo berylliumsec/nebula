@@ -1,29 +1,33 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Execution workers refuse a project table seen only inside a subquery or bare EXISTS. has_entity_with_metadata (first use of every command approval), engagement_has_dependents (DELETE of a non-archived project) and Butler search's private-chat filter used that shape and failed in supervisor mode. They now select a mapped id with LIMIT 1, and Butler search outer-joins the chat on its primary key so the guard scopes it. New worker regression tests in test_execution_scope_probes.py (sqlite and PostgreSQL, using the execution fixture) cover both probes, the fenced answer for another project's approval, and a crafted document that names another project's chat. The other selected suites cover the same helpers and search outside workers: storage and guarded-delete semantics, session record lookups, federated search, the read-responsiveness search path, and Butler's private-chat search contract.",
-  "exclusions": "test_butler_administration.py is selected only for its two search tests: its starter-template tests ([skill], [agents_md]) fail identically on pristine origin/main. Playwright area project-deletion matches storage.py but is excluded: its fixture (tests/v3/application_model_fixture.py) crashes at startup on main since the async store change (un-awaited store.create), and it runs a single-process Core that never had the worker guard. The supervisor-mode journey was checked on a scratch Postgres Core instead (DELETE of a project with a chat: 500 on main, 409 'archive it instead' on this branch; Butler search_resources tool: CoordinationConflict on main, results on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
+  "reason": "On a SQLite supervisor Core, reserve_butler_session, report sign-off and delete_archived_engagement issued a textual BEGIN IMMEDIATE that the execution worker's SQL scope refuses, so opening Butler, signing off a report and deleting an archived project returned 500. The scope already begins every SQLite worker transaction with BEGIN IMMEDIATE, so the textual lock is now taken only when execution_runtime_id is None, as the store's other SQLite locks already do. Selected: the new worker tests in test_execution_worker_write_locks.py (each SQLite case fails on main), test_execution_scope.py for the guard, and the Butler session, report sign-off and Butler report tests that pass on main and exercise the changed lock paths outside workers.",
+  "exclusions": "Individual tests are selected in test_butler_sessions.py, test_report_signoff.py and test_butler_reports.py because 4 of their cases fail identically on pristine origin/main (un-awaited test client calls). test_archived_project_deletion.py is excluded for the same reason (all 11 cases fail on main); archived deletion in a worker is covered by the new test. The supervisor-mode journeys were checked on scratch SQLite Cores instead (Butler open, report sign-off and archived delete returned 500 on main, and 200/200/204 on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 140,
+    "python": 94,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_scope_probes.py",
+    "tests/v3/test_execution_worker_write_locks.py",
     "tests/v3/test_execution_scope.py",
-    "tests/v3/test_butler_administration.py::test_butler_search_excludes_private_and_foreign_chats_before_pagination",
-    "tests/v3/test_butler_administration.py::test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions",
-    "tests/v3/test_session_record_lookups.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_guarded_delete.py",
-    "tests/v3/test_federated_search.py",
-    "tests/v3/test_load_read_responsiveness.py"
+    "tests/v3/test_butler_reports.py::test_butler_report_delete_requires_current_project_and_core_confirmation",
+    "tests/v3/test_butler_reports.py::test_butler_report_note_transform_requires_linked_current_source_and_review",
+    "tests/v3/test_butler_reports.py::test_butler_reports_page_sources_and_prepare_exact_project_handoffs",
+    "tests/v3/test_butler_reports.py::test_report_core_api_checks_references_revision_and_finalization",
+    "tests/v3/test_butler_sessions.py::test_harness_reservation_commits_one_chat_and_vendor_binding",
+    "tests/v3/test_butler_sessions.py::test_provider_reservation_is_atomic_across_clients_and_core_restart",
+    "tests/v3/test_report_signoff.py::test_report_signoff_api_is_revision_aware",
+    "tests/v3/test_report_signoff.py::test_signoff_finalizes_review_with_active_operator_and_validated_findings",
+    "tests/v3/test_report_signoff.py::test_signoff_records_one_signed_revision_in_metadata_and_ledger",
+    "tests/v3/test_report_signoff.py::test_signoff_rejects_draft_stale_and_candidate_finding",
+    "tests/v3/test_report_signoff.py::test_signoff_rolls_back_finalization_when_audit_event_cannot_be_created"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "fba325860bc9996783b079251fdd5766bb0582db8583539660edf57ad538681e"
+  "change_digest": "1ed813dce64b4ce33a0f56abf5dfc711bec6717af9c3ec54628e7ce201b35a3d"
 }
