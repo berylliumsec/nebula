@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from sqlalchemy import and_, func, or_, select
@@ -37,6 +38,25 @@ _ATTACHABLE = ("reserved", "starting", "ready")
 _RECOVERY_WINDOW_MS = 10 * 60_000
 _RECOVERY_LIMIT = 3
 _RECOVERY_RETRY_MS = 30_000
+# A project worker stays this long after the project's last routed request
+# before it retires for lack of open chats or work, so a rename, archive or
+# second action on a quiet project does not pay another cold start. Bounded;
+# NEBULA_IDLE_WORKER_GRACE_SECONDS overrides it and 0 restores immediate
+# retirement. Grace ends early while another project waits for a worker.
+IDLE_WORKER_GRACE_SECONDS = 300
+MAX_IDLE_WORKER_GRACE_SECONDS = 3600
+
+
+def idle_worker_grace_ms() -> int:
+    raw = os.environ.get("NEBULA_IDLE_WORKER_GRACE_SECONDS")
+    try:
+        seconds = float(raw) if raw is not None else IDLE_WORKER_GRACE_SECONDS
+    except ValueError:
+        # diagnostic-expected: an unreadable override keeps the default grace.
+        seconds = IDLE_WORKER_GRACE_SECONDS
+    if seconds != seconds:  # NaN
+        seconds = IDLE_WORKER_GRACE_SECONDS
+    return int(min(MAX_IDLE_WORKER_GRACE_SECONDS, max(0.0, seconds)) * 1000)
 
 
 # A refused automatic recovery step proved no effect; it is asked again after
@@ -62,6 +82,7 @@ class RuntimeAutoAdmission:
         self._blocked: dict[str, tuple[int, int | None]] = {}
         self._admission_retry: dict[str, _AdmissionRetry] = {}
         self._retirement_cursor: str | None = None
+        self.idle_grace_ms = idle_worker_grace_ms()
         self._legacy_chat_cursor: tuple[str, int, str] | None = None
         self._legacy_chat_scan_complete = False
         self._legacy_chat_vault = None
@@ -225,22 +246,52 @@ class RuntimeAutoAdmission:
                         ),
                     )
                 )
+                # A project that still wants a worker its admission could not
+                # start means capacity is short: idle workers spend no grace
+                # while one waits, so they give their memory reserve back.
+                short_of_capacity = False
+                if self.idle_grace_ms and self._admission_retry:
+                    short_of_capacity = (
+                        await session.scalar(
+                            demand_query.with_only_columns(
+                                ProjectOwnershipRow.project_id
+                            )
+                            .where(
+                                ProjectOwnershipRow.project_id.in_(
+                                    list(self._admission_retry)
+                                )
+                            )
+                            .limit(1)
+                        )
+                    ) is not None
                 if waiting:
                     demand_query = demand_query.where(
                         ProjectOwnershipRow.project_id.not_in(waiting)
                     )
                 demands = list(await session.execute(demand_query.limit(16)))
-                idle_query = select(
-                    ProjectOwnershipRow.project_id,
-                    ProjectOwnershipRow.runtime_id,
-                ).where(
+                idle = [
                     ProjectOwnershipRow.runtime_id.is_not(None),
                     ProjectOwnershipRow.lease_expires_at_ms > now_ms,
                     ~open_chat,
                     ~pending_chat_start,
                     ~legacy_chat_start,
                     ~active_work,
-                )
+                ]
+                if self.idle_grace_ms and not short_of_capacity:
+                    idle.append(
+                        ~select(RuntimeCommandRow.id)
+                        .where(
+                            RuntimeCommandRow.project_id
+                            == ProjectOwnershipRow.project_id,
+                            RuntimeCommandRow.accepted_at_ms
+                            > now_ms - self.idle_grace_ms,
+                        )
+                        .exists()
+                    )
+                idle_query = select(
+                    ProjectOwnershipRow.project_id,
+                    ProjectOwnershipRow.runtime_id,
+                ).where(*idle)
                 if self._retirement_cursor is not None:
                     idle_query = idle_query.where(
                         ProjectOwnershipRow.project_id > self._retirement_cursor
@@ -258,14 +309,7 @@ class RuntimeAutoAdmission:
                                 ProjectOwnershipRow.project_id,
                                 ProjectOwnershipRow.runtime_id,
                             )
-                            .where(
-                                ProjectOwnershipRow.runtime_id.is_not(None),
-                                ProjectOwnershipRow.lease_expires_at_ms > now_ms,
-                                ~open_chat,
-                                ~pending_chat_start,
-                                ~legacy_chat_start,
-                                ~active_work,
-                            )
+                            .where(*idle)
                             .order_by(ProjectOwnershipRow.project_id)
                             .limit(8)
                         )

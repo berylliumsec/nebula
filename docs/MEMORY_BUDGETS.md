@@ -119,7 +119,9 @@ is explicitly zero. It receives the same pre-launch kernel proof, live-limit
 controls and verified cleanup as other managed jobs. It has no additional
 search-specific runtime/Core-reserve charge; the administrator's Core/SQL floor
 is unchanged. Stop, idle retirement or host shutdown releases capacity only after
-the identified group is gone. Changing saved policy applies on the next service
+the identified group is gone. An idle project worker retires 5 minutes after its
+project's last request (`NEBULA_IDLE_WORKER_GRACE_SECONDS`), or at once while
+another project waits for a worker Core could not place. Changing saved policy applies on the next service
 start; a running-limit change remains a separate explicit action.
 
 Search startup can use a verified cached official image. An uncached search image

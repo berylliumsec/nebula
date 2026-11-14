@@ -48,6 +48,15 @@ def test_product_help_discovers_next_turn_mcp_context_choices(monkeypatch):
     assert "next turn" in text
 
 
+def test_product_help_explains_the_idle_project_worker_grace(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "how long does an idle project worker stay before it retires"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "NEBULA_IDLE_WORKER_GRACE_SECONDS" in text
+
+
 def test_product_help_explains_safe_project_runtime_recovery(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

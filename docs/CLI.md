@@ -241,6 +241,13 @@ default), along with live readings and saved/effective pressure thresholds.
 Explicit environment overrides remain authoritative; verify this response rather
 than assuming a launcher passed its intended values.
 
+A project's execution worker stays for 5 minutes after the project's last
+request (rename, archive, a chat message) even when the project has no open chat,
+so the next action does not wait for a new worker to start. Set
+`NEBULA_IDLE_WORKER_GRACE_SECONDS` (0–3600; 0 retires idle workers at once) to
+change it. The grace ends early while another project is waiting for a worker
+that Core could not place.
+
 Core prints its host administration token once at startup. Keep it on the host;
 remote chat uses device pairing. `NEBULA_V3_API_TOKEN` can supply the host token
 for both startup and invitations. Headless mode keeps authentication enabled and
