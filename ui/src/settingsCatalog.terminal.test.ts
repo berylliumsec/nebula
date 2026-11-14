@@ -32,6 +32,7 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   expect(pairing).toContain("turn elapsed time");
   expect(pairing).toContain("token usage");
   for (const phrase of ["/queue", "/now", "stop and send", "/mcp exclude", "project defaults for new chats", "always allow tool results", "resume harness session"]) {
+  for (const phrase of ["/goal complete", "/goal child", "subagent approvals", "edit pending request", "always allow on this host", "stop all subagents"]) {
     expect(pairing).toContain(phrase);
   }
 });

@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Brings the GUI's follow-up queue and model/tool choices to the paired terminal client: numbered /queue with add (held for later when idle), edit, move up/down/first/last, remove, retry, pause/resume/clear and 'Send one now'; /now stop-and-send (pause, enqueue first, cancel, resume); /model through Core's checked runtime switch also from a harness, with unverified-model verification, one 409 retry and deferred-activation notice; chat choices remembered as project assistant defaults and applied to new chats; /mcp delivery states, tool-schema mode and next-turn exclusions; 'Always allow' standing tool-result consent saved on the runtime; harness session resume for new harness chats; remove-all attachments. Rebased on main 936b5d5 (after #1038); shared docs, catalog and packaging entries keep both features. Selected: the new followups unit contracts, shell and TUI suites, the client wheel allowlist (new module), two new real paired TLS LAN Core PTY journeys, the product-knowledge search and Chroma digest sync, the settings-catalog terminal test, and existing real-Core cases for the slash menu, settings saves and the multi-select skills/MCP picker with saved readback.",
-  "exclusions": "No full suites. No native or Playwright changes: only the separate Python terminal client, docs and settings catalog keywords changed; browser viewport projects do not exercise this journey and the catalog change is covered by its Vitest file. tests/test_terminal_pty.py and other tests/v3/test_terminal_core.py cases are not selected: 6 fail identically on pristine origin/main locally, and test_paired_full_screen_tui_shows_progress_and_saved_answer's raw 'YOU \u00b7 SENDING' expect races Core acceptance against an 80 ms render delay (failed 1 of 6 local runs on pristine main). No live provider calls or Core deployment.",
+  "reason": "Stacked on #1043 (follow-up queue and model choices), rebased on main 936b5d5 after #1038; the selection is the union of both PRs because this diff against main includes #1043. Fixes a terminal client bug and adds GUI goal, approval and subagent controls. /goal complete always failed with 'Core (422): completion requires a summary and evidence' because the TUI sent the running goal's empty completion_evidence; Core's validation is correct and the GUI is unaffected (it requires summary and evidence before enabling Confirm). The TUI now asks for evidence items and sends them as operator_confirmation, and retries a goal action once on a moved revision. Adds /goal child and child-goal listing; subagent approvals, edited arguments and SSH always-allow in /approvals; subagent status, open, stop and stop-all in /agents; and opens subagent and child-goal conversations. Selected: the new agents unit contracts, the shell suite (approval rows), a real paired TLS LAN Core PTY journey (child goal and completion with evidence), the product-knowledge search and Chroma digest sync, the settings-catalog terminal test, and the remembered-chat real-Core case for the open_view change.",
+  "exclusions": "No full suites. No native or Playwright changes: only the separate Python terminal client, docs and settings catalog keywords changed; browser viewport projects do not exercise these terminal workflows and the catalog change is covered by its Vitest file. Existing approval and goal real-Core cases (test_terminal_queue_detach_approval_and_ctrl_c_use_core_state, test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect) fail identically on pristine origin/main (an un-awaited store.get in the first), so they cannot prove this change; tests/test_terminal_pty.py does not touch these workflows. Subagent and SSH approval journeys need a delegating model or SSH host the inert fixture lacks; they are covered by MockTransport unit cases. test_paired_full_screen_tui_shows_progress_and_saved_answer is not selected: its raw 'YOU \u00b7 SENDING' expect is racy on pristine main. No live provider calls or Core deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 109,
+    "python": 121,
     "frontend": 1,
     "native": 0,
     "playwright": 0
@@ -20,7 +20,11 @@
     "tests/v3/test_terminal_core.py::test_paired_full_screen_slash_menu_tracks_chat_context",
     "tests/v3/test_terminal_core.py::test_paired_tui_settings_stays_open_for_multiple_changes",
     "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
-    "tests/test_terminal_conversations.py"
+    "tests/test_terminal_conversations.py",
+    "tests/test_terminal_agents.py",
+    "tests/v3/test_terminal_agents_core.py",
+    "tests/v3/test_terminal_agents_knowledge.py",
+    "tests/v3/test_terminal_core.py::test_paired_tui_recovers_missing_remembered_chat"
   ],
   "frontend": [
     "ui/src/settingsCatalog.terminal.test.ts"
@@ -28,5 +32,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "82ba1c45e428dd5ea3b33ef203b02c60a231de3c519731a183a3ee3518e69ddc"
+  "change_digest": "47929d2d858b5d993c1d509aee5a37b9eb887c441a0296bb598906c90cf57083"
 }
