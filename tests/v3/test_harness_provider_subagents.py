@@ -321,10 +321,10 @@ async def test_harness_delegates_to_harness_and_reuses_child_for_another_round(
             return "The child completed both rounds."
 
         adapter.script = script
-        parent, _, turn = _prepare(
+        parent, _, turn = await _prepare(
             runtime, project, harness, "Delegate the work.", setting=setting
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -374,14 +374,14 @@ async def test_harness_subagent_stop_cancels_its_harness_turn(tmp_path):
             return "Stopped the child."
 
         adapter.script = script
-        _, _, parent_turn = _prepare(
+        _, _, parent_turn = await _prepare(
             runtime,
             project,
             harness,
             "Start and stop.",
             setting={"harness_profile_id": harness.id, "model": "gpt-test"},
         )
-        await runtime.start_chat_turn(parent_turn.id)
+        await (await runtime.start_chat_turn(parent_turn.id))
         record = await store.get(ChatSubagent, seen["id"])
         child_turn = await store.get(ChatTurn, record.child_turn_id)
         assert seen["stopped"]["status"] == "stopped"
@@ -395,8 +395,8 @@ async def test_harness_subagent_stop_cancels_its_harness_turn(tmp_path):
     (await scenario())
 
 
-def _prepare(runtime, project, harness, prompt, *, chat_id=None, setting=SETTING):
-    return runtime.prepare_chat(
+async def _prepare(runtime, project, harness, prompt, *, chat_id=None, setting=SETTING):
+    return await runtime.prepare_chat(
         engagement_id=project.id,
         profile_id=harness.id,
         model=None,
@@ -411,6 +411,16 @@ def _prepare(runtime, project, harness, prompt, *, chat_id=None, setting=SETTING
 async def _until(predicate, timeout: float = 5.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition was not reached in time")
+        await asyncio.sleep(0.01)
+
+
+async def _until_saved(store, kind, entity_id, check, timeout: float = 5.0) -> None:
+    """Wait until the saved entity satisfies ``check``; the store is async."""
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not check(await store.get(kind, entity_id)):
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition was not reached in time")
         await asyncio.sleep(0.01)
@@ -456,10 +466,10 @@ async def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path
             return "There are three route files."
 
         adapter.script = script
-        parent_chat, chat_turn, turn = _prepare(
+        parent_chat, chat_turn, turn = await _prepare(
             runtime, project, harness, "Split the work."
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
 
         assert (
             await store.get(HarnessTurn, turn.id)
@@ -504,8 +514,11 @@ async def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path
         assert {item.status for item in calls} == {ToolCallStatus.COMPLETE}
 
         # Once the harness turn ends the report is posted for the operator.
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.result_message_id is not None,
         )
         messages = await _messages(store, parent_chat.id)
         assert messages[-2].content == "There are three route files."
@@ -567,11 +580,11 @@ async def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tm
             tools_enabled=False,
             allow_cloud_tool_results=False,
         )
-        await _until(
-            lambda: (
-                store.get(type(run), run.id).status
-                in {RunStatus.COMPLETE, RunStatus.FAILED}
-            )
+        await _until_saved(
+            store,
+            type(run),
+            run.id,
+            lambda saved: saved.status in {RunStatus.COMPLETE, RunStatus.FAILED},
         )
         final = await store.get(type(run), run.id)
         assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
@@ -633,8 +646,8 @@ async def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
             return "Done."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Delegate a check")
-        await runtime.start_chat_turn(turn.id)
+        _, _, turn = await _prepare(runtime, project, harness, "Delegate a check")
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -683,14 +696,17 @@ async def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
             return "Started a review."
 
         adapter.script = delegate
-        parent_chat, _, turn = _prepare(runtime, project, harness, "Review auth.")
-        await runtime.start_chat_turn(turn.id)
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Review auth.")
+        await (await runtime.start_chat_turn(turn.id))
         (record,) = await store.list_entities(ChatSubagent)
         assert record.status == ChatSubagentStatus.RUNNING
 
         child.gate.set()
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.result_message_id is not None,
         )
         assert (await store.get(ChatSubagent, record.id)).reported_at is None
         assert "Focus on session cookies." in child.requests[0].messages[-1].content
@@ -701,23 +717,23 @@ async def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
 
         adapter.script = follow_up
         adapter.connections[0].script = follow_up
-        _, _, second = _prepare(
+        _, _, second = await _prepare(
             runtime, project, harness, "What did it find?", chat_id=parent_chat.id
         )
         assert "Cookies lack SameSite." in second.prompt
         assert "arrived after your last turn" in second.prompt
         # Received only once the vendor accepts the prompt carrying it.
         assert (await store.get(ChatSubagent, record.id)).reported_at is None
-        await runtime.start_chat_turn(second.id)
+        await (await runtime.start_chat_turn(second.id))
         assert "Cookies lack SameSite." in adapter.connections[0].prompts[-1]
         assert (await store.get(ChatSubagent, record.id)).reported_at is not None
 
         # A report is handed over once.
-        _, _, third = _prepare(
+        _, _, third = await _prepare(
             runtime, project, harness, "Anything else?", chat_id=parent_chat.id
         )
         assert "Cookies lack SameSite." not in third.prompt
-        await runtime.start_chat_turn(third.id)
+        await (await runtime.start_chat_turn(third.id))
         await chat.shutdown()
 
     (await scenario())
@@ -746,18 +762,18 @@ async def test_wait_is_bounded_and_reports_what_is_still_running(tmp_path):
             return "Moving on."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Delegate slowly.")
-        await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=5)
+        _, _, turn = await _prepare(runtime, project, harness, "Delegate slowly.")
+        await asyncio.wait_for(await runtime.start_chat_turn(turn.id), timeout=5)
         (record,) = await store.list_entities(ChatSubagent)
         assert seen["waited"]["still_running"] == [record.id]
         assert "subagent.wait again" in seen["waited"]["note"]
         assert (await store.get(ChatSubagent, record.id)).reported_at is None
         child.gate.set()
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status
-                == ChatSubagentStatus.COMPLETED
-            )
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.status == ChatSubagentStatus.COMPLETED,
         )
         await chat.shutdown()
 
@@ -780,7 +796,7 @@ async def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
             return "unreachable"
 
         adapter.script = script
-        parent_chat, _, turn = _prepare(runtime, project, harness, "Delegate.")
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Delegate.")
         task = await runtime.start_chat_turn(turn.id)
         await asyncio.wait_for(started.wait(), timeout=5)
         await runtime.cancel_turn(turn.id, reason="Operator stop")
@@ -790,13 +806,17 @@ async def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
             pass
 
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status == ChatSubagentStatus.STOPPED
-            )
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.status == ChatSubagentStatus.STOPPED,
         )
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.result_message_id is not None,
         )
         assert (await _messages(store, parent_chat.id))[-1].metadata[
             "subagent_status"
@@ -809,7 +829,7 @@ async def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
 async def test_subagent_tools_follow_the_chat_setting(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
-        parent_chat, off_chat_turn, off_turn = _prepare(
+        parent_chat, off_chat_turn, off_turn = await _prepare(
             runtime, project, harness, "No delegation.", setting=None
         )
         assert (await chat.subagents.available_capabilities(off_chat_turn.id))[
@@ -820,7 +840,7 @@ async def test_subagent_tools_follow_the_chat_setting(tmp_path):
             item["name"] for item in (await runtime._gateway_catalog(session))["tools"]
         }
         assert not names & SUBAGENT_TOOLS
-        await runtime.start_chat_turn(off_turn.id)
+        await (await runtime.start_chat_turn(off_turn.id))
         assert "provider_subagent" not in (
             await store.get(ChatSession, parent_chat.id)
         ).metadata or (
@@ -828,7 +848,7 @@ async def test_subagent_tools_follow_the_chat_setting(tmp_path):
             is None
         )
 
-        _, chat_turn, on_turn = _prepare(
+        _, chat_turn, on_turn = await _prepare(
             runtime, project, harness, "Delegate now.", chat_id=parent_chat.id
         )
         # Turning subagents on keeps the vendor session and thread.
@@ -843,7 +863,7 @@ async def test_subagent_tools_follow_the_chat_setting(tmp_path):
             item["name"] for item in (await runtime._gateway_catalog(session))["tools"]
         }
         assert SUBAGENT_TOOLS <= names
-        await runtime.start_chat_turn(on_turn.id)
+        await (await runtime.start_chat_turn(on_turn.id))
         # The vendor catalog is fixed per connection, so the change reopens it
         # and the new instructions name the subagent model.
         assert len(adapter.opens) == 2
@@ -886,7 +906,7 @@ async def test_subagent_tools_follow_the_chat_setting(tmp_path):
             refused.update(await connection.call("subagent.start", task="Nope."))
             return "Refused."
 
-        _, _, off_again = _prepare(
+        _, _, off_again = await _prepare(
             runtime,
             project,
             harness,
@@ -895,7 +915,7 @@ async def test_subagent_tools_follow_the_chat_setting(tmp_path):
             setting=None,
         )
         adapter.script = stale
-        await runtime.start_chat_turn(off_again.id)
+        await (await runtime.start_chat_turn(off_again.id))
         assert refused["isError"] is True
         assert refused["structuredContent"]["category"] == "unavailable_tool"
         assert len(adapter.opens) == 3
@@ -932,14 +952,14 @@ async def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
             )
 
         adapter.script = script
-        parent_chat, chat_turn, turn = _prepare(
+        parent_chat, chat_turn, turn = await _prepare(
             runtime, project, harness, "Fan out.", setting=limited
         )
         assert chat_turn.request_snapshot["provider_subagent"] == limited
         assert (await store.get(ChatSession, parent_chat.id)).metadata[
             "provider_subagent"
         ] == limited
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         # The refusal is a schema-guided failure (#520), which carries no
         # Core error text: a capacity refusal says to wait for running work
         # and retry, with the operator's limit as Core's own numbers.
@@ -964,18 +984,18 @@ async def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
         assert "at most 1 run at once" in instructions(adapter.opens[0])
 
         child.gate.set()
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status
-                == ChatSubagentStatus.COMPLETED
-            )
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.status == ChatSubagentStatus.COMPLETED,
         )
         # Clearing the limit changes the instructions, so the connection reopens.
         adapter.script = None
-        _, _, unlimited = _prepare(
+        _, _, unlimited = await _prepare(
             runtime, project, harness, "No limit now.", chat_id=parent_chat.id
         )
-        await runtime.start_chat_turn(unlimited.id)
+        await (await runtime.start_chat_turn(unlimited.id))
         assert len(adapter.opens) == 2
         assert "run at once" not in instructions(adapter.opens[1])
         await chat.shutdown()
@@ -993,7 +1013,7 @@ async def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path)
         },
     )
     with pytest.raises(ChatConfigurationError, match="tool check"):
-        _prepare(
+        await _prepare(
             runtime,
             project,
             harness,
@@ -1001,7 +1021,7 @@ async def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path)
             setting={"provider_profile_id": "provider", "model": "model-unverified"},
         )
     with pytest.raises(ChatConfigurationError, match="does not exist"):
-        _prepare(
+        await _prepare(
             runtime,
             project,
             harness,
@@ -1009,7 +1029,7 @@ async def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path)
             setting={"provider_profile_id": "missing", "model": "model-a"},
         )
     with pytest.raises(ChatPrivacyError, match="does not permit project data"):
-        _prepare(
+        await _prepare(
             runtime,
             project,
             harness,
@@ -1017,12 +1037,14 @@ async def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path)
             setting={"provider_profile_id": "closed", "model": "model-a"},
         )
     with pytest.raises(ChatConfigurationError, match="between 1 and 100"):
-        _prepare(runtime, project, harness, "Hi", setting={**SETTING, "max_active": 0})
+        await _prepare(
+            runtime, project, harness, "Hi", setting={**SETTING, "max_active": 0}
+        )
     assert not (await store.list_entities(ChatTurn))
     assert not (await store.list_entities(ChatSession))
     # A cloud provider that accepts project data is fine: turning subagents on
     # is the consent to send it their tool results.
-    _prepare(
+    await _prepare(
         runtime,
         project,
         harness,
@@ -1038,7 +1060,7 @@ async def test_local_only_projects_refuse_cloud_subagent_models(tmp_path):
         local_only_project=True,
     )
     with pytest.raises(ChatPrivacyError, match="local-only"):
-        _prepare(
+        await _prepare(
             runtime,
             project,
             harness,
@@ -1049,7 +1071,7 @@ async def test_local_only_projects_refuse_cloud_subagent_models(tmp_path):
 
 async def test_subagent_gateway_calls_read_as_delegated_work(tmp_path):
     store, project, harness, chat, _adapter, runtime = await _setup(tmp_path)
-    _, _, turn = _prepare(runtime, project, harness, "Hi")
+    _, _, turn = await _prepare(runtime, project, harness, "Hi")
     session = await store.get(HarnessSession, turn.harness_session_id)
     for name in ("subagent.start", _portable_gateway_tool_name("subagent.wait")):
         event = await runtime._record_tool_event(
@@ -1186,7 +1208,7 @@ async def test_harness_subagents_use_model_choice_unless_the_operator_forces_eff
 
         adapter.script = delegate
         _, _, turn = await prepare("high")
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         assert [item["reasoning_effort"] for item in started] == [
             "model default",
             "high",
@@ -1210,7 +1232,7 @@ async def test_harness_subagents_use_model_choice_unless_the_operator_forces_eff
 
         adapter.script = delegate_once
         _, _, other = await prepare("max")
-        await runtime.start_chat_turn(other.id)
+        await (await runtime.start_chat_turn(other.id))
         assert started[-1]["reasoning_effort"] == "model default"
         assert child.requests[-1].messages[-1].content == "Count tests."
         assert child.requests[-1].reasoning_effort is None
@@ -1231,7 +1253,7 @@ async def test_harness_subagents_use_model_choice_unless_the_operator_forces_eff
 
         adapter.script = delegate_forced
         _, _, forced = await prepare("high", {**SETTING, "reasoning_effort": "xhigh"})
-        await runtime.start_chat_turn(forced.id)
+        await (await runtime.start_chat_turn(forced.id))
         assert started[-1]["reasoning_effort"] == "xhigh"
         assert child.requests[-1].reasoning_effort == "xhigh"
         await chat.shutdown()
@@ -1282,8 +1304,8 @@ async def test_harness_answers_a_subagent_question_with_subagent_message(tmp_pat
             return "Staging is healthy."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Check the deploy.")
-        await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=10)
+        _, _, turn = await _prepare(runtime, project, harness, "Check the deploy.")
+        await asyncio.wait_for(await runtime.start_chat_turn(turn.id), timeout=10)
         (record,) = await store.list_entities(ChatSubagent)
 
         # The wait returned as soon as the subagent asked, well before timeout.
@@ -1307,6 +1329,84 @@ async def test_harness_answers_a_subagent_question_with_subagent_message(tmp_pat
     (await scenario())
 
 
+async def test_harness_subagent_question_waits_in_the_gateway_for_the_reply(tmp_path):
+    """A harness child's message_parent(wait_for_reply) pauses its Core tool
+    call until the parent answers, and returns that answer in the same round."""
+
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        seen: dict = {"child_prompts": []}
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            if connection is not adapter.connections[0]:
+                seen["child_prompts"].append(prompt)
+                if "Ask which environment" not in prompt:
+                    return "A later round started instead of the answer."
+                seen["answer"] = await connection.call(
+                    "message_parent",
+                    message="Staging or production?",
+                    wait_for_reply=True,
+                )
+                return "Checked staging: healthy."
+            started = _payload(
+                await connection.call(
+                    "subagent.start", task="Ask which environment to check."
+                )
+            )
+            seen["asked"] = _payload(await connection.call("subagent.wait"))
+            seen["replied"] = _payload(
+                await connection.call(
+                    "subagent.message",
+                    subagent_id=started["subagent_id"],
+                    message="Use staging.",
+                )
+            )
+            seen["reported"] = _payload(await connection.call("subagent.wait"))
+            return "Staging is healthy."
+
+        adapter.script = script
+        _, _, turn = await _prepare(
+            runtime,
+            project,
+            harness,
+            "Check the deploy.",
+            setting={"harness_profile_id": harness.id, "model": "gpt-test"},
+        )
+        await asyncio.wait_for(await runtime.start_chat_turn(turn.id), timeout=20)
+        (record,) = await store.list_entities(ChatSubagent)
+        assert record.harness_profile_id == harness.id
+
+        # The parent saw the question while the child was paused on it.
+        asked = seen["asked"]
+        assert asked["awaiting_your_reply"] == [record.id]
+        (question,) = asked["subagents"][0]["messages"]
+        assert question["content"] == "Staging or production?"
+        assert seen["replied"]["delivery"] == "answered"
+
+        # The child's paused tool call returned the parent's answer.
+        answer = _payload(seen["answer"])
+        assert [item["content"] for item in answer["messages"]] == ["Use staging."]
+        (call,) = [
+            item
+            for item in await store.list_entities(ToolCall)
+            if item.tool_name == "message_parent"
+        ]
+        assert call.status == ToolCallStatus.COMPLETE, call.error
+
+        # The answer finished the same round instead of starting another one.
+        assert len(seen["child_prompts"]) == 1
+        assert seen["reported"]["subagents"][0]["report"] == "Checked staging: healthy."
+        record = await store.get(ChatSubagent, record.id)
+        assert record.rounds == 1
+        assert record.status == ChatSubagentStatus.COMPLETED
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        await chat.shutdown()
+
+    (await scenario())
+
+
 async def test_subagent_message_is_steered_into_the_running_harness_turn(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
@@ -1323,8 +1423,8 @@ async def test_subagent_message_is_steered_into_the_running_harness_turn(tmp_pat
             return "Handled the update."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Review config.")
-        await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=10)
+        _, _, turn = await _prepare(runtime, project, harness, "Review config.")
+        await asyncio.wait_for(await runtime.start_chat_turn(turn.id), timeout=10)
         steered = adapter.connections[0].steered[0]
         assert steered.startswith("Nebula subagent update")
         assert "Found credentials in .env; stop the others?" in steered
@@ -1351,12 +1451,15 @@ async def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
             return "Started provisioning."
 
         adapter.script = delegate
-        parent_chat, _, turn = _prepare(runtime, project, harness, "Provision.")
-        await runtime.start_chat_turn(turn.id)
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Provision.")
+        await (await runtime.start_chat_turn(turn.id))
         child.gate.set()
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        await _until_saved(
+            store,
+            ChatSubagent,
+            record.id,
+            lambda saved: saved.result_message_id is not None,
         )
         # Asked while the harness was idle: the child went on without waiting.
         child_turn = await store.get(ChatTurn, record.child_turn_id)
@@ -1376,7 +1479,7 @@ async def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
 
         adapter.script = None
         adapter.connections[0].script = None
-        _, _, second = _prepare(
+        _, _, second = await _prepare(
             runtime, project, harness, "What happened?", chat_id=parent_chat.id
         )
         assert "Which region?" in second.prompt
@@ -1386,7 +1489,7 @@ async def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
         assert (
             await store.get(ChatSubagentMessage, question.id)
         ).status == ChatSubagentMessageStatus.PENDING
-        await runtime.start_chat_turn(second.id)
+        await (await runtime.start_chat_turn(second.id))
         assert (
             await store.get(ChatSubagentMessage, question.id)
         ).status == ChatSubagentMessageStatus.DELIVERED
@@ -1408,15 +1511,15 @@ async def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path)
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
         # First send carries the verified choice and saves it on the chat.
-        parent_chat, _, first = _prepare(runtime, project, harness, "Delegate.")
-        await runtime.start_chat_turn(first.id)
+        parent_chat, _, first = await _prepare(runtime, project, harness, "Delegate.")
+        await (await runtime.start_chat_turn(first.id))
         assert (await store.get(ChatSession, parent_chat.id)).metadata[
             "provider_subagent"
         ] == (SETTING)
         assert len(adapter.opens) == 1
 
         # A later send omits the choice (composer still verifying the model).
-        _, chat_turn, second = _prepare(
+        _, chat_turn, second = await _prepare(
             runtime,
             project,
             harness,
@@ -1429,7 +1532,7 @@ async def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path)
         assert chat_turn.request_snapshot["provider_subagent"] == SETTING
         session = await store.get(HarnessSession, second.harness_session_id)
         assert session.metadata["provider_subagent"] == SETTING
-        await runtime.start_chat_turn(second.id)
+        await (await runtime.start_chat_turn(second.id))
         # ... and the connection is reused rather than reopened twice.
         assert len(adapter.opens) == 1
         await chat.shutdown()

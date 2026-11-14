@@ -2661,13 +2661,16 @@ async def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         observed_permissions: list[Any] = []
         handoff_receipts: list[str] = []
 
+        async def record_handoff(status: str) -> None:
+            handoff_receipts.append(status)
+
         async def permission(request):
             observed_permissions.append(request)
             future: asyncio.Future[HarnessPermissionDecision] = (
                 asyncio.get_running_loop().create_future()
             )
             future.set_result(HarnessPermissionDecision(allowed=True))
-            return PermissionTicket(None, "call-1", future, handoff_receipts.append)
+            return PermissionTicket(None, "call-1", future, record_handoff)
 
         credentials = CredentialStore()
         credential = credentials.create(
