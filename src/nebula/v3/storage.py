@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
+from .advisory_keys import per_id_key
 from .diagnostics import record_caught_exception
 from .async_utils import call_async, finish_cleanup
 from .query_predicates import visible_harness_chat_title
@@ -440,6 +441,50 @@ class StoreTransaction:
                 "The project worker is closing; retry chat creation after retirement."
             )
 
+    async def lock_shared_rows(self) -> bool:
+        """Read rows every project shares as of the write this unit will make.
+
+        Execution workers on PostgreSQL write those rows one transaction at a
+        time across projects; this joins that order before reading them. True
+        when this call took the lock, so rows read earlier may be stale. On
+        SQLite, and for host or API connections, it does nothing.
+        """
+
+        connection = await self.session.connection()
+        sync_connection = connection.sync_connection
+        if (
+            sync_connection is None
+            or sync_connection.info.get("execution_owned") is None
+            or sync_connection.info.get("execution_global_writes", True)
+        ):
+            return False
+        from .execution_scope import lock_global_writes
+
+        await connection.run_sync(lock_global_writes)
+        return True
+
+    async def _current_shared_row(self, row: EntityRow | None) -> EntityRow | None:
+        """Read a shared row as of this unit's turn to write shared rows.
+
+        Another project's worker may have changed it since this unit first
+        loaded it, before the unit held the shared-row write order.
+        """
+
+        if row is None or row.engagement_id is not None:
+            return row
+        if row.kind == Engagement.entity_kind:
+            return row
+        connection = await self.session.connection()
+        sync_connection = connection.sync_connection
+        if (
+            sync_connection is None
+            or sync_connection.info.get("execution_owned") is None
+            or connection.dialect.name != "postgresql"
+        ):
+            return row
+        await self.lock_shared_rows()
+        return await self.session.get(EntityRow, row.id, populate_existing=True)
+
     async def lock_operation_stream(self, operation_id: str) -> None:
         """Serialize project-event sequence assignment before goal row writes.
 
@@ -453,7 +498,7 @@ class StoreTransaction:
         if self.session.bind and self.session.bind.dialect.name == "postgresql":
             (
                 await self.session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:operation_id))"),
+                    text(f"SELECT pg_advisory_xact_lock({per_id_key('operation_id')})"),
                     {"operation_id": f"operation:{operation_id}"},
                 )
             )
@@ -585,6 +630,7 @@ class StoreTransaction:
         if protected:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
         row = await self.session.get(EntityRow, entity_id)
+        row = await self._current_shared_row(row)
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
@@ -670,6 +716,12 @@ class StoreTransaction:
                 revision=updated.revision,
                 updated_at=updated.updated_at,
             )
+            # Execution workers serialize writes to rows shared by every
+            # project; the row just read says whether this is one.
+            .execution_options(
+                nebula_global_entity=row.engagement_id is None
+                and row.kind != Engagement.entity_kind
+            )
         )
         if result.rowcount != 1:
             raise ConflictError(
@@ -738,6 +790,7 @@ class StoreTransaction:
         """Delete one revision-guarded entity inside the current unit of work."""
 
         row = await self.session.get(EntityRow, entity_id)
+        row = await self._current_shared_row(row)
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
@@ -932,7 +985,7 @@ class NebulaStore:
             # blocking unrelated run ledgers.
             (
                 await connection.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
+                    text(f"SELECT pg_advisory_xact_lock({per_id_key('run_id')})"),
                     {"run_id": run_id},
                 )
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .advisory_keys import per_id_key
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -363,7 +364,7 @@ async def create_engagement_with_default_scope(
             ):
                 (
                     await transaction.session.execute(
-                        text("SELECT pg_advisory_xact_lock(hashtext(:name_key))"),
+                        text(f"SELECT pg_advisory_xact_lock({per_id_key('name_key')})"),
                         {"name_key": f"nebula:project-name:{name_key}"},
                     )
                 )
