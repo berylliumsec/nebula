@@ -1,23 +1,30 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Core follow-up dispatch: ChatQueueService.step now awaits start_provider_turn, harness prepare_chat and start_chat_turn, which #939 made async; the storage alert path awaits ChatQueueService.get/exists/write and harness create_session. test_chat_queue.py covers provider and harness dispatch, sequential draining, model/effort picked after queueing, the reclaimed provider turn, the direct-send race and stuck claims (8 of its 24 tests failed on main from these defects and stale test calls). test_storage_integrations.py covers storage dispatch into the queue and the dashboard's queue status (9 of 11 failed on main because its enroll helper never awaited the request, which also hid the product defect); its new harness-source test covers create_session. The selected harness goal test steps the queue through a reviewed harness follow-up.",
-  "exclusions": "No UI, native or frontend code changed. Playwright area storage-integrations matches storage_integrations.py but is excluded: its real-Core fixture spawns a Core whose provider admission is held by this shared host's CPU pressure gate (load ~40 on 8 CPUs from parallel agents), so it cannot complete here, and real-core.spec.ts is not run on main. assistant-queue-core keeps its queue paused and never dispatches; assistant-queue-reconciliation and chat-provider-queue are mocked. The real-Core dispatch journey was checked instead on scratch Postgres Cores through the same queue API the UI uses (main: follow-up stuck at sending with a never-started turn; this branch: two follow-ups queued during a running response sent in order afterwards and the queue drained). Other suites that import the queue helpers (test_chat_decisions, test_chat_catchup, test_chat_polling_cost, the rest of test_harness_chat_goals) fail identically or only on main at 5ae5b88 for unrelated reasons (un-awaited fork_session in a test, un-awaited AsyncSession.scalar in chat_catchup.py, harness goal runtime switch preconditions).",
+  "reason": "The Application Model service became async in #939, but its callers did not change. ModelBroker's to_thread calls returned coroutines (7 model.* tools failed), the sync route handlers returned coroutines (422), and reset never awaited service.project and read with an async connection (500). Execution workers also refused its Core-table graph and edit reads. The fix maps the existing tables (no schema change), reads through the mapped columns, awaits the service in tools and routes, and awaits/run_syncs in reset. Selected: the six Application Model suites (nine of their tests fail on main because of this defect and pass here), the new worker round trip in test_execution_scope_application_model.py (API, tools, reset and project isolation on sqlite and PostgreSQL), test_execution_scope.py (the guard still refuses a Core select over the now-mapped graphs table), and the browser companion and assistant viewer suites that build the same service and tools.",
+  "exclusions": "test_archived_project_deletion.py (11 cases) and test_migrations.py (4 cases) fail identically on pristine origin/main (un-awaited test client calls / unrelated migration failures), so they are not selected even though archived deletion touches these tables. Playwright areas working-knowledge and assistant-browser-viewer match application_model/** but are excluded: their fixture tests/v3/application_model_fixture.py crashes at startup on main (un-awaited store.create), and the GUI is retired. The supervisor-mode API and model-tool chat round trip was checked on a scratch PostgreSQL Core instead (422/500 and tool failures on main, 200 and successful tools on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 37,
+    "python": 198,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_storage_integrations.py",
-    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
+    "tests/v3/test_application_model_admission.py",
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_application_model.py",
+    "tests/v3/test_application_model_registry.py",
+    "tests/v3/test_application_model_reset.py",
+    "tests/v3/test_application_model_views.py",
+    "tests/v3/test_execution_scope_application_model.py",
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_assistant_browser_viewer.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "7e1a00a1edadb5fe6c3344d6c6abe11841681aed5b25f5550ed9207d3798ea25"
+  "change_digest": "b04796dbebea75a14f3fed5f458de28e811d91713faa271c49679ec6bab3fde6"
 }

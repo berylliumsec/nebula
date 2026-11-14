@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from ..database import EntityRow
 from ..domain import Engagement, utc_now
-from .persistence import graphs, edits
+from .persistence import ApplicationGraphEditRow, graphs, edits
 
 
 def captures(project):
@@ -28,9 +28,9 @@ def captures(project):
 
 
 async def preview(service, project):
-    service.project(project)
+    (await service.project(project))
     async with service.store.database.connection() as connection:
-        graph = service._read(connection, project)
+        graph = await connection.run_sync(lambda sync: service._read(sync, project))
         return {
             "revision": graph["revision"],
             "objects": len(graph["objects"]),
@@ -48,7 +48,7 @@ async def preview(service, project):
 async def reset(service, project, request):
     from .service import digest, empty
 
-    service.project(project)
+    (await service.project(project))
     fingerprint = digest({"op": "reset", "request": request.model_dump(mode="json")})
     async with service.store.database.connection() as connection:
         (
@@ -68,9 +68,13 @@ async def reset(service, project, request):
                 raise HTTPException(404, "Project unavailable")
             receipt = (
                 await connection.execute(
-                    select(edits.c.digest, edits.c.payload).where(
-                        edits.c.project_id == project,
-                        edits.c.idempotency_key == request.idempotency_key,
+                    select(
+                        ApplicationGraphEditRow.digest,
+                        ApplicationGraphEditRow.payload,
+                    ).where(
+                        ApplicationGraphEditRow.project_id == project,
+                        ApplicationGraphEditRow.idempotency_key
+                        == request.idempotency_key,
                     )
                 )
             ).first()
@@ -80,7 +84,7 @@ async def reset(service, project, request):
                         409, "This retry key belongs to a different edit"
                     )
                 return receipt.payload["result"]
-            old = service._read(connection, project)
+            old = await connection.run_sync(lambda sync: service._read(sync, project))
             if old["revision"] != request.expected_revision:
                 raise HTTPException(
                     409,

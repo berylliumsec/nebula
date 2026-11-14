@@ -29,3 +29,19 @@ edits = Table(
     Column("digest", String(64), nullable=False),
     Column("payload", JSON, nullable=False),
 )
+
+
+class ApplicationGraphRow(Base):
+    """Mapped reads of ``graphs``.
+
+    Execution workers scope mapped reads to their project and refuse Core-table
+    selects over project tables, so every read goes through these classes.
+    """
+
+    __table__ = graphs
+
+
+class ApplicationGraphEditRow(Base):
+    """Mapped reads of ``edits``; see :class:`ApplicationGraphRow`."""
+
+    __table__ = edits
