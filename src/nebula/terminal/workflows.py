@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .followups import now, queue
 from .state import Cursor, visible_message
 from .transport import ApiError, ClientError, key, terminal_text
 
@@ -866,92 +867,6 @@ async def input_question(shell: Shell, args: list[str]) -> None:
     shell.ui.say(f"Question status: {status}.")
 
 
-async def queue(shell: Shell, args: list[str]) -> None:
-    view = shell.current()
-    path = f"chat/sessions/{key(view.session_id)}/queue"
-    current = await shell.api.request("GET", path)
-    for item in current.get("items", []):
-        shell.ui.say(
-            f"{item['status']}: {((item.get('request') or {}).get('messages') or [{}])[-1].get('content', '')}"
-        )
-    operations = [
-        "show",
-        "enqueue",
-        "edit",
-        "remove",
-        "reorder",
-        "pause",
-        "resume",
-        "clear",
-        "retry",
-    ]
-    action = (
-        args[0]
-        if args
-        else (
-            await shell.ui.choose(
-                "Follow-up queue",
-                [{"id": name, "name": name.title()} for name in operations],
-            )
-        )["id"]
-    )
-    if action == "show":
-        return
-    body: dict[str, Any] = {"action": action, "expected_revision": current["revision"]}
-    if action == "enqueue":
-        from uuid import uuid4
-
-        text = await shell.ui.ask("Follow-up message")
-        body.update(
-            request=await shell.body(text), idempotency_key=str(uuid4()), paused=True
-        )
-    elif action in {"edit", "remove", "reorder", "retry"}:
-        items = [
-            {
-                **row,
-                "name": f"{row['status']}: {((row.get('request') or {}).get('messages') or [{}])[-1].get('content', '')[:100]}",
-            }
-            for row in current["items"]
-            if row["status"] not in {"complete", "sending", "claiming"}
-        ]
-        if not items:
-            raise ClientError("No editable queue items.")
-        item = await shell.ui.choose("Queue item", items)
-        body["item_id"] = item["id"]
-        if action == "edit":
-            request = dict(item["request"])
-            request["messages"] = [
-                {
-                    "role": "user",
-                    "content": await shell.ui.ask(
-                        "Message", default=request["messages"][-1]["content"]
-                    ),
-                }
-            ]
-            body["request"] = request
-        elif action == "reorder":
-            body["order"] = [
-                item["id"],
-                *[
-                    row["id"]
-                    for row in current["items"]
-                    if row["id"] != item["id"]
-                    and row["status"] in {"queued", "needs_review"}
-                ],
-            ]
-    elif action in {"clear", "resume"} and not await shell.ui.confirm(
-        f"{action.title()} this queue?"
-    ):
-        return
-    elif action not in operations:
-        raise ClientError("Choose a listed queue action.")
-    await shell.api.request("POST", path, json=body)
-    observed = await shell.api.request("GET", path)
-    shell.ui.say(
-        f"Queue saved in Core: {'paused' if observed['paused'] else 'enabled'}, {len(observed['items'])} items."
-    )
-
-
 async def schedule(shell: Shell, args: list[str]) -> None:
     view = shell.current()
     if (await shell.configuration())["backend"] != "provider":
@@ -1001,5 +916,6 @@ actions = {
     "approvals": approvals,
     "input": input_question,
     "queue": queue,
+    "now": now,
     "schedule": schedule,
 }
