@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Storage senders on a supervisor Core: the API worker now authenticates POST /api/v1/storage/events, /inventory and /test with the source token (transport rule on the real client), answers /test itself, and saves reports for the source's project under a storage-source principal bound to the token digest, with a body-digest idempotency key. runtime_delivery accepts that principal only for the report routes, counts a storage event as chat-starting work, and revalidates the source before replay; authentication refuses the principal on operator routes; the storage router accepts it on replay; project workers leave other projects' dispatches pending. test_api_worker.py covers the ingress (token, operator token, guesses, remote HTTP, /test, idempotent retry, routing to the source's project, chat_start, no secret in the durable intent, replay principal and operator bearer, revocation before replay) next to the existing API worker contracts. test_storage_integrations.py covers the worker-side replay (ingest and dispatch into the chat queue, refusal on an operator route, rotated token) and dispatch ownership, plus the single-process sender suite. test_runtime_principal, test_runtime_delivery, test_work_batch_contracts, test_runtime_work_batches, test_runtime_global_reads and test_runtime_global_api cover the principal, delivery, batch and global read paths these changes touch.",
-  "exclusions": "No UI or native code changed. test_product_knowledge.py is excluded because two of its search tests (headless core, Butler browser mission) fail identically on origin/main; the bundled index was built and verified locally with the edited docs/storage-integrations.md (427 passages), and CI builds and verifies it anyway. Playwright area storage-integrations is excluded: its real-Core fixture cannot complete provider turns on this host's saturated pressure gate and real-core.spec.ts is not run on main; the supervisor journey was checked instead on a scratch Postgres supervisor Core (sender report 202 accepted and dispatched into its incident chat, which drained; /test 200; inventory 202; operator token and revoked source 401; sources list 200). PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL; the new ingress test also passed on PostgreSQL locally.",
+  "reason": "Storage senders on a supervisor Core, hardened after a security review. The API worker authenticates POST /api/v1/storage/events, /inventory and /test with the source token and transport rule, validates every body before saving, answers /test itself, and saves reports as storage.report/v1 commands for the source's project under a storage-source principal bound to the token digest; it waits for the project worker in its own 4-slot pool for at most 5 s, gates on the storage.report/v1 release feature, chains a new run after a failed or interrupted one, and answers retryable problems with 503. Delivery confines the principal to report paths and revalidates it on replay; an interrupted report fails retryably (runner and claim) instead of blocking its lane; handoff and API promotion fence pending reports; authentication refuses the principal on operator routes; a replayed report records and wakes the dispatch loop; callbacks have an overall deadline. test_api_worker, test_runtime_principal, test_storage_integrations, test_storage_sender and the new test_storage_report_compatibility hold the regression tests for every confirmed review finding (each caught by a mutation pass); test_runtime_delivery, test_runtime_coordination, test_runtime_routing, test_deployment_lifecycle, test_chat_acceptance_compatibility, test_authentication_api, test_api_worker_composition, test_runtime_global_reads, test_runtime_global_api, test_runtime_work_batches and test_work_batch_contracts cover the delivery, claim, routing, deployment-fence, authentication and global paths these changes touch.",
+  "exclusions": "No UI or native code changed. test_work_batch_contracts.py::test_project_admission_requires_an_exact_chat_start is excluded: its legacy-normal-command case has failed on origin/main since #1028 admitted workers for queued project commands. test_runtime_worker_features.py is excluded: its canonical-admission tests spawn real workers and fail identically on main on this host (execution role does not come up under load with a per-worktree venv); with that venv the API-role case passes on this branch, and the real-Core runs started execution workers from a release declaring storage.report/v1. test_product_knowledge.py is excluded (two search tests fail identically on main); the index builds and verifies with the edited docs. Playwright area storage-integrations is excluded: its real-Core fixture cannot complete provider turns on this host's saturated pressure gate and real-core.spec.ts is not run on main; the supervisor journey was checked on scratch Postgres supervisor Cores instead (invalid report 422 and not saved; sender report 202 and dispatched by the woken loop into its incident chat, which drained; /test 200; inventory 202 twice; operator token and revoked source 401).",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 195,
+    "python": 413,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -14,15 +14,29 @@
     "tests/v3/test_api_worker.py",
     "tests/v3/test_runtime_principal.py",
     "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_storage_sender.py",
+    "tests/v3/test_storage_report_compatibility.py",
     "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_work_batch_contracts.py",
     "tests/v3/test_runtime_global_reads.py",
     "tests/v3/test_runtime_global_api.py",
-    "tests/v3/test_runtime_work_batches.py"
+    "tests/v3/test_runtime_work_batches.py",
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_chat_acceptance_compatibility.py",
+    "tests/v3/test_authentication_api.py",
+    "tests/v3/test_api_worker_composition.py",
+    "tests/v3/test_work_batch_contracts.py::test_session_creation_routes_are_explicit_chat_start_intents",
+    "tests/v3/test_work_batch_contracts.py::test_additive_migration_keeps_prior_data_and_enforces_metadata",
+    "tests/v3/test_work_batch_contracts.py::test_work_barrier_stays_at_fifo_head_while_control_and_other_project_advance",
+    "tests/v3/test_work_batch_contracts.py::test_claim_pins_only_active_participant_project",
+    "tests/v3/test_work_batch_contracts.py::test_transfer_rechecks_late_batch_and_terminal_rows_unpin",
+    "tests/v3/test_work_batch_contracts.py::test_expired_recovery_requires_active_batch_support_and_terminal_unpins",
+    "tests/v3/test_work_batch_contracts.py::test_execution_scope_cannot_read_or_write_another_project_batch"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "0a49ae9dbaac04f1592ab50f92430c2472ef088f94e6c3bca360b4726316c485"
+  "change_digest": "8c496d76029b94310ee56888d4b57feea0eef2eda740480d7605bac658db6366"
 }

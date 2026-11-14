@@ -46,6 +46,44 @@ def test_reference_sender_persists_one_event_id_across_retries(tmp_path):
         sender.sender_url("https://storage.example/api/v1/storage/events?token=leak")
 
 
+def test_reference_sender_outwaits_core_and_retries_a_read_timeout(monkeypatch):
+    from nebula.v3.storage_sender import STORAGE_ACK_WAIT_SECONDS
+
+    sender = sender_module()
+    # Core acknowledges a saved report (queued) well before the sender gives up.
+    assert sender.TIMEOUT_SECONDS > 2 * STORAGE_ACK_WAIT_SECONDS
+    payload = b'{"schema_version":1,"event_id":"same"}'
+    requests = []
+
+    class Accepted:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self, _limit):
+            return b'{"accepted":true,"queued":true,"duplicate":null,"current":null}'
+
+    def post(request, timeout):
+        requests.append(request.data)
+        if len(requests) == 1:
+            # urllib raises a bare TimeoutError, not a URLError, on a slow read.
+            raise TimeoutError("timed out")
+        return Accepted()
+
+    monkeypatch.setattr(sender, "urlopen", post)
+    monkeypatch.setattr(sender.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sender.random, "random", lambda: 0.0)
+    result = sender.send(
+        "https://storage.example/api/v1/storage/events", "secret", payload, attempts=2
+    )
+    assert result["accepted"] is True
+    assert requests == [payload, payload]
+
+
 def test_reference_sender_retries_identical_payload_and_requires_ack(monkeypatch):
     sender = sender_module()
     payload = b'{"schema_version":1,"event_id":"same"}'
@@ -64,7 +102,7 @@ def test_reference_sender_retries_identical_payload_and_requires_ack(monkeypatch
             return b'{"accepted":true,"duplicate":false,"current":true}'
 
     def post(request, timeout):
-        assert timeout == 15
+        assert timeout == sender.TIMEOUT_SECONDS
         requests.append(request)
         if len(requests) == 1:
             raise HTTPError(request.full_url, 503, "temporarily unavailable", {}, None)

@@ -763,6 +763,8 @@ async def test_supervisor_replay_runs_a_saved_report_as_its_storage_source(tmp_p
     actor = storage_source_actor(entity)
     # An execution worker replays the saved report with the operator bearer
     # and the durable storage-source principal; the sender token is never saved.
+    service = client.app.state.storage_integrations
+    service._dispatch_wake.clear()
     with runtime_principal(actor):
         accepted = await client.post(
             "/api/v1/storage/events", headers=AUTH, json=event()
@@ -771,6 +773,12 @@ async def test_supervisor_replay_runs_a_saved_report_as_its_storage_source(tmp_p
         assert accepted.json()["accepted"] is True
         # That principal cannot reach an operator route.
         assert (await client.get("/api/v1/storage", headers=AUTH)).status_code == 403
+    # The replayed report only records; the dispatch loop, woken, runs the
+    # source callbacks and the chat dispatch outside the project's work lane.
+    dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
+    assert dashboard["dispatches"][0]["status"] == "pending", dashboard["dispatches"]
+    assert service._dispatch_wake.is_set()
+    await service.dispatch_pending()
     dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
     assert dashboard["dispatches"][0]["status"] == "queued", dashboard["dispatches"]
     chat_id = dashboard["incidents"][0]["chat_session_id"]
@@ -811,6 +819,58 @@ async def test_project_worker_leaves_another_projects_dispatch_pending(tmp_path)
     with execution_context(ProjectLease("storage-project", "worker", 1)):
         await service.dispatch_pending()
     assert (await store.get(StorageDispatch, elsewhere.id)).status == "pending"
+
+
+async def test_a_trickling_source_callback_has_one_overall_deadline(
+    tmp_path, monkeypatch
+):
+    import time
+
+    import httpx
+
+    from nebula.v3 import storage_integrations
+
+    class Trickle(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            # Each byte arrives well inside the per-read timeout.
+            for byte in b'{"diagnostics": "slow"}':
+                self.wfile.write(bytes([byte]))
+                self.wfile.flush()
+                time.sleep(0.2)
+
+        def log_message(self, *_):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("NEBULA_TEST_STORAGE_CALLBACK_TOKEN", "callback-token")
+        monkeypatch.setattr(storage_integrations, "CALLBACK_DEADLINE_SECONDS", 0.6)
+        client, store = await setup(tmp_path)
+        created = await enroll(client)
+        source = await store.get_by_kind("storage_sources", created["source"]["id"])
+        source = await store.update(
+            type(source),
+            source.id,
+            {
+                "callback_url": f"http://127.0.0.1:{server.server_port}",
+                "callback_credential_ref": "env:NEBULA_TEST_STORAGE_CALLBACK_TOKEN",
+            },
+            expected_revision=source.revision,
+        )
+        service = client.app.state.storage_integrations
+        started = time.monotonic()
+        with pytest.raises(httpx.ReadTimeout, match="overall deadline"):
+            await service._callback(source, "/v1/diagnose", {"incident_id": "i"})
+        assert time.monotonic() - started < 3
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 pytestmark = pytest.mark.anyio

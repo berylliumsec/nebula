@@ -12,11 +12,13 @@ import hashlib
 import hmac
 import ipaddress
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import HTTPException
 from pydantic import Field, field_validator, model_validator
 
 from .domain import NebulaModel, StorageSource
+from .runtime_coordination import STORAGE_REPORT_COMMAND
 from .storage import NebulaStore, NotFoundError
 
 MAX_EVENT_BYTES = 64 * 1024
@@ -27,6 +29,14 @@ STORAGE_INVENTORY_PATH = "/api/v1/storage/inventory"
 STORAGE_TEST_PATH = "/api/v1/storage/test"
 # The only requests a storage-source principal may submit as durable commands.
 STORAGE_REPORT_PATHS = frozenset({STORAGE_EVENTS_PATH, STORAGE_INVENTORY_PATH})
+# A release whose execution workers can run STORAGE_REPORT_COMMAND.
+STORAGE_REPORT_FEATURE = STORAGE_REPORT_COMMAND
+# How long an API worker waits for the project's worker before acknowledging a
+# saved report as queued. Well inside the reference sender's 30 s timeout, and
+# short enough that a sender cannot hold a viewer slot for long.
+STORAGE_ACK_WAIT_SECONDS = 5.0
+# Sender reports wait in their own small pool, never the operator's viewers.
+STORAGE_SENDER_SLOTS = 4
 
 
 class StorageIdentity(NebulaModel):
@@ -106,6 +116,29 @@ async def authenticate_storage_source(
     if not source.enabled and not allow_disabled:
         raise HTTPException(403, "storage source is disabled")
     return source
+
+
+def validate_storage_report(path: str, body: bytes) -> None:
+    """Reject a report Core would refuse before it is saved or acknowledged."""
+    if path == STORAGE_INVENTORY_PATH:
+        StorageInventory.model_validate_json(body)
+    else:
+        StorageEvent.model_validate_json(body)
+
+
+def storage_report_key(source: StorageSource, path: str, body: bytes) -> str:
+    """Durable idempotency key for one sender request.
+
+    An event's retry is the same command for the same project, and the event ID
+    dedupes it again in Core. Inventory has no report identity and is safe to
+    run again, so each inventory request is its own command.
+    """
+    if path == STORAGE_INVENTORY_PATH:
+        return "storage-inventory-" + uuid4().hex
+    digest = hashlib.sha256(
+        source.engagement_id.encode() + b"\0" + path.encode() + b"\0" + body
+    ).hexdigest()
+    return "storage-event-" + digest
 
 
 def storage_source_actor(source: StorageSource) -> str:

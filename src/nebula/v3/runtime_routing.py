@@ -20,7 +20,11 @@ from .database import (
     RuntimeResourceRow,
 )
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT, ReleaseManifest
-from .runtime_coordination import CoordinationConflict, RuntimeCoordination
+from .runtime_coordination import (
+    CoordinationConflict,
+    RuntimeCoordination,
+    STORAGE_REPORT_COMMAND,
+)
 from .runtime_delivery import HttpIntent
 from .runtime_http import HttpUpstream
 from .runtime_ipc import RuntimeCredentials, RuntimeIpcError
@@ -159,6 +163,33 @@ class RuntimeRouting:
 
     async def supports_chat_resume(self, project_id: str) -> bool:
         return await self.supports_feature(project_id, "chat.resume/v1")
+
+    async def supports_storage_reports(self, project_id: str, *, default: bool) -> bool:
+        """Whether the worker that runs this project's next command runs storage reports.
+
+        That is the live owner's release, or for an unowned project the release
+        a new owner would start from. ``default`` stands for a host with no
+        promoted target, whose owners start from this same build.
+        """
+        async with self.coordination.database.session() as session:
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            process = (
+                await session.get(RuntimeProcessRow, owner.runtime_id)
+                if owner is not None and owner.runtime_id
+                else None
+            )
+            version = process.version if process is not None else None
+            if version is None:
+                host = await session.get(DeploymentHostRow, "host")
+                version = host.target_version if host is not None else None
+            if version is None:
+                return default
+            release = await session.get(RuntimeReleaseRow, version)
+            return (
+                release is not None
+                and STORAGE_REPORT_COMMAND
+                in ReleaseManifest.model_validate(release.manifest).features
+            )
 
     async def supports_feature(self, project_id: str, feature: str) -> bool:
         async with self.coordination.database.session() as session:

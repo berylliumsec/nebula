@@ -21,7 +21,8 @@
       "provider.tools-context-ownership/v1",
       "harness.standing-instructions/v1",
       "host.web-search-query/v1",
-      "project.work-batch/v1"
+      "project.work-batch/v1",
+      "storage.report/v1"
     ]
   }
 }

@@ -52,6 +52,7 @@ from .runtime_coordination import (
     LeaseLost,
     ProjectLease,
     RuntimeCoordination,
+    STORAGE_REPORT_COMMAND,
     ShutdownBlocked,
     project_worker_commands,
 )
@@ -261,7 +262,9 @@ class DeploymentCoordinator:
                 await session.scalars(
                     select(RuntimeCommandRow.name)
                     .where(
-                        RuntimeCommandRow.name.in_(("chat.accept/v1", "chat.resume/v1"))
+                        RuntimeCommandRow.name.in_(
+                            ("chat.accept/v1", "chat.resume/v1", STORAGE_REPORT_COMMAND)
+                        )
                     )
                     .distinct()
                 )
@@ -1546,7 +1549,7 @@ class DeploymentCoordinator:
                         RuntimeCommandRow.project_id == project_id,
                         RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
                         RuntimeCommandRow.name.in_(
-                            ("chat.accept/v1", "chat.resume/v1")
+                            ("chat.accept/v1", "chat.resume/v1", STORAGE_REPORT_COMMAND)
                         ),
                     )
                     .distinct()
@@ -1557,6 +1560,7 @@ class DeploymentCoordinator:
             ):
                 raise CoordinationConflict(
                     "The target cannot read this project's accepted chat requests"
+                    " or storage reports"
                 )
             unfinished = await session.scalar(
                 select(RuntimeCommandRow.id)
