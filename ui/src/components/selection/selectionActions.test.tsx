@@ -21,6 +21,27 @@ function selectNodeText(node: Node, start = 0, end = node.textContent?.length ??
   return selection;
 }
 
+describe("selection actions on resize", () => {
+  it("keeps a focused text box's caret, so WebKit keeps the keystrokes typed next", () => {
+    render(<SelectionActionsProvider onAsk={vi.fn()} onAddNote={vi.fn()}><textarea aria-label="Composer" defaultValue="Draft" /><p>Plain text</p></SelectionActionsProvider>);
+    const composer = screen.getByRole("textbox", { name: "Composer" }) as HTMLTextAreaElement;
+    composer.focus();
+    composer.setSelectionRange(5, 5);
+    const clear = vi.spyOn(Selection.prototype, "removeAllRanges");
+    try {
+      fireEvent(window, new Event("resize"));
+      expect(clear).not.toHaveBeenCalled();
+      // Elsewhere a resize still clears a stale page selection with its popover.
+      composer.blur();
+      selectNodeText(screen.getByText("Plain text").firstChild!);
+      fireEvent(window, new Event("resize"));
+      expect(clear).toHaveBeenCalled();
+    } finally {
+      clear.mockRestore();
+    }
+  });
+});
+
 describe("selection actions", () => {
   it("bounds exact text and marks a truncated draft", () => {
     const text = `λ${"x".repeat(SELECTION_TEXT_LIMIT + 10)}`;

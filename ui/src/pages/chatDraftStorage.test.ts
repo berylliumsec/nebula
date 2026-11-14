@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHAT_DRAFT_LIMITS, ChatDraftStore, chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
+import { CHAT_DRAFT_LIMITS, ChatDraftStore, chatDraftStorageKey, clearChatDraft, draftFollowsKeyChange, readChatDraft, writeChatDraft, type ChatDraftIdentity } from "./chatDraftStorage";
 
 describe("assistant draft recovery", () => {
   it("isolates unsent text by project and conversation", () => {
@@ -82,5 +82,38 @@ describe("assistant draft recovery", () => {
     expect(readChatDraft(localStorage, key)).toBe("");
     writeChatDraft(localStorage, chatDraftStorageKey("project", "current", "scope"), "new");
     expect(localStorage.getItem(key)).toBeNull();
+  });
+});
+
+describe("composer text across a draft key change", () => {
+  const at = (scope: string, sessionId = "", engagementId = "project"): ChatDraftIdentity =>
+    ({ scope, persistent: !scope.startsWith("window:"), engagementId, sessionId });
+
+  it("follows the same chat while its storage scope resolves or a reconnect passes through this window's scope", () => {
+    expect(draftFollowsKeyChange(at("window:a", "chat"), at("core:me", "chat"))).toBe(true);
+    expect(draftFollowsKeyChange(at("core:me", "chat"), at("window:b", "chat"), { lastPersistentScope: "core:me" })).toBe(true);
+    expect(draftFollowsKeyChange(at("window:b", "chat"), at("core:me", "chat"), { lastPersistentScope: "core:me" })).toBe(true);
+    expect(draftFollowsKeyChange(at("window:a"), at("window:b"))).toBe(true);
+  });
+
+  it("never moves text between two Core identities, even through a temporary scope", () => {
+    expect(draftFollowsKeyChange(at("core:me", "chat"), at("core:other", "chat"))).toBe(false);
+    expect(draftFollowsKeyChange(at("window:b", "chat"), at("core:other", "chat"), { lastPersistentScope: "core:me" })).toBe(false);
+  });
+
+  it("follows only the chat this composer's own first send named or gave up", () => {
+    expect(draftFollowsKeyChange(at("core:me"), at("core:me", "created"), { namedSessionId: "created" })).toBe(true);
+    expect(draftFollowsKeyChange(at("core:me", "created"), at("core:me"), { abandonedSessionId: "created" })).toBe(true);
+    // Choosing another chat, or a new chat, keeps each draft where it was typed.
+    expect(draftFollowsKeyChange(at("core:me"), at("core:me", "other"), { namedSessionId: "created" })).toBe(false);
+    expect(draftFollowsKeyChange(at("core:me"), at("core:me", "created"))).toBe(false);
+    expect(draftFollowsKeyChange(at("core:me", "one"), at("core:me", "two"))).toBe(false);
+    expect(draftFollowsKeyChange(at("core:me", "one"), at("core:me"))).toBe(false);
+  });
+
+  it("never moves text to another project or across two changes at once", () => {
+    expect(draftFollowsKeyChange(at("core:me", "chat"), at("core:me", "chat", "other-project"))).toBe(false);
+    expect(draftFollowsKeyChange(at("window:a"), at("core:me", "created"), { namedSessionId: "created" })).toBe(false);
+    expect(draftFollowsKeyChange(undefined, at("core:me"))).toBe(false);
   });
 });

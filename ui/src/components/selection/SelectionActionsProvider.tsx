@@ -142,16 +142,24 @@ export function SelectionActionsProvider({
     document.addEventListener("keyup", read, true);
     document.addEventListener("select", read, true);
     document.addEventListener("keydown", dismissForEscape, true);
-    globalThis.addEventListener("resize", dismissSelection);
+    // A resize (on a phone, often the software keyboard opening) only moves
+    // the popover. While a text box has focus the document selection is its
+    // caret, and WebKit drops every keystroke once that is cleared.
+    const dismissForResize = () => {
+      const focused = document.activeElement;
+      if (isSelectableTextControl(focused) || (focused instanceof HTMLElement && focused.isContentEditable)) closeActions();
+      else dismissSelection();
+    };
+    globalThis.addEventListener("resize", dismissForResize);
     return () => {
       document.removeEventListener("pointerdown", dismissForPointer, true);
       document.removeEventListener("pointerup", read, true);
       document.removeEventListener("keyup", read, true);
       document.removeEventListener("select", read, true);
       document.removeEventListener("keydown", dismissForEscape, true);
-      globalThis.removeEventListener("resize", dismissSelection);
+      globalThis.removeEventListener("resize", dismissForResize);
     };
-  }, [dismissSelection, domOptions]);
+  }, [closeActions, dismissSelection, domOptions]);
 
   const context = useMemo(() => ({ presentSelection, dismissSelection }), [presentSelection, dismissSelection]);
   const viewportWidth = globalThis.innerWidth || 1024;
