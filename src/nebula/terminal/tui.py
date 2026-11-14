@@ -1629,7 +1629,8 @@ class TuiUI(TerminalUI):
             self.clear_loading()
             self._disarm_interrupt()
             if default and not self.composer.text:
-                self.composer.text = default
+                # Continue a restored or quoted draft at its end, as a text field does.
+                self.composer.buffer.set_document(Document(default, len(default)))
             self._mode = "main"
             self.app.layout.focus(
                 self.transcript if self._read_at_match else self.composer
