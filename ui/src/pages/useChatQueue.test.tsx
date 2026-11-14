@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ApiClient } from "../api/client";
+import { ApiError, type ApiClient } from "../api/client";
+import { PROJECT_RUNTIME_UNAVAILABLE, ProjectRuntimeRecovery } from "../api/projectRuntime";
 import { useChatQueue, type ChatQueue } from "./useChatQueue";
 
 let visibility: DocumentVisibilityState = "visible";
@@ -84,5 +85,54 @@ describe("follow-up queue polling", () => {
     await advance(0);
     expect(reads.length).toBe(2);
     expect(result.current.queue?.items[0]?.status).toBe("needs_review");
+  });
+
+  it("waits quietly for an idle project's worker and reads again as soon as it answers", async () => {
+    // A retired project worker: Core answers project reads 503 until the
+    // operator's next action readmits one. That is not a queue failure.
+    let away = true;
+    const recovery = new ProjectRuntimeRecovery(async () => ({ answered: !away }));
+    const reads: string[] = [];
+    const api = {
+      projectRuntime: recovery,
+      requestIfChanged: vi.fn(async (path: string) => {
+        reads.push(path);
+        if (away) {
+          recovery.unavailable(path);
+          throw new ApiError("idle", 503, undefined, { detail: "idle", code: PROJECT_RUNTIME_UNAVAILABLE, retryable: true });
+        }
+        recovery.answered(path);
+        return { value: queueWith("queued"), etag: "tag" };
+      }),
+    } as unknown as ApiClient;
+    const { result } = renderHook(() => useChatQueue(api, "s"));
+    await advance(0);
+    expect(result.current.error).toBeUndefined();
+    await advance(3_000);
+    expect(result.current.error).toBeUndefined();
+    const beforeReady = reads.length;
+    away = false;
+    // The shared probe notices the worker within its backoff and the queue reads at once.
+    await advance(5_000);
+    expect(reads.length).toBeGreaterThan(beforeReady);
+    expect(result.current.queue?.items[0]?.status).toBe("queued");
+    expect(result.current.error).toBeUndefined();
+    expect(recovery.state).toBe("available");
+  });
+
+  it("clears a failed read once a later read succeeds, unchanged or not", async () => {
+    let fail = true;
+    const api = {
+      requestIfChanged: vi.fn(async (_path: string, etag: string | undefined) => {
+        if (fail) throw new Error("Core read failed");
+        return etag === "tag" ? undefined : { value: queueWith(), etag: "tag" };
+      }),
+    } as unknown as ApiClient;
+    const { result } = renderHook(() => useChatQueue(api, "s"));
+    await advance(0);
+    expect(result.current.error).toContain("Core read failed");
+    fail = false;
+    await advance(2_000);
+    expect(result.current.error).toBeUndefined();
   });
 });
