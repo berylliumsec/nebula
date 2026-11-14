@@ -613,3 +613,25 @@ async def test_retained_prepared_worker_survives_host_detach_and_new_host_activa
         for path in retained.root.rglob("*"):
             if path.is_dir():
                 path.chmod(0o700)
+
+
+async def test_recovery_refused_before_its_commit_is_a_rejection(recovery):
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    value = recovery
+    root = stepped_supervisor(value.coordinator, value.rpc)
+    # The source owner is still live, so begin_recovery refuses in its
+    # transaction and nothing changes.
+    with pytest.raises(OperationRejected, match="still live"):
+        await root.recover_project(
+            "one",
+            "target",
+            expected_owner=value.old,
+            expected_handoff_revision=None,
+            operation_id="refused-recovery",
+            actor_id="operator",
+        )
+    async with value.database.session() as session:
+        assert await session.get(ProjectHandoffRow, "one") is None
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert owner.runtime_id == "source"
