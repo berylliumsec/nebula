@@ -391,11 +391,6 @@ async def serve(config):
                 )
             if created:
                 await automatic.start()
-            if "idle_grace_ms" in body:
-                # A bounded idle grace keeps a browser journey short.
-                automatic.idle_grace_ms = max(
-                    0, min(int(body["idle_grace_ms"]), 60_000)
-                )
             return {"started": True}
         if operation == "pending-commands":
             from nebula.v3.database import RuntimeCommandRow
