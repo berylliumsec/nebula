@@ -328,6 +328,16 @@ class Host:
             if row["runtime_id"]
         }
 
+    def unowned_workers(self) -> set[str]:
+        owners = {row["runtime_id"] for row in self.projects.values()}
+        return {
+            runtime_id
+            for runtime_id, row in self.processes.items()
+            if row["role"] == "execution"
+            and row["state"] != "retired"
+            and runtime_id not in owners
+        }
+
     def actions(self, action: str) -> list[str]:
         return [key for key, name, _ in self.dispatched if name == action]
 
@@ -501,6 +511,18 @@ def test_rollback_supersedes_a_promotion_stalled_mid_handoff(host: Host):
     assert rollback["superseded"]["action"] == "promote"
     assert rollback["superseded"]["version"] == NEW
     assert saved["active"] == OLD
+    # The source the replaced promotion moved away from is retired too.
+    assert host.unowned_workers() == set()
+
+
+def test_rollback_retires_a_target_the_replaced_promotion_never_used(host: Host):
+    host.faults["handoff"] = ["uncertain"]
+    assert deployer.promote()["status"] == "waiting_for_handoffs"
+    [prepared] = host.unowned_workers()
+    rollback_until_converged(host)
+    assert host.owners() == {"project-1": OLD, "project-2": OLD}
+    assert host.processes[prepared]["state"] == "retired"
+    assert host.unowned_workers() == set()
 
 
 def test_rollback_supersedes_a_promotion_stalled_before_api_promotion(

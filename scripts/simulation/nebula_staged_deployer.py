@@ -312,6 +312,57 @@ class StagedDeployer:
             )
         )
 
+    @staticmethod
+    def _superseded_leftovers(superseded, status: dict, own: set) -> list[str]:
+        """Runtimes a replaced promotion journaled that no longer have work.
+
+        A source qualifies once its project's ownership moved past the fence
+        the promotion journaled; a prepared target once it owns no project.
+        Runtimes the promotion already retired, runtimes owning a project,
+        and this rollback's own sources and targets are left alone.
+        """
+        if not isinstance(superseded, dict):
+            return []
+        rows = {
+            row.get("project_id"): row
+            for row in status.get("projects", [])
+            if isinstance(row, dict)
+        }
+        owners = {row.get("runtime_id") for row in rows.values()}
+        fences = superseded.get("source_fencing_by_project", {})
+        targets = superseded.get("target_runtime_by_project", {})
+        retired = {
+            (entry.get("parameters") or {}).get("runtime_id")
+            for key, entry in superseded.get("steps", {}).items()
+            if key.startswith(("retire/", "retire-unused-target/"))
+            and (entry.get("receipt") or {}).get("state") == "succeeded"
+        }
+        listed = status.get("processes")
+        live = (
+            {row.get("runtime_id") for row in listed if isinstance(row, dict)}
+            if isinstance(listed, list)
+            else None
+        )
+        candidates = []
+        for project_id, source in superseded.get(
+            "source_runtime_by_project", {}
+        ).items():
+            row = rows.get(project_id)
+            if row is not None and row.get("phase") not in (None, "verified"):
+                continue
+            if row is None or row.get("fencing_token", 0) > fences.get(project_id, 0):
+                candidates.append(source)
+            candidates.append(targets.get(project_id))
+        return [
+            runtime_id
+            for runtime_id in dict.fromkeys(candidates)
+            if isinstance(runtime_id, str)
+            and runtime_id not in retired
+            and runtime_id not in owners
+            and runtime_id not in own
+            and (live is None or runtime_id in live)
+        ]
+
     def _stage_and_promote_api(
         self, journal: dict, version: str, *, migrate: bool = True
     ) -> None:
@@ -842,6 +893,25 @@ class StagedDeployer:
                             "detail": str(error)[:1000],
                         }
                     ],
+                    pinned,
+                )
+
+        # A rollback that replaced an unfinished promotion retires what that
+        # promotion left without work: the sources of transfers that moved
+        # past them, and targets that never received their project.
+        superseded = journal.get("superseded")
+        status = self._status()
+        for runtime_id in self._superseded_leftovers(
+            superseded,
+            status,
+            {*source_by_project.values(), *target_by_project.values()},
+        ):
+            try:
+                _, status = retire_ownerless(runtime_id, status)
+            except (RuntimeError, OSError) as error:
+                return waiting(
+                    status,
+                    [{"runtime_id": runtime_id, "detail": str(error)[:1000]}],
                     pinned,
                 )
 
