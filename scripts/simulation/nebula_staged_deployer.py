@@ -167,28 +167,15 @@ class StagedDeployer:
         self.record["active"] = version
         self.save(self.record)
 
-    def promote(self, version: str) -> dict:
-        journal = self._journal("promote", version)
-        self._stage_and_promote_api(journal, version)
-        self._operation(journal, "target", "target_execution", {"version": version})
-        return self._move_projects(journal, version)
+    @staticmethod
+    def _execution_staged(status: dict, version: str) -> dict | None:
+        """Hold execution while two other versions keep their workers resident.
 
-    def rollback(self, version: str) -> dict:
-        journal = self._journal("rollback", version)
-        self._stage_and_promote_api(journal, version, migrate=False)
-        self._operation(
-            journal,
-            "target",
-            "rollback_code",
-            {
-                "version": version,
-                "expected_revision": self._status()["revision"],
-            },
-        )
-        return self._move_projects(journal, version)
-
-    def _move_projects(self, journal: dict, version: str) -> dict:
-        status = self._status()
+        Core refuses to target a release that would be a third resident
+        execution version, because no worker could start as it. The promoted
+        API stays; rerunning the deployment targets the release once an older
+        version has retired.
+        """
         resident = status.get("resident_versions", [])
         if version not in resident and len(resident) >= 2:
             return {
@@ -196,6 +183,40 @@ class StagedDeployer:
                 "commit": version,
                 "deployment": status,
             }
+        return None
+
+    def promote(self, version: str) -> dict:
+        journal = self._journal("promote", version)
+        self._stage_and_promote_api(journal, version)
+        staged = self._execution_staged(self._status(), version)
+        if staged is not None:
+            return staged
+        self._operation(journal, "target", "target_execution", {"version": version})
+        return self._move_projects(journal, version)
+
+    def rollback(self, version: str) -> dict:
+        journal = self._journal("rollback", version)
+        self._stage_and_promote_api(journal, version, migrate=False)
+        status = self._status()
+        staged = self._execution_staged(status, version)
+        if staged is not None:
+            return staged
+        self._operation(
+            journal,
+            "target",
+            "rollback_code",
+            {
+                "version": version,
+                "expected_revision": status["revision"],
+            },
+        )
+        return self._move_projects(journal, version)
+
+    def _move_projects(self, journal: dict, version: str) -> dict:
+        status = self._status()
+        staged = self._execution_staged(status, version)
+        if staged is not None:
+            return staged
         projects = status.get("projects", [])
         if len(projects) > 10_000:
             raise RuntimeError(
