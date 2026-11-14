@@ -129,6 +129,7 @@ class Shell:
                 "detach",
                 "steer",
                 "stop",
+                "now",
             }
         else:
             meta = view.session.get("metadata") or {}
@@ -143,13 +144,13 @@ class Shell:
             if "input" not in self._pending_kinds:
                 available.discard("input")
         if not busy and not (view.session is None and view.receipt):
-            available -= {"follow", "detach", "steer", "stop"}
+            available -= {"follow", "detach", "steer", "stop", "now"}
         elif view.config.get("backend") != "harness":
             available.discard("steer")
         if self.stream_task is None or self.stream_task.done():
             available.discard("detach")
         priority = (
-            ["approvals", "input", "status", "follow", "stop", "steer", "queue"]
+            ["approvals", "input", "status", "follow", "now", "stop", "steer", "queue"]
             if self._pending_kinds or busy
             else [
                 "model",
@@ -333,24 +334,30 @@ class Shell:
     async def select_project(
         self, selected: str | None = None, *, chat: str | None = None
     ) -> None:
-        item = await self.collection(
-            "Project",
-            "engagements",
-            selected=selected,
-            extras=[{"id": "__create", "name": "Create project"}],
-            predicate=lambda row: not (row.get("metadata") or {}).get("archived_at"),
-            complete_catalog=True,
-            page_size=1000,
-        )
-        if item["id"] == "__create":
-            name = (await self.ui.ask("Project name")).strip()
-            if not name:
-                raise ClientError("A project needs a name.")
-            item = await self.api.request(
-                "POST", "engagements", json={"name": name, "request_id": str(uuid4())}
+        from .projects import archived, archived_projects, create
+
+        while True:
+            item = await self.collection(
+                "Project",
+                "engagements",
+                selected=selected,
+                extras=[
+                    {"id": "__create", "name": "Create project"},
+                    {"id": "__archived", "name": "Archived projects"},
+                ],
+                # Core archives a project by status, as the GUI's list reads it.
+                predicate=lambda row: not archived(row),
+                complete_catalog=True,
+                page_size=1000,
             )
-            item = await self.api.request("GET", f"engagements/{key(item['id'])}")
-            self.ui.say(f"Created {item['name']}.")
+            if item["id"] == "__archived":
+                restored = await archived_projects(self)
+                if restored is None:
+                    continue
+                item = restored
+            elif item["id"] == "__create":
+                item = await create(self)
+            break
         await self.select_chat(chat, project=item)
 
     async def select_chat(
@@ -422,13 +429,19 @@ class Shell:
                     parent = await self.api.request(
                         "GET", f"chat-sessions/{key(parent_id)}"
                     )
+            delegated = bool(
+                meta.get("subagent_id") or meta.get("delegated_from_goal_id")
+            )
+            # Subagent and child-goal chats open like the GUI's: readable and
+            # messageable. Other temporary assistant chats stay out of the shell.
             if (
                 not main_chat(session)
                 and not meta.get("control_assistant")
                 and not (meta.get("side_chat") and parent is not None)
+                and not (delegated and not meta.get("temporary_assistant"))
             ):
                 raise ClientError(
-                    "Delegated conversations are inspected through /agents; message their parent main agent."
+                    "This temporary conversation is not available in the terminal. Use /chats."
                 )
         await self.detach()
         identity = (
@@ -480,9 +493,11 @@ class Shell:
             )
             if self.view is not view:
                 return
-            visible_projects = projects
-            if not any(row.get("id") == view.project_id for row in projects):
-                visible_projects = [view.project, *projects]
+            visible_projects = [
+                row for row in projects if row.get("status") != "archived"
+            ]
+            if not any(row.get("id") == view.project_id for row in visible_projects):
+                visible_projects = [view.project, *visible_projects]
             visible_chats = [row for row in chats if main_chat(row)]
             selected = view.session
             if selected is not None and not any(
@@ -588,7 +603,13 @@ class Shell:
             view.config = result["settings"]
             view.session["revision"] = result["revision"]
         elif not view.config:
-            defaults = view.project.get("assistant_defaults") or {}
+            try:
+                defaults = await self.api.request(
+                    "GET", f"engagements/{key(view.project_id)}/assistant-defaults"
+                )
+            except ApiError:
+                defaults = view.project.get("assistant_defaults") or {}
+            view.project["assistant_defaults"] = defaults
             options = await self.runtimes()
             if not options:
                 raise ClientError(
@@ -626,6 +647,32 @@ class Shell:
                 "allow_subagents": False,
                 "allow_agent_messaging": False,
             }
+            if matched is not None:
+                # Choices remembered for this project apply to new chats, as in
+                # the GUI; Core still validates them on the first turn.
+                harness = chosen["backend"] == "harness"
+                for name in (
+                    "mcp_server_ids",
+                    "hook_ids",
+                    "allow_subagents",
+                    "subagent_provider_id",
+                    "subagent_harness_profile_id",
+                    "subagent_model",
+                    "max_active_subagents",
+                    "subagent_reasoning_effort",
+                    *(
+                        (
+                            "harness_reasoning_effort",
+                            "harness_service_tier",
+                            "harness_mode",
+                        )
+                        if harness
+                        else ("reasoning_effort", "mcp_context_mode")
+                    ),
+                ):
+                    value = defaults.get(name)
+                    if value not in (None, [], ""):
+                        view.config[name] = value
         return view.config
 
     async def open_butler(self, project: dict[str, Any] | None = None) -> None:
@@ -925,10 +972,7 @@ class Shell:
                     and privacy.get("permits_sensitive_data") is True
                 )
                 if not standing_consent:
-                    if not await self.ui.confirm(
-                        f"Allow selected tool/context results to be sent to {config['model']} for this turn?"
-                    ):
-                        raise CancelledInput()
+                    await self.tool_result_consent(config, profile)
                 result["allow_cloud_tool_results"] = True
             if (
                 not local
@@ -942,6 +986,54 @@ class Shell:
                 else:
                     result["allow_cloud_knowledge"] = True
         return result
+
+    async def tool_result_consent(
+        self, config: dict[str, Any], profile: dict[str, Any]
+    ) -> None:
+        """Ask once per turn, or save standing consent on the runtime as the GUI does."""
+        privacy = profile.get("privacy") or {}
+        question = (
+            f"Allow selected tool/context results to be sent to {config['model']} "
+            "for this turn?"
+        )
+        if privacy.get("permits_sensitive_data") is not True or not profile.get("id"):
+            if not await self.ui.confirm(question):
+                raise CancelledInput()
+            return
+        choice = (
+            await self.ui.choose(
+                question,
+                [
+                    {"id": "once", "name": "Allow this turn"},
+                    {
+                        "id": "always",
+                        "name": f"Always allow for {profile.get('name') or config['model']}",
+                    },
+                    {"id": "cancel", "name": "Don't send"},
+                ],
+            )
+        )["id"]
+        if choice == "cancel":
+            raise CancelledInput()
+        if choice == "always":
+            kind = "providers" if config["backend"] == "provider" else "harnesses"
+            current = await self.api.request("GET", f"{kind}/{key(profile['id'])}")
+            saved_privacy = {**(current.get("privacy") or {})}
+            saved_privacy["auto_share_tool_results"] = True
+            saved = await self.api.request(
+                "PATCH",
+                f"{kind}/{key(profile['id'])}",
+                json={
+                    "changes": {"privacy": saved_privacy},
+                    "expected_revision": current["revision"],
+                },
+            )
+            if ((saved or {}).get("privacy") or {}).get("auto_share_tool_results"):
+                self.profiles[profile["id"]] = {**profile, **saved}
+                self.ui.say(
+                    "Saved: tool results are shared with this runtime on later turns "
+                    "until you turn it off in Core Settings."
+                )
 
     async def send(self, text: str) -> None:
         from .settings import select_skill
@@ -1498,6 +1590,10 @@ class Shell:
             await self.select_project()
         elif name == "projects":
             await self.select_project(args[0] if args else None)
+        elif name == "project":
+            from .projects import project
+
+            await project(self, args)
         elif name == "snapshot":
             from .snapshot import show_project_snapshot
 
@@ -1548,7 +1644,7 @@ class Shell:
         elif name == "settings":
             await settings(self)
         elif name == "mcp":
-            await select_mcp_servers(self)
+            await select_mcp_servers(self, args)
         elif name == "skills":
             await select_skill(self, " ".join(args) or None)
         elif name == "attach":
@@ -1571,6 +1667,9 @@ class Shell:
                     selected = await self.api.request(
                         "GET", f"engagements/{key(prefs['project_id'])}"
                     )
+                    if selected.get("status") == "archived":
+                        # The GUI does not reopen an archived project either.
+                        raise ApiError("The remembered project is archived.", 409)
                     if chat is not None:
                         await self.select_chat(chat, project=selected)
                     elif prefs.get("session_id"):
@@ -1587,7 +1686,10 @@ class Shell:
                     if exc.status not in {404, 409}:
                         raise
                     self.ui.say(
-                        "The remembered conversation is unavailable. Choose another."
+                        "The remembered project is archived. Choose another, or "
+                        "restore it from /projects › Archived projects."
+                        if str(exc) == "The remembered project is archived."
+                        else "The remembered conversation is unavailable. Choose another."
                     )
             if not restored:
                 await self.select_project(project, chat=chat)
