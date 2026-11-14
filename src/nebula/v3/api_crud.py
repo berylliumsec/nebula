@@ -269,7 +269,7 @@ def _register_crud_routes(
     read_only: bool = False,
     append_only: bool = False,
     after_create: Callable[[Entity], Any] | None = None,
-    after_write: Callable[[str], Any] | None = None,
+    after_write: MaybeAsync[[str], Any] | None = None,
     delete_archived_project: Callable[[Engagement], Any] | None = None,
     actor_id: MaybeAsync[[], str],
 ) -> None:
@@ -371,7 +371,7 @@ def _register_crud_routes(
             if after_create is not None:
                 after_create(created)
             if after_write is not None:
-                after_write(created.id)
+                (await call_async(after_write, created.id))
             return created
 
         create_entity.__name__ = f"create_{resource.replace('-', '_')}"
@@ -523,7 +523,7 @@ def _register_crud_routes(
                 model, entity_id, entity, expected_revision=expected_revision
             )
             if after_write is not None:
-                after_write(saved.id)
+                (await call_async(after_write, saved.id))
             return saved
 
         replace_entity.__name__ = f"replace_{resource.replace('-', '_')}"
@@ -599,7 +599,7 @@ def _register_crud_routes(
                 expected_revision=expected_revision,
             )
             if after_write is not None:
-                after_write(saved.id)
+                (await call_async(after_write, saved.id))
             return saved
 
         patch_entity.__name__ = f"patch_{resource.replace('-', '_')}"

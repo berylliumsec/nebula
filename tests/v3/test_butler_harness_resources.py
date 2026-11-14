@@ -6,6 +6,10 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+import asyncio
+import gc
+import time
+import warnings
 from datetime import datetime, timedelta, timezone
 
 from tests.v3.async_test_support import AsyncTestClient as TestClient
@@ -462,6 +466,49 @@ async def test_manual_codex_quota_refresh_persists_project_resource(
         )
         assert queried["ordinary_usage_allowed"] is False
         assert queried["balances"][0]["remaining"] == 6.5
+
+
+async def test_saving_a_harness_profile_reads_its_quota_for_butler(
+    tmp_path, monkeypatch
+):
+    """The profile write route awaits its quota read instead of dropping it."""
+
+    store = NebulaStore(tmp_path / "quota.db")
+    (await _profile(store, "codex", HarnessKind.CODEX_APP_SERVER))
+    (await _watched_project(store, "project", "codex"))
+    reads = []
+
+    async def account_read(self, profile, credentials):
+        reads.append(profile.id)
+        return {
+            "ordinaryUsageAllowed": True,
+            "rateLimits": {"primary": {"usedPercent": 40}},
+        }
+
+    monkeypatch.setattr(CodexAppServerAdapter, "read_account_usage", account_read)
+    app = create_app(store=store, auth_token="test-token")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with TestClient(app) as client:
+            current = await store.get(HarnessProfile, "codex")
+            response = await client.patch(
+                "/api/v1/harnesses/codex",
+                headers={"Authorization": "Bearer test-token"},
+                json={
+                    "changes": {"name": "Codex account"},
+                    "expected_revision": current.revision,
+                },
+            )
+            assert response.status_code == 200, response.text
+            deadline = time.monotonic() + 5
+            while (await store.count_entities(ButlerHarnessQuota)) == 0:
+                # Before the fix the async quota scheduler was called without
+                # await: its coroutine was dropped and no read ever ran.
+                assert time.monotonic() < deadline, "the save never read the quota"
+                await asyncio.sleep(0.02)
+        gc.collect()
+    assert "codex" in reads
+    assert not [w for w in caught if "was never awaited" in str(w.message)]
 
 
 async def test_grok_quota_refresh_is_visible_to_butler_and_queryable_by_agent(
