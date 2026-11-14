@@ -163,11 +163,6 @@ class ControllableTerminalProcess:
     async def emit(self, data: bytes) -> None:
         await self._chunks.put(data)
 
-    async def emit_from_thread(self, data: bytes) -> None:
-        asyncio.run_coroutine_threadsafe((await self.emit(data)), self._loop).result(
-            timeout=1
-        )
-
     async def exit(self, exit_code: int) -> None:
         self._exit_code = exit_code
         await self._chunks.put(None)
@@ -1771,7 +1766,7 @@ async def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_p
             ready = await socket.receive_json()
             assert ready["type"] == "ready"
             original_reconnect_ticket = ready["reconnect_ticket"]
-            runner.processes[0].emit_from_thread(b"visible before navigation\r\n")
+            await runner.processes[0].emit(b"visible before navigation\r\n")
             displayed = await socket.receive_json()
             assert displayed["sequence"] == 1
             assert base64.b64decode(displayed["data"]) == (
@@ -1783,7 +1778,7 @@ async def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_p
                 service._sessions[session["session_id"]].attachment is not None
                 and time.monotonic() < detach_deadline
             ):
-                time.sleep(0.01)
+                await asyncio.sleep(0.01)
             assert service._sessions[session["session_id"]].attachment is None
 
         assert len(runner.processes) == 1
@@ -1804,7 +1799,7 @@ async def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_p
         assert recovery["session"]["last_sequence"] == 0
         assert recovery["session"]["websocket_ticket"] != (original_reconnect_ticket)
         assert recovery["runtime"]["image_digest"] == ("sha256:" + "c" * 64)
-        runner.processes[0].emit_from_thread(b"missed while view changed\r\n")
+        await runner.processes[0].emit(b"missed while view changed\r\n")
         reconnect_protocols = [
             "nebula.container-terminal.v1",
             f"nebula.auth.{encoded_token}",

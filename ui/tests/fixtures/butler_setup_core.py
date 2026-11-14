@@ -53,7 +53,7 @@ class InertSetupIO:
 
     async def resolve(self, project_id, *, on_progress=None):
         (await self.store.get(Engagement, project_id))
-        profile = self.platform.resolve_human_terminal_profile(project_id)
+        profile = await self.platform.resolve_human_terminal_profile(project_id)
         if on_progress is not None:
             self.attempts += 1
             self.prepared_projects.append(project_id)
@@ -68,7 +68,7 @@ class InertSetupIO:
         return HumanTerminalRuntimeResolution(
             profile=profile,
             runner=self,
-            workspace=self.platform.workspace_for(project_id),
+            workspace=await self.platform.workspace_for(project_id),
             image=self.image,
         )
 
@@ -99,11 +99,11 @@ def configure_setup_io(store, platform, root: Path):
     return boundary
 
 
-def create_fixture_app(*args: Any, **kwargs: Any):
+async def create_fixture_app(*args: Any, **kwargs: Any):
     store = args[0] if args else kwargs["store"]
     platform = kwargs["tool_platform"]
-    store.create(Engagement(name="Setup controls fixture", status="active"))
-    store.create(Engagement(name="Other setup fixture", status="active"))
+    await store.create(Engagement(name="Setup controls fixture", status="active"))
+    await store.create(Engagement(name="Other setup fixture", status="active"))
     configure_setup_io(store, platform, Path(platform.workspace_root).parent)
     return _create_app(*args, **kwargs)
 

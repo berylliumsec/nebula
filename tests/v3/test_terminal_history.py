@@ -710,7 +710,7 @@ async def test_durable_spool_recovers_an_interrupted_command_after_core_restart(
         "12",
         base64.b64encode(b"long-running-scan"),
     )
-    parser.feed(start + executed + b"partial result\n")
+    await parser.feed_async(start + executed + b"partial result\n")
 
     restarted = TerminalCommandHistory(
         store.database, store=store, artifact_store=artifacts
@@ -1007,7 +1007,7 @@ async def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_ou
     )
     output = "password=super-secret-value\n☃\n".encode()
     now = datetime.now(timezone.utc)
-    record = history.record_capture(
+    record = await history.record_capture(
         engagement_id=project.id,
         session_id="terminal-api",
         operator_id="system",
@@ -1214,7 +1214,7 @@ async def test_spool_writes_coalesce_durable_syncs_across_chunks(tmp_path, monke
         manifest_sha256="b" * 64,
         default_tools=("printf",),
     )
-    parser.feed(
+    await parser.feed_async(
         _audit_frame(
             "Start",
             nonce,
@@ -1243,7 +1243,7 @@ async def test_spool_writes_coalesce_durable_syncs_across_chunks(tmp_path, monke
     monkeypatch.setattr(os, "replace", counting_replace)
     chunk = b"x" * 1024
     for _ in range(64):
-        parser.feed(chunk)
+        await parser.feed_async(chunk)
     monkeypatch.undo()
 
     # Every chunk lands in the spool, but the durable work is coalesced instead
@@ -1254,7 +1254,7 @@ async def test_spool_writes_coalesce_durable_syncs_across_chunks(tmp_path, monke
     assert fsyncs <= 6
     assert metadata_rewrites <= 2
 
-    finished = parser.feed(_audit_frame("End", nonce, "40", b"0"))
+    finished = await parser.feed_async(_audit_frame("End", nonce, "40", b"0"))
     assert len(finished.captures) == 1
     record = await history.record_capture(
         engagement_id=project.id,
@@ -1300,7 +1300,7 @@ async def test_spool_recovery_tolerates_raw_bytes_ahead_of_metadata(tmp_path):
         "41",
         base64.b64encode(b"long-running-scan"),
     )
-    parser.feed(start + executed + b"partial result\n")
+    await parser.feed_async(start + executed + b"partial result\n")
 
     # Core dies after a raw append landed but before the metadata describing it
     # was rewritten: the raw file is ahead of the recorded count and hash.

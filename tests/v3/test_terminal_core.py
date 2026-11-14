@@ -7,6 +7,7 @@ import codecs
 import ipaddress
 import json
 import os
+import re
 import select
 import socket
 import ssl
@@ -147,8 +148,11 @@ class Connection(HarnessConnection):
 
     async def run_turn(self, prompt, *, model, **options):
         yield HarnessEvent(type="started", external_session_id=self.external_session_id)
+        # Like the Codex and Grok adapters, announce each pause on the turn
+        # stream: since beeca9a the plain client learns of an attached turn's
+        # pauses only from that stream, not from a background attention poll.
         if "ask fixture question" in prompt:
-            _identity, answer = await self.request.interaction_handler(
+            interaction_id, answer = await self.request.interaction_handler(
                 HarnessInteractionRequest(
                     vendor_request_id=str(uuid4()),
                     kind=HarnessInteractionKind.USER_INPUT,
@@ -161,6 +165,15 @@ class Connection(HarnessConnection):
                         }
                     ],
                 )
+            )
+            yield HarnessEvent(
+                type="interaction",
+                item_id=interaction_id,
+                item_kind="tool",
+                item_status="waiting_input",
+                title="Input required",
+                summary="The fixture harness is waiting for operator input.",
+                payload={"interaction_id": interaction_id, "kind": "user_input"},
             )
             await answer
         if "request fixture approval" in prompt:
@@ -175,6 +188,18 @@ class Connection(HarnessConnection):
                     rationale="Synthetic review only; the fixture never writes a file",
                 )
             )
+            if ticket.approval_id:
+                yield HarnessEvent(
+                    type="approval_required",
+                    approval_id=ticket.approval_id,
+                    tool_call_id=ticket.tool_call_id,
+                    item_id=ticket.tool_call_id or ticket.approval_id,
+                    item_kind="tool",
+                    item_status="waiting_approval",
+                    title="Mcp approval required",
+                    summary="The harness is waiting for an operator decision.",
+                    payload={"category": "mcp", "arguments": {"record": "synthetic"}},
+                )
             await ticket.decision
             await ticket.acknowledge_handoff("sent")
         yield HarnessEvent(type="message_delta", delta="Synthetic harness answer.")
@@ -299,6 +324,39 @@ class TerminalProcess:
                 assert self.decoder is not None
                 self.screen_stream.feed(self.decoder.decode(data))
         pytest.fail(f"Terminal screen did not settle: {markers!r}; {display}")
+
+    def submission_heading(self, text):
+        """Return the transcript heading drawn directly above a sent message."""
+        assert self.screen is not None
+        lines = self.screen.display
+        for index in range(1, len(lines)):
+            column = lines[index].find(text)
+            if column < 0:
+                continue
+            heading = lines[index - 1][column:].strip()
+            if re.fullmatch(r"YOU(?: · [A-Z]+)*", heading):
+                return heading
+        return None
+
+    def expect_submission_heading(self, text, headings, timeout=25):
+        assert self.screen is not None and self.screen_stream is not None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            heading = self.submission_heading(text)
+            if heading in headings:
+                return heading
+            ready, _, _ = select.select([self.output_fd], [], [], 0.05)
+            if ready:
+                data = os.read(self.output_fd, 65536)
+                if not data:
+                    break
+                self.output.extend(data)
+                assert self.decoder is not None
+                self.screen_stream.feed(self.decoder.decode(data))
+        pytest.fail(
+            f"Submission {text!r} was not shown as one of {sorted(headings)!r}:\n"
+            + "\n".join(self.screen.display)
+        )
 
     def expect_chat_state(self, title, state, timeout=25):
         assert self.screen is not None and self.screen_stream is not None
@@ -834,14 +892,21 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
     terminal.expect("Message or /command")
     terminal.expect("New conversation")
     terminal.send("New conversation", expect="/help for commands")
-    terminal.send("Answer a synthetic markdown layout question", expect="YOU · SENDING")
+    request = "Answer a synthetic markdown layout question"
+    terminal.send(request)
+    # The transcript draws after an 80 ms debounce, so a Core that accepts the
+    # turn first skips the pending heading. Either heading of this exact
+    # submission shows it in the transcript as it is sent.
+    terminal.expect_submission_heading(request, {"YOU · SENDING", "YOU"})
     terminal.expect("Synthetic provider answer.")
-    terminal.expect_screen(
+    display = terminal.expect_screen(
         "Synthetic provider answer.",
         "HEIF",
         "Response complete.",
         absent=("**Synthetic", "|---|", "/projects/terminal-project/workbench"),
     )
+    # Core accepted it: no SENDING, SAVED, FAILED or UNCERTAIN qualifier remains.
+    assert terminal.submission_heading(request) == "YOU", display
     os.write(terminal.input_fd, b"\x1b[21~")  # F10 restores copyable source.
     terminal.expect_screen("F10 Render", "**Synthetic provider answer.**")
     sessions = (
@@ -1136,27 +1201,31 @@ def test_paired_tui_finds_and_opens_child_project(lan_core):
 
 def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core):
     data = lan_core
-    second = data["store"].create(
-        Engagement(
-            id="second-project",
-            name="Second Project",
-            workspace_path=str(data["workspace"]),
-            assistant_defaults={
-                "backend": "provider",
-                "provider_id": "provider-a",
-                "model": "model-a",
-            },
+    second = asyncio.run(
+        data["store"].create(
+            Engagement(
+                id="second-project",
+                name="Second Project",
+                workspace_path=str(data["workspace"]),
+                assistant_defaults={
+                    "backend": "provider",
+                    "provider_id": "provider-a",
+                    "model": "model-a",
+                },
+            )
         )
     )
-    data["store"].create(
-        ChatSession(
-            id="slow-chat",
-            engagement_id=second.id,
-            title="Slow chat",
-            backend="provider",
-            provider_profile_id="provider-a",
-            model="model-a",
-            metadata={"initial_title_state": "operator"},
+    asyncio.run(
+        data["store"].create(
+            ChatSession(
+                id="slow-chat",
+                engagement_id=second.id,
+                title="Slow chat",
+                backend="provider",
+                provider_profile_id="provider-a",
+                model="model-a",
+                metadata={"initial_title_state": "operator"},
+            )
         )
     )
     delayed = data["delayed_read"]
@@ -1254,6 +1323,11 @@ def test_paired_tui_polls_selected_chat_and_reads_others_on_demand(lan_core):
             b"\x1b[?1000l"
         )
 
+    # Since bef388e the chat screen keeps mouse reporting for wheel scrolling;
+    # F12 Copy releases the mouse for native text selection.
+    assert mouse_reporting_enabled(), "Chat screen lost wheel scrolling"
+    os.write(watcher.input_fd, b"\x1b[24~")  # F12 Copy
+    watcher.expect_screen("F12 Scroll")
     assert b"\x1b[?1000l" in watcher.output
     assert not mouse_reporting_enabled(), "Chat screen captured native text selection"
     before = len(data["observed_state_reads"])
@@ -1319,7 +1393,7 @@ def test_paired_tui_polls_selected_chat_and_reads_others_on_demand(lan_core):
                     "only selected chat polled in background",
                     "F3 fetches other chat states on demand",
                     "RUN, WAIT, IDLE as other client changes turns",
-                    "native selection on chat screen and mouse controls in picker",
+                    "wheel scrolling and F12 native selection on chat screen, mouse controls in picker",
                 ],
                 "result": "passed",
             }
@@ -1489,7 +1563,10 @@ def test_terminal_queue_detach_approval_and_ctrl_c_use_core_state(lan_core):
     reopened.send("/stop", expect="Turn cancelled.")
     from nebula.v3.domain import ChatTurn
 
-    assert data["store"].get(ChatTurn, active["turn_id"]).status.value == "cancelled"
+    assert (
+        asyncio.run(data["store"].get(ChatTurn, active["turn_id"])).status.value
+        == "cancelled"
+    )
     reopened.send("/chats", expect="Harness chat")
     reopened.send("Harness chat", expect="Ready for your next message")
     reopened.send("request fixture approval", expect="Action required")
@@ -1513,7 +1590,10 @@ def test_terminal_queue_detach_approval_and_ctrl_c_use_core_state(lan_core):
     assert active["busy"]
     os.write(terminal_tty.input_fd, b"\x03")
     terminal_tty.expect("Turn cancelled.")
-    assert data["store"].get(ChatTurn, active["turn_id"]).status.value == "cancelled"
+    assert (
+        asyncio.run(data["store"].get(ChatTurn, active["turn_id"])).status.value
+        == "cancelled"
+    )
     terminal_tty.close()
     print(
         json.dumps(

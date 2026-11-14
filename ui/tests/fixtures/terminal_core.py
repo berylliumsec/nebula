@@ -125,7 +125,7 @@ class SyntheticTerminalPlatform:
         workspace.mkdir(parents=True, exist_ok=True)
         return workspace
 
-    def resolve_human_terminal_profile(self, engagement_id: str) -> RunnerProfile:
+    async def resolve_human_terminal_profile(self, engagement_id: str) -> RunnerProfile:
         del engagement_id
         return self.profile
 
