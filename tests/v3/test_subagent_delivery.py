@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from nebula.v3.async_utils import call_async
 from nebula.v3.chat import ChatHistoryConflict, _runtime_digest_matches
 from nebula.v3.chat_agent_messages import AgentMessageService
 from nebula.v3.chat_subagents import (
@@ -59,7 +60,6 @@ from tests.v3.test_chat_subagents import (
     _request,
     _response,
     _setup,
-    _until,
 )
 from tests.v3.test_harness_provider_subagents import (
     ScriptedConnection,
@@ -88,6 +88,20 @@ class ReportingProvider(RoutedProvider):
             return _finish(f"child-finish-{len(self.child_requests)}")
         text = " ".join(str(message.content) for message in request.messages)
         return _response(text=next(v for k, v in REPORTS.items() if k in text))
+
+
+async def _until_saved(check, timeout: float = 30.0) -> None:
+    """Wait until the async ``check`` holds; the store is read with await.
+
+    The bound covers a whole async chain (a child's turn, the parent's resume
+    and the report's post) on a busy runner; a hang still fails here.
+    """
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not await check():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition was not reached in time")
+        await asyncio.sleep(0.01)
 
 
 def _outputs(request: ModelRequest, *names: str) -> list[dict]:
@@ -180,12 +194,13 @@ async def test_long_reports_reach_a_working_parent_whole_and_within_the_bound(
             del request
             assert provider.child_gate is not None
             provider.child_gate.set()
-            await _until(
-                lambda: (
-                    [item.status for item in store.list_entities(ChatSubagent)]
-                    == [ChatSubagentStatus.COMPLETED] * 2
-                )
-            )
+
+            async def both_finished() -> bool:
+                return [
+                    item.status for item in await store.list_entities(ChatSubagent)
+                ] == [ChatSubagentStatus.COMPLETED] * 2
+
+            await _until_saved(both_finished)
             return _call("p3", "wait_subagents", subagent_ids=None, mode=None)
 
         async def read_reports(request: ModelRequest) -> ModelResponse:
@@ -204,11 +219,12 @@ async def test_long_reports_reach_a_working_parent_whole_and_within_the_bound(
             _request(project, content="Split the review.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def parent_complete() -> bool:
+            turn = await store.get(ChatTurn, parent_turn_id)
+            return turn.status == ChatTurnStatus.COMPLETE
+
+        await _until_saved(parent_complete)
 
         # Every subagent result the model read fits the bound: none was
         # swapped for the "exceeded the model-delivery bound" placeholder.
@@ -275,7 +291,7 @@ async def test_core_delivers_only_news_and_lists_stay_within_the_bound(
     assert summary == "1 subagent report received"
     # Received once Core saved the step, not while building it.
     assert (await store.get(ChatSubagent, fresh.id)).reported_at is None
-    delivery.commit()
+    await call_async(delivery.commit)
     assert (await store.get(ChatSubagent, fresh.id)).reported_at is not None
     assert (await service.routing_delivery(turn, {"list_subagents"})) is None
 
@@ -392,12 +408,16 @@ async def test_parked_parent_resumes_across_a_core_update_that_changed_tool_spec
             _request(project, content="Count.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status
-                == ChatTurnStatus.WAITING_CALLBACK
+
+        async def waiting_for_children() -> bool:
+            # Parked once Core has also released its claim, a later write.
+            turn = await store.get(ChatTurn, parent_turn_id)
+            return (
+                turn.status == ChatTurnStatus.WAITING_CALLBACK
+                and turn.execution_claim_id is None
             )
-        )
+
+        await _until_saved(waiting_for_children)
         parked = await store.get(ChatTurn, parent_turn_id)
         runtime_digest = parked.request_snapshot["automation_runtime_digest"]
         assert SUBAGENT_TOOLS_CONTRACT in runtime_digest.split("+")
@@ -433,12 +453,12 @@ async def test_parked_parent_resumes_across_a_core_update_that_changed_tool_spec
         )
 
         provider.child_gate.set()
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status
-                in {ChatTurnStatus.COMPLETE, ChatTurnStatus.FAILED}
-            )
-        )
+
+        async def settled() -> bool:
+            turn = await store.get(ChatTurn, parent_turn_id)
+            return turn.status in {ChatTurnStatus.COMPLETE, ChatTurnStatus.FAILED}
+
+        await _until_saved(settled)
         finished = await store.get(ChatTurn, parent_turn_id)
         assert finished.error is None
         assert finished.status == ChatTurnStatus.COMPLETE
@@ -475,12 +495,16 @@ async def test_prepare_resume_refuses_only_a_real_runtime_change(
             _request(project, content="Count.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status
-                == ChatTurnStatus.WAITING_CALLBACK
+
+        async def waiting_for_children() -> bool:
+            # Parked once Core has also released its claim, a later write.
+            turn = await store.get(ChatTurn, parent_turn_id)
+            return (
+                turn.status == ChatTurnStatus.WAITING_CALLBACK
+                and turn.execution_claim_id is None
             )
-        )
+
+        await _until_saved(waiting_for_children)
         parked = await store.get(ChatTurn, parent_turn_id)
         (
             await store.update(
@@ -591,13 +615,16 @@ async def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
             return "Started a review."
 
         adapter.script = delegate
-        parent_chat, _, turn = _prepare(runtime, project, harness, "Review auth.")
-        await runtime.start_chat_turn(turn.id)
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Review auth.")
+        await (await runtime.start_chat_turn(turn.id))
         (record,) = await store.list_entities(ChatSubagent)
         child.gate.set()
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def result_posted() -> bool:
+            saved = await store.get(ChatSubagent, record.id)
+            return saved.result_message_id is not None
+
+        await _until_saved(result_posted)
         assert (await store.get(ChatSubagent, record.id)).reported_at is None
 
         connection = adapter.connections[0]
@@ -610,11 +637,11 @@ async def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
             yield  # pragma: no cover - makes this an async generator
 
         connection.run_turn = refused  # type: ignore[method-assign]
-        _, _, failing = _prepare(
+        _, _, failing = await _prepare(
             runtime, project, harness, "What did it find?", chat_id=parent_chat.id
         )
         assert "Cookies lack SameSite." in failing.prompt
-        await runtime.start_chat_turn(failing.id)
+        await (await runtime.start_chat_turn(failing.id))
         assert (await store.get(HarnessTurn, failing.id)).status in {
             HarnessTurnStatus.FAILED,
             HarnessTurnStatus.INTERRUPTED,
@@ -680,7 +707,7 @@ async def test_long_peer_message_reaches_a_working_agent_in_parts(
         assert (
             await store.get(ChatAgentMessage, sent["message_id"])
         ).status == ChatAgentMessageStatus.PENDING
-        delivery.commit()
+        await call_async(delivery.commit)
         assert (
             await store.get(ChatAgentMessage, sent["message_id"])
         ).status == ChatAgentMessageStatus.DELIVERED
@@ -762,7 +789,7 @@ async def test_long_parent_message_reaches_a_working_subagent_in_parts(
         )
         (message,) = await store.list_entities(ChatSubagentMessage)
         assert message.status == ChatSubagentMessageStatus.PENDING
-        delivery.commit()
+        await call_async(delivery.commit)
         assert (
             await store.get(ChatSubagentMessage, message.id)
         ).status == ChatSubagentMessageStatus.DELIVERED
@@ -789,12 +816,13 @@ async def test_a_report_past_its_bound_keeps_its_conclusion_and_says_it_was_cut(
             _request(project, content="Survey it.", allow_subagents=True)
         )
         (await chat.start_provider_turn(prepared))
-        await _until(
-            lambda: (
-                [item.status for item in store.list_entities(ChatSubagent)]
-                == [ChatSubagentStatus.COMPLETED]
-            )
-        )
+
+        async def completed() -> bool:
+            return [
+                item.status for item in await store.list_entities(ChatSubagent)
+            ] == [ChatSubagentStatus.COMPLETED]
+
+        await _until_saved(completed)
         (record,) = await store.list_entities(ChatSubagent)
         assert len(record.result) <= 20_000
         assert record.result.startswith("OPENING finding")

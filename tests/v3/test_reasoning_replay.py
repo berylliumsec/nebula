@@ -247,8 +247,8 @@ async def _chat(
     return store, service, prepared, broker
 
 
-def _run(service: ChatService, prepared: PreparedChat) -> str:
-    return asyncio.run(service.complete(prepared)).message.content
+async def _run(service: ChatService, prepared: PreparedChat) -> str:
+    return (await service.complete(prepared)).message.content
 
 
 # --- OpenAI-compatible wire helpers -------------------------------------
@@ -366,7 +366,7 @@ async def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp
     )
     _, service, prepared, broker = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
+    assert await _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
     for payload in wire.payloads[1:]:  # routing step 2, then the synthesis
@@ -420,7 +420,7 @@ async def test_openrouter_deepseek_v4_gets_its_empty_reasoning_details_back(tmp_
     )
     _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert await _run(service, prepared) == ANSWER
 
     for payload in wire.payloads[1:]:
         replay = _after_question(payload["messages"])
@@ -463,7 +463,7 @@ async def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tm
     )
     _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
+    assert await _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     for payload in wire.payloads[1:]:
         replay = _after_question(payload["messages"])
@@ -511,7 +511,7 @@ async def test_legacy_deepseek_reasoner_gets_no_back_filled_reasoning(tmp_path):
     )
     _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert await _run(service, prepared) == ANSWER
 
     payload = wire.payloads[1]
     replay = _after_question(payload["messages"])
@@ -567,7 +567,7 @@ async def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
     )
     _, service, prepared, broker = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
+    assert await _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
     for payload in wire.payloads[1:]:
@@ -693,7 +693,7 @@ async def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_
     )
     _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
+    assert await _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     for payload in wire.payloads[1:]:
         messages = payload["messages"]
@@ -773,7 +773,7 @@ async def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
     )
     _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
+    assert await _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     for kwargs in seen[1:]:
         messages = kwargs["messages"]
@@ -917,7 +917,7 @@ async def test_chat_records_the_batch_group_and_reasoning_once(tmp_path):
     provider = Scripted(responses)
     store, service, prepared, _ = await _chat(tmp_path, provider, "model-a")
 
-    assert _run(service, prepared) == ANSWER
+    assert await _run(service, prepared) == ANSWER
 
     history = (await store.get(ChatTurn, "turn")).tool_history
     assert [entry["budget_class"] for entry in history] == ["refused", "execution"]
@@ -963,7 +963,7 @@ async def test_an_unreadable_call_stays_in_the_batch_that_issued_it(tmp_path):
     provider = Scripted(responses)
     store, service, prepared, broker = await _chat(tmp_path, provider, "model-a")
 
-    assert _run(service, prepared) == ANSWER
+    assert await _run(service, prepared) == ANSWER
 
     assert [call.arguments["value"] for call in broker.calls] == ["b"]
     history = (await store.get(ChatTurn, "turn")).tool_history
@@ -1446,7 +1446,7 @@ async def test_chat_attaches_only_the_newest_screenshot_to_its_own_result(tmp_pa
         )
     )
 
-    assert _run(service, prepared) == ANSWER
+    assert await _run(service, prepared) == ANSWER
 
     routing = provider.requests[0]
     # No screenshot rides ahead of the calls as an extra user message.

@@ -633,12 +633,15 @@ async def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
 
     broker = ScanBroker()
     provider = AlternatingProvider(calls=12)
+    # Sized so the 60% compaction target is the 18,432 tokens this scenario
+    # was built around: a crossing then clears other older results while
+    # older lookups stay whole.
     store, service, prepared = await _turn(
         tmp_path,
         provider,
         broker,
         history=2,
-        window=32_768,
+        window=40_960,
         specs=[SPEC, READ_SPEC],
     )
 

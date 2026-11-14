@@ -196,8 +196,8 @@ async def _fixture(
     return store, profile, provider, goal
 
 
-def _send(service, profile, **extra):
-    return service.prepare(
+async def _send(service, profile, **extra):
+    return await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id="project",
@@ -216,7 +216,7 @@ async def test_recovery_asks_for_the_answer_alone_instead_of_more_room_to_think(
         tmp_path, answer_on=2, monkeypatch=monkeypatch, with_goal=False
     )
     service = ChatService(store)
-    response = await service.complete(_send(service, profile))
+    response = await service.complete(await _send(service, profile))
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
     assert response.message.content == "Recovered visible answer."
@@ -233,7 +233,7 @@ async def test_outside_goal_mode_one_recovery_is_the_automatic_budget(
         tmp_path, answer_on=99, monkeypatch=monkeypatch, with_goal=False
     )
     service = ChatService(store)
-    prepared = _send(service, profile)
+    prepared = await _send(service, profile)
     with pytest.raises(ProviderResponseError):
         (await service.complete(prepared))
 
@@ -254,7 +254,7 @@ async def test_a_running_goal_keeps_asking_until_it_gets_an_answer(
     monkeypatch.setattr(chat_module.asyncio, "sleep", _no_delay)
     service = ChatService(store)
     response = await service.complete(
-        _send(service, profile, session_id="session", goal_id=goal.id)
+        await _send(service, profile, session_id="session", goal_id=goal.id)
     )
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
@@ -281,7 +281,7 @@ async def test_a_goal_that_can_never_finish_is_blocked_rather_than_looping(
     with pytest.raises(ProviderResponseError):
         (
             await service.complete(
-                _send(service, profile, session_id="session", goal_id=goal.id)
+                await _send(service, profile, session_id="session", goal_id=goal.id)
             )
         )
 
@@ -392,7 +392,9 @@ async def test_the_operators_reasoning_level_is_sent_and_remembered(
         tmp_path, answer_on=1, monkeypatch=monkeypatch, with_goal=False
     )
     service = ChatService(store)
-    response = await service.complete(_send(service, profile, reasoning_effort="low"))
+    response = await service.complete(
+        await _send(service, profile, reasoning_effort="low")
+    )
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
     assert normal[0].reasoning_effort == "low"
@@ -400,7 +402,11 @@ async def test_the_operators_reasoning_level_is_sent_and_remembered(
     assert session.metadata["reasoning_effort"] == "low"
 
     # Returning to the model's default is a choice, so it round-trips as one.
-    (await service.complete(_send(service, profile, session_id=response.session_id)))
+    (
+        await service.complete(
+            await _send(service, profile, session_id=response.session_id)
+        )
+    )
     assert (await store.get(ChatSession, response.session_id)).metadata[
         "reasoning_effort"
     ] is None

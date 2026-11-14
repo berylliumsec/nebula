@@ -204,12 +204,14 @@ def _stream_events(provider: OpenAICompatibleProvider) -> list[Any]:
     return asyncio.run(collect())
 
 
-def _complete(provider: OpenAICompatibleProvider):
-    return asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="hi")])
-        )
+async def _complete_async(provider: OpenAICompatibleProvider):
+    return await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="hi")])
     )
+
+
+def _complete(provider: OpenAICompatibleProvider):
+    return asyncio.run(_complete_async(provider))
 
 
 # --- MODEL-4: json_object structured output ----------------------------------
@@ -610,7 +612,7 @@ async def test_versioned_base_paths_are_not_given_v1(base_url):
         ProviderFlavor.CUSTOM, "glm-5.3-flash", base_url=base_url, handler=handler
     )
 
-    response = _complete(provider)
+    response = await _complete_async(provider)
     health = await provider.health()
 
     prefix = base_url.rstrip("/")
