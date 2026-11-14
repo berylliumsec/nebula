@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +26,111 @@ staged_spec = importlib.util.spec_from_file_location(
 assert staged_spec is not None and staged_spec.loader is not None
 staged_module = importlib.util.module_from_spec(staged_spec)
 staged_spec.loader.exec_module(staged_module)
+
+
+_CONFIRM_API_READ = getattr(deployer, "confirm_api_read", None)
+
+
+@pytest.fixture(autouse=True)
+def _offline_api_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Readiness tests stub health; they never reach a real Core API."""
+    monkeypatch.setattr(
+        deployer, "confirm_api_read", lambda *_args: None, raising=False
+    )
+
+
+class _ApiCore:
+    """A local Core whose health is ok while its API read may still fail."""
+
+    def __init__(self, commit: str, failures: int) -> None:
+        self.commit, self.failures, self.reads = commit, failures, 0
+
+    def get(self, path: str, **parameters: object):
+        if path == "health":
+            return {"commit": self.commit, "status": "ok"}
+        assert path == "engagements" and parameters == {"offset": 0, "limit": 1}
+        self.reads += 1
+        if self.reads <= self.failures:
+            raise OSError("HTTP Error 503: API worker is not answering")
+        return []
+
+
+def _fast_clock(monkeypatch: pytest.MonkeyPatch, step: float) -> None:
+    now = [0.0]
+
+    def monotonic() -> float:
+        now[0] += step
+        return now[0]
+
+    monkeypatch.setattr(
+        deployer, "time", SimpleNamespace(monotonic=monotonic, sleep=lambda _s: None)
+    )
+
+
+@pytest.mark.parametrize("failures", [2, 10_000])
+def test_legacy_readiness_requires_an_authenticated_api_read(
+    monkeypatch: pytest.MonkeyPatch, failures: int
+) -> None:
+    commit = "c" * 40
+    core = _ApiCore(commit, failures)
+    monkeypatch.setattr(deployer, "confirm_api_read", _CONFIRM_API_READ, raising=False)
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    web = io.BytesIO(json.dumps({"commit": commit, "dirty": False}).encode())
+    monkeypatch.setattr(deployer, "urlopen", lambda *_args, **_kwargs: web)
+    _fast_clock(monkeypatch, 60)
+    if failures > 2:
+        with pytest.raises(RuntimeError, match="within 480 seconds"):
+            deployer.wait_ready(commit)
+        assert core.reads >= 1
+    else:
+        deployer.wait_ready(commit)
+        assert core.reads == 3
+
+
+@pytest.mark.parametrize("failures", [2, 10_000])
+def test_supervisor_readiness_requires_an_authenticated_api_read(
+    monkeypatch: pytest.MonkeyPatch, failures: int
+) -> None:
+    commit, api_version = "b" * 40, "a" * 40
+    package_version = "3.0.0-beta.3+80d43d956ba75c35"
+    core = _ApiCore(commit, failures)
+    monkeypatch.setattr(deployer, "confirm_api_read", _CONFIRM_API_READ, raising=False)
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(
+        deployer, "runtime_package_version", lambda _version: package_version
+    )
+    monkeypatch.setattr(deployer, "unit_state", lambda _unit: "active")
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **_kwargs: {
+            "package_version": package_version,
+            "pid": 434411,
+            "process_birth": "linux:36155290-b5d2-43ea-9ee9-94c8b3220809:240197513",
+        },
+    )
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: {})
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
+    )
+    health = {
+        "status": "ok",
+        "database": "ok",
+        "commit": commit,
+        "recovery_version": package_version,
+    }
+    monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (health, _status()))
+    _fast_clock(monkeypatch, 1)
+    if failures > 2:
+        with pytest.raises(RuntimeError, match="API worker is not answering"):
+            deployer.wait_supervisor_host_ready(
+                commit, expected_api_version=api_version, prior_status=None, timeout=30
+            )
+    else:
+        readback = deployer.wait_supervisor_host_ready(
+            commit, expected_api_version=api_version, prior_status=None, timeout=30
+        )
+        assert readback["api_version"] == api_version and core.reads == 3
 
 
 def _status(*, runtime_id: str = "worker-1", fencing_token: int = 7) -> dict:

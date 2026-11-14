@@ -1,36 +1,37 @@
 {
-  "reviewed_by": "Claude Code",
-  "reason": "Since #987 auto-admission started a project worker only for an open chat or a chat-start command, so every other project-routed write (rename, archive, delete and anything else the API delivers to the project's worker) on a project without an open chat stayed queued with 202 forever; archived projects were skipped outright, so deleting one could never run, and the stranded rows blocked runtime-stop. Queued non-barrier project commands now admit exactly their project (archived included, retirement-held excluded); idle retirement waits for queued or running project commands and request_project_retirement declines while one is queued; a request arriving during a retirement hold waits (bounded) and is then admitted instead of a 409. Selection covers chatless edit and archived delete through real API ingress, routing and auto-admission; retirement declining with queued work and ignoring host-committed barriers; the bounded ingress wait and its 409 bound; the existing chat-scoped admission, child/parent, legacy goal-create, metadata-batch and read no-admission cases; retirement hold and release contracts (the #987 hold test now records that retirement declines while project commands are queued); readmission fence and held-project cases; and the API worker suite for the changed ingress.",
-  "exclusions": "No UI, native or frontend code changed, so no frontend, native or Playwright tests; the operator journey (empty project rename, archive and delete through the API and the desktop project switcher, delete right after the last chat, runtime-stop afterwards) was checked on scratch supervisor Cores (see the PR). test_runtime_reconciliation.py, test_runtime_chat_resume.py, test_runtime_chat_stream.py and the real-Core test in test_shutdown_readmission.py fail identically on main in this environment (pidfd, fixture and LAN prerequisites); across the 13 related files no test fails only with this change. PostgreSQL parametrizations are collected but skip in CI; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
+  "reviewed_by": "Claude",
+  "reason": "/api/v1/health derived api_ready and status from SQL only (a promoted API row with a live lease), so a frozen or hung API worker was reported ready indefinitely and a killed one until the next 5 s reconciliation while every API call failed. Health now asks the promoted worker for its identity over the signed worker RPC (1 s timeout, 1 s cache) and reports api_state ready/not_responding/unavailable, with api_ready and status following it; static-asset routing keeps the SQL-only check (api_promoted). The UI keeps its memory-budget recovery screen for held admission only (api_state unavailable). The deployer's wait_ready() and wait_supervisor_host_ready() now also require one authenticated API read. The selection covers supervisor health and recovery (real promoted API worker frozen/killed), management, host knowledge bootstrap health, deployer readiness waits, the UI health mapping and both recovery-screen suites.",
+  "exclusions": "test_runtime_management.py::test_owned_project_refuses_real_shutdown_without_notifying_launcher is left out: it fails identically on pristine main (dd1c200) after the recent shutdown/ledger merges (it expects state 'uncertain', the ledger now records 'failed'); the rest of that file is selected by name. test_runtime_host_knowledge_bootstrap.py::test_production_serve_runtime_syncs_owned_product_collection_on_lan is left out: it requires a non-loopback LAN address and fails identically on pristine main here; the rest of that file is selected by name. ui/src/api/client.test.ts is not selected because three of its existing cases (mission and harness mutation mapping) already fail on main; the new health-mapping cases live in ui/src/api/clientHealth.test.ts. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set; the selection passed locally on SQLite and PostgreSQL 16. No native or Playwright cases: the UI's visible behaviour is unchanged (the recovery screen still follows held admission); real-Core frozen/killed API evidence and the local deployer read are recorded in the PR. The deployer was never run against a remote host.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 57,
-    "frontend": 0,
+    "python": 63,
+    "frontend": 31,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_work_batches.py::test_project_edit_and_archived_delete_without_a_chat_admit_their_workers",
-    "tests/v3/test_runtime_work_batches.py::test_retirement_does_not_strand_queued_project_work",
-    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker",
-    "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
-    "tests/v3/test_runtime_work_batches.py::test_open_chat_created_without_routing_gets_its_exact_project_worker",
-    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
-    "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
-    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
-    "tests/v3/test_deployment_lifecycle.py::test_open_parent_chat_does_not_keep_child_project_worker",
-    "tests/v3/test_deployment_lifecycle.py::test_open_child_chat_keeps_its_exact_project_worker",
-    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_uses_its_own_hold_and_releases_exact_owner",
-    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation",
-    "tests/v3/test_shutdown_readmission.py::test_quiesced_and_fresh_projects_readmit_without_resetting_fences",
-    "tests/v3/test_shutdown_readmission.py::test_non_null_or_archived_projects_remain_held",
-    "tests/v3/test_shutdown_readmission.py::test_partial_shutdown_abort_keeps_unknown_worker_until_positive_retirement",
-    "tests/v3/test_api_worker.py"
+    "tests/v3/test_runtime_bootstrap.py",
+    "tests/v3/test_runtime_management.py::test_management_validates_auth_body_and_parameters_before_accepting",
+    "tests/v3/test_runtime_management.py::test_stage_and_recovery_selection_replay_authoritative_result",
+    "tests/v3/test_runtime_management.py::test_shutdown_callback_waits_for_success_and_never_repeats_saved_operation",
+    "tests/v3/test_runtime_management.py::test_uncertain_operation_never_notifies_shutdown_launcher",
+    "tests/v3/test_runtime_management.py::test_real_idle_api_shutdown_notifies_only_after_verified_process_retirement",
+    "tests/test_simulation_host_activation.py",
+    "tests/v3/test_runtime_host_knowledge_bootstrap.py::test_default_supervisor_opens_one_index_after_lock_and_reopens_same_digest",
+    "tests/v3/test_runtime_host_knowledge_bootstrap.py::test_no_factory_runs_before_exclusive_host_and_shared_owner",
+    "tests/v3/test_runtime_host_knowledge_bootstrap.py::test_optional_index_failure_keeps_authenticated_recovery",
+    "tests/v3/test_runtime_host_knowledge_bootstrap.py::test_cancelled_factory_is_joined_and_owned_client_closed_before_unlock"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/clientHealth.test.ts",
+    "ui/src/App.hostRecovery.test.tsx",
+    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  ],
   "native": [],
   "playwright": [],
-  "checks": [],
-  "change_digest": "4ec481fd9cc3167a4c0af4774a6c2178fdb35f4ff3bc18d841d916e40e64812c"
+  "checks": [
+    "frontend-audit"
+  ],
+  "change_digest": "1525dffa1c9dea8344672074079a40d883570fa8839c990f1cdbefebfaf4a934"
 }

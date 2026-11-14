@@ -227,7 +227,7 @@ class RuntimeSupervisor:
                 request.method in {"GET", "HEAD"}
                 and path != "/api"
                 and not path.startswith("/api/")
-                and not await self.bootstrap.api_ready()
+                and not await self.bootstrap.api_promoted()
                 and self.bootstrap.assets is not None
             ):
                 return _Forward(self.bootstrap.assets.app)
