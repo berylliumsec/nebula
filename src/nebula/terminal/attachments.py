@@ -223,7 +223,17 @@ async def attachments(shell: Shell) -> None:
     if not options:
         shell.ui.say("No pending file attachments.")
         return
+    if len(options) > 1:
+        options.insert(
+            0, {"id": "__all", "name": f"Remove all {len(options)} attachments"}
+        )
     item = await shell.ui.choose("Pending attachments (choose one to remove)", options)
+    if item["id"] == "__all":
+        if await shell.ui.confirm("Remove every pending attachment from the draft?"):
+            draft.images.clear()
+            draft.contexts.clear()
+            shell.ui.say("Removed all attachments. Uploaded sources remain on Core.")
+        return
     if await shell.ui.confirm("Remove this attachment from the draft?"):
         kind, index = item["id"].split(":")
         (draft.images if kind == "image" else draft.contexts).pop(int(index))
