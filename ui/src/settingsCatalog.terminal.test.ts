@@ -43,4 +43,6 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   for (const phrase of ["/project", "rename project", "relink project folder", "restore archived project", "delete archived project", "project execution mode", "project network scope", "project vpn route", "/project followup", "after-tool assistant"]) {
     expect(pairing).toContain(phrase);
   }
+  expect(pairing).toContain("type ahead");
+  expect(pairing).toContain("multi-word picker search");
 });

@@ -256,6 +256,7 @@ class TuiUI(TerminalUI):
         self._interrupt_armed = False
         self._interrupt_timer: asyncio.TimerHandle | None = None
         self._interrupt_cleared_draft = False
+        self._typed_ahead: str | None = None
         self._render_scheduled = False
         self._app_task: asyncio.Task[None] | None = None
 
@@ -945,6 +946,13 @@ class TuiUI(TerminalUI):
 
     def _footer_text(self) -> str:
         width = self.app.output.get_size().columns if hasattr(self, "app") else 80
+        if self._mode == "main" and self._typed_ahead is not None:
+            return _edge(
+                " Next: "
+                + " ".join(self._typed_ahead.split())[:60]
+                + " · runs when the current step finishes · ^C edits it",
+                width - 1,
+            )
         if self._mode == "main" and self._interrupt_armed:
             detail = " · Draft cleared" if self._interrupt_cleared_draft else ""
             return _edge(" ^C again to stop turn" + detail, width - 1)
@@ -1416,6 +1424,13 @@ class TuiUI(TerminalUI):
 
     def _submit_main(self) -> None:
         if self._main_future is None or self._main_future.done():
+            # A command or send is still finishing. Keep what was entered as the
+            # next input instead of dropping the Enter; Ctrl-C returns it.
+            value = self.composer.text
+            if value.strip() and self._typed_ahead is None:
+                self._typed_ahead = value
+                self.composer.text = ""
+                self._invalidate()
             return
         value = self.composer.text
         if value == "/":
@@ -1427,13 +1442,16 @@ class TuiUI(TerminalUI):
             return
         self._disarm_interrupt()
         self.composer.text = ""
+        self._begin_submission(value)
+        self._main_future.set_result(value)
+
+    def _begin_submission(self, value: str) -> None:
         if value.startswith("/"):
             command = value[1:].split(maxsplit=1)
             action = f"Running /{command[0]}…" if command else "Running command…"
         else:
             action = "Sending message…"
         self.begin_loading(action)
-        self._main_future.set_result(value)
 
     def set_commands(self, names: list[str]) -> None:
         previous = self.command_names
@@ -1476,6 +1494,10 @@ class TuiUI(TerminalUI):
     def _interrupt(self) -> None:
         if self._mode != "main":
             self._cancel_modal()
+            return
+        if self._typed_ahead is not None:
+            self.composer.text, self._typed_ahead = self._typed_ahead, None
+            self._invalidate()
             return
         if (
             self._interrupt_armed
@@ -1614,6 +1636,10 @@ class TuiUI(TerminalUI):
             )
             self._read_at_match = False
             self._main_future = asyncio.get_running_loop().create_future()
+            if self._typed_ahead is not None:
+                ahead, self._typed_ahead = self._typed_ahead, None
+                self._begin_submission(ahead)
+                self._main_future.set_result(ahead)
             self._invalidate()
             try:
                 return await self._main_future
@@ -1644,6 +1670,8 @@ class TuiUI(TerminalUI):
                 else None
             ),
         )
+        # Typing continues a prefilled answer instead of landing before it.
+        self._modal_input.buffer.cursor_position = len(default)
         self._modal_input.control.key_bindings = prompt_keys
         hint = (
             "Sensitive entry is hidden and never saved locally."
@@ -1792,6 +1820,13 @@ class TuiUI(TerminalUI):
             self.begin_loading(f"Opening {picker.title.lower()}…")
             picker.future.set_result(row)
 
+    def _menu_space(self) -> None:
+        """Toggle with Space before typing; afterwards Space is part of the search."""
+        if self._modal_input is not None and self._modal_input.text:
+            self._modal_input.buffer.insert_text(" ")
+            return
+        self._menu_select()
+
     def _menu_commit(self) -> None:
         picker = self._picker
         if (
@@ -1848,7 +1883,7 @@ class TuiUI(TerminalUI):
 
             @menu_keys.add(" ")
             def toggle(_event: Any) -> None:
-                self._menu_select()
+                self._menu_space()
 
             @menu_keys.add("c-s")
             def commit(_event: Any) -> None:
@@ -1883,7 +1918,7 @@ class TuiUI(TerminalUI):
                     Window(FormattedTextControl(self._menu_text), wrap_lines=True),
                     Window(
                         FormattedTextControl(
-                            "↑↓ Move · Space/Enter Toggle · Ctrl-S Save · Ctrl-G Cancel"
+                            "↑↓ Move · Enter Toggle · Space Toggle (types when searching) · Ctrl-S Save · Ctrl-G Cancel"
                             if multi_selected is not None
                             else "↑↓ Select · Enter Open · Ctrl-G Cancel"
                         ),
