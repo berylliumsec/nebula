@@ -43,7 +43,12 @@ from .process_identity import (
     signal_process,
 )
 from .release_store import ReleaseStore
-from .runtime_coordination import LEASE_MS, CoordinationConflict, ProjectLease
+from .runtime_coordination import (
+    LEASE_MS,
+    CoordinationConflict,
+    ProjectLease,
+    StartAborted,
+)
 from .runtime_ipc import RuntimeCredentials, RuntimeIpcError, RuntimeRpcClient
 
 if TYPE_CHECKING:
@@ -684,11 +689,11 @@ class RuntimeProcessHost:
                         await finish_cleanup(client.close())
             except BaseException:
 
-                async def failed_start():
+                async def failed_start() -> bool:
                     if not await self.coordinator.begin_start_abort(runtime_id):
                         # A committed ready worker can already own a project.
                         # Rediscover it rather than killing on a lost acknowledgement.
-                        return
+                        return False
                     failures: list[BaseException] = []
                     if child is not None:
                         try:
@@ -721,8 +726,17 @@ class RuntimeProcessHost:
                         raise BaseExceptionGroup(
                             "Worker startup cleanup did not complete", failures
                         )
+                    return True
 
-                await finish_cleanup(failed_start())
+                aborted = await finish_cleanup(failed_start())
+                error = sys.exc_info()[1]
+                if aborted and isinstance(error, Exception):
+                    # The process is confirmed gone and its reservation
+                    # retired, so this start had no effect and may be retried.
+                    raise StartAborted(
+                        "The worker did not become ready and its start was "
+                        f"aborted cleanly ({type(error).__name__}); nothing was started"
+                    ) from error
                 raise
 
     async def reconcile_idle_project_retirements(self, *, limit: int = 8) -> list[str]:

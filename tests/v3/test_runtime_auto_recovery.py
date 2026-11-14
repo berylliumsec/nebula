@@ -49,6 +49,7 @@ class Management:
         self.lose_prepare = False
         self.reject_reconciliation = False
         self.change_handoff = False
+        self.abort_starts = 0
 
     def ledger(self):
         return self.operations
@@ -60,6 +61,11 @@ class Management:
                 raise OperationRejected("OS absence could not be confirmed")
             return {"reconciled": True}
         if action == "prepare_execution":
+            if self.abort_starts:
+                from nebula.v3.runtime_coordination import StartAborted
+
+                self.abort_starts -= 1
+                raise StartAborted("The worker did not become ready; nothing started")
             runtime_id = "prepared-target"
             await self.coordinator.coordination.register_runtime(
                 runtime_id, values["version"]
@@ -434,3 +440,28 @@ async def test_recovery_initiation_is_bounded_to_sixteen_projects(recovery):
     assert sum(call[0] == "recover_project" for call in recovery.management.calls) == 16
     await recovery.automatic.reconcile()
     assert sum(call[0] == "recover_project" for call in recovery.management.calls) == 17
+
+
+async def test_aborted_recovery_spawn_is_retried_with_backoff(recovery):
+    recovery.management.abort_starts = 2
+    await recovery.automatic.reconcile()
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["prepare_execution"].state == "failed"
+
+    async def tick(advance_ms):
+        recovery.clock[0] += advance_ms
+        controller = recovery.controller()
+        await controller.reconcile()
+
+    def prepares():
+        return [c for c in recovery.management.calls if c[0] == "prepare_execution"]
+
+    await tick(31_000)
+    assert len(prepares()) == 2  # first retry after 30 s, aborted again
+    await tick(31_000)
+    assert len(prepares()) == 2  # the second retry waits 60 s
+    await tick(31_000)
+    assert len(prepares()) == 3
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["prepare_execution"].state == "succeeded"
+    assert rows["recover_project"].state == "succeeded"
