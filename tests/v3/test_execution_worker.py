@@ -1,6 +1,7 @@
 """Exact project grants and execution-owned delivery with isolated SQL only."""
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 import json
@@ -10,15 +11,16 @@ from fastapi import FastAPI, Request
 import httpx
 from pydantic import SecretStr
 import pytest
-from sqlalchemy import update
+from sqlalchemy import event, update
 
+from nebula.v3 import execution_worker
 from nebula.v3.database import Database, ProjectOwnershipRow, RuntimeInstanceRow
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.domain import Engagement
 from nebula.v3.execution_scope import current_execution_lease, execution_context
 from nebula.v3.execution_worker import ProjectExecution
-from nebula.v3.runtime_coordination import LeaseLost
+from nebula.v3.runtime_coordination import DispatchSnapshot, LeaseLost
 from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
 from nebula.v3.runtime_ipc import RuntimeIpcError, RuntimeRpcServer
 from nebula.v3.runtime_vault import RuntimeVault
@@ -319,3 +321,204 @@ async def test_cancelled_close_waits_for_controller_cleanup(runtime):
         await closing
     await runtime.execution.close()
     assert runtime.execution.task.done()
+
+
+async def test_idle_worker_makes_no_fenced_claims_and_still_picks_up_work(
+    runtime, monkeypatch
+):
+    # Long lease and safety intervals: only the probe can act or deliver here.
+    monkeypatch.setattr(execution_worker, "ACTIVE_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr(execution_worker, "SAFETY_CLAIM_SECONDS", 60.0)
+    monkeypatch.setattr(execution_worker, "HEARTBEAT_SECONDS", 60.0)
+    coordination = runtime.coordination.coordination
+    original, claims, statements = coordination.claim_next, [], []
+
+    async def counted(lease, *, lane=None):
+        claims.append(lane)
+        return await original(lease, lane=lane)
+
+    def record(_connection, _cursor, statement, *_args):
+        statements.append(statement)
+
+    monkeypatch.setattr(coordination, "claim_next", counted)
+    engine = coordination.database.engine.sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        await attach(runtime)
+        await asyncio.sleep(0.3)
+        claims.clear()
+        statements.clear()
+        await asyncio.sleep(2)
+        idle_claims, idle_statements = len(claims), list(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    # Polling claimed every lane about every 0.1 s: ~30 fenced claims and
+    # ~400 statements in two idle seconds. The probe reads ~6 rows twice a second.
+    assert idle_claims == 0
+    assert len(idle_statements) <= 60
+    # The probe only reads: no row locks, writes or immediate transactions.
+    for statement in idle_statements:
+        assert not re.search(
+            r"\b(UPDATE|INSERT|DELETE|IMMEDIATE)\b|FOR (UPDATE|SHARE)",
+            statement.upper(),
+        ), statement
+    receipt = await accept(runtime, "after-idle", name="Picked up after idle")
+    assert (await terminal(runtime, receipt)).state == "succeeded"
+
+
+async def test_control_pickup_stays_fast_while_work_is_running(runtime, monkeypatch):
+    # Idle probing and safety claims are pushed past terminal()'s budget, so the
+    # control command can only be delivered by the active (running-work) cadence.
+    monkeypatch.setattr(execution_worker, "ACTIVE_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr(execution_worker, "IDLE_PROBE_SECONDS", 60.0)
+    monkeypatch.setattr(execution_worker, "SAFETY_CLAIM_SECONDS", 60.0)
+    work = await accept(runtime, "work", hold=True)
+    await attach(runtime)
+    await asyncio.wait_for(runtime.entered.wait(), 5)
+    control = await accept(runtime, "control", lane="control", name="Control applied")
+    assert (await terminal(runtime, control)).state == "succeeded"
+    runtime.release.set()
+    assert (await terminal(runtime, work)).state == "succeeded"
+
+
+async def test_failing_probe_fails_open_with_one_diagnostic_and_backs_off(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(execution_worker, "ACTIVE_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr(execution_worker, "SAFETY_CLAIM_SECONDS", 60.0)
+    calls, recorded = [], []
+    real_record = execution_worker.record_caught_exception
+
+    async def broken(_lease):
+        calls.append(1)
+        raise RuntimeError("synthetic probe failure")
+
+    def record(feature, code, *args, **kwargs):
+        recorded.append(code)
+        return real_record(feature, code, *args, **kwargs)
+
+    monkeypatch.setattr(runtime.coordination.coordination, "dispatch_snapshot", broken)
+    monkeypatch.setattr(execution_worker, "record_caught_exception", record)
+    await attach(runtime)
+    receipt = await accept(runtime, "despite-probe", name="Delivered without probe")
+    assert (await terminal(runtime, receipt)).state == "succeeded"
+    await asyncio.sleep(1.5)
+    assert recorded.count("runtime.dispatch_probe.unavailable") == 1
+    # Backoff (0.2, 0.4, 0.8, 1.6 s...) rather than ten failing probes a second.
+    assert len(calls) <= 6
+
+
+async def test_handoff_watcher_ticks_only_while_a_source_handoff_applies(
+    runtime, monkeypatch
+):
+    monkeypatch.setattr(execution_worker, "ACTIVE_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr(execution_worker, "SAFETY_CLAIM_SECONDS", 60.0)
+    ticks, active, phase = [], [False], [None]
+
+    async def tick():
+        ticks.append(1)
+        return phase[0]
+
+    @asynccontextmanager
+    async def application(context, _grant):
+        app = FastAPI()
+        app.state.runtime_handoff = SimpleNamespace(restored_digest=None, tick=tick)
+        try:
+            yield app
+        finally:
+            context.restore_cleanup_completed = True
+
+    coordination = runtime.coordination.coordination
+    original = coordination.dispatch_snapshot
+
+    async def snapshot(lease):
+        return replace(await original(lease), handoff_active=active[0])
+
+    monkeypatch.setattr(coordination, "dispatch_snapshot", snapshot)
+    runtime.execution.application_factory = application
+    await attach(runtime)
+    await asyncio.sleep(1.5)
+    # Only the startup tick: no source handoff applies, so no fenced tick per second.
+    assert len(ticks) == 1
+    active[0], phase[0] = True, "requested"
+    await until(lambda: len(ticks) >= 2)
+    active[0] = False
+    # A returned phase keeps the one-second cadence without further hints.
+    await until(lambda: len(ticks) >= 4)
+
+
+async def test_stop_raised_with_a_probe_hint_never_starts_a_claim(runtime, monkeypatch):
+    # Regression: on Python 3.11, wait_for could swallow the stop's cancellation
+    # if a hint and the stop landed together, so a command ran after stop.
+    coordination = runtime.coordination.coordination
+    original = coordination.dispatch_snapshot
+    armed, stopped = [False], []
+
+    async def snapshot(lease):
+        result = await original(lease)
+        if armed[0] and "work" in result.lanes:
+            armed[0] = False
+            # close(), quiesce() or lease loss stopping the worker in the same
+            # loop turn as the probe's hint.
+            runtime.execution._stop.set()
+            stopped.append(True)
+        return result
+
+    monkeypatch.setattr(execution_worker, "ACTIVE_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr(execution_worker, "IDLE_PROBE_SECONDS", 0.05)
+    monkeypatch.setattr(coordination, "dispatch_snapshot", snapshot)
+    await attach(runtime)
+    await asyncio.sleep(0.3)
+    armed[0] = True
+    await accept(runtime, "after-stop", hold=True)
+    await until(lambda: stopped)
+    await asyncio.wait_for(asyncio.shield(runtime.execution.task), 5)
+    assert not runtime.entered.is_set()
+    assert runtime.mutations == []
+
+
+async def test_background_chat_turn_keeps_control_pickup_active(runtime, monkeypatch):
+    # A chat turn runs after its start command returns. Its Stop and approvals
+    # must keep the active cadence, not the idle one.
+    monkeypatch.setattr(execution_worker, "ACTIVE_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr(execution_worker, "IDLE_PROBE_SECONDS", 60.0)
+    monkeypatch.setattr(execution_worker, "SAFETY_CLAIM_SECONDS", 60.0)
+    turn = SimpleNamespace(done=False)
+
+    @asynccontextmanager
+    async def application(context, _grant):
+        app = FastAPI()
+        app.state.control_assistant_work = SimpleNamespace(
+            chat=SimpleNamespace(_active_provider_turns={"turn": turn})
+        )
+
+        @app.post("/api/v1/fixture")
+        async def mutate(request: Request):
+            return {"name": (await request.json()).get("name")}
+
+        try:
+            yield app
+        finally:
+            context.restore_cleanup_completed = True
+
+    runtime.execution.application_factory = application
+    await attach(runtime)
+    await asyncio.sleep(0.3)
+    control = await accept(runtime, "stop", lane="control", name="Stop the turn")
+    assert (await terminal(runtime, control)).state == "succeeded"
+
+
+async def test_safety_claims_deliver_without_any_probe_hint(runtime, monkeypatch):
+    monkeypatch.setattr(execution_worker, "SAFETY_CLAIM_SECONDS", 0.3)
+
+    async def silent(_lease):
+        return DispatchSnapshot(owned=True, lanes=frozenset(), handoff_active=False)
+
+    monkeypatch.setattr(runtime.coordination.coordination, "dispatch_snapshot", silent)
+    await attach(runtime)
+    await asyncio.sleep(0.5)
+    # One at a time: both fixture handlers rename the same project revision.
+    work = await accept(runtime, "work-safety", name="Work by safety claim")
+    assert (await terminal(runtime, work)).state == "succeeded"
+    control = await accept(runtime, "control-safety", lane="control", name="Control")
+    assert (await terminal(runtime, control)).state == "succeeded"

@@ -21,7 +21,7 @@ from .database import (
 from .deployments import checkpoint_digest
 from .deployment_protocol import ResourceSnapshot
 from .memory_budget import _HELD
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, source_handoff_active
 
 CHECKPOINT_FORMAT = "nebula.project-checkpoint/v1"
 CHECKPOINT_BATCH_ROWS = 10_000
@@ -269,12 +269,8 @@ class ProjectHandoffAgent:
     async def _tick(self):
         async with self.coordinator.coordination.fenced(self.lease) as session:
             handoff = await session.get(ProjectHandoffRow, self.lease.project_id)
-            if (
-                handoff is None
-                or (handoff.source_runtime_id, handoff.source_fencing_token)
-                != (self.lease.runtime_id, self.lease.fencing_token)
-                or handoff.phase not in {"requested", "finishing", "transferable"}
-            ):
+            # The idle probe uses the same predicate to decide when to tick.
+            if not source_handoff_active(handoff, self.lease):
                 return
             held = handoff.admission_held
         if held:

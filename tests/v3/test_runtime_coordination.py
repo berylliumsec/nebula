@@ -5,10 +5,16 @@ import os
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select, update
 from sqlalchemy.engine import make_url
 
-from nebula.v3.database import Database, RuntimeCommandRow
+from nebula.v3.database import (
+    Database,
+    DeploymentHostRow,
+    ProjectHandoffRow,
+    ProjectOwnershipRow,
+    RuntimeCommandRow,
+)
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import ChatTurn, Engagement
 from nebula.v3.event_history import purge_event_history
@@ -397,3 +403,200 @@ async def test_real_database_clock_is_used(cluster):
     del coordinator._clock_ms
     async with coordinator.database.session() as session:
         assert await coordinator._clock_ms(session) > 1_700_000_000_000
+
+
+async def _lane_rows(coordinator, lane):
+    async with coordinator.database.session() as session:
+        return list(
+            await session.execute(
+                select(RuntimeCommandRow.id, RuntimeCommandRow.state)
+                .where(RuntimeCommandRow.lane == lane)
+                .order_by(RuntimeCommandRow.sequence)
+            )
+        )
+
+
+async def _claim_acts(coordinator, lease, lane):
+    before = await _lane_rows(coordinator, lane)
+    claimed = await coordinator.claim_next(lease, lane=lane)
+    return claimed is not None or before != await _lane_rows(coordinator, lane)
+
+
+async def _dispatch_state(cluster, name):
+    (first, second), _stores, _clock = cluster
+    coordinator, lease = first, await first.claim_project("project", "old")
+
+    async def add(row):
+        async with coordinator.database.session() as session:
+            session.add(row)
+
+    async def handoff(phase, *, held=True, source_token=None):
+        await add(
+            ProjectHandoffRow(
+                project_id="project",
+                revision=1,
+                source_runtime_id=lease.runtime_id,
+                source_fencing_token=(
+                    lease.fencing_token if source_token is None else source_token
+                ),
+                target_runtime_id="new",
+                target_version="v2",
+                phase=phase,
+                admission_held=held,
+                blockers=[],
+                checkpoint={},
+                admitted_turn_ids=[],
+                updated_at_ms=1,
+            )
+        )
+
+    if name in {"queued_work", "queued_both"} or name in {
+        "handoff_hold",
+        "handoff_verified",
+        "shutdown",
+        "retirement",
+    }:
+        await submit(first, "work")
+    if name in {"queued_control", "queued_both"} or name in {
+        "handoff_hold",
+        "handoff_verified",
+        "shutdown",
+        "retirement",
+    }:
+        await submit(first, "control", lane="control")
+    if name in {
+        "control_own_running",
+        "control_foreign_running",
+        "control_uncertain",
+    }:
+        await submit(first, "control", lane="control")
+        assert await first.claim_next(lease, lane="control") is not None
+    if name in {"control_foreign_running", "control_uncertain"}:
+        coordinator, lease = second, await expire_and_claim(cluster)
+    if name == "control_uncertain":
+        assert await second.claim_next(lease, lane="control") is None
+        await submit(second, "control-behind", lane="control")
+    if name in {"handoff_finishing", "handoff_transferable", "handoff_other_source"}:
+        await submit(first, "work")
+        await submit(first, "control", lane="control")
+    if name == "handoff_finishing":
+        await handoff("finishing", held=False)
+    if name == "handoff_transferable":
+        await handoff("transferable", held=False)
+    if name == "handoff_other_source":
+        await handoff("requested", source_token=lease.fencing_token + 7)
+    if name == "own_running":
+        await submit(first, "work")
+        assert await first.claim_next(lease, lane="work") is not None
+    if name in {"foreign_running", "uncertain_head"}:
+        await submit(first, "work")
+        assert await first.claim_next(lease, lane="work") is not None
+        coordinator, lease = second, await expire_and_claim(cluster)
+    if name == "uncertain_head":
+        assert await second.claim_next(lease, lane="work") is None
+        await submit(second, "behind")
+    if name == "barrier_head":
+        await submit(first, "barrier")
+        async with coordinator.database.session() as session:
+            await session.execute(
+                update(RuntimeCommandRow).values(name="work.batch.barrier/v1")
+            )
+        await submit(first, "behind")
+    if name == "handoff_hold":
+        await handoff("requested")
+    if name == "handoff_verified":
+        await handoff("verified")
+    if name == "shutdown":
+        async with coordinator.database.session() as session:
+            await session.execute(
+                update(DeploymentHostRow)
+                .where(DeploymentHostRow.key == "host")
+                .values(shutdown_requested=True)
+            )
+    if name == "retirement":
+        async with coordinator.database.session() as session:
+            await session.execute(
+                update(ProjectOwnershipRow).values(retirement_requested=True)
+            )
+    return coordinator, lease
+
+
+@pytest.mark.parametrize(
+    ("name", "expected", "handoff_active"),
+    [
+        ("empty", set(), False),
+        ("queued_work", {"work"}, False),
+        ("queued_control", {"control"}, False),
+        ("queued_both", {"work", "control"}, False),
+        ("own_running", set(), False),
+        ("foreign_running", {"work"}, False),
+        ("uncertain_head", set(), False),
+        ("barrier_head", set(), False),
+        ("handoff_hold", {"control"}, True),
+        ("handoff_verified", {"work", "control"}, False),
+        ("shutdown", {"control"}, False),
+        ("retirement", set(), False),
+        ("control_own_running", set(), False),
+        ("control_foreign_running", {"control"}, False),
+        ("control_uncertain", set(), False),
+        ("handoff_finishing", {"work", "control"}, True),
+        ("handoff_transferable", {"work", "control"}, True),
+        ("handoff_other_source", {"control"}, False),
+    ],
+)
+async def test_dispatch_snapshot_reports_exactly_the_lanes_a_claim_acts_on(
+    cluster, name, expected, handoff_active
+):
+    coordinator, lease = await _dispatch_state(cluster, name)
+    snapshot = await coordinator.dispatch_snapshot(lease)
+    assert snapshot.owned
+    assert snapshot.handoff_active is handoff_active
+    acted = {
+        lane
+        for lane in ("work", "control")
+        if await _claim_acts(coordinator, lease, lane)
+    }
+    assert set(snapshot.lanes) == acted == expected
+
+
+async def test_dispatch_snapshot_takes_no_locks_and_reports_lost_ownership(cluster):
+    (first, second), _stores, clock = cluster
+    lease = await first.claim_project("project", "old")
+    await submit(first, "work")
+    statements = []
+
+    def record(_connection, _cursor, statement, *_args):
+        statements.append(statement.upper())
+
+    engine = second.database.engine.sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    async with first.database.session() as session:
+        # A held project-row lock would block a fenced claim but not the probe.
+        await session.execute(
+            update(ProjectOwnershipRow)
+            .where(ProjectOwnershipRow.project_id == "project")
+            .values(command_sequence=ProjectOwnershipRow.command_sequence)
+        )
+        try:
+            snapshot = await asyncio.wait_for(second.dispatch_snapshot(lease), 5)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+    assert snapshot.owned and snapshot.lanes == {"work"}
+    assert statements and all(
+        statement.lstrip().startswith("SELECT")
+        and "FOR UPDATE" not in statement
+        and "FOR SHARE" not in statement
+        for statement in statements
+    ), statements
+    clock[0] += LEASE_MS + 1
+    expired = await first.dispatch_snapshot(lease)
+    assert not expired.owned
+
+
+async def test_dispatch_snapshot_reports_a_superseded_owner(cluster):
+    (first, second), _stores, _clock = cluster
+    old = await first.claim_project("project", "old")
+    await submit(first, "work")
+    new = await expire_and_claim(cluster)
+    assert not (await second.dispatch_snapshot(old)).owned
+    assert (await second.dispatch_snapshot(new)).owned

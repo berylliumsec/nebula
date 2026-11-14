@@ -42,6 +42,11 @@ LEASE_MS = 30_000
 MAX_STREAM_BATCH = 256
 STREAM_EPOCH = "durable-v1"
 _STREAM_PREFIX = "chat_stream."
+COMMAND_LANES = ("work", "control")
+# A source owner keeps ticking its handoff only in these phases.
+TICK_PHASES = frozenset({"requested", "finishing", "transferable"})
+_DISPATCH_STATES = ("queued", "running", "uncertain")
+_BATCH_BARRIER = "work.batch.barrier/v1"
 
 
 class CoordinationConflict(RuntimeError):
@@ -81,6 +86,64 @@ class StreamFrame:
     event_type: str
     payload: dict[str, Any]
     epoch: str = STREAM_EPOCH
+
+
+@dataclass(frozen=True)
+class DispatchSnapshot:
+    """A lock-free read of what a fenced claim for this owner would do now.
+
+    It is a wake-up hint, never an authority: only ``claim_next`` changes state
+    and it re-reads everything under the project's fence.
+    """
+
+    owned: bool
+    lanes: frozenset[str]
+    handoff_active: bool
+
+
+def dispatch_holds(handoff, host, ownership) -> tuple[bool, bool]:
+    """Return (held, retiring) for a project's command lanes.
+
+    Shared by ``claim_next`` and ``dispatch_snapshot`` so an idle probe cannot
+    disagree with the claim about which lanes may start a command.
+    """
+    retiring = ownership is not None and bool(ownership.retirement_requested)
+    held = (
+        (handoff is not None and handoff.admission_held and handoff.phase != "verified")
+        or (host is not None and bool(host.shutdown_requested))
+        or retiring
+    )
+    return held, retiring
+
+
+def head_action(head, lease: ProjectLease) -> Literal["claim", "uncertain"] | None:
+    """What a fenced claim does with a lane's head command; None is an empty poll."""
+    if head is None or head.state == "uncertain":
+        return None
+    if head.state == "queued" and head.name == _BATCH_BARRIER:
+        # The host commits this typed SQL barrier with its whole batch.
+        # Keep it at the lane head so later work cannot overtake it.
+        return None
+    if head.state == "running":
+        if (head.runtime_id, head.fencing_token) != (
+            lease.runtime_id,
+            lease.fencing_token,
+        ):
+            # The old worker could have made an external call. Fencing
+            # cannot tell us its outcome; do not execute it a second time.
+            return "uncertain"
+        return None
+    return "claim"
+
+
+def source_handoff_active(handoff, lease: ProjectLease) -> bool:
+    """True while this exact owner must keep ticking a handoff as its source."""
+    return (
+        handoff is not None
+        and (handoff.source_runtime_id, handoff.source_fencing_token)
+        == (lease.runtime_id, lease.fencing_token)
+        and handoff.phase in TICK_PHASES
+    )
 
 
 def _identifier(value: str, name: str, maximum: int = 200) -> None:
@@ -540,20 +603,12 @@ class RuntimeCoordination:
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             host = await session.get(DeploymentHostRow, "host")
             ownership = await session.get(ProjectOwnershipRow, lease.project_id)
-            held = (
-                (
-                    handoff is not None
-                    and handoff.admission_held
-                    and handoff.phase != "verified"
-                )
-                or (host is not None and host.shutdown_requested)
-                or (ownership is not None and ownership.retirement_requested)
-            )
+            held, retiring = dispatch_holds(handoff, host, ownership)
             # Retirement is a project-wide quiescence boundary. Unlike host
             # shutdown and handoff, it cannot leave the control lane running:
             # even an untouched queued control command could start after the
             # worker's quiescence checkpoint and before its owner is released.
-            if ownership is not None and ownership.retirement_requested:
+            if retiring:
                 return None
             # Control delivery has its own ordered lane. Stop, approvals and
             # input decisions cannot sit behind uncertain work or a handoff.
@@ -564,7 +619,7 @@ class RuntimeCoordination:
                 select(RuntimeCommandRow)
                 .where(
                     RuntimeCommandRow.project_id == lease.project_id,
-                    RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+                    RuntimeCommandRow.state.in_(_DISPATCH_STATES),
                     *(
                         [RuntimeCommandRow.lane == selected_lane]
                         if selected_lane is not None
@@ -574,20 +629,12 @@ class RuntimeCoordination:
                 .order_by(RuntimeCommandRow.sequence)
                 .limit(1)
             )
-            if row is None or row.state == "uncertain":
+            action = head_action(row, lease)
+            if action is None:
                 return None
-            if row.state == "queued" and row.name == "work.batch.barrier/v1":
-                # The host commits this typed SQL barrier with its whole batch.
-                # Keep it at the lane head so later work cannot overtake it.
-                return None
-            if row.state == "running":
-                if (row.runtime_id, row.fencing_token) != (
-                    lease.runtime_id,
-                    lease.fencing_token,
-                ):
-                    # The old worker could have made an external call. Fencing
-                    # cannot tell us its outcome; do not execute it a second time.
-                    row.state = "uncertain"
+            assert row is not None
+            if action == "uncertain":
+                row.state = "uncertain"
                 return None
             row.state, row.runtime_id, row.fencing_token = (
                 "running",
@@ -596,6 +643,78 @@ class RuntimeCoordination:
             )
             return ClaimedCommand(
                 _receipt(row), row.name, row.payload, row.expected_revision
+            )
+
+    async def dispatch_snapshot(self, lease: ProjectLease) -> DispatchSnapshot:
+        """Read, without locks or writes, which lanes a fenced claim could act on.
+
+        An idle worker probes with this instead of opening a fenced write
+        transaction per lane every poll. It uses the same hold and head rules
+        as ``claim_next``; any lane it reports is still claimed under the fence.
+        """
+        async with self.database.session() as session:
+            ownership = (
+                await session.execute(
+                    select(
+                        ProjectOwnershipRow.runtime_id,
+                        ProjectOwnershipRow.fencing_token,
+                        ProjectOwnershipRow.lease_expires_at_ms,
+                        ProjectOwnershipRow.retirement_requested,
+                    ).where(ProjectOwnershipRow.project_id == lease.project_id)
+                )
+            ).first()
+            now = await self._clock_ms(session)
+            handoff = (
+                await session.execute(
+                    select(
+                        ProjectHandoffRow.admission_held,
+                        ProjectHandoffRow.phase,
+                        ProjectHandoffRow.source_runtime_id,
+                        ProjectHandoffRow.source_fencing_token,
+                    ).where(ProjectHandoffRow.project_id == lease.project_id)
+                )
+            ).first()
+            host = (
+                await session.execute(
+                    select(DeploymentHostRow.shutdown_requested).where(
+                        DeploymentHostRow.key == "host"
+                    )
+                )
+            ).first()
+            owned = (
+                ownership is not None
+                and (ownership.runtime_id, ownership.fencing_token)
+                == (lease.runtime_id, lease.fencing_token)
+                and ownership.lease_expires_at_ms > now
+            )
+            held, retiring = dispatch_holds(handoff, host, ownership)
+            lanes: set[str] = set()
+            for lane in () if retiring else COMMAND_LANES:
+                if held and lane == "work":
+                    continue
+                head = (
+                    await session.execute(
+                        select(
+                            RuntimeCommandRow.state,
+                            RuntimeCommandRow.name,
+                            RuntimeCommandRow.runtime_id,
+                            RuntimeCommandRow.fencing_token,
+                        )
+                        .where(
+                            RuntimeCommandRow.project_id == lease.project_id,
+                            RuntimeCommandRow.state.in_(_DISPATCH_STATES),
+                            RuntimeCommandRow.lane == lane,
+                        )
+                        .order_by(RuntimeCommandRow.sequence)
+                        .limit(1)
+                    )
+                ).first()
+                if head_action(head, lease) is not None:
+                    lanes.add(lane)
+            return DispatchSnapshot(
+                owned=owned,
+                lanes=frozenset(lanes),
+                handoff_active=source_handoff_active(handoff, lease),
             )
 
     async def finish_command(

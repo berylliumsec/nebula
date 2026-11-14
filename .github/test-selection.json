@@ -1,23 +1,25 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Fix chat reads returning 503 'runtime connection is unavailable' for every project beyond the first eight an API worker reads: RuntimeHttpProxy now evicts least-recently-used idle pooled clients instead of refusing a ninth endpoint, reserves an endpoint for each forwarded exchange, returns the reconnect response if retirement or shutdown races an eviction, keeps viewer WebSockets on their own max_websockets bound, and records api.runtime.endpoint_budget_occupied when every channel is busy. The proxy, its diagnostic boundaries and the API worker that owns it are the affected integration boundary.",
-  "exclusions": "Only the proxy, its diagnostic boundary tests and the API worker tests are selected; execution workers, chat delivery and the supervisor proxy are unchanged. No UI, native or Playwright cases: no frontend code changed and the defect is in Core's API-to-worker forwarding, covered at that layer by six new regression tests (verified failing on unpatched main). PostgreSQL variants in test_api_worker.py run only where NEBULA_TEST_POSTGRES_URL is set. Real-Core evidence (staging Postgres Core at the live commit plus this patch: 15 projects readable in both first-contact orders, 0 of 144 chat reads refused under a 15-chat load versus 63 of 159 before) is recorded in the PR, not executed by CI.",
+  "reason": "Idle project execution workers polled claim_next every 100 ms per lane; each empty claim was a fenced write transaction (~15 statements incl. a no-op row-lock UPDATE) and the handoff watcher opened another fenced transaction every second. The fix adds a lock-free RuntimeCoordination.dispatch_snapshot that shares claim_next's hold and lane-head rules, a per-worker probe that wakes per-lane consumers (0.1 s while a lane, a chat turn or a recent delivery is active; 0.5 s idle), 30 s safety claims and ticks, fail-open probe failure handling, handoff ticks only while a source handoff applies, and cancellation-safe waits. Selected suites cover the worker lifecycle and loops, claim/snapshot equivalence, the coordination fence, the handoff agent contract, durable delivery, and the diagnostic boundary that fakes the coordinator.",
+  "exclusions": "Process-level suites (test_execution_worker_process, test_runtime_continuity_acceptance, chat resume/acceptance, memory control, restart recovery) need a pidfd-capable interpreter and a production UI build; locally all 69 of those that fail did so identically on pristine main with and without this patch (no new failures). No UI, native or Playwright cases: no frontend code changed. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Staging before/after evidence (idle CPU 3.24 -> 0.75 cores, 601 -> 190 DB transactions/s for 16 idle workers; chat-start and mid-turn Stop pickup medians 4.27 -> 1.21 s and 2.47 -> 0.84 s) is recorded in the PR, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 59,
+    "python": 169,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_http.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_coordination.py",
     "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_api_worker.py"
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_runtime_delivery.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "1abaffaa27040a3eb9242c31aff8421409822fb37b2d9b6d955ba2e9d9fb7863"
+  "change_digest": "42a1e05ca07ffe6ee9314d7a07001932a93f66413e695f9b7d29c00d71d99a56"
 }
