@@ -5,15 +5,28 @@ import time
 
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import func, insert, literal, select, text, union_all, update
+from sqlalchemy import (
+    bindparam,
+    delete,
+    func,
+    insert,
+    literal,
+    select,
+    text,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from nebula.v3.api_crud import _register_crud_routes
+from nebula.v3.api_validation import ApiEntityValidator
 from nebula.v3.database import (
     Database,
     EntityRow,
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
+    ResourceRelationRow,
     SearchDocumentRow,
 )
 from nebula.v3.database_pool import PoolSettings
@@ -25,18 +38,23 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    Evidence,
+    Finding,
     HarnessKind,
     HarnessProfile,
     HarnessSession,
     HarnessTurn,
     HarnessTurnOrigin,
     HarnessTurnStatus,
+    Observation,
     ProviderProfile,
+    Report,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
 from nebula.v3.chat_queue import ChatQueueService
 from nebula.v3.execution_scope import ExecutionSQLScope, execution_context
 from nebula.v3.provider_scheduler import ProviderScheduler
+from nebula.v3.relations import ResourceRelationService
 from nebula.v3.runtime_coordination import (
     CoordinationConflict,
     LeaseLost,
@@ -781,3 +799,350 @@ async def test_expired_worker_cannot_write_anything(execution):
 def test_execution_worker_cannot_bootstrap_schema(tmp_path):
     with pytest.raises(ValueError, match="without migrating"):
         Database(tmp_path / "forbidden.db", execution_runtime_id="worker")
+
+
+async def _legacy_records(control, project):
+    relations = ResourceRelationService(control)
+    first = await relations.create_legacy_entity(
+        Evidence(
+            id=f"evidence-{project}",
+            engagement_id=project,
+            evidence_type="screenshot",
+            title="First evidence",
+        )
+    )
+    second = await relations.create_legacy_entity(
+        Evidence(
+            id=f"evidence-2-{project}",
+            engagement_id=project,
+            evidence_type="screenshot",
+            title="Second evidence",
+        )
+    )
+    third = await relations.create_legacy_entity(
+        Evidence(
+            id=f"evidence-3-{project}",
+            engagement_id=project,
+            evidence_type="screenshot",
+            title="Third evidence",
+        )
+    )
+    finding = await relations.create_legacy_entity(
+        Finding(
+            id=f"finding-{project}",
+            engagement_id=project,
+            title="Finding",
+            evidence_ids=[first.id],
+        )
+    )
+    other_finding = await relations.create_legacy_entity(
+        Finding(
+            id=f"finding-2-{project}",
+            engagement_id=project,
+            title="Second finding",
+            evidence_ids=[third.id],
+        )
+    )
+    note = await relations.create_legacy_entity(
+        Observation(
+            id=f"note-{project}",
+            engagement_id=project,
+            observation_type="note",
+            title="Note",
+            evidence_ids=[first.id],
+        )
+    )
+    report = await relations.create_legacy_entity(
+        Report(
+            id=f"report-{project}",
+            engagement_id=project,
+            title="Report",
+            finding_ids=[finding.id, other_finding.id],
+        )
+    )
+    return {
+        "observations": note,
+        "evidence": second,
+        "findings": finding,
+        "reports": report,
+    }
+
+
+def _legacy_crud_app(runtime, resource, model):
+    app = FastAPI()
+    _register_crud_routes(
+        app,
+        runtime,
+        ResourceRelationService(runtime),
+        lambda: None,
+        ApiEntityValidator(runtime),
+        resource,
+        model,
+        listing_capacity=lambda: None,
+        actor_id=lambda: "operator",
+    )
+    return app
+
+
+# The link edits add and remove relation rows in the same flush; removing or
+# adding two at once makes the ORM use one executemany DELETE or INSERT.
+_LEGACY_EDITS = {
+    "observations": (
+        Observation,
+        {"body": "Edited on the worker"},
+        {"evidence_ids": ["evidence-2-mine", "evidence-3-mine"]},
+    ),
+    "evidence": (
+        Evidence,
+        {"description": "Edited on the worker"},
+        {"finding_id": "finding-mine"},
+    ),
+    "findings": (
+        Finding,
+        {"description": "Edited on the worker"},
+        {"evidence_ids": ["evidence-2-mine"]},
+    ),
+    "reports": (
+        Report,
+        {"executive_summary": "Edited on the worker"},
+        {"finding_ids": [], "observation_ids": ["note-mine"]},
+    ),
+}
+
+
+@pytest.mark.parametrize("resource", sorted(_LEGACY_EDITS))
+async def test_legacy_relation_patch_on_execution_worker_edits_owned_records(
+    execution, resource
+):
+    """PATCH of a note, evidence item, finding or report on a project worker.
+
+    The relation service flushes an ORM unit-of-work UPDATE whose primary key
+    travels in the execution parameters, plus edge INSERTs and DELETEs.
+    """
+    control, runtime, _, lease = execution
+    owned = await _legacy_records(control, "mine")
+    foreign = await _legacy_records(control, "other")
+    model, text_change, link_change = _LEGACY_EDITS[resource]
+    entity = owned[resource]
+    async with AsyncTestClient(_legacy_crud_app(runtime, resource, model)) as client:
+        with execution_context(lease):
+            edited = await client.patch(
+                f"/api/v1/{resource}/{entity.id}",
+                json={"changes": text_change, "expected_revision": 1},
+            )
+            assert edited.status_code == 200, edited.text
+            assert edited.json()["revision"] == 2
+            linked = await client.patch(
+                f"/api/v1/{resource}/{entity.id}",
+                json={"changes": link_change, "expected_revision": 2},
+            )
+            assert linked.status_code == 200, linked.text
+            with pytest.raises(NotFoundError):
+                await client.patch(
+                    f"/api/v1/{resource}/{foreign[resource].id}",
+                    json={"changes": text_change, "expected_revision": 1},
+                )
+    saved = await control.get(model, entity.id)
+    assert saved.revision == 3
+    assert saved.engagement_id == "mine"
+    for field, value in {**text_change, **link_change}.items():
+        assert getattr(saved, field) == value
+    untouched = await control.get(model, foreign[resource].id)
+    assert untouched.revision == 1
+    assert untouched.engagement_id == "other"
+    async with control.database.session() as session:
+        projects = set(
+            await session.scalars(
+                select(ResourceRelationRow.project_id).where(
+                    (ResourceRelationRow.source_id == entity.id)
+                    | (ResourceRelationRow.target_id == entity.id)
+                )
+            )
+        )
+    assert projects <= {"mine"}
+
+
+async def test_orm_flush_cannot_reparent_owned_records(execution):
+    """The ownership check still runs for unit-of-work UPDATEs, one per row."""
+    control, runtime, _, lease = execution
+    turn = await control.get(ChatTurn, "turn-mine")
+    await control.create(turn.model_copy(update={"id": "turn-mine-2"}))
+    with pytest.raises(LeaseLost):
+        with execution_context(lease):
+            async with runtime.database.session() as session:
+                rows = list(
+                    await session.scalars(
+                        select(EntityRow)
+                        .where(EntityRow.id.in_(["turn-mine", "turn-mine-2"]))
+                        .order_by(EntityRow.id)
+                    )
+                )
+                assert len(rows) == 2
+                rows[0].payload = {**rows[0].payload, "model": "edited"}
+                rows[0].revision = 2
+                rows[1].payload = {**rows[1].payload, "engagement_id": "other"}
+                rows[1].revision = 2
+                await session.flush()
+    for turn_id in ("turn-mine", "turn-mine-2"):
+        saved = await control.get(ChatTurn, turn_id)
+        assert (saved.engagement_id, saved.revision, saved.model) == (
+            "mine",
+            1,
+            "inert",
+        )
+
+
+async def test_orm_flush_updates_several_owned_rows(execution):
+    control, runtime, _, lease = execution
+    turn = await control.get(ChatTurn, "turn-mine")
+    await control.create(turn.model_copy(update={"id": "turn-mine-2"}))
+    with execution_context(lease):
+        async with runtime.database.session() as session:
+            rows = list(
+                await session.scalars(
+                    select(EntityRow).where(
+                        EntityRow.id.in_(["turn-mine", "turn-mine-2"])
+                    )
+                )
+            )
+            for row in rows:
+                row.payload = {**row.payload, "model": "edited", "revision": 2}
+                row.revision = 2
+            await session.flush()
+    for turn_id in ("turn-mine", "turn-mine-2"):
+        assert (await control.get(ChatTurn, turn_id)).model == "edited"
+
+
+@pytest.mark.parametrize("kind", ["update", "delete"])
+async def test_executemany_writes_stay_in_owned_projects(execution, kind):
+    """Each parameter set of a batched UPDATE or DELETE keeps the project scope."""
+    control, runtime, _, lease = execution
+    target = EntityRow.id == bindparam("target")
+    if kind == "update":
+        statement = update(EntityRow).where(target).values(revision=bindparam("rev"))
+        batches = [
+            {"target": "turn-mine", "rev": 9},
+            {"target": "turn-other", "rev": 9},
+        ]
+    else:
+        statement = delete(EntityRow).where(target)
+        batches = [{"target": "turn-mine"}, {"target": "turn-other"}]
+    with execution_context(lease):
+        async with runtime.database.connection() as connection:
+            await connection.execute(statement, batches)
+            await connection.commit()
+    async with control.database.session() as session:
+        revisions = dict(
+            (
+                await session.execute(
+                    select(EntityRow.id, EntityRow.revision).where(
+                        EntityRow.id.in_(["turn-mine", "turn-other"])
+                    )
+                )
+            ).all()
+        )
+    assert revisions == (
+        {"turn-mine": 9, "turn-other": 1} if kind == "update" else {"turn-other": 1}
+    )
+
+
+@pytest.mark.parametrize("kind", ["column", "payload"])
+async def test_updates_resolve_bound_owner_values(execution, kind):
+    """A bound SET value is read from the execution parameters, not dropped."""
+    control, runtime, _, lease = execution
+    turn = await control.get(ChatTurn, "turn-mine")
+    statement = update(EntityRow).where(EntityRow.id == bindparam("target"))
+    if kind == "column":
+        statement = statement.values(engagement_id=bindparam("owner"))
+        moved = {"owner": "other"}
+        kept = {"owner": "mine"}
+    else:
+        statement = statement.values(payload=bindparam("document"))
+        moved = {
+            "document": turn.model_copy(update={"engagement_id": "other"}).model_dump(
+                mode="json"
+            )
+        }
+        kept = {
+            "document": turn.model_copy(update={"model": "edited"}).model_dump(
+                mode="json"
+            )
+        }
+    with execution_context(lease):
+        with pytest.raises(LeaseLost):
+            async with runtime.database.connection() as connection:
+                await connection.execute(statement, {"target": turn.id, **moved})
+                await connection.commit()
+        async with runtime.database.connection() as connection:
+            result = await connection.execute(statement, {"target": turn.id, **kept})
+            assert result.rowcount == 1
+            await connection.commit()
+    saved = await control.get(ChatTurn, turn.id)
+    assert saved.engagement_id == "mine"
+
+
+async def test_update_whose_rows_cannot_be_determined_fails_closed(execution):
+    control, runtime, _, lease = execution
+    with execution_context(lease):
+        with pytest.raises(CoordinationConflict):
+            async with runtime.database.connection() as connection:
+                await connection.execute(
+                    update(EntityRow)
+                    .where(EntityRow.id == bindparam("target"))
+                    .values(engagement_id="mine"),
+                    {"unrelated": "turn-mine"},
+                )
+    assert (await control.get(ChatTurn, "turn-mine")).revision == 1
+
+
+@pytest.mark.parametrize("kind", ["entity", "project"])
+async def test_insert_resolves_bound_owner_values(execution, kind):
+    """A bound owner in VALUES cannot hide the project it really writes."""
+    control, runtime, _, lease = execution
+    turn = await control.get(ChatTurn, "turn-other")
+    if kind == "entity":
+        statement = insert(EntityRow).values(
+            id="escaped",
+            kind="chat_turns",
+            engagement_id=bindparam("owner"),
+            revision=1,
+            payload=bindparam("document"),
+            created_at=turn.created_at,
+            updated_at=turn.updated_at,
+        )
+        parameters = {
+            "owner": "other",
+            "document": turn.model_copy(update={"id": "escaped"}).model_dump(
+                mode="json"
+            ),
+        }
+    else:
+        statement = insert(SearchDocumentRow).values(
+            id="escaped",
+            project_id=bindparam("owner"),
+            resource_kind="chat_turns",
+            resource_id="escaped",
+            revision=1,
+            label="Escaped",
+            updated_at=turn.updated_at,
+        )
+        parameters = {"owner": "other"}
+    with execution_context(lease):
+        with pytest.raises(LeaseLost):
+            async with runtime.database.connection() as connection:
+                await connection.execute(statement, parameters)
+                await connection.commit()
+    async with control.database.session() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(EntityRow)
+                .where(EntityRow.id == "escaped")
+            )
+            + await session.scalar(
+                select(func.count())
+                .select_from(SearchDocumentRow)
+                .where(SearchDocumentRow.id == "escaped")
+            )
+            == 0
+        )
