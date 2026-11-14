@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
-  "reason": "runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
+  "reason": "Stacked on the shutdown diagnosability change. A quiesced project whose only failed stop came from a service that runs inside the worker (chat follow-ups, chat schedules, event-loop monitor, event-history pruning) now closes and releases after the worker's own teardown finishes, with the failure reported as a cleanup warning; any other failure still keeps ownership. runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
   "exclusions": "Process-level suites (test_runtime_processes, test_execution_worker_process, test_runtime_host_services, test_runtime_memory_control, test_runtime_browser_bridge, test_runtime_worker_features, test_runtime_management, test_recovery_reconciliation, test_shutdown_readmission) need a pidfd-capable interpreter or a non-loopback LAN Core fixture; locally the same 76 cases fail identically on pristine main and on this branch (no new failures), so they are not selected. No UI, native or Playwright cases: no frontend code changed (the desktop Stop control only prints runtime-stop stderr). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core scratch evidence (injected service stop failures, six-project startup races, LAN-bound status reads) is recorded in the PR body, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 334,
+    "python": 339,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -31,5 +31,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "8a6389e7b443a11fff75f32fe2abe9119073ce5180200b688460ca06dd589b46"
+  "change_digest": "bf9fc60c5ebae9c92944f342807e8d6311ae55dc22099eafeed04a06536ed8b3"
 }

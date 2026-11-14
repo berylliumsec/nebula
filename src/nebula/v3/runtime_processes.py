@@ -970,6 +970,7 @@ class RuntimeProcessHost:
             )
         # A lost reply retains the durable admission hold. Explicit retries
         # inspect the same worker grant instead of restarting its application.
+        warnings = []
         for lease in leases:
             # Every refusal names its project so the receipt says what to fix.
             label = await self.coordinator.project_label(lease.project_id)
@@ -1002,6 +1003,16 @@ class RuntimeProcessHost:
                         + (f" ({failure})" if isinstance(failure, str) else "")
                         + "; retain its shutdown hold"
                     )
+                if isinstance(status.get("failure"), str) and status["failure"]:
+                    # Verified cleanup, but an in-process service reported a
+                    # failed stop; keep it visible in the shutdown receipt.
+                    warnings.append(
+                        {
+                            "project_id": lease.project_id,
+                            "runtime_id": lease.runtime_id,
+                            "detail": f"{label}: {status['failure']}",
+                        }
+                    )
             finally:
                 await client.close()
         async with self._launch:
@@ -1011,7 +1022,11 @@ class RuntimeProcessHost:
         for runtime_id in runtimes:
             await self.retire(runtime_id)
             stopped.append(runtime_id)
-        return {"state": "stopped", "retired_runtime_ids": stopped}
+        return {
+            "state": "stopped",
+            "retired_runtime_ids": stopped,
+            **({"cleanup_warnings": warnings} if warnings else {}),
+        }
 
     async def reconcile_processes(self) -> dict:
         """Release only unspawned or positively absent, unowned incarnations."""

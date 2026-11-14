@@ -37,7 +37,7 @@ SERVICE_FAILURE = (
 
 
 async def ready(
-    runtime, *, fail_cleanup=False, change_pause=False, fail_component=False
+    runtime, *, fail_cleanup=False, change_pause=False, fail_component=None
 ):
     @asynccontextmanager
     async def application(context, lease):
@@ -65,8 +65,9 @@ async def ready(
             if fail_component:
                 # The kernel attempted every service stop and the worker's own
                 # pools and clients closed; one service's stop still raised.
+                service, contained = fail_component
                 raise ServiceCleanupError(
-                    [("chat.follow-ups", PendingRollbackError(PRIVATE))]
+                    [(service, PendingRollbackError(PRIVATE))], contained=contained
                 )
 
     runtime.execution.application_factory = application
@@ -276,24 +277,79 @@ async def test_unverified_cleanup_reason_reaches_receipt_and_status(runtime):
         assert (await session.get(DeploymentHostRow, "host")).shutdown_requested
 
 
-async def test_failed_service_stop_is_named_in_receipt_and_status(runtime):
-    await ready(runtime, fail_component=True)
+async def test_in_process_service_stop_failure_still_stops_core(runtime):
+    await ready(runtime, fail_component=("chat.follow-ups", True))
+    receipt = await host_shutdown(runtime, "stop")
+    assert receipt["state"] == "succeeded"
+    assert receipt["result"] == {
+        "state": "stopped",
+        "retired_runtime_ids": [],
+        "cleanup_warnings": [
+            {
+                "project_id": "project",
+                "runtime_id": "old",
+                "detail": f"{LABEL}: {SERVICE_FAILURE}",
+            }
+        ],
+    }
+    assert PRIVATE not in str(receipt)
+    worker = await runtime.execution.status({})
+    assert worker["state"] == "closed" and worker["cleanup_complete"]
+    assert worker["failure"] == SERVICE_FAILURE
+    status, project = await project_status(runtime)
+    assert status.health != "degraded" and project.blockers == []
+    async with runtime.coordination.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "project")
+        assert owner.runtime_id is None
+        assert owner.fencing_token == runtime.lease.fencing_token
+
+
+async def test_in_process_service_stop_failure_still_retires_idle_project(runtime):
+    await ready(runtime, fail_component=("chat.follow-ups", True))
+    retired = []
+
+    async def rpc(runtime_id):
+        return RuntimeRpcClient(
+            "unix:///isolated/worker.sock",
+            b"k" * 32,
+            transport=httpx.ASGITransport(
+                app=runtime.context.rpc.app, raise_app_exceptions=False
+            ),
+        )
+
+    async def retire(runtime_id):
+        retired.append(runtime_id)
+
+    host = SimpleNamespace(coordinator=runtime.coordination, rpc=rpc, retire=retire)
+    assert await RuntimeProcessHost.retire_idle_project(host, "project")
+    assert retired == ["old"]
+    async with runtime.coordination.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "project")
+        assert owner.runtime_id is None and not owner.retirement_requested
+
+
+async def test_external_service_stop_failure_is_named_and_keeps_ownership(runtime):
+    await ready(runtime, fail_component=("harnesses.runtime", False))
+    failure = (
+        "1 Nebula Core service cleanup operation(s) failed: "
+        "harnesses.runtime (PendingRollbackError)"
+    )
     first = await host_shutdown(runtime, "stop-1")
     assert first["state"] == "uncertain"
     assert first["result"]["reason"] == (
         f"{LABEL}: The project worker stopped in state failed "
-        f"({SERVICE_FAILURE}); its ownership is retained"
+        f"({failure}); its ownership is retained"
     )
     assert PRIVATE not in str(first)
     status, project = await project_status(runtime)
     assert status.health == "degraded"
     assert project.blockers == [
-        f"Execution worker old failed: {SERVICE_FAILURE}; its own cleanup "
+        f"Execution worker old failed: {failure}; its own cleanup "
         "finished, but it still owns the project"
     ]
     retry = await host_shutdown(runtime, "stop-2")
     assert retry["result"]["reason"] == (
-        f"{LABEL}: The project worker failed ({SERVICE_FAILURE}) and cannot "
+        f"{LABEL}: The project worker failed ({failure}) and cannot "
         "quiesce; its ownership is retained"
     )
     async with runtime.coordination.database.session() as session:
