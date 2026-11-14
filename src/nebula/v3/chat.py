@@ -6472,6 +6472,11 @@ class ChatService:
                 if self.tool_platform is not None and request.allow_mcp_catalog
                 else ()
             )
+            # Core-owned families start from the stored scope when no runtime
+            # component supplied it first.
+            project_scope = (
+                await self._project_scope(engagement_id) if engagement_id else None
+            )
             turn_id = str(uuid4())
             try:
                 extra_components = (
@@ -6564,7 +6569,9 @@ class ChatService:
                                 self.workspace_resolver, engagement_id
                             )
                         ),
-                        scope=tool_components.scope if tool_components else None,
+                        scope=tool_components.scope
+                        if tool_components
+                        else project_scope,
                     )
                     if skill_components is not None:
                         tool_components = combine_tool_components(
@@ -6584,7 +6591,9 @@ class ChatService:
                                     or "."
                                 ).resolve()
                             ),
-                            scope=tool_components.scope if tool_components else None,
+                            scope=tool_components.scope
+                            if tool_components
+                            else project_scope,
                         ),
                     )
                 if child_messaging:
@@ -6601,7 +6610,9 @@ class ChatService:
                                     or "."
                                 ).resolve()
                             ),
-                            scope=tool_components.scope if tool_components else None,
+                            scope=tool_components.scope
+                            if tool_components
+                            else project_scope,
                         ),
                     )
                 if agent_messaging_enabled:
@@ -6618,7 +6629,9 @@ class ChatService:
                                     or "."
                                 ).resolve()
                             ),
-                            scope=tool_components.scope if tool_components else None,
+                            scope=tool_components.scope
+                            if tool_components
+                            else project_scope,
                         ),
                     )
                 if work_enabled:
@@ -6635,7 +6648,9 @@ class ChatService:
                                     or "."
                                 ).resolve()
                             ),
-                            scope=tool_components.scope if tool_components else None,
+                            scope=tool_components.scope
+                            if tool_components
+                            else project_scope,
                         ),
                     )
                 if work_roster_enabled:
@@ -6652,7 +6667,9 @@ class ChatService:
                                     or "."
                                 ).resolve()
                             ),
-                            scope=tool_components.scope if tool_components else None,
+                            scope=tool_components.scope
+                            if tool_components
+                            else project_scope,
                         ),
                     )
                 if goal is not None:
@@ -12630,6 +12647,18 @@ class ChatService:
             )
         return history
 
+    async def _project_scope(self, engagement_id: str) -> ScopePolicy:
+        """The project's stored scope, or the default other runtimes build.
+
+        Core-owned tool families (skills, subagents, agent messages, Work) must
+        start from this scope. ``_eligible_provider_specs`` compares a turn's
+        scope with the stored one, so a placeholder id rejects every turn.
+        """
+        engagement = await self.store.get(Engagement, engagement_id)
+        if engagement.scope_policy_id:
+            return await self.store.get(ScopePolicy, engagement.scope_policy_id)
+        return ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+
     async def _mcp_catalog(
         self,
         engagement_id: str,
@@ -14004,6 +14033,11 @@ class ChatService:
                     components,
                     (await standalone_components(self.store, turn.engagement_id)),
                 )
+            project_scope = (
+                await self._project_scope(turn.engagement_id)
+                if turn.engagement_id
+                else None
+            )
             skill_snapshots = [
                 SkillSnapshot.model_validate(item)
                 for item in snapshot.get("skill_snapshots", [])
@@ -14017,7 +14051,7 @@ class ChatService:
                             self.workspace_resolver, turn.engagement_id
                         )
                     ),
-                    scope=components.scope if components else None,
+                    scope=components.scope if components else project_scope,
                 )
                 if skill_snapshots
                 else None
@@ -14041,7 +14075,7 @@ class ChatService:
                         self.subagents,
                         engagement_id=turn.engagement_id,
                         workspace=workspace,
-                        scope=components.scope if components else None,
+                        scope=components.scope if components else project_scope,
                     ),
                 )
             if turn.request_snapshot.get("subagent_child"):
@@ -14060,7 +14094,7 @@ class ChatService:
                                 or "."
                             ).resolve()
                         ),
-                        scope=components.scope if components else None,
+                        scope=components.scope if components else project_scope,
                     ),
                 )
             if turn.request_snapshot.get("allow_agent_messaging"):
@@ -14079,7 +14113,7 @@ class ChatService:
                                 or "."
                             ).resolve()
                         ),
-                        scope=components.scope if components else None,
+                        scope=components.scope if components else project_scope,
                     ),
                 )
             if turn.request_snapshot.get("work_enabled"):
@@ -14098,7 +14132,7 @@ class ChatService:
                                 or "."
                             ).resolve()
                         ),
-                        scope=components.scope if components else None,
+                        scope=components.scope if components else project_scope,
                     ),
                 )
             if turn.request_snapshot.get("work_roster_enabled"):
@@ -14117,7 +14151,7 @@ class ChatService:
                                 or "."
                             ).resolve()
                         ),
-                        scope=components.scope if components else None,
+                        scope=components.scope if components else project_scope,
                     ),
                 )
             if components is not None and turn.request_snapshot.get(

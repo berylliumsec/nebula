@@ -34,6 +34,7 @@ from nebula.v3.domain import (
     ProviderProfile,
     ProviderCapabilityVerification,
     ProviderVerificationStatus,
+    ScopePolicy,
     ToolCallOrigin,
 )
 from nebula.v3.harnesses import HarnessRuntimeService
@@ -604,3 +605,57 @@ async def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_core_owned_tool_families_carry_the_projects_stored_scope(tmp_path):
+    """Regression: a verified local model with only Core-owned tool families.
+
+    Agent messaging and Work roster start the component chain when no runtime
+    supplies the scope. They must use the project's stored ScopePolicy: a
+    placeholder id made every such turn fail with "project scope changed".
+    """
+    store = NebulaStore(tmp_path / "project-scope.db")
+    project = await store.create(Engagement(name="Project"))
+    scope = await store.create(
+        ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id)
+    )
+    project = await store.update(
+        Engagement,
+        project.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=project.revision,
+    )
+    profile = await store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            capability_verifications={
+                "model-a": ProviderCapabilityVerification(
+                    model="model-a", status=ProviderVerificationStatus.VERIFIED
+                )
+            },
+            privacy={"local_only": True},
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    service = ChatService(store, provider_factory=lambda _: provider)
+    request = ChatCompletionRequest(
+        engagement_id=project.id,
+        provider_id=profile.id,
+        model="model-a",
+        messages=[{"role": "user", "content": "Coordinate"}],
+        include_knowledge=False,
+    )
+    prepared = await service.prepare_async(request)
+    assert prepared.tool_components is not None
+    assert prepared.tool_components.scope.id == scope.id
+    assert {"list_agents", "work_agents"} <= {*prepared.tool_components.specs}
+    restarted = ChatService(store, provider_factory=lambda _: provider)
+    resumed = await restarted.prepare_resume(prepared.turn.id)
+    assert resumed.tool_components is not None
+    assert resumed.tool_components.scope.id == scope.id
+    await restarted.complete(resumed)
+    await service.shutdown()
+    await restarted.shutdown()
