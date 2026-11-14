@@ -696,6 +696,22 @@ class RuntimeSupervisor:
                         if owner is not None and owner.runtime_id == runtime_id
                         else None
                     )
+                # An execution process attaches once. A bound worker may only
+                # resume its own current grant; claiming for it again would
+                # leave the project owned by a worker that cannot accept it.
+                if binding is not None and (
+                    lease is None
+                    or binding != asdict(lease)
+                    or status.get("state") not in {"starting", "prepared", "ready"}
+                ):
+                    raise CoordinationConflict(
+                        "This execution process already ended its project grant; "
+                        "prepare a new process"
+                    )
+                if binding is None and status.get("state") != "unassigned":
+                    raise CoordinationConflict(
+                        "This execution process cannot accept a project grant"
+                    )
                 if lease is None:
                     if expected_lease is not None:
                         raise CoordinationConflict(

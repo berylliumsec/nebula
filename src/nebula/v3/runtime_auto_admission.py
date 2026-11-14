@@ -273,6 +273,18 @@ class RuntimeAutoAdmission:
                     if project.status == "archived":
                         continue
                     runtime_id = self._pending.get(project.id)
+                    if runtime_id is not None:
+                        async with supervisor.coordinator.database.session() as session:
+                            pending = await session.get(RuntimeProcessRow, runtime_id)
+                        if pending is None or pending.state not in (
+                            "reserved",
+                            "starting",
+                            "ready",
+                        ):
+                            # A quiesced, aborted or retired process never
+                            # takes this project; prepare a fresh one.
+                            self._pending.pop(project.id, None)
+                            runtime_id = None
                     if runtime_id is None:
                         # Unknown unassigned processes may be manually prepared
                         # targets or a lost spawn response. Never steal/recreate
