@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client";
 import { startVisiblePoll, type PollOutcome } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 
 export interface SessionState {
   schema: "nebula.session-state/v1";
@@ -50,6 +52,9 @@ export function useSessionState(api: ApiClient | undefined, sessionId: string | 
   const [failure, setFailure] = useState<{sessionId: string; text: string}>();
   const refreshRef = useRef<() => void>(() => {});
   const refresh = useCallback(() => refreshRef.current(), []);
+  // Nonzero while the project's worker is idle or starting: the status reads again when it answers.
+  const [runtimeWait, setRuntimeWait] = useState(0);
+  useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); refreshRef.current(); });
   useEffect(() => {
     if (!api || !sessionId || !ready) return;
     const controller = new AbortController();
@@ -78,11 +83,12 @@ export function useSessionState(api: ApiClient | undefined, sessionId: string | 
           if (changed) setSnapshot(current => acceptSessionState(current, next, sessionId));
           return changed || next.busy ? "active" : "idle";
         } catch (error) {
-          if (!signal.aborted) {
-            void logCaughtDiagnostic("interface.chat.session_state_unavailable", "Authoritative response status could not be refreshed.", error, "sessions_page");
-            failed = true;
-            setFailure({sessionId, text: "Response status could not sync. Check the connection and retry."});
-          }
+          if (signal.aborted) return "stop";
+          // diagnostic-expected: the client recorded this read; the status backs off and reads again when the runtime answers.
+          if (isProjectRuntimeUnavailable(error)) { setRuntimeWait(value => value + 1); return "idle"; }
+          void logCaughtDiagnostic("interface.chat.session_state_unavailable", "Authoritative response status could not be refreshed.", error, "sessions_page");
+          failed = true;
+          setFailure({sessionId, text: "Response status could not sync. Check the connection and retry."});
           return "active";
         }
       },
