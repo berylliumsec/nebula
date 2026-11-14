@@ -722,30 +722,33 @@ class ProjectExecution:
                 stage="execution",
             )
 
+    async def _unavailable(self, scope, receive, send) -> None:
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 4413})
+        elif scope["type"] == "http" and self.state == "failed":
+            # A failed execution keeps its ownership for review; waiting
+            # would never succeed, so viewers see an uncoded failure.
+            await JSONResponse(
+                {
+                    "detail": "Project execution stopped; accepted work remains saved. Review the project runtime status."
+                },
+                status_code=503,
+            )(scope, receive, send)
+        elif scope["type"] == "http":
+            await JSONResponse(
+                project_runtime_unavailable_body(
+                    "Project execution is reconnecting; accepted work remains saved",
+                    "starting"
+                    if self.state in {"unassigned", "prepared"}
+                    else "closing",
+                ),
+                status_code=503,
+                headers=project_runtime_unavailable_headers(),
+            )(scope, receive, send)
+
     async def app(self, scope, receive, send):
         if self.state != "ready" or self.lease is None:
-            if scope["type"] == "websocket":
-                await send({"type": "websocket.close", "code": 4413})
-            elif scope["type"] == "http" and self.state == "failed":
-                # A failed execution keeps its ownership for review; waiting
-                # would never succeed, so viewers see an uncoded failure.
-                await JSONResponse(
-                    {
-                        "detail": "Project execution stopped; accepted work remains saved. Review the project runtime status."
-                    },
-                    status_code=503,
-                )(scope, receive, send)
-            elif scope["type"] == "http":
-                await JSONResponse(
-                    project_runtime_unavailable_body(
-                        "Project execution is reconnecting; accepted work remains saved",
-                        "starting"
-                        if self.state in {"unassigned", "prepared"}
-                        else "closing",
-                    ),
-                    status_code=503,
-                    headers=project_runtime_unavailable_headers(),
-                )(scope, receive, send)
+            await self._unavailable(scope, receive, send)
             return
         if scope["type"] == "http" and scope["method"] not in {
             "GET",
@@ -764,9 +767,13 @@ class ProjectExecution:
                 # diagnostic-expected: ordinary lease loss fences admission and returns the existing reconnect response.
                 self.state = "fenced"
                 self._stop.set()
-                await self.app(scope, receive, send)
+            # Quiescence, close or lease loss may have stopped this worker
+            # while the fence was checked; its application is then gone.
+            application = self.application
+            if self.state != "ready" or application is None:
+                await self._unavailable(scope, receive, send)
                 return
-            await self.application(scope, receive, send)
+            await application(scope, receive, send)
 
     async def close(self):
         if self._close_task is None:

@@ -85,6 +85,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.websockets import WebSocketState
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
@@ -589,6 +590,11 @@ from .writing_ai import (
     WritingTransformResponse,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .runtime_coordination import LeaseLost
+from .runtime_ipc import (
+    project_runtime_unavailable_body,
+    project_runtime_unavailable_headers,
+)
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
     CHAT_RESUME_COMMAND,
@@ -3428,6 +3434,56 @@ def create_execution_kernel(
         )
         response.headers["Retry-After"] = "1"
         return response
+
+    @app.exception_handler(LeaseLost)
+    async def lease_lost_handler(
+        connection: Request | WebSocket, exc: LeaseLost
+    ) -> Response | None:
+        # This worker no longer owns the project: retirement, a handoff or an
+        # expired lease released it while the request ran here, so its next
+        # transaction was fenced. A read is safe to repeat: Core routes it to
+        # the current owner, or answers this same coded 503 until one is ready.
+        # A saved mutation keeps its outcome. DurableHttpRunner cannot record
+        # an answer for a lost lease, so the command is reconciled and never
+        # offered for resending.
+        websocket = isinstance(connection, WebSocket)
+        if not websocket and connection.method not in {"GET", "HEAD", "OPTIONS"}:
+            raise exc
+        emit_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.project.read_fenced",
+            "A read reached a project worker that no longer owns the project; the client reads again.",
+            stage="request",
+            retryable=True,
+            exception=exc,
+            metadata={
+                "route": getattr(connection.scope.get("route"), "path", "unmatched"),
+                "transport": "websocket" if websocket else "http",
+            },
+        )
+        reconnect = JSONResponse(
+            project_runtime_unavailable_body(
+                "The project worker changed while this read ran. Saved work is unchanged; read again shortly.",
+                "closing",
+            ),
+            status_code=503,
+            headers=project_runtime_unavailable_headers(),
+        )
+        if not isinstance(connection, WebSocket):
+            return reconnect
+        if connection.application_state == WebSocketState.CONNECTING:
+            # Refuse the handshake with the same answer when the server can
+            # send one; any refused handshake is a reconnect for the proxy.
+            if "websocket.http.response" in connection.scope.get("extensions", {}):
+                return reconnect
+            await connection.close(code=1012)
+        elif connection.application_state == WebSocketState.CONNECTED:
+            await connection.close(
+                code=1012,
+                reason="Runtime connection changed; reconnect using the saved cursor",
+            )
+        return None
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
