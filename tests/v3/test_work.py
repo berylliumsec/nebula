@@ -20,6 +20,7 @@ from nebula.v3.domain import (
     ChatTurnStatus,
     Engagement,
     ProviderProfile,
+    ScopePolicy,
     WorkItem,
     WorkUpdate,
 )
@@ -297,7 +298,12 @@ async def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
         )
     )
     service = WorkService(store)
-    components = work_components(service, project.id, tmp_path)
+    components = work_components(
+        service,
+        project.id,
+        tmp_path,
+        ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id),
+    )
 
     async def call(name: str, arguments: dict):
         return await components.broker.execute(
@@ -361,7 +367,12 @@ async def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
     other = await service.create(
         unrelated.id, WorkCreate(title="Other"), actor_id="import"
     )
-    components = work_components(service, parent.id, tmp_path)
+    components = work_components(
+        service,
+        parent.id,
+        tmp_path,
+        ScopePolicy(id=f"scope:{parent.id}", engagement_id=parent.id),
+    )
 
     async def call(name: str, arguments: dict):
         return await components.broker.execute(
@@ -427,7 +438,12 @@ async def test_provider_work_pages_and_reads_full_long_item(tmp_path):
                 )
             )
         )
-    components = work_components(service, project.id, tmp_path)
+    components = work_components(
+        service,
+        project.id,
+        tmp_path,
+        ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id),
+    )
     assert "next_offset" in components.specs["work_list"].description
     assert "next_description_offset" in components.specs["work_get"].description
 
@@ -741,7 +757,12 @@ async def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path
         )
     )
 
-    components = work_roster_components(service, project.id, tmp_path)
+    components = work_roster_components(
+        service,
+        project.id,
+        tmp_path,
+        ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id),
+    )
 
     async def roster():
         result = await components.broker.execute(

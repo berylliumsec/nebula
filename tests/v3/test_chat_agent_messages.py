@@ -3,6 +3,8 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+from pathlib import Path
+
 import pytest
 
 from nebula.v3.chat import (
@@ -13,6 +15,7 @@ from nebula.v3.chat import (
 )
 from nebula.v3.chat_agent_messages import (
     AgentMessageService,
+    agent_message_components,
     resolve_agent_messaging_choice,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
@@ -40,6 +43,7 @@ from nebula.v3.domain import (
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.harnesses import HarnessConfigurationError
 from nebula.v3.storage import NebulaStore
+from nebula.v3.work import work_components, work_roster_components
 from nebula.v3.tools import InvalidToolArguments, ToolInvocation, ToolNotPermitted
 from tests.v3.test_chat import FakeProvider
 
@@ -659,3 +663,19 @@ async def test_core_owned_tool_families_carry_the_projects_stored_scope(tmp_path
     await restarted.complete(resumed)
     await service.shutdown()
     await restarted.shutdown()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: agent_message_components(
+            None, engagement_id="project", workspace=Path("/tmp")
+        ),
+        lambda: work_components(None, "project", Path("/tmp")),
+        lambda: work_roster_components(None, "project", Path("/tmp")),
+    ],
+    ids=["agent-messages", "work", "work-roster"],
+)
+def test_core_owned_tool_families_refuse_a_missing_scope(build):
+    with pytest.raises(ValueError, match="require the project's scope policy"):
+        build()
