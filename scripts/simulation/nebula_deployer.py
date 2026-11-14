@@ -2867,6 +2867,17 @@ def require_host_schema_compatibility(
         )
 
 
+def confirm_api_read(client: CoreClient | None = None) -> None:
+    """Read one authenticated page through the promoted API worker.
+
+    Health alone can be served by the supervisor while the API worker is dead
+    or hung; readiness requires the API itself to answer.
+    """
+    page = (client or api()).get("engagements", offset=0, limit=1)
+    if not isinstance(page, list):
+        raise ValueError("Core API read returned an invalid project page")
+
+
 def read_supervisor_health() -> tuple[dict[str, Any], dict[str, Any]]:
     client = api()
     health = client.get("health")
@@ -2911,6 +2922,7 @@ def wait_supervisor_host_ready(
                 last_problem = "host health is not ready"
                 time.sleep(2)
                 continue
+            confirm_api_read()
             if (
                 health.get("commit") != version
                 or health.get("recovery_version") != expected_package_version
@@ -3930,6 +3942,7 @@ def wait_ready(commit: str) -> None:
                 or health.get("status") != "ok"
             ):
                 raise ValueError("Core health identity or status is invalid")
+            confirm_api_read(client)
             request = Request("http://127.0.0.1:8000/web-build.json")
             with urlopen(request, timeout=10) as response:
                 web = json.load(response)
