@@ -1633,6 +1633,15 @@ async def test_project_edit_and_archived_delete_without_a_chat_admit_their_worke
             result={"http_status": 200},
         )
     await automatic.reconcile()
+    # The grace keeps both workers for the next action on these quiet projects.
+    assert retired == [] and len(prepared) == 2
+    batch.clock[0] += automatic.idle_grace_ms + 1_000
+    async with batch.database.session() as session:
+        for project_id in leases:
+            owner = await session.get(ProjectOwnershipRow, project_id)
+            owner.lease_expires_at_ms = batch.clock[0] + LEASE_MS
+        await session.commit()
+    await automatic.reconcile()
     assert sorted(retired) == ["one", "two"] and len(prepared) == 2
 
 
@@ -1730,3 +1739,113 @@ async def test_request_waits_out_a_retiring_project_worker(batch, tmp_path):
             )
         )
     assert keys == {"edit-during-retirement"}
+
+
+async def test_quiet_project_keeps_its_worker_for_a_bounded_grace(batch):
+    await runtime(batch, "quiet-worker")
+    lease = await batch.coordination.claim_project("one", "quiet-worker")
+    # A rename on a chatless project: routed to its worker and finished.
+    await batch.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="rename",
+        name="inert",
+        payload={},
+    )
+    claimed = await batch.coordination.claim_next(lease, lane="work")
+    await batch.coordination.finish_command(
+        lease, claimed.receipt.command_id, result={}
+    )
+    async with batch.database.session() as session:
+        api_host = await session.get(DeploymentHostRow, "host")
+        api_host.api_runtime_id = "synthetic-api"
+    retired = []
+
+    async def retire_idle_project(project_id):
+        retired.append(project_id)
+        return True
+
+    async def reconcile_idle_project_retirements():
+        return []
+
+    prepared = []
+
+    async def prepare_execution(_version):
+        prepared.append(_version)
+        raise RuntimeError("synthetic: no memory reserve for another worker")
+
+    async def attach_execution(project_id, runtime_id):
+        pytest.fail("No worker was prepared")
+
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare_execution,
+            attach_execution=attach_execution,
+            host=SimpleNamespace(
+                retire_idle_project=retire_idle_project,
+                reconcile_idle_project_retirements=reconcile_idle_project_retirements,
+            ),
+        ),
+        default_version="supported",
+    )
+    assert automatic.idle_grace_ms == 300_000
+    await automatic.reconcile()
+    assert retired == [], "the next action on this project would pay a cold start"
+
+    # Another project opens a chat, and its worker cannot be started.
+    waiting = await batch.store.create(
+        ChatSession(
+            engagement_id="two",
+            title="Waiting conversation",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    await automatic.reconcile()
+    assert len(prepared) == 1 and retired == []
+    # While it waits to retry, the idle worker spends no grace.
+    await automatic.reconcile()
+    assert retired == ["one"]
+
+    # Once nothing waits for a worker, the grace is bounded by the last
+    # request; the failed project's retry record alone does not end it.
+    await batch.store.update(
+        ChatSession,
+        waiting.id,
+        {"metadata": {"archived_at": "2026-11-13T00:00:00+00:00"}},
+        expected_revision=waiting.revision,
+    )
+    retired.clear()
+    automatic._retirement_cursor = None
+
+    async def advance(milliseconds):
+        batch.clock[0] += milliseconds
+        # The worker keeps renewing its lease meanwhile.
+        async with batch.database.session() as session:
+            owner = await session.get(ProjectOwnershipRow, "one")
+            owner.lease_expires_at_ms = batch.clock[0] + LEASE_MS
+            await session.commit()
+
+    await advance(299_000)
+    await automatic.reconcile()
+    assert retired == []
+    await advance(2_000)
+    await automatic.reconcile()
+    assert retired == ["one"]
+
+
+def test_idle_worker_grace_override_is_bounded(monkeypatch):
+    from nebula.v3.runtime_auto_admission import idle_worker_grace_ms
+
+    for raw, expected in (
+        ("0", 0),
+        ("90", 90_000),
+        ("999999", 3_600_000),
+        ("-5", 0),
+        ("soon", 300_000),
+        ("nan", 300_000),
+    ):
+        monkeypatch.setenv("NEBULA_IDLE_WORKER_GRACE_SECONDS", raw)
+        assert idle_worker_grace_ms() == expected
