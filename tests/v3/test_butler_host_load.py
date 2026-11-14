@@ -127,7 +127,7 @@ async def test_host_load_is_discoverable_read_only_and_rereads_core(tmp_path):
             and second["reason"] is None
         )
         assert calls == [("GET", "Bearer synthetic-host-read")] * 2
-        catalog = app.state.control_assistant_work.catalog(project.id)
+        catalog = await app.state.control_assistant_work.catalog(project.id)
         assert catalog["host_admission"]["read_operation"] == "nebula.work.host_load"
         with pytest.raises(CapabilityInputError):
             await butler.invoke(arguments, change=True)

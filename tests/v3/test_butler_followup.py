@@ -116,20 +116,21 @@ async def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             )
         )
     )
-    assert work.subagent_detail(project.id, "sub-1")["parent_session_id"] == parent.id
-    assert work.subagent_detail(project.id, "sub-1")["parent_url"].endswith(
+    assert (await work.subagent_detail(project.id, "sub-1"))[
+        "parent_session_id"
+    ] == parent.id
+    assert (await work.subagent_detail(project.id, "sub-1"))["parent_url"].endswith(
         f"session={parent.id}"
     )
-    assert (
-        work.subagent_detail(project.id, "sub-2")["message_via_session_id"] == parent.id
-    )
-    assert work.chat_detail(project.id, goal_child.id)["parent_url"].endswith(
+    assert (await work.subagent_detail(project.id, "sub-2"))[
+        "message_via_session_id"
+    ] == parent.id
+    assert (await work.chat_detail(project.id, goal_child.id))["parent_url"].endswith(
         f"session={parent.id}"
     )
-    assert (
-        work.chat_detail(project.id, goal_child.id)["message_via_session_id"]
-        == parent.id
-    )
+    assert (await work.chat_detail(project.id, goal_child.id))[
+        "message_via_session_id"
+    ] == parent.id
 
     async def scenario():
         with pytest.raises(ValueError, match="delegated subagent"):
@@ -141,9 +142,9 @@ async def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
                 },
             )
         with pytest.raises(ValueError, match="delegated subagent"):
-            work.queue_detail(project.id, child.id)
+            await work.queue_detail(project.id, child.id)
         with pytest.raises(ValueError, match="delegated subagent"):
-            work.queue_action(
+            await work.queue_action(
                 project.id,
                 {
                     "session_id": child.id,
@@ -162,7 +163,7 @@ async def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
                 },
             )
         with pytest.raises(ValueError, match="child goal chat"):
-            work.queue_action(
+            await work.queue_action(
                 project.id,
                 {
                     "session_id": goal_child.id,
@@ -186,12 +187,12 @@ async def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             },
         )
         assert sent["delivery"] == "queued"
-        assert work.queue.get(parent.id).items[0]["request"]["messages"][0][
+        assert (await work.queue.get(parent.id)).items[0]["request"]["messages"][0][
             "content"
         ] == ("Please redirect Files to the new question")
 
     (await scenario())
-    actions = work.catalog(project.id)["actions"]
+    actions = (await work.catalog(project.id))["actions"]
     assert {
         "nebula.work.fork_chat",
         "nebula.work.delete_chat",
@@ -260,15 +261,17 @@ async def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypa
             },
         )
     )
-    roster = work.subagents_overview(project.id, {})
+    roster = await work.subagents_overview(project.id, {})
     native = roster["native_subagents"][0]
     assert native["source"] == "native_harness"
     assert native["parent_session_id"] == chat.id
     assert native["can_stop"] is True
     assert native["can_message"] is False
-    assert work.overview(project.id)["native_subagents"][0]["task_id"] == "task-1"
+    assert (await work.overview(project.id))["native_subagents"][0][
+        "task_id"
+    ] == "task-1"
     with pytest.raises(ValueError, match="project's work roster"):
-        work.native_subagent_detail(
+        await work.native_subagent_detail(
             foreign.id,
             {
                 "turn_id": turn.id,
@@ -305,6 +308,8 @@ async def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypa
     )
     assert stopped["status"] == "cancelled"
     assert stopped["can_stop"] is False
+    # The active entry is fabricated: no ChatTurn backs it for shutdown to interrupt.
+    work.harness._active.pop(session.id)
 
 
 async def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
@@ -374,18 +379,16 @@ async def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
             },
         )
     )
-    detail = work.goal_detail(project.id, chat.id)
+    detail = await work.goal_detail(project.id, chat.id)
     assert detail["goal"] is None
     assert detail["native_harness_goal"]["objective"] == "Audit code"
     assert detail["native_harness_goal"]["control_supported"] is False
-    assert (
-        work.goals_overview(project.id)["native_harness_goals"][0]["session_id"]
-        == chat.id
-    )
-    assert (
-        work.overview(project.id)["chats"][0]["native_harness_goal"]["source"]
-        == "native_harness"
-    )
+    assert (await work.goals_overview(project.id))["native_harness_goals"][0][
+        "session_id"
+    ] == chat.id
+    assert (await work.overview(project.id))["chats"][0]["native_harness_goal"][
+        "source"
+    ] == "native_harness"
 
 
 pytestmark = pytest.mark.anyio

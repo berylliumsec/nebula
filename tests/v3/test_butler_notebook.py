@@ -27,6 +27,13 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError, GuidedToolError
 
 
+def _saved_policy(runtime):
+    async def project_policy(_project_id):
+        return runtime.policy
+
+    return project_policy
+
+
 async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     root = tmp_path / "selected"
@@ -290,7 +297,7 @@ async def test_butler_notebook_package_lookup_requires_policy_and_excludes_unver
             network_enabled=False,
         )
     )
-    runtime.project_policy = lambda _: runtime.policy
+    runtime.project_policy = _saved_policy(runtime)
     notebooks.automation_runtime = runtime
 
     async def invoke(name, arguments, *, change=False):
@@ -370,7 +377,7 @@ async def test_butler_notebook_restart_reports_absence_and_requires_current_idle
             host_access_acknowledged=True,
         )
     )
-    runtime.project_policy = lambda _: runtime.policy
+    runtime.project_policy = _saved_policy(runtime)
     notebooks.automation_runtime = runtime
     commands: list[str] = []
 
@@ -513,7 +520,7 @@ async def test_butler_notebook_package_install_requires_pin_and_observed_version
             network_enabled=False,
         )
     )
-    runtime.project_policy = lambda _: runtime.policy
+    runtime.project_policy = _saved_policy(runtime)
     notebooks.automation_runtime = runtime
     observed_versions: list[str | None] = [None, "1.0.0"]
     commands: list[list[str]] = []
@@ -602,7 +609,7 @@ async def test_docker_package_read_is_unknown_until_persisted_environment_is_mou
         policy=policy,
         _sessions={"renewed": SimpleNamespace(backend=backend)},
     )
-    runtime.project_policy = lambda _: runtime.policy
+    runtime.project_policy = _saved_policy(runtime)
     notebooks.automation_runtime = runtime
     monkeypatch.setattr(notebooks_module, "ContainerRuntimeSession", SimpleNamespace)
     commands: list[list[str]] = []
@@ -647,7 +654,7 @@ async def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp
             network_enabled=False,
         )
     )
-    runtime.project_policy = lambda _: runtime.policy
+    runtime.project_policy = _saved_policy(runtime)
     notebooks.automation_runtime = runtime
 
     async def invoke(name, arguments=None, *, change=False):

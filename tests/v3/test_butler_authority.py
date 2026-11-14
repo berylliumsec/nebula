@@ -6,7 +6,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 from datetime import timedelta
 
 from tests.v3.async_test_support import AsyncTestClient as TestClient
@@ -104,19 +103,17 @@ async def _setup(tmp_path, *, child: bool = False):
             GoalWrite(expected_revision=child_goal.revision, action="start"),
         )
     worker = app.state.butler_oversight
-    assert worker.replay_project(project.id)
+    assert await worker.replay_project(project.id)
     return store, app, project, main, main_goal, target, worker
 
 
-def _review(store, project, worker, choice, *, why_now=""):
-    decision = asyncio.run(
-        review_pending(
-            store,
-            project.id,
-            worker.worker_id,
-            _Reviewer(choice, why_now=why_now),
-            worker.memory_service,
-        )
+async def _review(store, project, worker, choice, *, why_now=""):
+    decision = await review_pending(
+        store,
+        project.id,
+        worker.worker_id,
+        _Reviewer(choice, why_now=why_now),
+        worker.memory_service,
     )
     assert decision is not None and decision.status == "reviewed"
     return decision
@@ -130,7 +127,7 @@ async def _overdue(store, project, goal, worker):
             {"progress_due_at": utc_now() - timedelta(seconds=1)},
         )
     )
-    assert worker.fire_due_deadlines(project.id) == 1
+    assert await worker.fire_due_deadlines(project.id) == 1
     assert any(
         event.event_type == "goal.progress_overdue"
         for event in (
@@ -571,22 +568,22 @@ async def test_delegate_requires_explicit_pause_grant_and_pauses_main_goal(tmp_p
 async def test_revoked_authority_cancels_planned_action_before_dispatch(tmp_path):
     store, app, project, main, goal, _, worker = await _setup(tmp_path)
     authority = app.state.butler_authority
-    authority.write(
+    await authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
     (await _overdue(store, project, goal, worker))
-    _review(store, project, worker, "ask")
-    assert authority.plan_next(project.id, worker.worker_id)
+    await _review(store, project, worker, "ask")
+    assert await authority.plan_next(project.id, worker.worker_id)
     planned = await store.find_entities(ButlerAction, {}, engagement_id=project.id)
     assert len(planned) == 1 and planned[0].status == "planned"
-    authority.write(
+    await authority.write(
         project.id,
         AuthorityWrite(authority="watch", delegate_actions=[], expected_revision=1),
     )
     (await authority.process_project(project.id, worker.worker_id))
     assert (await store.get(ButlerAction, planned[0].id)).status == "cancelled"
-    assert app.state.control_assistant_work.queue.get(main.id).items == []
+    assert (await app.state.control_assistant_work.queue.get(main.id)).items == []
 
 
 async def test_revoke_and_regrant_during_dispatch_cannot_use_old_event(
@@ -770,15 +767,15 @@ async def test_attention_re_review_keeps_agent_claim_unverified_and_parent_only(
 async def test_new_authority_does_not_replay_older_reviewed_decisions(tmp_path):
     store, app, project, main, goal, _, worker = await _setup(tmp_path)
     (await _overdue(store, project, goal, worker))
-    _review(store, project, worker, "ask")
+    await _review(store, project, worker, "ask")
     authority = app.state.butler_authority
-    authority.write(
+    await authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
     (await authority.process_project(project.id, worker.worker_id))
     assert (await store.count_entities(ButlerAction, engagement_id=project.id)) == 0
-    assert app.state.control_assistant_work.queue.get(main.id).items == []
+    assert (await app.state.control_assistant_work.queue.get(main.id)).items == []
 
 
 async def test_interrupted_dispatch_without_queue_receipt_stays_uncertain(tmp_path):

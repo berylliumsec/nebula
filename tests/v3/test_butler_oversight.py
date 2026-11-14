@@ -208,9 +208,11 @@ async def test_goal_transitions_commit_watch_and_project_events_then_close_after
 ):
     _, store, goals = await _setup(tmp_path)
     signals = []
-    store.on_project_oversight_change(
-        lambda project_id: signals.append((project_id, len(_events(store, project_id))))
-    )
+
+    async def record_signal(project_id):
+        signals.append((project_id, len(await _events(store, project_id))))
+
+    store.on_project_oversight_change(record_signal)
     running = await _start(goals)
 
     watch = await store.get(ButlerGoalWatch, watch_id(running.id))

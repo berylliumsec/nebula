@@ -408,8 +408,9 @@ async def test_ordinary_openrouter_completion_checks_credits_after_exchange_comm
         )
     )
     observed: list[tuple[str, int]] = []
+    scheduled: list[asyncio.Task] = []
 
-    async def check_after_commit(provider_id: str) -> None:
+    async def read_after_commit(provider_id: str) -> None:
         messages = await store.list_session_entities(ChatMessage, "session")
         observed.append(
             (
@@ -417,6 +418,10 @@ async def test_ordinary_openrouter_completion_checks_credits_after_exchange_comm
                 sum(message.role == ChatRole.ASSISTANT for message in messages),
             )
         )
+
+    def check_after_commit(provider_id: str) -> None:
+        # The observer is a synchronous scheduler, like the real credit check.
+        scheduled.append(asyncio.ensure_future(read_after_commit(provider_id)))
 
     chat = ChatService(
         store,
@@ -438,6 +443,7 @@ async def test_ordinary_openrouter_completion_checks_credits_after_exchange_comm
     assert prepared.tools_enabled is False
     completion = await chat.complete(prepared)
     assert completion.usage.total_tokens == 4
+    await asyncio.gather(*scheduled)
     assert observed == [(profile.id, 1)]
 
 
@@ -474,11 +480,13 @@ async def test_native_mission_attempt_usage_signals_account_check_after_commit(
         )
     )
     observed = []
-    store.on_provider_usage_change(
-        lambda profile_id: observed.append(
-            (profile_id, store.get(AgentAttempt, attempt.id).tokens_used)
+
+    async def record_usage(profile_id):
+        observed.append(
+            (profile_id, (await store.get(AgentAttempt, attempt.id)).tokens_used)
         )
-    )
+
+    store.on_provider_usage_change(record_usage)
     updated = await store.update(AgentAttempt, attempt.id, {"tokens_used": 4})
     assert updated.tokens_used == 4
     assert observed == [("provider", 4)]
