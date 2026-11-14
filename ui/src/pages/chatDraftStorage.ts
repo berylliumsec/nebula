@@ -62,6 +62,56 @@ export function chatDraftStorageKey(engagementId: string, sessionId?: string, sc
   return `${DRAFT_PREFIX}:${encodeURIComponent(scope ?? "unscoped")}:${encodeURIComponent(engagementId)}:${encodeURIComponent(sessionId || "new")}`;
 }
 
+/** What a composer draft key names: a storage scope, a project and a chat ("" before it is created). */
+export interface ChatDraftIdentity {
+  scope: string;
+  persistent: boolean;
+  engagementId: string;
+  sessionId: string;
+}
+
+export interface ChatDraftKeyChange {
+  /** The last persistent storage identity this composer used, if any. */
+  lastPersistentScope?: string;
+  /** A chat this composer's own first send just created ("" became this id). */
+  namedSessionId?: string;
+  /** A chat this composer's failed first send just gave up ("this id" became ""). */
+  abandonedSessionId?: string;
+}
+
+/**
+ * Whether the text in the composer belongs to the chat its key now names.
+ *
+ * Loading re-keys the same conversation without the operator choosing
+ * another one: the storage scope moves between this window's temporary scope
+ * and the Core identity (first load or a reconnect), or the composer's own
+ * first send names (or gives up) the chat it created. The text then follows
+ * the key instead of being filed under the old one and replaced by an empty
+ * draft. Anything else, including two different Core identities, is another
+ * chat or scope and must never receive this text.
+ */
+export function draftFollowsKeyChange(
+  previous: ChatDraftIdentity | undefined,
+  next: ChatDraftIdentity | undefined,
+  change: ChatDraftKeyChange = {},
+): boolean {
+  if (!previous || !next || previous.engagementId !== next.engagementId) return false;
+  const sameScope = previous.scope === next.scope;
+  const sameSession = previous.sessionId === next.sessionId;
+  if (sameScope && sameSession) return false;
+  if (sameSession) {
+    // Only through this window's temporary scope, and never into a Core
+    // identity other than the one this composer last used.
+    if (previous.persistent && next.persistent) return false;
+    if (next.persistent && change.lastPersistentScope !== undefined && next.scope !== change.lastPersistentScope) return false;
+    return true;
+  }
+  if (!sameScope) return false;
+  if (!previous.sessionId && next.sessionId) return next.sessionId === change.namedSessionId;
+  if (previous.sessionId && !next.sessionId) return previous.sessionId === change.abandonedSessionId;
+  return false;
+}
+
 export function readChatDraft(storage: Storage, key: string): string {
   try {
     return readRecord(storage, key)?.text ?? "";
