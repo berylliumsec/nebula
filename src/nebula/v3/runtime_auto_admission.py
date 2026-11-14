@@ -443,12 +443,14 @@ class RuntimeAutoAdmission:
                     delay = _ADMISSION_BACKOFF_SECONDS[
                         min(failures, len(_ADMISSION_BACKOFF_SECONDS)) - 1
                     ]
+                    # Say why first, so the retry delay runs from after the
+                    # write and is not spent on it.
+                    await self._record_hold(demand.project_id, error, failures)
                     self._admission_retry[demand.project_id] = _AdmissionRetry(
                         signature,
                         failures,
                         asyncio.get_running_loop().time() + delay,
                     )
-                    await self._record_hold(demand.project_id, error, failures)
                     record_caught_exception(
                         "runtime",
                         "runtime.project_admission.waiting",

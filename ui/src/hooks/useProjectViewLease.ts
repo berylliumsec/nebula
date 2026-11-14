@@ -14,7 +14,8 @@ function pageHidden(): boolean {
  * While a project view is open, hold a lease that tells Core the project is in
  * use, so an idle project's worker starts and its views load. Renewed while the
  * page is visible; a hidden page lets it lapse (Core retires the worker after
- * its idle grace) and takes it again on return. Released on leaving the project.
+ * its idle grace) and takes it again on return. Released on leaving the project
+ * and when the page itself goes away (closed, reloaded or navigated off).
  */
 export function useProjectViewLease(api: Pick<ApiClient, "holdProjectView" | "releaseProjectView" | "projectRuntime"> | null | undefined, projectId: string | undefined): void {
   useEffect(() => {
@@ -52,16 +53,31 @@ export function useProjectViewLease(api: Pick<ApiClient, "holdProjectView" | "re
       }
       void hold();
     };
-    void hold();
-    document.addEventListener("visibilitychange", visibility);
-    return () => {
-      controller.abort();
-      if (timer !== undefined) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", visibility);
+    const release = () => {
       void api.releaseProjectView(projectId, leaseId).catch((error: unknown) => {
         // diagnostic-expected: the lease lapses on its own when the release cannot run.
         void logCaughtDiagnostic("interface.project_view.release_failed", "A closed project view's lease could not be released; it lapses on its own.", error, "project-view");
       });
+    };
+    // A page that goes away never unmounts; end its lease now (keepalive) so
+    // the idle grace starts at once. A page restored from cache holds it again.
+    const pageHide = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+      release();
+    };
+    const pageShow = (event: PageTransitionEvent) => { if (event.persisted) void hold(); };
+    void hold();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("pagehide", pageHide);
+    window.addEventListener("pageshow", pageShow);
+    return () => {
+      controller.abort();
+      if (timer !== undefined) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("pagehide", pageHide);
+      window.removeEventListener("pageshow", pageShow);
+      release();
     };
   }, [api, projectId]);
 }
