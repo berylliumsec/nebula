@@ -43,7 +43,7 @@ describe("project runtime classification", () => {
     expect(projectRuntimeRetryDelay(0, 3000)).toBe(3000);
     expect(projectRuntimeRetryDelay(3, 60_000)).toBe(10_000);
     // An idle project waits for the operator, so it is asked less often.
-    expect([0, 3, 4, 9].map(attempt => projectRuntimeRetryDelay(attempt, undefined, "idle"))).toEqual([1000, 8000, 15_000, 15_000]);
+    expect([0, 3, 4, 9].map(attempt => projectRuntimeRetryDelay(attempt, undefined, "idle"))).toEqual([1000, 8000, 10_000, 10_000]);
   });
 });
 
@@ -164,14 +164,26 @@ describe("ProjectRuntimeRecovery", () => {
     expect(recovery.state).toBe("idle");
     await vi.advanceTimersByTimeAsync(1000 + 2000 + 4000 + 8000);
     expect(probe).toHaveBeenCalledTimes(4);
-    await vi.advanceTimersByTimeAsync(14_999);
+    await vi.advanceTimersByTimeAsync(9_999);
     expect(probe).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(1);
     expect(probe).toHaveBeenCalledTimes(5);
-    // The operator resumes work: Core starts a worker, and the line says so.
+    // The operator resumes work from this page: the write restarts the backoff.
     probe.mockResolvedValue({ answered: false, reason: "starting" });
-    await vi.advanceTimersByTimeAsync(15_000);
+    recovery.nudge();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(probe).toHaveBeenCalledTimes(6);
     expect(recovery.state).toBe("reconnecting");
+  });
+
+  it("ignores a nudge while nothing waits", async () => {
+    const probe = vi.fn().mockResolvedValue({ answered: true });
+    const recovery = new ProjectRuntimeRecovery(probe);
+    recovery.nudge();
+    recovery.unavailable("chat/sessions/a/goal");
+    recovery.nudge();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(probe).not.toHaveBeenCalled();
   });
 });
 

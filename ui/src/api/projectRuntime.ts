@@ -13,14 +13,15 @@
  * page is hidden. Core says why the worker is away: "starting" and "closing"
  * end on their own, while an "idle" project waits for the operator to resume
  * work in it (reads never admit a worker), so it is probed less often and
- * described differently.
+ * described differently. A write from this page (unarchive, a project command,
+ * a message) may be what readmits the worker, so it restarts the backoff.
  */
 
 export const PROJECT_RUNTIME_UNAVAILABLE = "project_runtime_unavailable";
 
 const BASE_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 5_000;
-const IDLE_DELAY_MS = 15_000;
+const IDLE_DELAY_MS = 10_000;
 const MAX_RETRY_AFTER_MS = 10_000;
 const MAX_TRACKED_READS = 16;
 
@@ -64,7 +65,7 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
   return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
 }
 
-/** 1 s, 2 s, 4 s, then 5 s (15 s for an idle project); a longer Retry-After (up to 10 s) is honoured. */
+/** 1 s, 2 s, 4 s, then 5 s (10 s for an idle project); a longer Retry-After (up to 10 s) is honoured. */
 export function projectRuntimeRetryDelay(attempt: number, retryAfterMs?: number, reason: ProjectRuntimeReason = "starting"): number {
   const ceiling = reason === "idle" ? IDLE_DELAY_MS : MAX_DELAY_MS;
   const backoff = Math.min(ceiling, BASE_DELAY_MS * 2 ** Math.max(0, Math.min(attempt, 8)));
@@ -117,6 +118,15 @@ export class ProjectRuntimeRecovery {
     this.failed.set(key, { path, retryAfterMs, reason });
     while (this.failed.size > MAX_TRACKED_READS) this.failed.delete(this.failed.keys().next().value!);
     this.notify();
+    this.schedule();
+  }
+
+  /** This page sent a write, which may readmit the worker: probe again soon. */
+  nudge(): void {
+    if (!this.failed.size || !this.waiters.size) return;
+    this.attempt = 0;
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
     this.schedule();
   }
 

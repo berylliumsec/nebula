@@ -5402,6 +5402,8 @@ export class ApiClient {
     }
 
     const read = method === "GET" || method === "HEAD";
+    // A write may be what readmits an idle project's worker.
+    if (!read) this.projectRuntime.nudge();
     if (!response.ok && !(acceptNotModified && response.status === 304)) {
       const rejected = await this.definitiveRejection(response);
       const error = await responseError(response);

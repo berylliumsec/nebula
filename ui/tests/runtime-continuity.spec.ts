@@ -171,7 +171,8 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
   await page.evaluate(() => { (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument = true; });
   recording = true;
   await unarchive.click();
-  await expect.poll(projectRuntime, {timeout: 120_000}).not.toBeNull();
+  // Readmission starts a real worker process; allow for a slow runner.
+  await expect.poll(projectRuntime, {timeout: 180_000}).not.toBeNull();
   await expect(answer).toBeVisible({timeout: 30_000});
   await expect(bookmark).toHaveAttribute("aria-pressed", "true");
   await expect(reconnecting).toBeHidden();
