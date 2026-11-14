@@ -29,14 +29,19 @@ from nebula.v3.database_migration import (
     migrate_sqlite_to_postgresql,
 )
 from nebula.v3 import database_migration as migration
+from tests.v3.async_test_support import anyio_backend as anyio_backend
 
 
 @pytest.fixture
-async def source(tmp_path: Path) -> Path:
+async def source(tmp_path: Path, anyio_backend) -> Path:
+    # The tests stay synchronous; requesting the backend lets anyio run this
+    # async fixture, which builds the schema with the async Core engine.
     path = tmp_path / "core.db"
     database = Database(path)
+    await database.initialize()
     metadata = MetaData()
-    metadata.reflect(bind=database.engine)
+    async with database.engine.connect() as connection:
+        await connection.run_sync(lambda sync: metadata.reflect(bind=sync))
     now = datetime(2026, 11, 5, 11, 30, 12, 345678, tzinfo=timezone.utc)
     async with database.engine.begin() as connection:
         entities = metadata.tables["entities"]
@@ -57,6 +62,7 @@ async def source(tmp_path: Path) -> Path:
                     )
                 )
             )
+        seeded: dict[str, dict[str, object]] = {}
         for table in metadata.sorted_tables:
             if table.name in {
                 "entities",
@@ -68,7 +74,15 @@ async def source(tmp_path: Path) -> Path:
             values = {}
             for column in table.columns:
                 if column.foreign_keys:
-                    values[column.name] = "project"
+                    # Reference a row this fixture already wrote: the project
+                    # entity, or the seeded row of a runtime table it names.
+                    [reference] = column.foreign_keys
+                    target = reference.column
+                    values[column.name] = (
+                        "project"
+                        if target.table.name == "entities"
+                        else seeded[target.table.name][target.name]
+                    )
                 elif column.nullable:
                     values[column.name] = None
                 elif isinstance(column.type, JSON):
@@ -89,6 +103,7 @@ async def source(tmp_path: Path) -> Path:
                         f"Add synthetic seed for {table.name}.{column.name}"
                     )
             (await connection.execute(table.insert().values(**values)))
+            seeded[table.name] = values
         # JSON null must remain distinct from SQL NULL. A timestamp with an
         # explicit offset must preserve its instant across backend adapters.
         (

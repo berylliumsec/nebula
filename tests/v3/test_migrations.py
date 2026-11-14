@@ -5,9 +5,11 @@ from tests.v3.async_test_support import (
 )
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -22,11 +24,46 @@ from sqlalchemy import (
     select,
     update,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.pool import NullPool
 
 from nebula.v3.database import Database
+from nebula.v3.database_pool import PoolSettings
 from nebula.v3.event_history import prune_orphaned_event_history
+
+# Since c1d88d9 (#960) 0031_runtime_coordination and every later revision
+# refuse to downgrade: code rollback keeps the additive runtime schema. SQL
+# rollback coverage therefore runs on databases that stop at the last
+# revision before that boundary, and a downgrade from head must be refused.
+LAST_REVERSIBLE = "0030_runtime_switch_lookup"
+ROLLBACK_REFUSED = "use compatible code rollback"
+
+
+@contextmanager
+def _postgresql_schema(database_url: str) -> Iterator[str]:
+    """A fresh schema per exercise; a downgrade can no longer reset one."""
+
+    url = make_url(Database._normalize_sync_url(database_url))
+    schema = "nebula_migrations_" + uuid4().hex
+    engine = create_engine(url, poolclass=NullPool)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+    try:
+        yield url.update_query_dict(
+            {"options": f"-csearch_path={schema}"}
+        ).render_as_string(hide_password=False)
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
+        engine.dispose()
+
+
+def _version(engine: Engine) -> str:
+    with engine.connect() as connection:
+        return connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one()
 
 
 def _run_migration(
@@ -48,9 +85,6 @@ def _exercise_migration_cycle(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     reversible_head = "0013_application_model_outbox"
     try:
-        if "alembic_version" in inspect(engine).get_table_names():
-            _run_migration(engine, command.downgrade, "base")
-
         # The graph replacement intentionally cannot reconstruct experimental
         # records. Exercise the reversible chain independently of that boundary.
         _run_migration(engine, command.upgrade, reversible_head)
@@ -92,7 +126,8 @@ def _exercise_migration_cycle(database_url: str) -> None:
             with engine.connect() as connection:
                 remaining = connection.exec_driver_sql(
                     "SELECT count(*) FROM pg_proc "
-                    "WHERE proname='nebula_reject_operation_event_mutation'"
+                    "WHERE proname='nebula_reject_operation_event_mutation' "
+                    "AND pronamespace = to_regnamespace(current_schema())"
                 ).scalar_one()
             assert remaining == 0
 
@@ -102,7 +137,7 @@ def _exercise_migration_cycle(database_url: str) -> None:
         assert "operation_events" not in inspect(engine).get_table_names()
         assert "run_events" not in inspect(engine).get_table_names()
 
-        _run_migration(engine, command.upgrade, "head")
+        _run_migration(engine, command.upgrade, LAST_REVERSIBLE)
         assert {"operation_events", "application_graphs", "session_projections"} <= set(
             inspect(engine).get_table_names()
         )
@@ -110,6 +145,17 @@ def _exercise_migration_cycle(database_url: str) -> None:
             _run_migration(engine, command.downgrade, reversible_head)
         assert "operation_events" in inspect(engine).get_table_names()
         assert "application_graphs" in inspect(engine).get_table_names()
+        assert _version(engine) == LAST_REVERSIBLE
+
+        # From head the runtime boundary refuses first and changes nothing.
+        _run_migration(engine, command.upgrade, "head")
+        head = _version(engine)
+        with pytest.raises(RuntimeError, match=ROLLBACK_REFUSED):
+            _run_migration(engine, command.downgrade, reversible_head)
+        assert {"operation_events", "application_graphs", "session_projections"} <= set(
+            inspect(engine).get_table_names()
+        )
+        assert _version(engine) == head
         _run_migration(engine, command.upgrade, "head")
     finally:
         engine.dispose()
@@ -121,7 +167,7 @@ def _exercise_chat_session_lookup_cycle(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     row_ids = ["postgres-chat-message", "postgres-chat-approval"]
     try:
-        _run_migration(engine, command.downgrade, "0015_session_projection")
+        _run_migration(engine, command.upgrade, "0015_session_projection")
         entities = Table("entities", MetaData(), autoload_with=engine)
         with engine.begin() as connection:
             connection.execute(
@@ -142,7 +188,7 @@ def _exercise_chat_session_lookup_cycle(database_url: str) -> None:
                 ],
             )
 
-        _run_migration(engine, command.upgrade, "head")
+        _run_migration(engine, command.upgrade, LAST_REVERSIBLE)
         projected = Table("entities", MetaData(), autoload_with=engine)
         with engine.connect() as connection:
             values = dict(
@@ -181,7 +227,8 @@ async def _exercise_event_owner_retention_cycle(database_url: str) -> None:
 
     engine = create_engine(database_url, future=True)
     try:
-        _run_migration(engine, command.upgrade, "head")
+        # The downgrade below crosses no runtime revision; head is reached later.
+        _run_migration(engine, command.upgrade, LAST_REVERSIBLE)
         metadata = MetaData()
         entities = Table("entities", metadata, autoload_with=engine)
         operations = Table("operation_events", metadata, autoload_with=engine)
@@ -304,7 +351,10 @@ async def _exercise_event_owner_retention_cycle(database_url: str) -> None:
             connection.execute(
                 runs.insert(), [run_event("orphan-run-3", "deleted-run")]
             )
-        database = Database(database_url, bootstrap=False)
+        # Since #939 a PostgreSQL Core needs an explicit connection budget.
+        database = Database(
+            database_url, bootstrap=False, pool_settings=PoolSettings(5, 12, 2)
+        )
         try:
             report = await prune_orphaned_event_history(
                 database, batch_size=1, min_age=timedelta(0)
@@ -318,6 +368,14 @@ async def _exercise_event_owner_retention_cycle(database_url: str) -> None:
                 "terminal",
             ]
             assert list(connection.execute(select(runs.c.id)).scalars()) == ["live-run"]
+        # At head the history of a record still in place stays put.
+        for table, event_id in (
+            (operations, "live"),
+            (operations, "terminal"),
+            (runs, "live-run"),
+        ):
+            with pytest.raises(DBAPIError, match="while their record exists"):
+                delete_event(table, event_id)
         # Once the project and its records are gone, so may all their history.
         with engine.begin() as connection:
             connection.execute(
@@ -471,9 +529,12 @@ def test_sqlite_migration_failure_leaves_no_partial_schema_and_can_retry(tmp_pat
 )
 async def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
     database_url = os.environ["NEBULA_TEST_POSTGRES_URL"]
-    _exercise_migration_cycle(database_url)
-    _exercise_chat_session_lookup_cycle(database_url)
-    (await _exercise_event_owner_retention_cycle(database_url))
+    with _postgresql_schema(database_url) as url:
+        _exercise_migration_cycle(url)
+    with _postgresql_schema(database_url) as url:
+        _exercise_chat_session_lookup_cycle(url)
+    with _postgresql_schema(database_url) as url:
+        (await _exercise_event_owner_retention_cycle(url))
 
 
 @pytest.mark.skipif(
@@ -481,13 +542,16 @@ async def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
     reason="NEBULA_TEST_POSTGRES_URL is required for PostgreSQL migration coverage",
 )
 def test_postgresql_harness_session_title_lookup_backfills_legacy_links():
-    engine = create_engine(os.environ["NEBULA_TEST_POSTGRES_URL"], future=True)
+    with _postgresql_schema(os.environ["NEBULA_TEST_POSTGRES_URL"]) as url:
+        _exercise_harness_session_title_lookup(url)
+
+
+def _exercise_harness_session_title_lookup(database_url: str) -> None:
+    engine = create_engine(database_url, future=True)
     previous = "0027_chat_turn_status_lookup"
     current = "0028_harness_session_title_lookup"
     ids = ["title-chat", "title-run", "title-turn", "title-number", "title-other"]
     try:
-        if "alembic_version" in inspect(engine).get_table_names():
-            _run_migration(engine, command.downgrade, "base")
         _run_migration(engine, command.upgrade, previous)
         entities = Table("entities", MetaData(), autoload_with=engine)
         with engine.begin() as connection:

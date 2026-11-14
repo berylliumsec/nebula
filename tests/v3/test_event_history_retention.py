@@ -181,7 +181,20 @@ def test_trigger_owner_kinds_are_the_retention_map_and_name_real_records():
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
 
-    assert set(migration._OWNED_OPERATION_KINDS) == set(OPERATION_EVENT_OWNER_KINDS)
+    # abd34d7 (#989) removed the built-in attack workflows and their records,
+    # so the retention map no longer names their kinds. The triggers 0018
+    # installed still do: that superset only lets such history go once its
+    # owner record is gone, and no current record has these kinds.
+    removed_attack_kinds = {
+        "browser_attack",
+        "browser_attack_results",
+        "browser_attacks",
+    }
+    assert set(migration._OWNED_OPERATION_KINDS) == (
+        set(OPERATION_EVENT_OWNER_KINDS) | removed_attack_kinds
+    )
+    assert removed_attack_kinds.isdisjoint(OPERATION_EVENT_OWNER_KINDS)
+    assert removed_attack_kinds.isdisjoint(ENTITY_MODEL_BY_KIND)
     assert set(OPERATION_EVENT_OWNER_KINDS.values()) <= set(ENTITY_MODEL_BY_KIND)
     # These keep their events while the project exists: the id is not a
     # record, or surviving records still read the ledger.
@@ -427,20 +440,21 @@ async def test_deleting_a_conversation_removes_its_turns_history(store):
 async def test_a_delete_returns_before_its_history_is_removed(store, monkeypatch):
     project = await store.create(Engagement(name="Deferred history"))
     deleted, _turn, harness_turn = await _conversation(store, project, "Gone")
-    started = threading.Event()
-    release = threading.Event()
+    # The purge runs as a task on this loop, so gate it with asyncio events.
+    started = asyncio.Event()
+    release = asyncio.Event()
     purge = event_history_module.purge_event_history
 
-    def gated(*args, **kwargs):
+    async def gated(*args, **kwargs):
         started.set()
-        assert release.wait(10)
-        return purge(*args, **kwargs)
+        await asyncio.wait_for(release.wait(), 10)
+        return await purge(*args, **kwargs)
 
     monkeypatch.setattr(event_history_module, "purge_event_history", gated)
 
     # A long history must not hold the write lock or the caller for its length.
     (await store.delete_chat_session(deleted.id))
-    assert started.wait(10)
+    await asyncio.wait_for(started.wait(), 10)
     with pytest.raises(NotFoundError):
         (await store.get(ChatSession, deleted.id))
     assert (await _operation_events(store, harness_turn.id)) == 3
