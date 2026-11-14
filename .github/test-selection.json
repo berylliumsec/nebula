@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
   "reason": "Three shutdown hangs and one log flood. (1) After any supervisor restart, verified handoff/recovery rows whose target no longer owns the project were re-advanced every 0.5 s, failing LeaseLost and logging runtime.project_restore.waiting at ERROR forever; the loop now selects verified rows only while their target still owns the project, logs a waiting transfer once per reason, and writes blockers only when they change. (2) SIGTERM or a confirmed shutdown waited without limit for open viewer streams relayed from workers; the stable listener now has a 5 s graceful shutdown bound. (3) A cancellation swallowed below a loop (Python 3.11 wait_for in the SQLAlchemy pool, or a driver error during cancel cleanup) left storage dispatch and chat follow-ups running after their single cancel(); they now stop on a flag and are re-cancelled until done. Selected tests cover each mechanism directly.",
-  "exclusions": "test_chat_queue.py and test_storage_integrations.py have 17 failures here that are identical on pristine main (host-load timing in this environment), so their files are not selected; the new focused tests drive both services' shutdown paths. Other test_recovery_reconciliation cases need a non-loopback LAN Core fixture and fail identically on main; only the handoff-loop cases are selected. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (SIGTERM with an open /api/v1/work/events stream: >90 s on main, 5.5 s here; restore-waiting flood: ~320/min on main, 0 here on the same database) is in the PR body.",
+  "exclusions": "Other test_recovery_reconciliation cases need a non-loopback LAN Core fixture and fail identically on main; only the handoff-loop cases are selected. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (SIGTERM with an open /api/v1/work/events stream: >90 s on main, 5.5 s here; restore-waiting flood: ~320/min on main, 0 here on the same database) is in the PR body.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 15,
+    "python": 51,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -13,6 +13,8 @@
   "python": [
     "tests/v3/test_stable_listener_shutdown.py",
     "tests/v3/test_swallowed_cancellation.py",
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_chat_queue.py",
     "tests/v3/test_recovery_reconciliation.py::test_finished_recovery_is_not_retried_after_its_target_retires",
     "tests/v3/test_recovery_reconciliation.py::test_waiting_transfer_is_recorded_once_per_reason",
     "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work"
@@ -21,5 +23,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "3d4669236b866bffdbcaec1460bf5a0b25f57e3f015f75f372bb54b21bb67703"
+  "change_digest": "d73043068b7427677ec9cc4b86824e55902fd126d49ef331c5ab5e16dd09e82b"
 }
