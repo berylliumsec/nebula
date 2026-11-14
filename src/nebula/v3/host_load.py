@@ -62,11 +62,14 @@ class HostLoadSnapshot:
         for metric, value in self.readings().items():
             limit = getattr(thresholds, metric)
             if value is not None and math.isfinite(value) and value >= limit:
+                # Waiting work saves this text, so it names the metric and the
+                # threshold only: a live reading would rewrite every queued
+                # turn each time it moved. Readings stay in the sample.
                 return replace(
                     self,
                     busy=True,
                     pressure_metric=metric,
-                    reason=f"Waiting for host pressure: {labels[metric]} ({value:.0%} >= {limit:.0%})",
+                    reason=f"Waiting for host pressure: {labels[metric]} at or above {limit:.0%}",
                 )
         return (
             self

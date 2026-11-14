@@ -1,23 +1,31 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Core follow-up dispatch: ChatQueueService.step now awaits start_provider_turn, harness prepare_chat and start_chat_turn, which #939 made async; the storage alert path awaits ChatQueueService.get/exists/write and harness create_session. test_chat_queue.py covers provider and harness dispatch, sequential draining, model/effort picked after queueing, the reclaimed provider turn, the direct-send race and stuck claims (8 of its 24 tests failed on main from these defects and stale test calls). test_storage_integrations.py covers storage dispatch into the queue and the dashboard's queue status (9 of 11 failed on main because its enroll helper never awaited the request, which also hid the product defect); its new harness-source test covers create_session. The selected harness goal test steps the queue through a reviewed harness follow-up.",
-  "exclusions": "No UI, native or frontend code changed. Playwright area storage-integrations matches storage_integrations.py but is excluded: its real-Core fixture spawns a Core whose provider admission is held by this shared host's CPU pressure gate (load ~40 on 8 CPUs from parallel agents), so it cannot complete here, and real-core.spec.ts is not run on main. assistant-queue-core keeps its queue paused and never dispatches; assistant-queue-reconciliation and chat-provider-queue are mocked. The real-Core dispatch journey was checked instead on scratch Postgres Cores through the same queue API the UI uses (main: follow-up stuck at sending with a never-started turn; this branch: two follow-ups queued during a running response sent in order afterwards and the queue drained). Other suites that import the queue helpers (test_chat_decisions, test_chat_catchup, test_chat_polling_cost, the rest of test_harness_chat_goals) fail identically or only on main at 5ae5b88 for unrelated reasons (un-awaited fork_session in a test, un-awaited AsyncSession.scalar in chat_catchup.py, harness goal runtime switch preconditions).",
+  "reason": "Host pressure's waiting reason embedded the live reading (e.g. 'CPU use (99% >= 80%)'). Queued chat turns, missions and harness turns save that text, so each change in the reading rewrote every waiting record (a real Core turn reached ~50 revisions in 17 minutes; up to one write and one queued stream frame per second) and widened stale-revision windows for harness and mission Stop. The reason now names only the metric and threshold. Selected: host load sampling/admission (with the new regression test), host pressure settings and admission, shared runtime capacity waits, Butler host-load reads, and the host-load-admission browser journey that shows the queued notice.",
+  "exclusions": "test_butler_host_load.py::test_host_load_is_discoverable_read_only_and_rereads_core and test_host_cpu_budget.py (11 cases) fail identically on pristine origin/main and with this patch, so they are excluded. Playwright runs three of the eight host-load-admission profiles (desktop, Chromium 390, WebKit 390), all passing locally on the LAN origin; the other five are the same journey at other widths. Real-Core evidence (scratch Postgres Core, forced CPU threshold: a queued turn's revision 1 -> 33 in 40 s on main vs 2 -> 2 with this patch) is recorded in the PR, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 37,
+    "python": 67,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_storage_integrations.py",
-    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_host_pressure.py",
+    "tests/v3/test_runtime_capacity.py",
+    "tests/v3/test_butler_host_load.py::test_core_startup_syncs_current_host_load_guidance_into_chroma",
+    "tests/v3/test_butler_host_load.py::test_managed_host_load_uses_fixed_route_and_preserves_unknown_values",
+    "tests/v3/test_butler_host_load.py::test_scheduled_global_butler_can_discover_and_reread_host_load",
+    "tests/v3/test_butler_host_load.py::test_expired_host_sample_refresh_runs_off_loop_and_is_shared"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "host-load-admission/model-desktop",
+    "host-load-admission/model-chromium-390",
+    "host-load-admission/model-webkit-390"
+  ],
   "checks": [],
-  "change_digest": "7e1a00a1edadb5fe6c3344d6c6abe11841681aed5b25f5550ed9207d3798ea25"
+  "change_digest": "453dc2ac7e2768b4779194608465df7cb27a49fbc00f80e971dd5d4927cb7639"
 }
