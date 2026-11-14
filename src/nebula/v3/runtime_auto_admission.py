@@ -32,6 +32,11 @@ _RECOVERY_LIMIT = 3
 _RECOVERY_RETRY_MS = 30_000
 
 
+# A refused automatic recovery step proved no effect; it is asked again after
+# this long, so a transient refusal never blocks recovery for good.
+REFUSED_RECOVERY_RETRY_MS = 30_000
+
+
 class RuntimeAutoAdmission:
     def __init__(self, supervisor, *, default_version: str):
         self.supervisor = supervisor
@@ -379,7 +384,22 @@ class RuntimeAutoAdmission:
         ledger = management.ledger()
         async with self.supervisor.coordinator.database.session() as session:
             prior = await session.get(DeploymentOperationRow, operation_id)
-        if prior is not None:
+        retry_refused = False
+        if prior is not None and prior.state == "failed":
+            # A refused attempt proved it had no effect, so the same
+            # deterministic operation is asked again, but not on every tick.
+            async with self.supervisor.coordinator.database.session() as session:
+                now_ms = await self.supervisor.coordinator.coordination._clock_ms(
+                    session
+                )
+            if now_ms - prior.updated_at_ms < REFUSED_RECOVERY_RETRY_MS:
+                detail = (prior.result or {}).get("detail", "refused")
+                raise CoordinationConflict(
+                    f"Automatic recovery operation {operation_id} was refused "
+                    f"({detail}); it is asked again shortly"
+                )
+            retry_refused = True
+        if prior is not None and not retry_refused:
             # Saved parameters and results are authoritative, including an
             # unknown spawn outcome after a host restart.
             receipt = await ledger.status(operation_id, actor_id=_RECOVERY_ACTOR)
@@ -400,6 +420,7 @@ class RuntimeAutoAdmission:
                 action=action,
                 parameters=parameters,
                 dispatch=dispatch,
+                retry_rejected=True,
             )
         if receipt["state"] != "succeeded":
             raise CoordinationConflict(

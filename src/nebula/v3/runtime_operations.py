@@ -46,7 +46,16 @@ class DeploymentOperations:
         action: str,
         parameters: dict,
         dispatch: Callable[[str, dict], Awaitable[dict]],
+        retry_rejected: bool = False,
     ) -> dict:
+        """Run an operation once per ID; a replayed ID returns its saved receipt.
+
+        ``retry_rejected`` is only for callers whose IDs are deterministic
+        (automatic recovery): a rejected receipt proved no effect, so that
+        caller may ask again under the same ID, with fresh parameters. The
+        earlier refusal is kept as a durable receipt. Uncertain and succeeded
+        receipts are never dispatched again.
+        """
         for value, name, maximum in (
             (operation_id, "operation_id", 200),
             (actor_id, "actor_id", 200),
@@ -65,7 +74,15 @@ class DeploymentOperations:
             row = await session.get(DeploymentOperationRow, operation_id)
             now = await self.coordinator.coordination._clock_ms(session)
             if row is not None:
-                if row.actor_id != actor_id or row.request_hash != digest:
+                retry = (
+                    retry_rejected
+                    and row.state == "failed"
+                    and row.actor_id == actor_id
+                    and row.action == action
+                )
+                if not retry and (
+                    row.actor_id != actor_id or row.request_hash != digest
+                ):
                     raise CoordinationConflict(
                         "operation ID already identifies another request"
                     )
@@ -74,20 +91,36 @@ class DeploymentOperations:
                     row.result = {
                         "detail": "The previous host did not confirm this operation. Read deployment status before reconciling it."
                     }
-                return self._receipt(row)
-            row = DeploymentOperationRow(
-                operation_id=operation_id,
-                actor_id=actor_id,
-                action=action,
-                request_hash=digest,
-                parameters=parameters,
-                state="running",
-                claim_owner=self.owner_id,
-                result=None,
-                created_at_ms=now,
-                updated_at_ms=now,
-            )
-            session.add(row)
+                if not retry:
+                    return self._receipt(row)
+                await self.coordinator._receipt(
+                    session,
+                    "operation.retried",
+                    {
+                        "operation_id": operation_id,
+                        "action": action,
+                        "previous_request_hash": row.request_hash,
+                        "previous_result": row.result,
+                        "previous_updated_at_ms": row.updated_at_ms,
+                    },
+                )
+                row.request_hash, row.parameters = digest, parameters
+                row.state, row.claim_owner, row.result = "running", self.owner_id, None
+                row.updated_at_ms = now
+            else:
+                row = DeploymentOperationRow(
+                    operation_id=operation_id,
+                    actor_id=actor_id,
+                    action=action,
+                    request_hash=digest,
+                    parameters=parameters,
+                    state="running",
+                    claim_owner=self.owner_id,
+                    result=None,
+                    created_at_ms=now,
+                    updated_at_ms=now,
+                )
+                session.add(row)
         try:
             result = _document(await dispatch(action, parameters))
         except BaseException as error:

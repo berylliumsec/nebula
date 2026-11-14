@@ -314,6 +314,27 @@ async def test_reconciliation_rejection_cannot_prepare(recovery):
     assert (await operations(recovery))[0].state == "failed"
 
 
+async def test_refused_recovery_is_asked_again_later_with_the_same_operation(
+    recovery,
+):
+    recovery.management.reject_reconciliation = True
+    await recovery.automatic.reconcile()
+    [refused] = await operations(recovery)
+    assert refused.state == "failed"
+    # Within the retry interval the refusal is not dispatched again.
+    await recovery.controller().reconcile()
+    assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
+    # Later, the same deterministic operation is asked again and can succeed.
+    recovery.management.reject_reconciliation = False
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    calls = [call[0] for call in recovery.management.calls]
+    assert calls[:2] == ["reconcile_project", "reconcile_project"]
+    assert recovery.management.calls[1][2] == refused.operation_id
+    rows = {row.operation_id: row for row in await operations(recovery)}
+    assert rows[refused.operation_id].state == "succeeded"
+
+
 async def test_unknown_unassigned_execution_is_not_reused_or_duplicated(recovery):
     async with recovery.coordinator.database.session() as session:
         session.add(process("unknown-target"))

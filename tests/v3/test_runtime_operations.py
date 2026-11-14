@@ -189,3 +189,73 @@ async def test_unconfirmed_operation_is_diagnosed_without_its_text(
     assert [event["event_code"] for event in events] == [
         "runtime.deployment_operation.unconfirmed"
     ]
+
+
+async def test_rejected_operation_is_asked_again_only_when_opted_in(host):
+    from sqlalchemy import select
+
+    from nebula.v3.database import DeploymentReceiptRow
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    calls = []
+
+    async def dispatch(action, parameters):
+        calls.append((action, parameters))
+        if len(calls) == 1:
+            raise OperationRejected("handoff changed; read fresh recovery state")
+        return {"recovered": True}
+
+    args = dict(
+        operation_id="auto-recovery:synthetic",
+        actor_id="automatic-recovery",
+        action="recover_project",
+        parameters={"project_id": "one", "expected_handoff_revision": 1},
+        dispatch=dispatch,
+    )
+    ledger = DeploymentOperations(host[0])
+    first = await ledger.execute(**args)
+    assert first["state"] == "failed"
+    # An ordinary replay keeps the saved receipt, as deployment journals expect.
+    assert await ledger.execute(**args) == first and len(calls) == 1
+    # Automatic recovery asks again with fresh parameters under the same ID.
+    fresh = {
+        **args,
+        "parameters": {"project_id": "one", "expected_handoff_revision": 2},
+    }
+    second = await DeploymentOperations(host[0]).execute(**fresh, retry_rejected=True)
+    assert second["state"] == "succeeded"
+    assert calls[1] == ("recover_project", fresh["parameters"])
+    assert await ledger.execute(**fresh, retry_rejected=True) == second
+    assert len(calls) == 2
+    async with host[0].database.session() as session:
+        [audit] = list(
+            await session.scalars(
+                select(DeploymentReceiptRow).where(
+                    DeploymentReceiptRow.action == "operation.retried"
+                )
+            )
+        )
+    assert audit.result["operation_id"] == "auto-recovery:synthetic"
+    assert audit.result["previous_result"]["detail"] == (
+        "handoff changed; read fresh recovery state"
+    )
+
+
+async def test_uncertain_operation_is_never_asked_again(host):
+    calls = []
+
+    async def dispatch(action, _parameters):
+        calls.append(action)
+        raise OSError("lost reply")
+
+    args = dict(
+        operation_id="auto-recovery:lost",
+        actor_id="automatic-recovery",
+        action="prepare_execution",
+        parameters={"version": "v1"},
+        dispatch=dispatch,
+        retry_rejected=True,
+    )
+    assert (await DeploymentOperations(host[0]).execute(**args))["state"] == "uncertain"
+    assert (await DeploymentOperations(host[0]).execute(**args))["state"] == "uncertain"
+    assert calls == ["prepare_execution"]
