@@ -588,7 +588,7 @@ from .writing_ai import (
     WritingTransformRequest,
     WritingTransformResponse,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, revision_conflict
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
     CHAT_RESUME_COMMAND,
@@ -10418,9 +10418,11 @@ def create_execution_kernel(
     ) -> ProviderCapabilityVerifyResponse:
         profile = await store.get(ProviderProfile, provider_id)
         if profile.revision != request.expected_revision:
-            raise ConflictError(
-                f"revision conflict: expected {request.expected_revision}, "
-                f"found {profile.revision}"
+            raise revision_conflict(
+                ProviderProfile.entity_kind,
+                profile.id,
+                request.expected_revision,
+                profile.revision,
             )
         return await _verify_provider_capability(
             store, profile, request.model, provider_factory
@@ -12780,8 +12782,8 @@ def create_execution_kernel(
     ) -> Response:
         chat = await store.get(ChatSession, session_id)
         if if_match is not None and chat.revision != if_match:
-            raise ConflictError(
-                f"revision conflict: expected {if_match}, found {chat.revision}"
+            raise revision_conflict(
+                ChatSession.entity_kind, chat.id, if_match, chat.revision
             )
         if chat.backend == ChatBackend.HARNESS and chat.harness_session_id:
             # Release the vendor process and its MCP gateway before the rows
