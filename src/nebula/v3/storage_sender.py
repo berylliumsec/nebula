@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 import hmac
 import ipaddress
+import json
 from typing import Literal
 from uuid import uuid4
 
@@ -18,12 +19,12 @@ from fastapi import HTTPException
 from pydantic import Field, field_validator, model_validator
 
 from .domain import NebulaModel, StorageSource
-from .runtime_coordination import STORAGE_REPORT_COMMAND
+from .runtime_coordination import STORAGE_REPORT_COMMAND, STORAGE_SOURCE_ACTOR_PREFIX
 from .storage import NebulaStore, NotFoundError
 
 MAX_EVENT_BYTES = 64 * 1024
 # Durable principal for a report a storage source sent through an API worker.
-STORAGE_SOURCE_ACTOR = "storage-source:"
+STORAGE_SOURCE_ACTOR = STORAGE_SOURCE_ACTOR_PREFIX
 STORAGE_EVENTS_PATH = "/api/v1/storage/events"
 STORAGE_INVENTORY_PATH = "/api/v1/storage/inventory"
 STORAGE_TEST_PATH = "/api/v1/storage/test"
@@ -120,14 +121,29 @@ async def authenticate_storage_source(
 
 def validate_storage_report(path: str, body: bytes) -> None:
     """Reject a report Core would refuse before it is saved or acknowledged."""
-    if path == STORAGE_INVENTORY_PATH:
-        StorageInventory.model_validate_json(body)
-    else:
-        StorageEvent.model_validate_json(body)
+    canonical_storage_report(path, body)
+
+
+def canonical_storage_report(path: str, body: bytes) -> bytes:
+    """The validated report in one canonical encoding, or a ValidationError.
+
+    Core identifies an event by the content of its validated model (the same
+    digest ``ingest`` keeps for its event ID), not by the sender's bytes. Saving
+    this encoding makes whitespace, key order or an equivalent time zone
+    spelling the same durable report.
+    """
+    model = StorageInventory if path == STORAGE_INVENTORY_PATH else StorageEvent
+    report = model.model_validate_json(body)
+    return json.dumps(
+        report.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
 
 
 def storage_report_key(source: StorageSource, path: str, body: bytes) -> str:
-    """Durable idempotency key for one sender request.
+    """Durable idempotency key for one canonical sender request.
 
     An event's retry is the same command for the same project, and the event ID
     dedupes it again in Core. Inventory has no report identity and is safe to

@@ -6,23 +6,40 @@ from sqlalchemy.orm import aliased
 from .database import (
     EntityRow,
     ProviderToolManifestRow,
+    RuntimeCommandRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
     RuntimeWorkBatchProjectRow,
 )
 from .deployment_protocol import ReleaseManifest
 from .chat_snapshot_parts import TOOLS_OWNERSHIP_KEY
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, STORAGE_REPORT_COMMAND
 
 PROVIDER_TOOLS_FEATURE = "provider.tools-context/v1"
 PROVIDER_TOOLS_OWNERSHIP_FEATURE = "provider.tools-context-ownership/v1"
 STANDING_INSTRUCTIONS_FEATURE = "harness.standing-instructions/v1"
 HOST_SEARCH_FEATURE = "host.web-search-query/v1"
 WORK_BATCH_FEATURE = "project.work-batch/v1"
+STORAGE_REPORT_FEATURE = STORAGE_REPORT_COMMAND
 
 
 async def required_context_features(session, project_id: str) -> set[str]:
     required = set()
+    if (
+        await session.scalar(
+            select(RuntimeCommandRow.id)
+            .where(
+                RuntimeCommandRow.project_id == project_id,
+                RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        # A storage report waiting to run needs an owner that can run it;
+        # admission, recovery and handoff all check this before a grant.
+        required.add(STORAGE_REPORT_FEATURE)
     if (
         await session.scalar(
             select(RuntimeWorkBatchProjectRow.batch_id)

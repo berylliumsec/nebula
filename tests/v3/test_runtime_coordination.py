@@ -450,6 +450,37 @@ async def _dispatch_state(cluster, name):
             )
         )
 
+    if name in {
+        "queued_report",
+        "report_handoff_hold",
+        "report_shutdown",
+        "report_foreign_running",
+    }:
+        await submit(
+            first,
+            "report",
+            actor_id="storage-source:source:" + "a" * 64,
+            name="storage.report/v1",
+            lane="report",
+            expected_revision=None,
+        )
+    if name == "report_handoff_hold":
+        await handoff("requested")
+    if name == "report_shutdown":
+        async with coordinator.database.session() as session:
+            await session.execute(
+                update(DeploymentHostRow)
+                .where(DeploymentHostRow.key == "host")
+                .values(shutdown_requested=True)
+            )
+    if name == "report_foreign_running":
+        # A lost owner's run (only a release that runs reports can own them).
+        async with coordinator.database.session() as session:
+            await session.execute(
+                update(RuntimeCommandRow).values(
+                    state="running", runtime_id="lost", fencing_token=999
+                )
+            )
     if name in {"queued_work", "queued_both"} or name in {
         "handoff_hold",
         "handoff_verified",
@@ -542,6 +573,12 @@ async def _dispatch_state(cluster, name):
         ("handoff_finishing", {"work", "control"}, True),
         ("handoff_transferable", {"work", "control"}, True),
         ("handoff_other_source", {"control"}, False),
+        # Storage reports have their own lane, held like work.
+        ("queued_report", {"report"}, False),
+        ("report_handoff_hold", set(), True),
+        ("report_shutdown", set(), False),
+        # A storage report a lost owner left running is queued again.
+        ("report_foreign_running", {"report"}, False),
     ],
 )
 async def test_dispatch_snapshot_reports_exactly_the_lanes_a_claim_acts_on(
@@ -553,7 +590,7 @@ async def test_dispatch_snapshot_reports_exactly_the_lanes_a_claim_acts_on(
     assert snapshot.handoff_active is handoff_active
     acted = {
         lane
-        for lane in ("work", "control")
+        for lane in ("work", "control", "report")
         if await _claim_acts(coordinator, lease, lane)
     }
     assert set(snapshot.lanes) == acted == expected

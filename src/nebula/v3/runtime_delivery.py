@@ -2,7 +2,9 @@
 
 Only authenticated adapters call ``accept``. SQL contains keyed encrypted-content
 references; credentials never enter an accepted intent. A claimed mutation is
-never automatically retried, including after a partial HTTP response.
+never automatically retried, including after a partial HTTP response. A storage
+report is the exception: its response commits only with its outcome and its
+recording is idempotent, so an interrupted run is queued again.
 """
 
 from __future__ import annotations
@@ -13,11 +15,12 @@ import binascii
 from dataclasses import dataclass
 import json
 import re
+from collections.abc import Sequence
 from typing import Literal
 from uuid import uuid4
 
 from pydantic import Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from .async_utils import finish_cleanup
 from .authentication import runtime_principal
@@ -49,7 +52,15 @@ from .runtime_chat_acceptance import (
     ChatBinding,
 )
 from .storage import NebulaStore, NotFoundError
-from .runtime_coordination import STORAGE_REPORT_COMMAND, STORAGE_REPORT_INTERRUPTED
+from .runtime_coordination import REPORT_LANE, STORAGE_REPORT_COMMAND
+from .storage_report_admission import (
+    STORAGE_REPORT_MINIMUM_AGE_MS,
+    STORAGE_REPORT_PRUNE_BATCH,
+    STORAGE_REPORT_RETAINED,
+    STORAGE_REPORT_RETENTION_MS,
+    discard_unreferenced,
+    storage_report_admission,
+)
 from .storage_sender import (
     STORAGE_REPORT_PATHS,
     parse_storage_source_actor,
@@ -61,6 +72,9 @@ MAX_REQUEST_BYTES = 8 * 1024**2
 # JSON. Keep a bounded allowance for the filename, media type and JSON syntax.
 MAX_LIBRARY_INGEST_REQUEST_BYTES = 4 * ((20 * 1024**2 + 2) // 3) + 128 * 1024
 MAX_FRAME_BYTES = 256 * 1024
+# A storage report's response is buffered until it commits with its outcome;
+# Core answers a report with a small JSON object.
+MAX_REPORT_RESPONSE = 256 * 1024
 # Some routes answer 202 as their final response, so a client cannot tell a
 # finished request from a receipt by status. Every answer on a receipt-following
 # path says which it is: the request's own final response ("complete"), a
@@ -291,12 +305,20 @@ class RuntimeDelivery:
         project_id: str,
         actor_id: str,
         idempotency_key: str,
-        lane: Literal["work", "control"] = "work",
+        lane: Literal["work", "control", "report"] = "work",
         expected_revision: int | None = None,
         chat_acceptance: bool = False,
         chat_resume: bool = False,
         chat_start: bool = False,
+        storage_release_default: bool | None = None,
     ) -> CommandReceipt:
+        """Save one request as a durable command for its project's owner.
+
+        A storage source's report runs on the report lane and is admitted only
+        within its source's and project's backlog bounds and, when
+        ``storage_release_default`` is given, only while every worker that may
+        run it supports storage reports (see ``storage_report_admission``).
+        """
         if chat_acceptance and chat_resume:
             raise ValueError("A request has one chat transport")
         if chat_start and not self.is_chat_start_intent(intent):
@@ -336,7 +358,23 @@ class RuntimeDelivery:
         # Project and revision also participate in the immutable identity.
         raw = _json(intent.model_dump(mode="json"))
         reference = await asyncio.to_thread(self.vault.put, raw, purpose=purpose)
-        return await self.coordination.submit(
+        admit = None
+        if storage_report:
+            lane = REPORT_LANE
+
+            async def discard(session):
+                await discard_unreferenced(
+                    session, self.vault, actor_id, reference, purpose
+                )
+
+            admit = storage_report_admission(
+                self.coordination,
+                project_id=project_id,
+                actor_id=actor_id,
+                release_default=storage_release_default,
+                discard=discard,
+            )
+        receipt = await self.coordination.submit(
             project_id=project_id,
             actor_id=actor_id,
             idempotency_key=idempotency_key,
@@ -349,7 +387,16 @@ class RuntimeDelivery:
             lane=lane,
             expected_revision=expected_revision,
             chat_start=chat_start,
+            admit=admit,
         )
+        if storage_report and not await asyncio.to_thread(
+            (self.vault.root / reference).exists
+        ):
+            # Pruning removes a finished report's payload under the project's
+            # ownership lock. A report saved after that lock was released can
+            # share the same content-addressed payload; publish it again.
+            await asyncio.to_thread(self.vault.put, raw, purpose=purpose)
+        return receipt
 
     async def request(self, command: ClaimedCommand) -> tuple[HttpIntent, str]:
         async with self.coordination.database.session() as session:
@@ -437,8 +484,30 @@ class RuntimeDelivery:
         )
         return sequence
 
-    async def complete(self, lease: ProjectLease, command_id: str, *, status_code: int):
+    async def complete(
+        self,
+        lease: ProjectLease,
+        command_id: str,
+        *,
+        status_code: int,
+        frames: Sequence[tuple[Literal["head", "body"], bytes]] = (),
+    ):
+        """Commit the outcome; ``frames`` are published in the same transaction.
+
+        A command whose response is buffered (a storage report) never leaves a
+        partial response behind, so running it again needs no reconciliation.
+        """
+        if any(
+            kind not in {"head", "body"} or len(content) > MAX_FRAME_BYTES
+            for kind, content in frames
+        ):
+            raise RuntimeIpcError("runtime response frame exceeds its bound")
+
         async def terminal(session):
+            for kind, content in frames:
+                await self._append_frame(session, lease, command_id, kind, content)
+                # The next frame's order check reads this one back.
+                await session.flush()
             await self._append_frame(session, lease, command_id, "end", b"")
 
         # A final frame is visible only in the transaction that commits the
@@ -450,6 +519,90 @@ class RuntimeDelivery:
             result={"http_status": status_code},
             apply=terminal,
         )
+
+    async def prune_storage_reports(self, lease: ProjectLease) -> int:
+        """Remove this project's finished storage reports past their retention.
+
+        Each pass removes a bounded batch with its response frames and, unless
+        another saved report of the same principal shares it, its request
+        payload. Files are removed before the commit while the project's
+        ownership row is locked; a report saved afterwards republishes its
+        payload (see ``accept``).
+        """
+        async with self.coordination.fenced(lease) as session:
+            now = await self.coordination._clock_ms(session)
+            finished = (
+                RuntimeCommandRow.project_id == lease.project_id,
+                RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                RuntimeCommandRow.state.in_(("succeeded", "failed")),
+            )
+            retained = (
+                select(RuntimeCommandRow.id)
+                .where(*finished)
+                .order_by(RuntimeCommandRow.sequence.desc())
+                .limit(STORAGE_REPORT_RETAINED)
+            )
+            rows = list(
+                await session.scalars(
+                    select(RuntimeCommandRow)
+                    .where(
+                        *finished,
+                        RuntimeCommandRow.accepted_at_ms
+                        < now - STORAGE_REPORT_MINIMUM_AGE_MS,
+                        or_(
+                            RuntimeCommandRow.accepted_at_ms
+                            < now - STORAGE_REPORT_RETENTION_MS,
+                            RuntimeCommandRow.id.not_in(retained),
+                        ),
+                    )
+                    .order_by(RuntimeCommandRow.sequence)
+                    .limit(STORAGE_REPORT_PRUNE_BATCH)
+                )
+            )
+            if not rows:
+                return 0
+            identities = [row.id for row in rows]
+            payloads = {
+                (row.actor_id, row.payload.get("request_reference"))
+                for row in rows
+                if isinstance(row.payload, dict)
+            }
+            frames = list(
+                await session.execute(
+                    select(
+                        RuntimeDeliveryRow.command_id,
+                        RuntimeDeliveryRow.sequence,
+                        RuntimeDeliveryRow.content_reference,
+                    ).where(RuntimeDeliveryRow.command_id.in_(identities))
+                )
+            )
+            await session.execute(
+                delete(RuntimeDeliveryRow)
+                .where(RuntimeDeliveryRow.command_id.in_(identities))
+                .execution_options(synchronize_session=False)
+            )
+            await session.execute(
+                delete(RuntimeCommandRow)
+                .where(RuntimeCommandRow.id.in_(identities))
+                .execution_options(synchronize_session=False)
+            )
+            await session.flush()
+            for actor, reference in payloads:
+                if isinstance(reference, str):
+                    await discard_unreferenced(
+                        session,
+                        self.vault,
+                        actor,
+                        reference,
+                        self._intent_purpose(actor),
+                    )
+            for command_id, sequence, reference in frames:
+                await asyncio.to_thread(
+                    self.vault.discard,
+                    reference,
+                    purpose=self._frame_purpose(command_id, sequence),
+                )
+            return len(rows)
 
     async def lookup(self, actor_id: str, idempotency_key: str) -> str:
         """Find a lost acceptance without submitting or revealing another actor's work."""
@@ -610,9 +763,10 @@ class DurableHttpRunner:
         self.delivery, self.app, self.operator_token = delivery, app, operator_token
         # The typed chat transports this owner's application serves.
         self.typed_chat_commands = typed_chat_commands & CHAT_COMMANDS
+        self._storage_pruned_at: float | None = None
 
     async def run_one(
-        self, lease: ProjectLease, *, lane: Literal["work", "control"]
+        self, lease: ProjectLease, *, lane: Literal["work", "control", "report"]
     ) -> bool:
         command = await self.delivery.coordination.claim_next(lease, lane=lane)
         if command is None:
@@ -623,15 +777,12 @@ class DurableHttpRunner:
         except BaseException:
             # A controller failure can follow a committed external effect.
             # Keep the receipt, mark uncertainty and never replay automatically.
-            # A storage report has no external effect and records atomically,
-            # so it fails retryably instead of holding the lane as uncertain.
+            # A storage report has no external effect, records atomically and
+            # publishes its response only with its outcome, so it runs again.
             async def uncertain():
                 if command.name == STORAGE_REPORT_COMMAND:
-                    await self.delivery.coordination.finish_command(
-                        lease,
-                        command.receipt.command_id,
-                        state="failed",
-                        result=dict(STORAGE_REPORT_INTERRUPTED),
+                    await self.delivery.coordination.requeue_storage_report(
+                        lease, command.receipt.command_id
                     )
                     return
                 await self.delivery.coordination.finish_command(
@@ -645,36 +796,71 @@ class DurableHttpRunner:
 
             await finish_cleanup(uncertain())
             raise
+        if command.name == STORAGE_REPORT_COMMAND:
+            await self._prune_storage_reports(lease)
         return True
+
+    async def _prune_storage_reports(self, lease: ProjectLease) -> None:
+        """Keep finished storage reports bounded, at most once a minute."""
+        now = asyncio.get_running_loop().time()
+        if self._storage_pruned_at is not None and now - self._storage_pruned_at < 60:
+            return
+        self._storage_pruned_at = now
+        try:
+            await self.delivery.prune_storage_reports(lease)
+        except LeaseLost:
+            raise
+        except Exception as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.storage_report.prune_failed",
+                "Finished storage reports could not be pruned; Core retries later.",
+                error,
+                stage="delivery",
+            )
 
     async def _invoke(self, lease: ProjectLease, command: ClaimedCommand):
         intent, actor = await self.delivery.request(command)
         command_id = command.receipt.command_id
+        # A storage report's response is published only with its outcome.
+        buffered = [] if command.name == STORAGE_REPORT_COMMAND else None
         if not await self.delivery.valid_actor(actor):
-            await self.delivery.append(
+            storage_source = parse_storage_source_actor(actor)
+            refusal = [
+                (
+                    "head",
+                    _json(
+                        {
+                            "status": 401,
+                            "headers": [["content-type", "application/json"]],
+                        }
+                    ),
+                ),
+                (
+                    "body",
+                    _json(
+                        {
+                            "detail": "The storage source was disabled, revoked or rotated before this report ran"
+                            if storage_source is not None
+                            else "The accepting device session expired or was revoked",
+                        }
+                    ),
+                ),
+            ]
+            if buffered is None:
+                for kind, content in refusal:
+                    await self.delivery.append(lease, command_id, kind, content)
+            await self.delivery.complete(
                 lease,
                 command_id,
-                "head",
-                _json(
-                    {
-                        "status": 401,
-                        "headers": [["content-type", "application/json"]],
-                    }
-                ),
+                status_code=401,
+                frames=refusal if buffered is not None else (),
             )
-            await self.delivery.append(
-                lease,
-                command_id,
-                "body",
-                _json(
-                    {
-                        "detail": "The storage source was disabled, revoked or rotated before this report ran"
-                        if parse_storage_source_actor(actor) is not None
-                        else "The accepting device session expired or was revoked",
-                    }
-                ),
-            )
-            await self.delivery.complete(lease, command_id, status_code=401)
+            if storage_source is not None:
+                # The rest of this principal's queued reports cannot run either.
+                await self.delivery.coordination.cancel_storage_reports(
+                    lease, source_id=storage_source[0], actor_id=actor
+                )
             return
         name = command.name
         typed = typed_chat_command(intent) if name == HTTP_INVOKE_COMMAND else None
@@ -755,29 +941,26 @@ class DurableHttpRunner:
                     for key, value in message.get("headers", [])
                     if key.lower() not in {b"connection", b"transfer-encoding"}
                 ]
-                await self.delivery.append(
-                    lease,
-                    command_id,
-                    "head",
-                    _json(
-                        {
-                            "status": status_code,
-                            "headers": response_headers,
-                        }
-                    ),
-                )
+                head = _json({"status": status_code, "headers": response_headers})
+                if buffered is not None:
+                    buffered.append(("head", head))
+                else:
+                    await self.delivery.append(lease, command_id, "head", head)
                 started = True
             elif message["type"] == "http.response.body":
                 if not started or ended:
                     raise RuntimeIpcError("runtime response body is out of order")
                 chunk = message.get("body", b"")
                 for offset in range(0, len(chunk), MAX_FRAME_BYTES):
-                    await self.delivery.append(
-                        lease,
-                        command_id,
-                        "body",
-                        chunk[offset : offset + MAX_FRAME_BYTES],
-                    )
+                    part = chunk[offset : offset + MAX_FRAME_BYTES]
+                    if buffered is not None:
+                        if sum(len(item) for _, item in buffered) > MAX_REPORT_RESPONSE:
+                            raise RuntimeIpcError(
+                                "a storage report response exceeds its bound"
+                            )
+                        buffered.append(("body", part))
+                    else:
+                        await self.delivery.append(lease, command_id, "body", part)
                 if not message.get("more_body", False):
                     ended = True
             else:
@@ -791,4 +974,6 @@ class DurableHttpRunner:
             memory_actor.reset(attribution)
         if not ended:
             raise RuntimeIpcError("runtime response ended without a durable completion")
-        await self.delivery.complete(lease, command_id, status_code=status_code)
+        await self.delivery.complete(
+            lease, command_id, status_code=status_code, frames=buffered or ()
+        )

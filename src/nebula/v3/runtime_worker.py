@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import partial
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -156,10 +155,10 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
             project_for=routing.project_for,
             chat_acceptance_for=routing.supports_chat_acceptance,
             chat_resume_for=routing.supports_chat_resume,
-            storage_reports_for=partial(
-                routing.supports_storage_reports,
-                default=STORAGE_REPORT_FEATURE in context.manifest.features,
-            ),
+            # With no promoted target, a project's next owner starts from this
+            # API's build.
+            storage_report_release_default=STORAGE_REPORT_FEATURE
+            in context.manifest.features,
             upstream_for=routing.upstream_for,
             static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
             dispose_database=False,

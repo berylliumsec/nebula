@@ -25,7 +25,12 @@ from .database import (
 )
 from .diagnostics import record_caught_exception
 from .domain import Engagement
-from .runtime_coordination import CoordinationConflict, project_worker_commands
+from .runtime_coordination import (
+    CoordinationConflict,
+    STORAGE_REPORT_COMMAND,
+    pending_storage_dispatches,
+    project_worker_commands,
+)
 from .setup import bootstrap_scratch_project
 
 _RECOVERY_ACTOR = "runtime-auto-recovery"
@@ -220,6 +225,11 @@ class RuntimeAutoAdmission:
                 active_work = project_worker_commands(
                     ProjectOwnershipRow.project_id, ("queued", "running")
                 )
+                # A recorded storage alert opens its incident chat from the
+                # project's worker; keep or start one until it has.
+                storage_alert = pending_storage_dispatches(
+                    ProjectOwnershipRow.project_id
+                )
                 now = asyncio.get_running_loop().time()
                 # Projects waiting out a retry delay must not fill the batch
                 # and starve projects that could be admitted now.
@@ -243,6 +253,7 @@ class RuntimeAutoAdmission:
                             pending_chat_start,
                             legacy_chat_start,
                             queued_work,
+                            storage_alert,
                         ),
                     )
                 )
@@ -276,6 +287,7 @@ class RuntimeAutoAdmission:
                     ~pending_chat_start,
                     ~legacy_chat_start,
                     ~active_work,
+                    ~storage_alert,
                 ]
                 if self.idle_grace_ms and not short_of_capacity:
                     idle.append(
@@ -781,10 +793,23 @@ class RuntimeAutoAdmission:
                 )
                 .exists()
             )
+            # A storage report saved for a project whose worker died, or an
+            # alert it recorded before dying, needs the project recovered even
+            # without an open chat; nothing else would ever run it.
+            storage_work = or_(
+                select(RuntimeCommandRow.id)
+                .where(
+                    RuntimeCommandRow.project_id == ProjectOwnershipRow.project_id,
+                    RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                    RuntimeCommandRow.state.in_(("queued", "running")),
+                )
+                .exists(),
+                pending_storage_dispatches(ProjectOwnershipRow.project_id),
+            )
             query = select(ProjectOwnershipRow).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
                 ProjectOwnershipRow.lease_expires_at_ms <= now,
-                or_(open_chat, pending_chat_start, legacy_chat_start),
+                or_(open_chat, pending_chat_start, legacy_chat_start, storage_work),
             )
             if self._recovery_cursor is not None:
                 query = query.where(

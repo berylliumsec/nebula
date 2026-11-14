@@ -41,7 +41,7 @@ from .domain import (
     utc_now,
 )
 from .execution_scope import current_execution_lease
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, ProjectWorkerClosing
 from .authentication import current_runtime_principal
 from .storage_sender import (  # noqa: F401 - the sender contract is re-exported here
     MAX_EVENT_BYTES,
@@ -59,6 +59,7 @@ MAX_CALLBACK_BYTES = 64 * 1024
 # One bound for a whole callback exchange, not each socket operation.
 CALLBACK_DEADLINE_SECONDS = 15.0
 SEVERITY = {"healthy": 0, "warning": 1, "critical": 2, "unavailable": 3}
+_SOURCE_GONE = "The storage source no longer exists; this alert cannot be dispatched"
 EntityT = TypeVar("EntityT", bound=Entity)
 
 
@@ -164,6 +165,25 @@ class StorageIntegrationService:
         self._stopping = False
         self._dispatch_lock = asyncio.Lock()
         self._dispatch_wake = asyncio.Event()
+        # Dispatches in progress: a project worker hands off or quiesces only
+        # once its source callbacks and incident chat creation have finished.
+        self._dispatching: dict[str, asyncio.Task] = {}
+        # A supervisor execution worker binds control of its project's queued
+        # storage reports; a single-process Core has none.
+        self.report_control = None
+
+    def bind_report_control(self, control) -> None:
+        self.report_control = control
+
+    async def settle_queued_reports(self, source: StorageSource) -> None:
+        """Refuse queued reports a source can no longer send.
+
+        Disabling, revoking, rotating or moving a source invalidates the
+        principal its saved reports carry; they are cancelled now instead of
+        each running only to be refused.
+        """
+        if self.report_control is not None:
+            await self.report_control.cancel(source)
 
     async def startup(self) -> None:
         self._stopping = False
@@ -286,12 +306,15 @@ class StorageIntegrationService:
                     next_values["model"],
                 )
             )
-        return await self.store.update(
+        updated = await self.store.update(
             StorageSource,
             source_id,
             changes,
             expected_revision=request.expected_revision,
         )
+        if {"enabled", "engagement_id"}.intersection(changes):
+            await self.settle_queued_reports(updated)
+        return updated
 
     async def rotate(
         self, source_id: str, *, expected_revision: int | None = None
@@ -304,6 +327,7 @@ class StorageIntegrationService:
             {"token_sha256": hashlib.sha256(raw.encode()).hexdigest()},
             expected_revision=expected_revision or source.revision,
         )
+        await self.settle_queued_reports(source)
         return source, f"{source.id}.{raw}"
 
     async def authenticate(
@@ -695,6 +719,25 @@ class StorageIntegrationService:
         return True
 
     async def _dispatch(self, dispatch: StorageDispatch) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._dispatching[dispatch.id] = task
+        try:
+            await self._dispatch_now(dispatch)
+        except ProjectWorkerClosing as exc:
+            # The project is being retired; its next worker dispatches this
+            # alert, which keeps demanding one while it is pending.
+            record_caught_exception(
+                "storage",
+                "storage.dispatch.deferred",
+                "A storage alert waits for its project's next worker.",
+                exc,
+                stage="dispatch",
+            )
+        finally:
+            self._dispatching.pop(dispatch.id, None)
+
+    async def _dispatch_now(self, dispatch: StorageDispatch) -> None:
         source = await self.store.get(StorageSource, dispatch.source_id)
         incident = await self.store.get(StorageIncident, dispatch.incident_id)
         (
@@ -1149,6 +1192,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
             },
             expected_revision=body.expected_revision if body else source.revision,
         )
+        await service.settle_queued_reports(source)
         return _source_public(source)
 
     @router.post("/test", openapi_extra=event_body)
@@ -1170,8 +1214,9 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         except ConflictError as exc:
             raise HTTPException(409, str(exc)) from exc
         if parse_storage_source_actor(current_runtime_principal()) is not None:
-            # A report replayed from a supervisor API worker holds its project's
-            # work lane; the source's callbacks run in the dispatch loop instead.
+            # A report replayed from a supervisor API worker runs on its
+            # project's report lane; the source's callbacks run in the dispatch
+            # loop instead, so they never hold that lane.
             service.wake_dispatch()
         else:
             await service.dispatch_pending()
@@ -1190,6 +1235,19 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         dispatch_id: str, _: str = Depends(require_auth)
     ) -> dict[str, Any]:
         dispatch = await service.store.get(StorageDispatch, dispatch_id)
+        try:
+            await service.store.get(StorageSource, dispatch.source_id)
+        except NotFoundError as exc:
+            # The source (and its project) is gone; nothing could ever dispatch
+            # this alert. Settle it instead of leaving it pending forever.
+            if dispatch.status != "failed" or dispatch.error != _SOURCE_GONE:
+                await service.store.update(
+                    StorageDispatch,
+                    dispatch.id,
+                    {"status": "failed", "error": _SOURCE_GONE},
+                    expected_revision=dispatch.revision,
+                )
+            raise HTTPException(409, _SOURCE_GONE) from exc
         dispatch = await service.store.update(
             StorageDispatch,
             dispatch.id,

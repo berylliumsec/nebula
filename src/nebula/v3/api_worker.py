@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, W
 from fastapi.encoders import jsonable_encoder
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
+from sqlalchemy import select
 from starlette.responses import JSONResponse, StreamingResponse
 
 from .authentication import CoreAuthentication
@@ -27,7 +28,7 @@ from .authentication_api import AuthenticationApi
 from .deployments import DeploymentCoordinator
 from .domain import ChatTurn
 from .runtime_chat_stream import RuntimeChatJournal
-from .runtime_coordination import CoordinationConflict, ProjectRetiring
+from .runtime_coordination import CoordinationConflict, ProjectRetiring, REPORT_LANE
 from .runtime_delivery import (
     HttpIntent,
     MAX_REQUEST_BYTES,
@@ -44,6 +45,12 @@ from .runtime_routes import command_lane
 from .runtime_identity import mount_runtime_identity
 from .runtime_static import RuntimeStatic
 from .storage import NebulaStore, NotFoundError
+from .storage_report_admission import (
+    StorageReportBacklog,
+    StorageReportUnsupported,
+    refuse_backlog,
+    storage_report_backlog as pending_storage_reports,
+)
 from .storage_sender import (
     MAX_EVENT_BYTES,
     STORAGE_ACK_WAIT_SECONDS,
@@ -52,10 +59,10 @@ from .storage_sender import (
     STORAGE_SENDER_SLOTS,
     STORAGE_TEST_PATH,
     authenticate_storage_source,
+    canonical_storage_report,
     sender_transport_allowed,
     storage_report_key,
     storage_source_actor,
-    validate_storage_report,
 )
 
 # How many failed or interrupted runs of one report a sender request skips
@@ -116,7 +123,7 @@ def create_api_worker(
     upstream_for: Callable[[dict], Awaitable[HttpUpstream]],
     chat_acceptance_for: Callable[[str], Awaitable[bool]] | None = None,
     chat_resume_for: Callable[[str], Awaitable[bool]] | None = None,
-    storage_reports_for: Callable[[str], Awaitable[bool]] | None = None,
+    storage_report_release_default: bool | None = None,
     static_dir: Path | None = None,
     maximum_waiting_views: int = 32,
     maximum_control_views: int = 8,
@@ -446,7 +453,7 @@ def create_api_worker(
             headers={"X-Nebula-Command-Id": receipt.command_id},
         )
 
-    def storage_report_retry(command_id=None):
+    def storage_report_retry(command_id=None, *, retry_after=5):
         # 409 tells a sender its event ID changed content, which it must not
         # retry. Anything temporary on Core's side is a retryable 503.
         return JSONResponse(
@@ -455,8 +462,40 @@ def create_api_worker(
                 **({"command_id": command_id} if command_id else {}),
             },
             status_code=503,
-            headers={"Retry-After": "5"},
+            headers={"Retry-After": str(retry_after)},
         )
+
+    def storage_report_backlog(error: StorageReportBacklog):
+        # The source (or its project) already has its bound of reports waiting
+        # to run. Nothing was saved; the sender retries the same report later.
+        return JSONResponse(
+            {"detail": str(error) + "; retry the same report later"},
+            status_code=429,
+            headers={"Retry-After": str(error.retry_after)},
+        )
+
+    async def storage_backlog_refusal(actor, key, project_id, source_id):
+        """Refuse a new report over its backlog bound before writing its payload.
+
+        A resend of a report that is already saved is never refused here. The
+        bound is enforced again where the report is saved.
+        """
+        async with store.database.session() as session:
+            saved = await session.scalar(
+                select(RuntimeCommandRow.id).where(
+                    RuntimeCommandRow.actor_id == actor,
+                    RuntimeCommandRow.idempotency_key == key,
+                )
+            )
+            if saved is not None:
+                return None
+            counts = await pending_storage_reports(session, project_id, source_id)
+        try:
+            refuse_backlog(*counts)
+        except StorageReportBacklog as error:
+            # diagnostic-expected: a full backlog is the sender's retryable 429.
+            return storage_report_backlog(error)
+        return None
 
     # Sender reports wait in their own small pool: a source token never takes
     # the operator's viewer capacity, and a full pool acknowledges at once.
@@ -506,29 +545,32 @@ def create_api_worker(
             if len(body) > MAX_EVENT_BYTES:
                 raise HTTPException(413, "storage request exceeds 64 KiB")
         try:
-            validate_storage_report(path, bytes(body))
+            # The report is saved in one canonical encoding, so a padded or
+            # reordered copy of the same event is the same durable report.
+            report = canonical_storage_report(path, bytes(body))
         except ValidationError as error:
+            # The raw input can be bytes that are not UTF-8; never echo it.
             raise HTTPException(
-                422, jsonable_encoder(error.errors(include_url=False))
+                422,
+                jsonable_encoder(error.errors(include_url=False, include_input=False)),
             ) from None
         if path == STORAGE_TEST_PATH:
             return {"valid": True, "source_id": source.id}
-        if storage_reports_for is not None and not await storage_reports_for(
-            source.engagement_id
-        ):
-            # The project's worker is from a release that cannot run a storage
-            # report; saving one would strand it. Retry after the update.
-            return storage_report_retry()
         intent = HttpIntent.capture(
             "POST",
             path,
             b"",
             [(b"content-type", b"application/json")],
-            bytes(body),
+            report,
         )
         actor = storage_source_actor(source)
-        base_key = storage_report_key(source, path, bytes(body))
+        base_key = storage_report_key(source, path, report)
         key = base_key
+        refused = await storage_backlog_refusal(
+            actor, key, source.engagement_id, source.id
+        )
+        if refused is not None:
+            return refused
         try:
             for _ in range(STORAGE_REPORT_RUNS):
                 receipt = await delivery.accept(
@@ -536,7 +578,8 @@ def create_api_worker(
                     project_id=source.engagement_id,
                     actor_id=actor,
                     idempotency_key=key,
-                    lane=command_lane(path),
+                    lane=REPORT_LANE,
+                    storage_release_default=storage_report_release_default,
                 )
                 if not await storage_report_needs_new_run(receipt.command_id):
                     break
@@ -545,18 +588,30 @@ def create_api_worker(
                 key = f"{base_key}-after-{receipt.command_id}"
             else:
                 return storage_report_retry()
+        except (
+            StorageReportBacklog
+        ) as error:  # diagnostic-expected: a full backlog is the sender's retryable 429
+            return storage_report_backlog(error)
+        except StorageReportUnsupported:  # diagnostic-expected: a release that cannot run reports is temporary; the sender retries
+            return storage_report_retry(retry_after=30)
         except CoordinationConflict:  # diagnostic-expected: a closing or draining owner is temporary; the sender retries
             # 409 means a changed duplicate to senders, which they must not retry.
             return storage_report_retry()
-        return await response_view(
-            actor,
-            receipt.command_id,
-            receipt=receipt,
-            slots=sender_slots,
-            pending=storage_report_saved,
-            unsettled=storage_report_retry,
-            start_timeout=storage_wait,
-        )
+        try:
+            return await response_view(
+                actor,
+                receipt.command_id,
+                receipt=receipt,
+                slots=sender_slots,
+                pending=storage_report_saved,
+                unsettled=storage_report_retry,
+                start_timeout=storage_wait,
+            )
+        except (
+            NotFoundError,
+            FileNotFoundError,
+        ):  # diagnostic-expected: a finished report pruned while it was read; the resend runs again
+            return storage_report_retry()
 
     @app.api_route(
         "/api/v1/{path:path}",

@@ -3,7 +3,8 @@
 No process-local lock is an authority. Writers hold the project's SQL row lock
 and recheck the database clock before commit. Network calls must happen outside
 ``fenced``: a lost lease cannot undo an external effect. A claimed command left
-by an expired owner becomes uncertain, never automatically queued again.
+by an expired owner becomes uncertain, never automatically queued again. The
+one exception is a storage report, which records atomically and idempotently.
 
 These primitives deliberately do not enable overlapping legacy Core processes.
 The worker extraction must route *all* execution writes through this boundary.
@@ -43,19 +44,29 @@ LEASE_MS = 30_000
 MAX_STREAM_BATCH = 256
 STREAM_EPOCH = "durable-v1"
 _STREAM_PREFIX = "chat_stream."
-COMMAND_LANES = ("work", "control")
+# Storage senders' reports have their own ordered lane, so a source's backlog
+# never delays the operator's work or control commands in the same project.
+REPORT_LANE = "report"
+COMMAND_LANES = ("work", "control", REPORT_LANE)
 # A source owner keeps ticking its handoff only in these phases.
 TICK_PHASES = frozenset({"requested", "finishing", "transferable"})
 _DISPATCH_STATES = ("queued", "running", "uncertain")
 _BATCH_BARRIER = "work.batch.barrier/v1"
 # A storage sender's report, saved by an API worker under a storage-source
-# principal. Its execution is idempotent by event ID, so an interrupted run
-# fails retryably instead of holding its lane as uncertain work.
+# principal. Recording it is atomic and idempotent by event ID, so a run that
+# was interrupted is queued again (a bounded number of times) instead of
+# holding its lane as uncertain work.
 STORAGE_REPORT_COMMAND = "storage.report/v1"
+STORAGE_REPORT_ATTEMPTS = 3
 STORAGE_REPORT_INTERRUPTED = {
     "http_status": 503,
     "detail": "The storage report was interrupted; the sender may retry it",
 }
+STORAGE_REPORT_CANCELLED = {
+    "http_status": 401,
+    "detail": "The storage source was disabled, revoked, rotated or moved before this report ran",
+}
+STORAGE_SOURCE_ACTOR_PREFIX = "storage-source:"
 
 
 class CoordinationConflict(RuntimeError):
@@ -109,6 +120,47 @@ def project_worker_commands(project_id, states: Sequence[str] = ("queued",)) -> 
         )
         .exists()
     )
+
+
+def pending_storage_dispatches(project_id) -> Any:
+    """SQL EXISTS for a recorded storage alert whose incident chat is not open yet.
+
+    A storage report finishes once it records; the source's project worker then
+    opens the incident chat from its dispatch loop. Until it does, the dispatch
+    needs that project's worker exactly like queued project work. A dispatch
+    belongs to the project its source belongs to now.
+    """
+    from sqlalchemy.orm import aliased
+
+    dispatch, source = aliased(EntityRow), aliased(EntityRow)
+    return (
+        select(dispatch.id)
+        .join(source, source.id == dispatch.payload["source_id"].as_string())
+        .where(
+            dispatch.kind == "storage_dispatches",
+            dispatch.payload["status"].as_string() == "pending",
+            source.kind == "storage_sources",
+            source.engagement_id == project_id,
+        )
+        .exists()
+    )
+
+
+def requeue_interrupted_storage_report(row: RuntimeCommandRow) -> None:
+    """Run an interrupted storage report again instead of leaving it uncertain.
+
+    Its response frames commit only with its outcome and recording is atomic
+    and idempotent, so nothing of the interrupted run needs reconciliation. A
+    report that keeps being interrupted fails retryably for the sender.
+    """
+    runs = (row.result or {}).get("interrupted_runs")
+    runs = (runs if type(runs) is int and runs >= 0 else 0) + 1
+    if runs >= STORAGE_REPORT_ATTEMPTS:
+        row.state = "failed"
+        row.result = {**STORAGE_REPORT_INTERRUPTED, "interrupted_runs": runs}
+        return
+    row.state, row.runtime_id, row.fencing_token = "queued", None, None
+    row.result = {"interrupted_runs": runs}
 
 
 @dataclass(frozen=True)
@@ -482,9 +534,16 @@ class RuntimeCoordination:
         name: str,
         payload: dict[str, Any],
         expected_revision: int | None = None,
-        lane: Literal["work", "control"] = "work",
+        lane: Literal["work", "control", "report"] = "work",
         chat_start: bool = False,
+        admit: Callable[[AsyncSession], Awaitable[None]] | None = None,
     ) -> CommandReceipt:
+        """Save one command, or return the one already saved under its key.
+
+        ``admit`` runs for a new command only, after the project's ownership
+        row is locked and before the insert. It sees the same owner, handoff
+        and host state as any claim or transfer that follows, and may refuse.
+        """
         for label, value in (
             ("project_id", project_id),
             ("actor_id", actor_id),
@@ -492,8 +551,10 @@ class RuntimeCoordination:
         ):
             _identifier(value, label)
         _identifier(name, "name", 100)
-        if lane not in {"work", "control"}:
+        if lane not in COMMAND_LANES:
             raise ValueError("unknown command lane")
+        if (lane == REPORT_LANE) != (name == STORAGE_REPORT_COMMAND):
+            raise ValueError("only storage reports use the report lane")
         if type(chat_start) is not bool:
             raise ValueError("chat_start must be a boolean")
         if expected_revision is not None and (
@@ -572,6 +633,8 @@ class RuntimeCoordination:
                 raise ProjectRetiring(
                     "the project worker is closing; retry the request after retirement"
                 )
+            if admit is not None:
+                await admit(session)
             await self._insert_absent(
                 session,
                 RuntimeCommandRow,
@@ -683,10 +746,13 @@ class RuntimeCoordination:
             return True
 
     async def claim_next(
-        self, lease: ProjectLease, *, lane: Literal["work", "control"] | None = None
+        self,
+        lease: ProjectLease,
+        *,
+        lane: Literal["work", "control", "report"] | None = None,
     ) -> ClaimedCommand | None:
         async with self.fenced(lease) as session:
-            if lane not in {None, "work", "control"}:
+            if lane is not None and lane not in COMMAND_LANES:
                 raise ValueError("unknown command lane")
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             host = await session.get(DeploymentHostRow, "host")
@@ -701,7 +767,7 @@ class RuntimeCoordination:
             # Control delivery has its own ordered lane. Stop, approvals and
             # input decisions cannot sit behind uncertain work or a handoff.
             selected_lane = "control" if held and lane is None else lane
-            if held and selected_lane == "work":
+            if held and selected_lane != "control":
                 return None
             row = await session.scalar(
                 select(RuntimeCommandRow)
@@ -724,7 +790,7 @@ class RuntimeCoordination:
             if action == "uncertain":
                 if row.name == STORAGE_REPORT_COMMAND:
                     # Re-running a storage report is safe; never block the lane.
-                    row.state, row.result = "failed", dict(STORAGE_REPORT_INTERRUPTED)
+                    requeue_interrupted_storage_report(row)
                 else:
                     row.state = "uncertain"
                 return None
@@ -782,7 +848,7 @@ class RuntimeCoordination:
             held, retiring = dispatch_holds(handoff, host, ownership)
             lanes: set[str] = set()
             for lane in () if retiring else COMMAND_LANES:
-                if held and lane == "work":
+                if held and lane != "control":
                     continue
                 head = (
                     await session.execute(
@@ -853,6 +919,66 @@ class RuntimeCoordination:
                         "A control changed project state; verify a new safe boundary"
                     ]
                     handoff.revision += 1
+
+    async def requeue_storage_report(
+        self, lease: ProjectLease, command_id: str
+    ) -> None:
+        """Queue this owner's interrupted storage report to run again."""
+        async with self.fenced(lease) as session:
+            row = await session.get(RuntimeCommandRow, command_id, with_for_update=True)
+            if (
+                row is None
+                or row.name != STORAGE_REPORT_COMMAND
+                or row.project_id != lease.project_id
+                or row.state != "running"
+                or (row.runtime_id, row.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+            ):
+                raise CoordinationConflict("command is not running under this owner")
+            requeue_interrupted_storage_report(row)
+
+    async def cancel_storage_reports(
+        self,
+        lease: ProjectLease,
+        *,
+        source_id: str,
+        keep_actor: str | None = None,
+        actor_id: str | None = None,
+    ) -> int:
+        """Settle a source's queued reports that can no longer run.
+
+        Disabling, revoking, rotating or moving a source invalidates the
+        principal its saved reports carry. They are refused at once instead of
+        each being claimed and answered 401 in turn. ``keep_actor`` is the
+        source's still-valid principal in this project, if it has one;
+        ``actor_id`` limits the refusal to one principal found invalid.
+        """
+        _identifier(source_id, "source_id")
+        async with self.fenced(lease) as session:
+            changed = await session.execute(
+                update(RuntimeCommandRow)
+                .where(
+                    RuntimeCommandRow.project_id == lease.project_id,
+                    RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                    RuntimeCommandRow.state == "queued",
+                    RuntimeCommandRow.actor_id.startswith(
+                        f"{STORAGE_SOURCE_ACTOR_PREFIX}{source_id}:", autoescape=True
+                    ),
+                    *(
+                        [RuntimeCommandRow.actor_id != keep_actor]
+                        if keep_actor is not None
+                        else []
+                    ),
+                    *(
+                        [RuntimeCommandRow.actor_id == actor_id]
+                        if actor_id is not None
+                        else []
+                    ),
+                )
+                .values(state="failed", result=dict(STORAGE_REPORT_CANCELLED))
+                .execution_options(synchronize_session=False)
+            )
+            return int(changed.rowcount or 0)
 
     async def append_stream_batch(
         self,

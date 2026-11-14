@@ -59,6 +59,7 @@ async def agent(project):
         execution_service=SimpleNamespace(_tasks={}),
         report_render_service=SimpleNamespace(_tasks={}),
         execution_ai_service=SimpleNamespace(_tasks={}),
+        storage_integrations=SimpleNamespace(_dispatching={}),
     )
     item = ProjectHandoffAgent(
         SimpleNamespace(coordinator=project.coordinator),

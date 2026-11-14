@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
@@ -54,13 +54,16 @@ from .runtime_coordination import (
     RuntimeCoordination,
     STORAGE_REPORT_COMMAND,
     ShutdownBlocked,
+    pending_storage_dispatches,
     project_worker_commands,
+    requeue_interrupted_storage_report,
 )
 from .process_identity import same_process
 
 _RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
 EXECUTION_FAILED_RECEIPT = "project.execution_failed"
 _UNFINISHED = ("queued", "running", "uncertain")
+_PENDING_STORAGE_ALERT = "A recorded storage alert has not opened its incident chat yet"
 
 
 def _checkpoint(value: dict) -> dict:
@@ -237,6 +240,24 @@ class DeploymentCoordinator:
                     )
                 )
             )
+            if STORAGE_REPORT_COMMAND not in manifest.features:
+                # A saved storage report must run on a release that knows it;
+                # an older target would strand it in its project.
+                pending = await session.scalar(
+                    select(RuntimeCommandRow.project_id)
+                    .where(
+                        RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                        RuntimeCommandRow.state.in_(_UNFINISHED),
+                    )
+                    .limit(1)
+                )
+                if pending is not None:
+                    raise CoordinationConflict(
+                        f"{await self._project_label_in(session, pending)} has "
+                        "storage reports waiting to run. Let them finish, or "
+                        "disable their storage source, before moving execution to "
+                        "a release that cannot run storage reports"
+                    )
             if (
                 manifest.version not in execution_versions
                 and len(execution_versions) >= MAX_EXECUTION_VERSIONS
@@ -258,17 +279,29 @@ class DeploymentCoordinator:
                     set(resident_manifest.features)
                     & {"chat.accept/v1", "chat.resume/v1"}
                 )
+            # An API reads accepted chat requests for as long as they exist.
             required.update(
                 await session.scalars(
                     select(RuntimeCommandRow.name)
                     .where(
-                        RuntimeCommandRow.name.in_(
-                            ("chat.accept/v1", "chat.resume/v1", STORAGE_REPORT_COMMAND)
-                        )
+                        RuntimeCommandRow.name.in_(("chat.accept/v1", "chat.resume/v1"))
                     )
                     .distinct()
                 )
             )
+            # A storage report needs an API that knows it only until it runs.
+            if (
+                await session.scalar(
+                    select(RuntimeCommandRow.id)
+                    .where(
+                        RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                        RuntimeCommandRow.state.in_(_UNFINISHED),
+                    )
+                    .limit(1)
+                )
+                is not None
+            ):
+                required.add(STORAGE_REPORT_COMMAND)
             missing = required - set(manifest.features)
             if missing:
                 raise CoordinationConflict(
@@ -585,11 +618,15 @@ class DeploymentCoordinator:
     async def project_label(self, project_id: str) -> str:
         """Name a project for operator-facing refusals without loading its model."""
         async with self.database.session() as session:
-            name = await session.scalar(
-                select(EntityRow.payload["name"].as_string()).where(
-                    EntityRow.id == project_id, EntityRow.kind == "engagements"
-                )
+            return await self._project_label_in(session, project_id)
+
+    @staticmethod
+    async def _project_label_in(session, project_id: str) -> str:
+        name = await session.scalar(
+            select(EntityRow.payload["name"].as_string()).where(
+                EntityRow.id == project_id, EntityRow.kind == "engagements"
             )
+        )
         # The name is the operator's own label; keep it one bounded line so a
         # receipt or host detail cannot be reshaped by its characters.
         if not isinstance(name, str):
@@ -684,8 +721,17 @@ class DeploymentCoordinator:
         command_states = (
             ("running", "uncertain") if allow_queued_commands else _UNFINISHED
         )
+        # A queued storage report is durable and runs again after a restart;
+        # it never holds a shutdown (a source could otherwise keep posting).
+        command_blocks = and_(
+            RuntimeCommandRow.state.in_(command_states),
+            or_(
+                RuntimeCommandRow.state != "queued",
+                RuntimeCommandRow.name != STORAGE_REPORT_COMMAND,
+            ),
+        )
         for model, predicate, label in (
-            (RuntimeCommandRow, RuntimeCommandRow.state.in_(command_states), "Command"),
+            (RuntimeCommandRow, command_blocks, "Command"),
             (RuntimeResourceRow, RuntimeResourceRow.state != "closed", "Resource"),
             (
                 RuntimeCapacityReservationRow,
@@ -882,6 +928,10 @@ class DeploymentCoordinator:
                 session, lease.project_id
             ):
                 raise CoordinationConflict("A chat start is pending for this project")
+            if project_retirement and await self._project_has_pending_storage_alert(
+                session, lease.project_id
+            ):
+                raise CoordinationConflict(_PENDING_STORAGE_ALERT)
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             if handoff is not None and handoff.phase != HandoffPhase.VERIFIED:
                 raise CoordinationConflict(
@@ -941,6 +991,12 @@ class DeploymentCoordinator:
             is not None
         )
 
+    @staticmethod
+    async def _project_has_pending_storage_alert(session, project_id: str) -> bool:
+        return bool(
+            await session.scalar(select(pending_storage_dispatches(project_id)))
+        )
+
     async def request_project_retirement(self, lease: ProjectLease) -> bool:
         """Fence one idle project's admission before its controller quiesces.
 
@@ -975,6 +1031,12 @@ class DeploymentCoordinator:
                 # the ownership row lock, so none can be queued after the hold.
                 if await session.scalar(
                     select(project_worker_commands(lease.project_id))
+                ):
+                    return False
+                # A recorded storage alert opens its incident chat from this
+                # worker's dispatch loop; retiring first would lose it.
+                if await self._project_has_pending_storage_alert(
+                    session, lease.project_id
                 ):
                     return False
                 host = await session.get(DeploymentHostRow, "host")
@@ -1087,6 +1149,11 @@ class DeploymentCoordinator:
                 session,
                 lease.project_id,
                 allow_queued_commands=project_retirement,
+            ) or (
+                project_retirement
+                and await self._project_has_pending_storage_alert(
+                    session, lease.project_id
+                )
             ):
                 raise CoordinationConflict(
                     "Project acquired work while quiescing; retain its owner"
@@ -1839,6 +1906,19 @@ class DeploymentCoordinator:
                 ]
                 previous.revision += 1
                 previous.updated_at_ms = now
+            # A storage report records atomically and idempotently and its
+            # response commits with its outcome, so it simply runs again.
+            for report in list(
+                await session.scalars(
+                    select(RuntimeCommandRow).where(
+                        RuntimeCommandRow.project_id == project_id,
+                        RuntimeCommandRow.state == "running",
+                        RuntimeCommandRow.name == STORAGE_REPORT_COMMAND,
+                    )
+                )
+            ):
+                requeue_interrupted_storage_report(report)
+            await session.flush()
             await session.execute(
                 update(RuntimeCommandRow)
                 .where(

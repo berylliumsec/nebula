@@ -187,8 +187,23 @@ class NotFoundError(StorageError):
     pass
 
 
+# Storage rows that belong to a project only through their source.
+_SOURCE_OWNED_STORAGE_KINDS = (
+    "storage_devices",
+    "storage_volumes",
+    "storage_incidents",
+    "storage_event_receipts",
+    "storage_dispatches",
+    "storage_actions",
+)
+
+
 class ConflictError(StorageError):
     pass
+
+
+class ProjectWorkerClosing(ConflictError):
+    """The project's worker is being retired; the write belongs to its next one."""
 
 
 class CorruptRecordError(StorageError):
@@ -418,7 +433,7 @@ class StoreTransaction:
                     "The execution worker no longer owns this project; retry chat creation after admission."
                 )
             if retirement_requested:
-                raise ConflictError(
+                raise ProjectWorkerClosing(
                     "The project worker is closing; retry chat creation after retirement."
                 )
             return
@@ -438,7 +453,7 @@ class StoreTransaction:
             )
         )
         if owner_exists is not None:
-            raise ConflictError(
+            raise ProjectWorkerClosing(
                 "The project worker is closing; retry chat creation after retirement."
             )
 
@@ -3198,6 +3213,25 @@ class NebulaStore:
                 ),
             ):
                 (await session.execute(delete(table).where(column == engagement_id)))
+            # Storage rows name their source, not the project. Remove them with
+            # the project's sources, or their alerts stay pending forever.
+            source_ids = list(
+                await session.scalars(
+                    select(EntityRow.id).where(
+                        EntityRow.engagement_id == engagement_id,
+                        EntityRow.kind == "storage_sources",
+                    )
+                )
+            )
+            if source_ids:
+                (
+                    await session.execute(
+                        delete(EntityRow).where(
+                            EntityRow.kind.in_(_SOURCE_OWNED_STORAGE_KINDS),
+                            EntityRow.payload["source_id"].as_string().in_(source_ids),
+                        )
+                    )
+                )
             (
                 await session.execute(
                     delete(EntityRow).where(EntityRow.engagement_id == engagement_id)

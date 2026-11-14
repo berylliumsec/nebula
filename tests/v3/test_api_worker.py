@@ -585,7 +585,7 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
         )
 
     runner = DurableHttpRunner(boundary.delivery, execution, operator_token=_TOKEN)
-    assert await runner.run_one(boundary.lease, lane="work")
+    assert await runner.run_one(boundary.lease, lane="report")
     assert seen == [(command.actor_id, b"Bearer " + _TOKEN.encode())]
     replay = await client.post("/api/v1/storage/events", headers=sender, json=report)
     assert replay.status_code == 202
@@ -604,7 +604,7 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
         {"enabled": False},
         expected_revision=current.revision,
     )
-    assert await runner.run_one(boundary.lease, lane="work")
+    assert await runner.run_one(boundary.lease, lane="report")
     assert len(seen) == 1
     async with boundary.host.database.session() as session:
         stopped = await session.get(RuntimeCommandRow, later.json()["command_id"])
@@ -632,7 +632,7 @@ async def test_storage_sender_reports_reach_their_project_without_operator_crede
     )
     assert again.status_code == 202, again.text
     assert again.json()["command_id"] != later.json()["command_id"]
-    assert await runner.run_one(boundary.lease, lane="work")
+    assert await runner.run_one(boundary.lease, lane="report")
     assert len(seen) == 2
 
 
@@ -730,80 +730,123 @@ async def test_a_storage_report_is_acknowledged_well_before_a_sender_gives_up(
     assert saved.status_code == 202 and saved.json()["queued"] is True
 
 
-async def test_an_interrupted_or_failed_storage_report_runs_again_without_blocking_work(
+async def test_an_interrupted_storage_report_runs_again_without_blocking_work(
     boundary,
 ):
-    from nebula.v3.runtime_coordination import STORAGE_REPORT_INTERRUPTED
+    from nebula.v3.database import RuntimeDeliveryRow
+    from nebula.v3.runtime_coordination import (
+        STORAGE_REPORT_ATTEMPTS,
+        STORAGE_REPORT_INTERRUPTED,
+    )
 
     _, headers = await _storage_source(boundary)
     _, client = boundary.api()
     report = _storage_report()
     first = await client.post("/api/v1/storage/events", headers=headers, json=report)
     assert first.status_code == 202, first.text
+    command_id = first.json()["command_id"]
 
-    async def stopped(_scope, _receive, _send):
+    async def stopped(_scope, _receive, send):
+        # The worker stops after Core answered but before the outcome commits.
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 202,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b'{"accepted":true}'})
         raise RuntimeError("the execution worker stopped mid-report")
 
     with pytest.raises(RuntimeError):
         await DurableHttpRunner(
             boundary.delivery, stopped, operator_token=_TOKEN
-        ).run_one(boundary.lease, lane="work")
+        ).run_one(boundary.lease, lane="report")
     async with boundary.host.database.session() as session:
-        interrupted = await session.get(RuntimeCommandRow, first.json()["command_id"])
-    # Re-running a report is safe, so it fails retryably instead of uncertain.
-    assert interrupted.state == "failed"
-    assert interrupted.result == STORAGE_REPORT_INTERRUPTED
+        interrupted = await session.get(RuntimeCommandRow, command_id)
+        frames = await session.scalar(
+            select(func.count(RuntimeDeliveryRow.id)).where(
+                RuntimeDeliveryRow.command_id == command_id
+            )
+        )
+    # Recording is idempotent and nothing of the run was published, so the
+    # same report is simply queued again rather than left uncertain.
+    assert (interrupted.state, interrupted.runtime_id) == ("queued", None)
+    assert interrupted.result == {"interrupted_runs": 1}
+    assert frames == 0
     resent = await client.post("/api/v1/storage/events", headers=headers, json=report)
-    assert resent.status_code == 202
-    assert resent.json()["command_id"] != first.json()["command_id"]
+    assert resent.status_code == 202 and resent.json()["command_id"] == command_id
+    good = DurableHttpRunner(
+        boundary.delivery, await _accepted(), operator_token=_TOKEN
+    )
+    assert await good.run_one(boundary.lease, lane="report")
+    settled = await client.post("/api/v1/storage/events", headers=headers, json=report)
+    assert settled.status_code == 202
+    assert settled.json() == {"accepted": True, "duplicate": False, "current": True}
+
+    # A saved 500 is not replayed to the sender; the retry runs again.
+    failing = _storage_report("observation-500")
+    saved = await client.post("/api/v1/storage/events", headers=headers, json=failing)
     broken = DurableHttpRunner(
         boundary.delivery,
         await _accepted(500, b'{"detail":"boom"}'),
         operator_token=_TOKEN,
     )
-    assert await broken.run_one(boundary.lease, lane="work")
-    # A saved 500 is not replayed to the sender either; the retry runs again.
-    third = await client.post("/api/v1/storage/events", headers=headers, json=report)
-    assert third.json()["command_id"] not in {
-        first.json()["command_id"],
-        resent.json()["command_id"],
-    }
-    good = DurableHttpRunner(
-        boundary.delivery, await _accepted(), operator_token=_TOKEN
-    )
-    assert await good.run_one(boundary.lease, lane="work")
-    settled = await client.post("/api/v1/storage/events", headers=headers, json=report)
-    assert settled.status_code == 202
-    assert settled.json() == {"accepted": True, "duplicate": False, "current": True}
+    assert await broken.run_one(boundary.lease, lane="report")
+    third = await client.post("/api/v1/storage/events", headers=headers, json=failing)
+    assert third.json()["command_id"] != saved.json()["command_id"]
+    assert await good.run_one(boundary.lease, lane="report")
 
-    # A report left running by a lost owner fails retryably; the lane moves on.
+    # A report left running by a lost owner runs again under the next owner.
     fourth = await client.post(
         "/api/v1/storage/events", headers=headers, json=_storage_report("observation-4")
     )
-    async with boundary.host.database.session() as session:
-        row = await session.get(RuntimeCommandRow, fourth.json()["command_id"])
-        row.state, row.runtime_id, row.fencing_token = "running", "lost-owner", 999
-        await session.commit()
-    assert await boundary.coordination.claim_next(boundary.lease, lane="work") is None
-    async with boundary.host.database.session() as session:
-        lost = await session.get(RuntimeCommandRow, fourth.json()["command_id"])
-    assert (lost.state, lost.result) == ("failed", STORAGE_REPORT_INTERRUPTED)
-    operator = await client.post("/api/v1/synthetic", headers=_AUTH, json={"text": "x"})
-    assert operator.status_code == 202
-    claimed = await boundary.coordination.claim_next(boundary.lease, lane="work")
-    assert claimed is not None
-    assert claimed.receipt.command_id == operator.json()["receipt"]["command_id"]
+    lost_id = fourth.json()["command_id"]
+    for attempt in range(1, STORAGE_REPORT_ATTEMPTS + 1):
+        async with boundary.host.database.session() as session:
+            row = await session.get(RuntimeCommandRow, lost_id)
+            row.state, row.runtime_id, row.fencing_token = "running", "lost-owner", 999
+            await session.commit()
+        operator = await client.post(
+            "/api/v1/synthetic",
+            headers=_AUTH | {"Idempotency-Key": f"op-{attempt}"},
+            json={"text": "x"},
+        )
+        # The operator's work never waits behind a storage report.
+        claimed = await boundary.coordination.claim_next(boundary.lease, lane="work")
+        assert claimed.receipt.command_id == operator.json()["receipt"]["command_id"]
+        await boundary.coordination.finish_command(
+            boundary.lease, claimed.receipt.command_id, result={"http_status": 200}
+        )
+        assert (
+            await boundary.coordination.claim_next(boundary.lease, lane="report")
+            is None
+        )
+        async with boundary.host.database.session() as session:
+            lost = await session.get(RuntimeCommandRow, lost_id)
+        if attempt < STORAGE_REPORT_ATTEMPTS:
+            assert (lost.state, lost.result) == (
+                "queued",
+                {"interrupted_runs": attempt},
+            )
+        else:
+            # One that keeps being interrupted fails retryably for the sender.
+            assert lost.state == "failed"
+            assert lost.result == {
+                **STORAGE_REPORT_INTERRUPTED,
+                "interrupted_runs": STORAGE_REPORT_ATTEMPTS,
+            }
+    again = await client.post(
+        "/api/v1/storage/events", headers=headers, json=_storage_report("observation-4")
+    )
+    assert again.json()["command_id"] != lost_id
 
 
 async def test_storage_reports_wait_for_a_worker_release_that_can_run_them(boundary):
     _, headers = await _storage_source(boundary)
-    asked = []
-
-    async def unsupported(project_id):
-        asked.append(project_id)
-        return False
-
-    _, client = boundary.api(storage_reports_for=unsupported)
+    # The fixture's owner runs an unstaged release, and this API's own build
+    # cannot run reports either: nothing that would run the report knows it.
+    _, client = boundary.api(storage_report_release_default=False)
     for path, body in (
         ("/api/v1/storage/events", _storage_report()),
         ("/api/v1/storage/inventory", {"schema_version": 1, "devices": []}),
@@ -811,9 +854,14 @@ async def test_storage_reports_wait_for_a_worker_release_that_can_run_them(bound
         held = await client.post(path, headers=headers, json=body)
         assert held.status_code == 503, held.text
         assert held.headers["retry-after"]
-    assert asked == ["project", "project"]
     async with boundary.host.database.session() as session:
         assert await session.scalar(select(func.count(RuntimeCommandRow.id))) == 0
+    # Nothing of the refused reports stays in the vault.
+    assert [
+        path.name
+        for path in boundary.delivery.vault.root.iterdir()
+        if not path.name.startswith(".") and path.name != "key"
+    ] == []
     tested = await client.post(
         "/api/v1/storage/test", headers=headers, json=_storage_report()
     )

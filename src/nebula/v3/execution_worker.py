@@ -23,6 +23,7 @@ from .runtime_coordination import (
     HEARTBEAT_SECONDS,
     LeaseLost,
     ProjectLease,
+    REPORT_LANE,
 )
 from .runtime_delivery import DurableHttpRunner, RuntimeDelivery
 from .runtime_host_services import host_service_client
@@ -172,6 +173,15 @@ async def project_application(context, lease) -> AsyncIterator[object]:
         )
         if services.get("browser_bridge") is True:
             app.state.browser_companion.bind_bridge(RemoteBrowserBridge(client).resolve)
+        storage = getattr(app.state, "storage_integrations", None)
+        if storage is not None:
+            from .storage_report_admission import StorageReportControl
+
+            # Disabling, revoking, rotating or moving a source cancels its
+            # queued reports in this project.
+            storage.bind_report_control(
+                StorageReportControl(context.coordinator.coordination, lease)
+            )
         if HANDOFF_FEATURE in context.manifest.features:
             app.state.runtime_recovery_operation_id = (
                 recovery["operation_id"]
@@ -636,6 +646,10 @@ class ProjectExecution:
                         # diagnostic-expected: the control consumer classifies operation failures and is cancelled and joined below.
                         asyncio.create_task(
                             consume("control"), name="nebula-project-control"
+                        ),
+                        # diagnostic-expected: the storage report consumer classifies operation failures and is cancelled and joined below.
+                        asyncio.create_task(
+                            consume(REPORT_LANE), name="nebula-project-reports"
                         ),
                         # diagnostic-expected: the lease watcher fences and classifies failures and is cancelled and joined below.
                         asyncio.create_task(watch_lease(), name="nebula-project-lease"),

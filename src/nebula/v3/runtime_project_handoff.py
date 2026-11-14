@@ -46,6 +46,8 @@ _HANDLES = {
     "execution_service": ("_tasks",),
     "report_render_service": ("_tasks",),
     "execution_ai_service": ("_tasks",),
+    # A storage alert being dispatched: its source callback and incident chat.
+    "storage_integrations": ("_dispatching",),
 }
 _LIVE_SQL = {
     "automation_sessions": {"starting", "ready", "running", "active"},
