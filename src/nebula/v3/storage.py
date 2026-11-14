@@ -3024,7 +3024,12 @@ class NebulaStore:
         async with self.database.session() as session:
             # Acquire the writer lock before inspecting children; a concurrent
             # restore or new turn cannot interleave with the checked deletion.
-            if self.database.engine.dialect.name == "sqlite":
+            # An execution worker's SQL scope already begins SQLite
+            # transactions with BEGIN IMMEDIATE and refuses textual statements.
+            if (
+                self.database.engine.dialect.name == "sqlite"
+                and self.database.execution_runtime_id is None
+            ):
                 (await session.execute(text("BEGIN IMMEDIATE")))
             row = await session.get(EntityRow, engagement_id, with_for_update=True)
             if row is None or row.kind != "engagements":
