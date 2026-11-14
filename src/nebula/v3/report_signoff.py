@@ -106,7 +106,12 @@ async def _begin_signoff_write(
     update and a concurrent finding change could slip between them.
     """
 
-    if store.database.engine.dialect.name == "sqlite":
+    # An execution worker's SQL scope already begins every SQLite transaction
+    # with BEGIN IMMEDIATE and refuses textual statements.
+    if (
+        store.database.engine.dialect.name == "sqlite"
+        and store.database.execution_runtime_id is None
+    ):
         (await transaction.session.execute(text("BEGIN IMMEDIATE")))
 
 

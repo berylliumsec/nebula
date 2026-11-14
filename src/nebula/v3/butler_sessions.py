@@ -87,7 +87,10 @@ async def reserve_butler_session(
     async with store.transaction() as transaction:
         dialect = transaction.session.get_bind().dialect.name
         if dialect == "sqlite":
-            (await transaction.session.execute(text("BEGIN IMMEDIATE")))
+            # An execution worker's SQL scope already begins every SQLite
+            # transaction with BEGIN IMMEDIATE and refuses textual statements.
+            if store.database.execution_runtime_id is None:
+                (await transaction.session.execute(text("BEGIN IMMEDIATE")))
         elif dialect == "postgresql":
             (
                 await transaction.session.execute(

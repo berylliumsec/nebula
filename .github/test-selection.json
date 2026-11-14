@@ -1,37 +1,33 @@
 {
   "reviewed_by": "Claude",
-  "reason": "A worker statement interrupted mid-flight (cancellation, timeout or lost backend) leaves its SQLAlchemy connection invalidated; ExecutionSQLScope's rollback listener then read connection.info, which raised PendingRollbackError in place of the original exception. At shutdown this hit the chat follow-up poll, so the worker recorded its cleanup as failed, kept the project and every later Core shutdown or idle retirement was refused. The listener now skips invalidated connections. Selected suites cover the execution scope (new cancellation/timeout and follow-up shutdown regressions on PostgreSQL), execution workers, deployment lifecycle, orphan recovery, project handoff and admission, runtime capacity, chat acceptance, delivery, diagnostics boundaries, memory, host search, index attempts and work-batch contracts.",
-  "exclusions": "Only suites that pass on pristine main are selected. test_runtime_quiescence.py, test_shutdown_readmission.py, test_chat_queue.py, test_shared_butler_memory.py, test_shared_knowledge.py, test_shared_memory_import.py and twelve other related files already fail on main (process-level suites needing a pidfd-capable interpreter, a cached model or a production UI build, plus #939 async leftovers in the chat queue); run sequentially, their failure sets are identical with and without this change. The new regressions are PostgreSQL-only because SQLite cannot hold a statement open to interrupt it. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (runtime-stop after chats failing 2/2 before, 4/4 clean after) is recorded in the PR.",
+  "reason": "On a SQLite supervisor Core, reserve_butler_session, report sign-off and delete_archived_engagement issued a textual BEGIN IMMEDIATE that the execution worker's SQL scope refuses, so opening Butler, signing off a report and deleting an archived project returned 500. The scope already begins every SQLite worker transaction with BEGIN IMMEDIATE, so the textual lock is now taken only when execution_runtime_id is None, as the store's other SQLite locks already do. Selected: the new worker tests in test_execution_worker_write_locks.py (each SQLite case fails on main), test_execution_scope.py for the guard, and the Butler session, report sign-off and Butler report tests that pass on main and exercise the changed lock paths outside workers.",
+  "exclusions": "Individual tests are selected in test_butler_sessions.py, test_report_signoff.py and test_butler_reports.py because 4 of their cases fail identically on pristine origin/main (un-awaited test client calls). test_archived_project_deletion.py is excluded for the same reason (all 11 cases fail on main); archived deletion in a worker is covered by the new test. The supervisor-mode journeys were checked on scratch SQLite Cores instead (Butler open, report sign-off and archived delete returned 500 on main, and 200/200/204 on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 447,
+    "python": 94,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_runtime_capacity.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_execution_memory.py",
+    "tests/v3/test_execution_worker_write_locks.py",
     "tests/v3/test_execution_scope.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_index_attempts.py",
-    "tests/v3/test_memory_prelaunch.py",
-    "tests/v3/test_project_handoff_admission.py",
-    "tests/v3/test_provider_tool_manifest.py",
-    "tests/v3/test_runtime_capacity.py",
-    "tests/v3/test_runtime_chat_acceptance.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_runtime_host_search.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_work_batch_contracts.py"
+    "tests/v3/test_butler_reports.py::test_butler_report_delete_requires_current_project_and_core_confirmation",
+    "tests/v3/test_butler_reports.py::test_butler_report_note_transform_requires_linked_current_source_and_review",
+    "tests/v3/test_butler_reports.py::test_butler_reports_page_sources_and_prepare_exact_project_handoffs",
+    "tests/v3/test_butler_reports.py::test_report_core_api_checks_references_revision_and_finalization",
+    "tests/v3/test_butler_sessions.py::test_harness_reservation_commits_one_chat_and_vendor_binding",
+    "tests/v3/test_butler_sessions.py::test_provider_reservation_is_atomic_across_clients_and_core_restart",
+    "tests/v3/test_report_signoff.py::test_report_signoff_api_is_revision_aware",
+    "tests/v3/test_report_signoff.py::test_signoff_finalizes_review_with_active_operator_and_validated_findings",
+    "tests/v3/test_report_signoff.py::test_signoff_records_one_signed_revision_in_metadata_and_ledger",
+    "tests/v3/test_report_signoff.py::test_signoff_rejects_draft_stale_and_candidate_finding",
+    "tests/v3/test_report_signoff.py::test_signoff_rolls_back_finalization_when_audit_event_cannot_be_created"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4c58995a935b4203dfb8f1463c5d58c7dc1dc575086b31ff7e6db9206161d4d5"
+  "change_digest": "a0f3c55912269b4b651c55650d983caf6e25f8af08216bad0e83f0a428bfc2f1"
 }
