@@ -23,6 +23,7 @@ from nebula.v3.runtime_service import (
     inherited_listener,
     initialize_database,
     relay_drain,
+    relay_stop_bound,
     runtime_pool_settings,
 )
 from nebula.v3.supervisor import _Availability
@@ -174,7 +175,7 @@ def _held_listener():
 
 
 def _read(port):
-    with socket.create_connection(("127.0.0.1", port), timeout=30) as client:
+    with socket.create_connection(("127.0.0.1", port), timeout=120) as client:
         return client.recv(16).decode()
 
 
@@ -183,14 +184,14 @@ def test_inherited_listener_queues_connections_between_supervisor_generations():
     try:
         first = _generation(holder, port, "first")
         assert _read(port) == "first"
-        assert first.wait(30) == 0
+        assert first.wait(120) == 0
         # No generation is accepting now. The connection is still accepted by
         # the kernel and waits instead of being refused.
-        waiting = socket.create_connection(("127.0.0.1", port), timeout=30)
+        waiting = socket.create_connection(("127.0.0.1", port), timeout=120)
         second = _generation(holder, port, "second")
         assert waiting.recv(16).decode() == "second"
         waiting.close()
-        assert second.wait(30) == 0
+        assert second.wait(120) == 0
     finally:
         holder.close()
 
@@ -199,7 +200,7 @@ def test_inherited_listener_must_match_the_requested_address():
     holder, port = _held_listener()
     try:
         wrong = _generation(holder, port + 1 if port < 65535 else port - 1, "wrong")
-        output, _ = wrong.communicate(timeout=30)
+        output, _ = wrong.communicate(timeout=120)
         assert wrong.returncode == 3 and "does not match" in output
     finally:
         holder.close()
@@ -348,4 +349,68 @@ async def test_drain_closes_answered_streams_but_never_an_exchange_awaiting_its_
         server.should_exit = True
         drain.cancel()
         await asyncio.gather(drain, serving, return_exceptions=True)
+        listener.close()
+
+
+async def test_holder_stop_is_bounded_when_a_client_stops_reading(monkeypatch):
+    # A client that stops reading a large response (a phone off the network,
+    # a paused download) keeps unflushed bytes on its connection, which never
+    # closes by itself. The stopping generation must still exit and release
+    # the host lock; uvicorn's own timeout is disabled here so the drain alone
+    # has to bound it.
+    monkeypatch.setattr(runtime_service, "VIEWER_DRAIN_SECONDS", 0.3)
+    monkeypatch.setattr(runtime_service, "RELAY_FLUSH_SECONDS", 0.5)
+    owner = SimpleNamespace(
+        closing=False, closed=False, started=True, viewers=set(), answered={}
+    )
+    chunk = b"x" * 65536
+
+    async def upstream(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        for _ in range(4096):
+            await send({"type": "http.response.body", "body": chunk, "more_body": True})
+        await send({"type": "http.response.body", "body": b""})
+
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(16)
+    holder = listener.dup()
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(
+            _Availability(upstream, owner),
+            log_level="critical",
+            timeout_graceful_shutdown=None,
+        )
+    )
+    drain = relay_drain(server, owner, inherited=True)
+    serving = asyncio.create_task(server.serve(sockets=[listener]))
+    stalled = socket.socket()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.05)
+        stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        stalled.setblocking(False)
+        loop = asyncio.get_running_loop()
+        await loop.sock_connect(stalled, ("127.0.0.1", port))
+        await loop.sock_sendall(stalled, b"GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+        await asyncio.sleep(1)
+        assert server.server_state.connections
+        began = loop.time()
+        server.should_exit = True
+        await asyncio.wait_for(asyncio.shield(serving), 15)
+        assert loop.time() - began < 10
+        assert relay_stop_bound() < 60
+    finally:
+        # Release a still-stalled connection so a failing run tears down.
+        for connection in list(server.server_state.connections):
+            connection.transport.abort()
+        server.force_exit = server.should_exit = True
+        drain.cancel()
+        await asyncio.gather(drain, serving, return_exceptions=True)
+        stalled.close()
+        holder.close()
         listener.close()

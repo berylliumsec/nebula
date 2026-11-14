@@ -71,7 +71,15 @@ Additional detail for E4–E6:
 ## Unit and integration tests
 
 These ran with a pidfd-capable Python 3.12, on SQLite and on PostgreSQL
-(`NEBULA_TEST_POSTGRES_URL`):
+(`NEBULA_TEST_POSTGRES_URL`). The interpreter was a per-worktree venv whose
+`.pth` resolves `nebula` to this branch's `src`, so worker and Core processes
+spawned by the tests import the branch code, not the primary checkout. The
+final run used `red-suites/mkvenv.sh`. Baselines used the same kind of venv
+pointed at a clean `main` worktree. At load average 35–48, the tests that start
+a real API worker can miss the existing 20 s readiness bound. That happened to
+two `test_supervisor.py` cases and `test_paired_browser_repairs_memory_before_real_api_admission`.
+The two supervisor cases fail identically on clean `main` with the same venv
+and load. All three pass in CI.
 - `tests/v3/test_project_handoff_agent.py`: an in-flight follow-up dispatch
   keeps the project finishing and transfer refuses.
 - `tests/v3/test_runtime_host_services.py`:
@@ -92,7 +100,13 @@ These ran with a pidfd-capable Python 3.12, on SQLite and on PostgreSQL
   - the restart probe ignores TIME_WAIT but refuses a live listener;
   - a self-bound listener gets no drain;
   - under a real uvicorn stop with a holder, the drain closes an answered
-    stream but a request still awaiting its receipt receives its 202.
+    stream but a request still awaiting its receipt receives its 202;
+  - a client that stopped reading a large response cannot hold a
+    holder-backed stop open: its connection is aborted after the flush
+    window, with uvicorn's own timeout disabled in the test.
+- `tests/test_deployer_protocol.py`: the deployer's `deployment_post` honours
+  a 503 `Retry-After` and resubmits the same operation, and still raises a 503
+  that carries no `Retry-After`.
 - `tests/v3/test_runtime_management.py`: a deployment operation whose request
   is cancelled answers a retryable 503 with its operation ID, and still records
   `succeeded` before the host releases authority.

@@ -45,17 +45,24 @@ def status():
 def operation(action, parameters):
     operation_id = f"roll-{uuid.uuid4().hex}"
     for _ in range(600):
-        response = http.post(
-            "/deployment/operations",
-            json={
-                "operation_id": operation_id,
-                "action": action,
-                "parameters": parameters,
-            },
-            headers={"Idempotency-Key": operation_id},
-        )
-        if response.status_code == 429:
+        try:
+            response = http.post(
+                "/deployment/operations",
+                json={
+                    "operation_id": operation_id,
+                    "action": action,
+                    "parameters": parameters,
+                },
+                headers={"Idempotency-Key": operation_id},
+            )
+        except httpx.TransportError:
+            # The host may be between generations; the same ID is idempotent.
             time.sleep(0.5)
+            continue
+        if response.status_code == 429 or (
+            response.status_code == 503 and "Retry-After" in response.headers
+        ):
+            time.sleep(min(float(response.headers.get("Retry-After", "0.5")), 10))
             continue
         response.raise_for_status()
         receipt = response.json()

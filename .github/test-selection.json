@@ -1,16 +1,17 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Rolling Core releases. serve adopts an inherited listening socket (LISTEN_FDS or --listen-fd), validated before ownership and detached on failure, and probes with SO_REUSEADDR. While a holder keeps the socket, a stopping supervisor closes only relayed exchanges that already answered (after 5 s) and never one awaiting its receipt (up to 30 s); a self-bound listener relays to completion. Deployment operations run shielded, answer 503 with their operation ID if their request is cancelled, and are joined before host authority is released. Workers resend read-only host observations only while the host is being replaced (connect failure or the undispatched 503); peer capacity and peer failures fail at once; queued host-pressure callers share one observation. The handoff inventory keeps a project finishing while a queued follow-up dispatch is in flight. Selected suites cover the handoff agent, listener adoption and drain, the management ledger, IPC, host-service replacement and resend bounds, supervisor lifecycle and bootstrap, the browser bridge and the remote host-pressure gate.",
-  "exclusions": "Per-test selections exclude cases that fail identically on clean main: the product-guidance mirror and API-peer 401/404 cases in test_runtime_host_services.py, test_owned_project_refuses_real_shutdown_without_notifying_launcher in test_runtime_management.py (expects 'uncertain'; #1019 makes it 'failed'), and test_shared_automation_image_prepare_replay_and_changed_runner in test_runtime_host_observations.py. Process-level suites need a pidfd-capable Python with Nebula importable by spawned workers; locally they ran on Python 3.12 (SQLite as in CI; earlier also PostgreSQL). Under heavy shared-host load the existing 20 s worker readiness bound can time out spawn-based tests; reruns pass. No UI, native or Playwright cases: no frontend code changed; browser reconnect across a host swap is recorded as unverified. scripts/deploy_rehearsal and the docs are rehearsal tooling and evidence (E1-E7c in docs/validation/rolling-core-releases.md), not run by CI.",
+  "reason": "Rolling Core releases. serve adopts an inherited listening socket (LISTEN_FDS or --listen-fd), validated before ownership and detached on failure, and probes with SO_REUSEADDR. While a holder keeps the socket, a stopping supervisor closes only relayed exchanges that already answered (after 5 s) and never one awaiting its receipt (up to 30 s); after that, connections whose client stopped reading get a 5 s flush and are aborted, with a 50 s uvicorn backstop; a self-bound listener relays to completion. Deployment operations run shielded, answer 503 with their operation ID and Retry-After if their request is cancelled (the deployer's deployment_post and the rehearsal roll honour it), and are joined before host authority is released. Workers resend read-only host observations only while the host is being replaced (connect failure or the undispatched 503); peer capacity and peer failures fail at once; queued host-pressure callers share one observation. The handoff inventory keeps a project finishing while a queued follow-up dispatch is in flight. Selected suites cover the deployer's operation client, the handoff agent, listener adoption and drain, the management ledger, IPC, host-service replacement and resend bounds, supervisor lifecycle and bootstrap, the browser bridge and the remote host-pressure gate.",
+  "exclusions": "Per-test selections exclude cases that fail identically on clean main: the product-guidance mirror and API-peer 401/404 cases in test_runtime_host_services.py, test_owned_project_refuses_real_shutdown_without_notifying_launcher in test_runtime_management.py (expects 'uncertain'; #1019 makes it 'failed'), test_shared_automation_image_prepare_replay_and_changed_runner in test_runtime_host_observations.py, and test_staged_deployer.py (its test_lost_handoff_reply_reconciles_before_retiring_or_advancing fails on main). Process-level suites need a pidfd-capable Python with Nebula importable by spawned workers; locally they ran on Python 3.12 (SQLite as in CI; earlier also PostgreSQL). Under heavy shared-host load the existing 20 s worker readiness bound can time out spawn-based tests; reruns pass. No UI, native or Playwright cases: no frontend code changed; browser reconnect across a host swap is recorded as unverified. scripts/deploy_rehearsal and the docs are rehearsal tooling and evidence (E1-E7c in docs/validation/rolling-core-releases.md), not run by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 128,
+    "python": 153,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/test_deployer_protocol.py",
     "tests/v3/test_project_handoff_agent.py",
     "tests/v3/test_runtime_service.py",
     "tests/v3/test_runtime_ipc.py",
@@ -44,5 +45,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "f227b94000ead6848f09d7b225c96f11a014839952ecc5e909fdb49a9fa2f929"
+  "change_digest": "134b9cf4f62f9c5c0644fddc7961f4c4f4455fe7c76f91017750254aabd9c3da"
 }

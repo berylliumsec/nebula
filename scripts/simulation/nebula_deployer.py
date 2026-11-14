@@ -702,7 +702,9 @@ def first_parent_commits(directory: Path, *, previous: str, sha: str) -> list[st
         capture=True,
     ).splitlines()
     if not commits or commits[-1] != sha:
-        raise RuntimeError("CI acceptance requires a complete first-parent commit chain")
+        raise RuntimeError(
+            "CI acceptance requires a complete first-parent commit chain"
+        )
     parent = previous
     for commit in commits:
         actual = run(
@@ -714,9 +716,7 @@ def first_parent_commits(directory: Path, *, previous: str, sha: str) -> list[st
     return commits
 
 
-def verify_ci_trust_inputs(
-    directory: Path, *, trusted_baseline: str, sha: str
-) -> None:
+def verify_ci_trust_inputs(directory: Path, *, trusted_baseline: str, sha: str) -> None:
     # These files define which checks run and how the selection artifact is
     # validated. CI-only acceptance cannot trust a candidate to rewrite them.
     try:
@@ -1523,10 +1523,8 @@ def validate_ci_acceptance_record(
             or not isinstance(playwright.get("selected_entries"), list)
             or not playwright["selected_entries"]
             or pr_ci["run_id"] == playwright["run_id"]
-            or pr_ci["selection_change_digest"]
-            != playwright["selection_change_digest"]
-            or pr_ci["selection_plan_sha256"]
-            != playwright["selection_plan_sha256"]
+            or pr_ci["selection_change_digest"] != playwright["selection_change_digest"]
+            or pr_ci["selection_plan_sha256"] != playwright["selection_plan_sha256"]
         ):
             raise RuntimeError("release CI supplemental Playwright record is invalid")
         expected_jobs = {"plan": "success", "gate": "success"}
@@ -1689,9 +1687,10 @@ def validate_ci_acceptance_record(
         baseline = item["commit"]
     if baseline != sha:
         raise RuntimeError("release CI acceptance record is invalid")
-    if expected_commits is not None and [
-        item["commit"] for item in ci["receipts"]
-    ] != expected_commits:
+    if (
+        expected_commits is not None
+        and [item["commit"] for item in ci["receipts"]] != expected_commits
+    ):
         raise RuntimeError("release CI acceptance record is invalid")
 
 
@@ -2184,16 +2183,22 @@ def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
         or pending == version
         or active != previous
     ):
-        raise RuntimeError("Deployment state does not match the pending-candidate recovery")
+        raise RuntimeError(
+            "Deployment state does not match the pending-candidate recovery"
+        )
     pending_release = verified_release(pending)
     pending_acceptance = json.loads(
         (pending_release / "simulation-acceptance.json").read_text()
     )
     if pending_acceptance.get("previous") != previous:
-        raise RuntimeError("Pending candidate was accepted against another active release")
+        raise RuntimeError(
+            "Pending candidate was accepted against another active release"
+        )
     steps = journal.get("steps")
     if not isinstance(steps, dict) or set(steps) != {"stage", "migrate", "api"}:
-        raise RuntimeError("Promotion journal contains additional or missing operations")
+        raise RuntimeError(
+            "Promotion journal contains additional or missing operations"
+        )
 
     stage_entry, stage_receipt = _require_recorded_operation(
         journal, step="stage", action="stage", expected_state="succeeded"
@@ -2253,7 +2258,9 @@ def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
             or not isinstance(host.get("operation_id"), str)
             or not host.get("operation_id")
         ):
-            raise RuntimeError("Legacy top-level host activation does not match deployment")
+            raise RuntimeError(
+                "Legacy top-level host activation does not match deployment"
+            )
     elif (
         not isinstance(deployment_host, dict)
         or deployment_host.get("version") != version
@@ -2294,9 +2301,7 @@ def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
     identity = host_connection(allow_stale=True)
     if identity is None or identity.get("package_version") != package_version:
         raise RuntimeError("Current runtime discovery does not match the selected host")
-    require_runtime_process_in_service(
-        supervisor_service_identity(), identity, version
-    )
+    require_runtime_process_in_service(supervisor_service_identity(), identity, version)
     health, status = read_supervisor_health()
     residents = status.get("resident_versions")
     if (
@@ -2317,7 +2322,9 @@ def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
         )
 
     if len(history) >= DEPLOYMENT_HISTORY_LIMIT:
-        raise RuntimeError("Deployment history archive is full; retain existing records")
+        raise RuntimeError(
+            "Deployment history archive is full; retain existing records"
+        )
     reconciliation = {
         "id": deployment_id,
         "state": "reconciled_no_effect",
@@ -2373,9 +2380,7 @@ def verified_release(sha: str) -> Path:
             ci,
             previous=previous,
             sha=sha,
-            expected_commits=first_parent_commits(
-                REPO, previous=previous, sha=sha
-            ),
+            expected_commits=first_parent_commits(REPO, previous=previous, sha=sha),
             directory=REPO,
         )
     return release
@@ -2700,7 +2705,8 @@ def host_status_snapshot(
         or status.get("protocol") != "nebula.runtime/v1"
         or not (
             deployment_health == "ready"
-            or allow_degraded and deployment_health == "degraded"
+            or allow_degraded
+            and deployment_health == "degraded"
         )
         or not isinstance(status.get("api_version"), str)
         or not SHA.fullmatch(status["api_version"])
@@ -2733,7 +2739,10 @@ def host_status_snapshot(
             not isinstance(project_id, str)
             or not project_id
             or project_id in owners
-            or (runtime_id is not None and (not isinstance(runtime_id, str) or not runtime_id))
+            or (
+                runtime_id is not None
+                and (not isinstance(runtime_id, str) or not runtime_id)
+            )
             or (runtime_version is not None and not isinstance(runtime_version, str))
             or type(fencing_token) is not int
             or fencing_token < 0
@@ -2796,10 +2805,13 @@ def require_preserved_workers(
     current_residents = set(after["resident_versions"])
     if (
         not previous_residents <= current_residents
-        or current_residents - previous_residents
+        or current_residents
+        - previous_residents
         - ({admitted_version} if admitted_version is not None else set())
     ):
-        raise RuntimeError("Host restart changed resident execution versions unexpectedly")
+        raise RuntimeError(
+            "Host restart changed resident execution versions unexpectedly"
+        )
     return {"retained": retained}
 
 
@@ -3056,9 +3068,7 @@ def reconcile_attention_activation(
         )
     snapshot = host_status_snapshot(
         status,
-        allow_degraded=(
-            allow_degraded_workers and prior.get("health") == "degraded"
-        ),
+        allow_degraded=(allow_degraded_workers and prior.get("health") == "degraded"),
     )
     if snapshot["api_version"] != prior["api_version"]:
         raise RuntimeError(
@@ -3325,8 +3335,7 @@ def activate_supervisor_host(
         health.get("status") != "ok"
         or health.get("database") != "ok"
         or health.get("commit") != previous_version
-        or health.get("recovery_version")
-        != runtime_package_version(previous_version)
+        or health.get("recovery_version") != runtime_package_version(previous_version)
     ):
         raise RuntimeError(
             "Current supervisor API/database health does not match its process identity"
@@ -3650,8 +3659,7 @@ def rollback_host() -> dict[str, Any]:
         health.get("status") != "ok"
         or health.get("database") != "ok"
         or health.get("commit") != current_version
-        or health.get("recovery_version")
-        != runtime_package_version(current_version)
+        or health.get("recovery_version") != runtime_package_version(current_version)
     ):
         raise RuntimeError(
             "Current supervisor health is not verified for code rollback"
@@ -4127,19 +4135,43 @@ def offline_rollback(
     }
 
 
+DEPLOYMENT_RETRY_ATTEMPTS = 30
+DEPLOYMENT_RETRY_MAX_SECONDS = 10
+
+
 def deployment_post(path: str, payload: dict) -> dict:
+    """Submit a deployment operation, honouring the host's Retry-After.
+
+    A stopping or busy supervisor answers 503 or 429 with Retry-After while
+    the operation continues under its ID. Submitting the same operation ID
+    again is idempotent and returns its saved receipt once one exists.
+    """
     client = api()
-    request = Request(
-        f"{client.origin}/api/v1/{path}",
-        data=json.dumps(payload, separators=(",", ":")).encode(),
-        headers={
-            "Authorization": f"Bearer {client.token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=60) as response:
-        return json.load(response)
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    for attempt in range(DEPLOYMENT_RETRY_ATTEMPTS):
+        request = Request(
+            f"{client.origin}/api/v1/{path}",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {client.token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=60) as response:
+                return json.load(response)
+        except HTTPError as error:
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            if (
+                error.code not in {429, 503}
+                or retry_after is None
+                or not retry_after.isdigit()
+                or attempt + 1 == DEPLOYMENT_RETRY_ATTEMPTS
+            ):
+                raise
+            time.sleep(min(int(retry_after), DEPLOYMENT_RETRY_MAX_SECONDS))
+    raise RuntimeError("Deployment operation retry budget is exhausted")
 
 
 def runtime_release(sha: str) -> tuple[Path, str]:

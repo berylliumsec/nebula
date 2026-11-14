@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -48,6 +49,21 @@ VIEWER_DRAIN_SECONDS = 5
 # it answers, up to this bound. The API worker answers an accepted request
 # with its saved receipt within 15 s.
 RELAY_ANSWER_LIMIT_SECONDS = 30
+# After every relayed exchange has finished or been closed, a connection may
+# still hold response bytes its client stopped reading (a phone that left the
+# network, a paused download). It gets this long to flush, then is aborted.
+RELAY_FLUSH_SECONDS = 5
+
+
+def relay_stop_bound() -> int:
+    """Hard bound on a holder-backed stop, as uvicorn's graceful timeout.
+
+    The drain below normally finishes well within it; this backstop holds
+    even if the drain itself fails, so the host lock is always released.
+    """
+    return math.ceil(
+        VIEWER_DRAIN_SECONDS + RELAY_ANSWER_LIMIT_SECONDS + 2 * RELAY_FLUSH_SECONDS
+    )
 
 
 def relay_drain(server, supervisor, *, inherited: bool):
@@ -63,6 +79,18 @@ def relay_drain(server, supervisor, *, inherited: bool):
         await drain_relays(
             supervisor, VIEWER_DRAIN_SECONDS, limit=RELAY_ANSWER_LIMIT_SECONDS
         )
+        # Uvicorn waits for every connection to close before it releases the
+        # application. A connection whose client stopped reading never closes
+        # by itself; abort it once the flush window ends, so a stalled reader
+        # cannot keep this generation, and the host lock, alive.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RELAY_FLUSH_SECONDS
+        while server.server_state.connections and loop.time() < deadline:
+            await asyncio.sleep(0.1)
+        for connection in list(server.server_state.connections):
+            transport = getattr(connection, "transport", None)
+            if transport is not None:
+                transport.abort()
 
     return create_diagnostic_task(
         when_stopping(),
@@ -338,6 +366,7 @@ async def serve_runtime(
                 access_log=False,
                 ssl_certfile=str(tls_cert) if tls_cert else None,
                 ssl_keyfile=str(tls_key) if tls_key else None,
+                timeout_graceful_shutdown=relay_stop_bound() if inherited else None,
             )
         )
         drain = relay_drain(server, supervisor, inherited=inherited)
