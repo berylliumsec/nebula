@@ -199,6 +199,15 @@ permit sensitive data and needs an explicit confirmation that redacted tool
 output may be sent to it. Each change saves the whole setting with the project's
 revision and is read back from Core.
 
+`/results` lists the conversation's retained results. Choosing a tool result
+opens its output, as the GUI's artifact inspector does: read it in pages (continuing
+inside very long lines), search every output of that tool call with more matches on
+request, or save the raw output to a file on this client after confirming it may be
+sensitive. For a harness conversation, `/activity` also offers **Stop subagent** for
+the harness's own running subagent tasks when the harness advertises subagent
+control, and **Rewind files** to a checkpoint while idle when it advertises
+checkpoint rewind.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
