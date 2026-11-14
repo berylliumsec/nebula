@@ -964,7 +964,7 @@ class TuiUI(TerminalUI):
             return _edge(" Project Snapshot    R Refresh    Esc Close", width - 1)
         if self._mode == "board":
             return _edge(
-                " Board  R Refresh  Esc Chat  / Search  Tab Details  ↑↓ Select",
+                " Board  N New  U Update  T Track  L Link  A Tools  R Refresh  / Search  Esc Chat",
                 width - 1,
             )
         if self._mode == "notes":
