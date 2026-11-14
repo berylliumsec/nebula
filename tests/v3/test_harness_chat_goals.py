@@ -750,14 +750,12 @@ async def test_late_subagent_report_resumes_parked_harness_goal_once(tmp_path):
             )
         )
         (await runtime.start_chat_turn(harness_turn.id))
-        for _ in range(300):
-            if (
-                await store.get(ChatTurn, parent_turn.id)
-            ).status == ChatTurnStatus.COMPLETE and not runtime._chat_turn_tasks:
-                break
-            await asyncio.sleep(0.01)
-        else:
-            pytest.fail("parent harness turn did not settle")
+        # The task leaves _chat_turn_tasks before its turn settles the goal;
+        # wait for the whole task so the report below really arrives late.
+        await asyncio.wait_for(runtime._chat_turn_tasks[harness_turn.id], 10)
+        assert (
+            await store.get(ChatTurn, parent_turn.id)
+        ).status == ChatTurnStatus.COMPLETE
         assert (await goals.get(created.session.id)).status == ChatGoalStatus.RUNNING
         assert (
             len((await store.list_session_entities(ChatTurn, created.session.id))) == 1
@@ -782,9 +780,112 @@ async def test_late_subagent_report_resumes_parked_harness_goal_once(tmp_path):
         ).result_message_id is not None
         assert "Subagent reports are ready" in adapter.connections[0].prompts[-1]
         await chat.subagents.deliver_pending(created.session.id)
-        assert (
-            len((await store.list_session_entities(ChatTurn, created.session.id))) == 2
+        turns = await store.list_session_entities(ChatTurn, created.session.id)
+        assert [turn.status for turn in turns] == [ChatTurnStatus.COMPLETE] * 2
+        await runtime.shutdown()
+        await chat.shutdown()
+
+    (await scenario())
+
+
+async def test_a_report_that_starts_the_next_goal_turn_is_not_paused_by_the_last(
+    tmp_path,
+):
+    """A finished turn's cleanup can start the goal's next turn before it settles.
+
+    That newer turn holds the goal's claim. The older turn's settle must leave
+    the goal to it instead of pausing the goal, and its claim, mid-turn.
+    """
+
+    async def scenario() -> None:
+        store, engagement, profile, _mcp, adapter, runtime = await _runtime(tmp_path)
+        chat = ChatService(store)
+        runtime.bind_provider_subagents(chat.subagents)
+        chat.subagents.bind_harness_runtime(runtime)
+        goals = ChatGoalService(store, runtime)
+        created = await _new_goal(goals, step_budget=2)
+        (
+            await goals.write(
+                created.session.id,
+                GoalWrite(expected_revision=created.goal.revision, action="start"),
+            )
         )
+        _session, parent_turn, harness_turn = await runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model="test-model",
+            prompt="Delegate and wait for a report",
+            chat_session_id=created.session.id,
+            goal_id=created.goal.id,
+            harness_session_id=None,
+            mcp_server_ids=None,
+            include_knowledge=False,
+        )
+        child_chat = await store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                backend=ChatBackend.PROVIDER,
+                provider_profile_id="provider-fixture",
+                model="fixture",
+                parent_session_id=created.session.id,
+                title="Child report",
+            )
+        )
+        # The child finishes while the parent turn runs, so the parent turn's
+        # own cleanup posts the report and starts the goal's second turn.
+        (
+            await store.create(
+                ChatSubagent(
+                    engagement_id=engagement.id,
+                    parent_session_id=created.session.id,
+                    parent_turn_id=parent_turn.id,
+                    parent_backend=ChatBackend.HARNESS,
+                    child_session_id=child_chat.id,
+                    name="Packet reviewer",
+                    task="Inspect bounds",
+                    status=ChatSubagentStatus.COMPLETED,
+                    finished_at=utc_now(),
+                    result="Packet lengths were checked.",
+                )
+            )
+        )
+        second_started = asyncio.Event()
+        release_second = asyncio.Event()
+        original_open = adapter.open
+
+        async def open_connection(request):
+            connection = await original_open(request)
+            run_turn = connection.run_turn
+
+            async def gated_run_turn(prompt, *, model, images=None):
+                if "Subagent reports are ready" in prompt:
+                    second_started.set()
+                    await release_second.wait()
+                async for event in run_turn(prompt, model=model, images=images):
+                    yield event
+
+            connection.run_turn = gated_run_turn  # type: ignore[method-assign]
+            return connection
+
+        adapter.open = open_connection  # type: ignore[method-assign]
+        (await runtime.start_chat_turn(harness_turn.id))
+        first = runtime._chat_turn_tasks[harness_turn.id]
+        await asyncio.wait_for(second_started.wait(), 10)
+        await asyncio.wait_for(first, 10)
+
+        # The first turn has fully settled while the second one runs.
+        goal = await goals.get(created.session.id)
+        turns = await store.list_session_entities(ChatTurn, created.session.id)
+        assert len(turns) == 2
+        assert goal.status == ChatGoalStatus.RUNNING
+        assert goal.execution_claim_id == turns[1].id
+
+        release_second.set()
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        goal = await goals.get(created.session.id)
+        assert goal.blocked_reason == "Goal step budget is exhausted."
+        turns = await store.list_session_entities(ChatTurn, created.session.id)
+        assert [turn.status for turn in turns] == [ChatTurnStatus.COMPLETE] * 2
         await runtime.shutdown()
         await chat.shutdown()
 
