@@ -185,6 +185,9 @@ class RuntimeAutoAdmission:
                         # expired or uncertain owners still have a runtime ID.
                         .where(
                             ProjectOwnershipRow.runtime_id.is_(None),
+                            # A held project refuses the grant; preparing a
+                            # worker for it would only leave one unassigned.
+                            ProjectOwnershipRow.retirement_requested.is_(False),
                             or_(
                                 open_chat,
                                 pending_chat_start,
