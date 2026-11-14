@@ -55,9 +55,13 @@ be stable across retries of the same observation. `observed_at` needs a time
 zone. Use `healthy`, `warning`, `critical`, or `unavailable`; unavailable may
 omit capacity. Available states require nonnegative free and positive total
 bytes, with free no greater than total. Source labels and paths are untrusted
-data. The server returns `202` with `duplicate` and `current` booleans. A
-duplicate event ID with changed content returns `409`; older observations are
-accepted as receipts but cannot replace current state. The full [JSON Schema](schemas/storage-event-v1.schema.json)
+data. The server returns `202` with `accepted: true` and `duplicate` and
+`current` booleans. When the source's project is still starting its worker,
+Core saves the report and returns `202` with `accepted: true`, `queued: true`
+and null `duplicate` and `current`; it records the report when that worker
+runs. A duplicate event ID with changed content returns `409`; older
+observations are accepted as receipts but cannot replace current state. A
+`503` asks the sender to retry the same body. The full [JSON Schema](schemas/storage-event-v1.schema.json)
 is versioned with this route and appears in Core's OpenAPI document.
 
 The same body can be sent to `POST /api/v1/storage/test` while a source is
