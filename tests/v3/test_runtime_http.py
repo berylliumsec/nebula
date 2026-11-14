@@ -21,6 +21,7 @@ from nebula.v3.runtime_http import (
     RuntimeHttpProxy,
     internal_headers,
 )
+from nebula.v3.runtime_ipc import RuntimeIpcError
 
 pytestmark = pytest.mark.anyio
 
@@ -826,3 +827,47 @@ async def test_retirement_during_eviction_returns_a_reconnect_response(monkeypat
         assert response.json()["detail"].startswith("The runtime connection")
     assert proxy.active == {}
     await proxy.close()
+
+
+@pytest.mark.parametrize("directory", ["private", "shared", "missing"])
+async def test_proxy_forwards_credentials_only_into_a_private_socket_directory(
+    tmp_path, directory
+):
+    key = secrets.token_bytes(32)
+    received = []
+    app = FastAPI()
+
+    @app.get("/probe")
+    async def probe(request: Request):
+        received.append(request.headers.get("authorization"))
+        return JSONResponse({})
+
+    async with server(PrivateRuntimeHttp(app, key)) as endpoint:
+        socket = Path(endpoint[7:])
+        if directory == "shared":
+            # e.g. another local user recreated a vanished /tmp socket path.
+            socket.parent.chmod(0o755)
+        elif directory == "missing":
+            endpoint = "unix://" + str(tmp_path / "vanished" / socket.name)
+
+        async def select(_scope):
+            return HttpUpstream(endpoint, key)
+
+        proxy = RuntimeHttpProxy(select)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy),
+                base_url="https://public.example",
+            ) as client:
+                request = client.get(
+                    "/probe", headers={"Authorization": "Bearer synthetic"}
+                )
+                if directory == "private":
+                    assert (await request).status_code == 200
+                else:
+                    with pytest.raises(RuntimeIpcError, match="not private"):
+                        await request
+        finally:
+            await proxy.close()
+            socket.parent.chmod(0o700)
+    assert received == (["Bearer synthetic"] if directory == "private" else [])

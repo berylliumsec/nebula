@@ -10,7 +10,9 @@ import hashlib
 import hmac
 from http.cookiejar import CookieJar
 import json
+import os
 import secrets
+import stat
 import time
 from typing import Any, Literal
 from builtins import BaseExceptionGroup
@@ -24,6 +26,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from .async_utils import finish_cleanup
 from .deployment_protocol import IPC_PROTOCOL
 from .diagnostics import record_caught_exception, record_diagnostic
+from .runtime_ipc import RuntimeIpcError
 
 _PREFIX = b"x-nebula-internal-"
 # Runtime endpoints that may hold forwarding channels at once. Idle endpoints
@@ -282,6 +285,29 @@ class _NoCookieJar(CookieJar):
         return None
 
 
+def _require_private_socket_directory(path: str) -> None:
+    """Forward viewer credentials only into a directory no other user can enter.
+
+    A recorded worker socket can outlive its directory, for example after
+    /tmp cleanup at boot. Another local user could recreate that public path
+    and would then receive forwarded Authorization and Cookie headers.
+    """
+    try:
+        details = os.lstat(os.path.dirname(path))
+    except OSError as error:
+        raise RuntimeIpcError(
+            "The runtime socket directory is not private; saved work remains queued"
+        ) from error
+    if (
+        not stat.S_ISDIR(details.st_mode)
+        or details.st_uid != os.getuid()
+        or details.st_mode & 0o077
+    ):
+        raise RuntimeIpcError(
+            "The runtime socket directory is not private; saved work remains queued"
+        )
+
+
 class RuntimeHttpProxy:
     """A viewer owns connections, never an upstream producer or process."""
 
@@ -489,7 +515,9 @@ class RuntimeHttpProxy:
                     await send({"type": "lifespan.shutdown.complete"})
                     return
         target = await self.select(scope)
-        target.socket_path()
+        socket_path = target.socket_path()
+        if self.transport_factory is None or scope["type"] == "websocket":
+            _require_private_socket_directory(socket_path)
         if scope["type"] == "websocket":
             await self._websocket(target, scope, receive, send)
             return

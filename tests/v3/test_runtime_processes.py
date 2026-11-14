@@ -104,7 +104,10 @@ async def main():
     host=RuntimeProcessHost(DeploymentCoordinator(database),Path(config['root']),pool_settings=settings,operator_token=config['token'])
     await host.start()
     identity=await host.spawn('v1','execution')
-    Path(config['ready']).write_text(identity.model_dump_json())
+    # Publish atomically: the test reads the file as soon as it exists.
+    staged=Path(config['ready']+'.tmp')
+    staged.write_text(identity.model_dump_json())
+    staged.replace(config['ready'])
     if config.get('graceful_exit'):
         await host.close()
         await database.dispose()
