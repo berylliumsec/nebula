@@ -12,7 +12,6 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from nebula.v3 import cli
 from nebula.v3.api import create_app
 from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 
@@ -40,5 +39,7 @@ def create_available_host_app(*args: Any, **kwargs: Any) -> FastAPI:
 
 
 if __name__ == "__main__":
-    cli.create_app = create_available_host_app
-    cli.main()
+    # Run as a script, so the helper beside this file is importable by name.
+    from in_process_core import serve_fixture
+
+    serve_fixture(create_available_host_app)

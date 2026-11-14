@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-from nebula.v3 import cli
+from nebula.v3.api import create_app as _create_app
 from nebula.v3.domain import (
     Engagement,
     ExecutionOrigin,
@@ -16,8 +16,6 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.harnesses import HarnessCapabilities, HarnessHealth
-
-_create_app = cli.create_app
 
 
 class InertNoteHarness:
@@ -154,5 +152,7 @@ async def create_fixture_app(*args: Any, **kwargs: Any):
 
 
 if __name__ == "__main__":
-    cli.create_app = create_fixture_app
-    cli.main()
+    # Run as a script, so the helper beside this file is importable by name.
+    from in_process_core import serve_fixture
+
+    serve_fixture(create_fixture_app)
