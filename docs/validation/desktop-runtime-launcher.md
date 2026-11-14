@@ -38,6 +38,13 @@ service incarnation to exit. The current Tauri window blocks automatic restart
 after an explicit shutdown. A missing supervisor is not proof its retained
 workers stopped and is reported as requiring reconnection.
 
+SIGTERM to `serve` also only detaches. The stable listener gives open viewer
+streams (such as `/api/v1/work/events`) 5 s and then closes them; clients
+reconnect with their cursors. Project workers deliberately keep running with
+their grants when their supervisor exits or dies: the next `serve` rediscovers
+and adopts them, and only `runtime-stop` (or that next supervisor's
+reconciliation) retires them. Workers never stop on supervisor loss alone.
+
 Desktop updates alone do not promote a different API. API promotion and rollback
 are explicit host deployment operations; they must be exercised independently of
 viewer reopen. The legacy `--handshake-stdout` protocol and unauthenticated remote

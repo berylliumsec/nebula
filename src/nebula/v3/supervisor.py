@@ -11,10 +11,10 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from starlette.responses import JSONResponse
 
-from .async_utils import finish_cleanup
+from .async_utils import cancel_and_join, finish_cleanup
 from .authentication import CoreAuthentication
 from .authentication_api import AuthenticationApi
 from .database import (
@@ -140,6 +140,9 @@ class RuntimeSupervisor:
         self._handoff_serial = asyncio.Lock()
         self._next_process_reconciliation = 0.0
         self._activated_handoffs: set[str] = set()
+        # The last waiting reason logged per project, so a transfer that keeps
+        # waiting is recorded when its reason changes, not on every tick.
+        self._restore_waiting: dict[str, tuple] = {}
         self.viewers: set[asyncio.Task] = set()
         authentication = CoreAuthentication(self.store, operator_token)
         self.authentication = authentication
@@ -317,10 +320,30 @@ class RuntimeSupervisor:
         async with self._handoff_serial:
             self._active()
             async with self.coordinator.database.session() as session:
-                query = select(ProjectHandoffRow).where(
-                    ProjectHandoffRow.phase.in_(
-                        ("transferable", "transferred", "verified")
+                # A verified transfer needs this loop only while its target
+                # still owns the project (to activate a prepared target after
+                # a restart). Once ownership moved on it is finished history;
+                # retrying it would fail on every tick and could even claim
+                # the project for a stale target.
+                query = (
+                    select(ProjectHandoffRow)
+                    .outerjoin(
+                        ProjectOwnershipRow,
+                        ProjectOwnershipRow.project_id == ProjectHandoffRow.project_id,
                     )
+                    .where(
+                        or_(
+                            ProjectHandoffRow.phase.in_(
+                                ("transferable", "transferred")
+                            ),
+                            and_(
+                                ProjectHandoffRow.phase == "verified",
+                                ProjectOwnershipRow.runtime_id
+                                == ProjectHandoffRow.target_runtime_id,
+                            ),
+                        )
+                    )
+                    .order_by(ProjectHandoffRow.project_id)
                 )
                 if self._activated_handoffs:
                     query = query.where(
@@ -341,23 +364,41 @@ class RuntimeSupervisor:
                         await self._advance_project_recovery(row)
                     else:
                         await self._advance_project_handoff(row)
+                    self._restore_waiting.pop(row.project_id, None)
                 except Exception as error:
                     # A blocked target must not starve transfers for other projects.
-                    record_caught_exception(
-                        "runtime",
-                        "runtime.project_restore.waiting",
-                        "This project remains held pending target restoration.",
-                        error,
-                        stage="handoff",
+                    signature = (
+                        row.phase,
+                        row.target_runtime_id,
+                        type(error).__name__,
+                        str(error),
                     )
+                    if self._restore_waiting.get(row.project_id) != signature:
+                        self._restore_waiting[row.project_id] = signature
+                        record_caught_exception(
+                            "runtime",
+                            "runtime.project_restore.waiting",
+                            "This project remains held pending target restoration."
+                            if row.phase == "transferred"
+                            else "A project transfer is waiting to continue.",
+                            error,
+                            stage="handoff",
+                        )
+                    if row.phase != "transferred":
+                        continue
+                    blockers = [
+                        "Target runtime "
+                        + row.target_runtime_id
+                        + " has not verified restoration; queued work remains held"
+                    ]
                     async with self.coordinator.coordination._write() as session:
                         pending = await session.get(ProjectHandoffRow, row.project_id)
-                        if pending is not None and pending.phase == "transferred":
-                            pending.blockers = [
-                                "Target runtime "
-                                + pending.target_runtime_id
-                                + " has not verified restoration; queued work remains held"
-                            ]
+                        if (
+                            pending is not None
+                            and pending.phase == "transferred"
+                            and pending.blockers != blockers
+                        ):
+                            pending.blockers = blockers
                             pending.revision += 1
 
     async def _advance_project_handoff(self, row):
@@ -900,8 +941,11 @@ class RuntimeSupervisor:
     async def _detach_resources(self, caller):
         failures = []
         if self._handoff_task is not None and self._handoff_task is not caller:
-            self._handoff_task.cancel()
-            await asyncio.gather(self._handoff_task, return_exceptions=True)
+            try:
+                await cancel_and_join(self._handoff_task)
+            except Exception:
+                # diagnostic-expected: the handoff loop records its own failures; detachment continues.
+                pass
         try:
             await self.proxy.close()
         except BaseException as error:

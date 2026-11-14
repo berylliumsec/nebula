@@ -36,7 +36,7 @@ from nebula.v3.process_identity import same_process
 from nebula.v3.release_store import MANIFEST_NAME, ReleaseStore
 from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
 from nebula.v3.runtime_host_services import HostSharedServices
-from nebula.v3.runtime_ipc import RuntimeRpcClient, RuntimeRpcServer
+from nebula.v3.runtime_ipc import RuntimeIpcError, RuntimeRpcClient, RuntimeRpcServer
 from nebula.v3.runtime_project_handoff import restored_checkpoint
 from nebula.v3.shared_memory_import import CompatibilityMemoryImport
 from nebula.v3.supervisor import RuntimeSupervisor
@@ -69,6 +69,7 @@ def stepped_supervisor(coordinator, rpc):
     root.started, root.closed, root._shutdown_committed = True, False, False
     root._handoff_serial, root._operations = asyncio.Lock(), asyncio.Lock()
     root._activated_handoffs = set()
+    root._restore_waiting = {}
     return root
 
 
@@ -635,3 +636,70 @@ async def test_recovery_refused_before_its_commit_is_a_rejection(recovery):
         assert await session.get(ProjectHandoffRow, "one") is None
         owner = await session.get(ProjectOwnershipRow, "one")
         assert owner.runtime_id == "source"
+
+
+async def test_finished_recovery_is_not_retried_after_its_target_retires(
+    recovery, monkeypatch
+):
+    value = recovery
+    lease = await value.begin()
+    await value.prepared(lease)
+    await value.coordinator.verify_recovery(
+        lease,
+        operation_id="saved-recovery",
+        restored_checkpoint_digest=value.execution.restored_checkpoint_digest,
+    )
+    # The project later quiesced and its recovery target retired; the verified
+    # handoff row remains as history.
+    async with value.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        owner.runtime_id, owner.lease_expires_at_ms = None, 0
+        (await session.get(RuntimeProcessRow, "target")).state = "retired"
+    calls, recorded = [], []
+
+    async def rpc(runtime_id):
+        calls.append(runtime_id)
+        return await value.rpc(runtime_id)
+
+    from nebula.v3 import supervisor as supervisor_module
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append(args[1]),
+    )
+    replacement = stepped_supervisor(value.coordinator, rpc)
+    for _tick in range(3):
+        await replacement.advance_project_handoffs()
+    assert calls == [] and recorded == []
+    async with value.database.session() as session:
+        handoff = await session.get(ProjectHandoffRow, "one")
+        assert handoff.phase == "verified" and not handoff.admission_held
+
+
+async def test_waiting_transfer_is_recorded_once_per_reason(recovery, monkeypatch):
+    value = recovery
+    await value.begin()
+    # The held recovery's target cannot answer; each tick fails the same way.
+
+    async def unreachable(_runtime_id):
+        raise RuntimeIpcError("synthetic target is unreachable")
+
+    from nebula.v3 import supervisor as supervisor_module
+
+    recorded = []
+    monkeypatch.setattr(
+        supervisor_module,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append(args[1]),
+    )
+    replacement = stepped_supervisor(value.coordinator, unreachable)
+    async with value.database.session() as session:
+        before = (await session.get(ProjectHandoffRow, "one")).revision
+    for _tick in range(4):
+        await replacement.advance_project_handoffs()
+    assert recorded == ["runtime.project_restore.waiting"]
+    async with value.database.session() as session:
+        handoff = await session.get(ProjectHandoffRow, "one")
+        assert handoff.phase == "transferred" and handoff.admission_held
+        assert handoff.revision == before + 1

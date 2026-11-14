@@ -17,6 +17,7 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import Field, field_validator, model_validator
 
+from .async_utils import cancel_and_join
 from .chat import ChatCompletionRequest, ChatRequestMessage
 from .chat_queue import QueueWrite
 from .credentials import CredentialStore
@@ -191,9 +192,11 @@ class StorageIntegrationService:
         self.harness_runtime = harness_runtime
         self.credentials = credentials
         self._task: asyncio.Task | None = None
+        self._stopping = False
         self._dispatch_lock = asyncio.Lock()
 
     async def startup(self) -> None:
+        self._stopping = False
         self._task = create_diagnostic_task(
             self._loop(),
             feature="storage",
@@ -203,17 +206,14 @@ class StorageIntegrationService:
         )
 
     async def shutdown(self) -> None:
+        # The flag ends the loop even if a cancellation is swallowed in SQL.
+        self._stopping = True
         if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                # diagnostic-expected: shutdown cancels and awaits the owned dispatch task.
-                pass
+            await cancel_and_join(self._task)
             self._task = None
 
     async def _loop(self) -> None:
-        while True:
+        while not self._stopping:
             try:
                 await self.dispatch_pending()
             except Exception as exc:
@@ -224,6 +224,8 @@ class StorageIntegrationService:
                     exc,
                     stage="dispatch",
                 )
+            if self._stopping:
+                return
             await asyncio.sleep(10)
 
     async def _validate_runtime(

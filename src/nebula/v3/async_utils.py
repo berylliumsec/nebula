@@ -108,6 +108,24 @@ class ServiceCleanupError(RuntimeError):
         )
 
 
+async def cancel_and_join(task: asyncio.Task, *, interval: float = 0.5) -> None:
+    """Stop an owned loop task, cancelling again until it has really ended.
+
+    Python 3.11's asyncio.wait_for (used by SQLAlchemy's pool checkout) can
+    drop a cancellation without raising (bpo-42130), and a driver error during
+    cancel cleanup can replace it with an ordinary exception that the loop
+    catches. One cancel() is then consumed and the loop runs on. Each further
+    cancel() is delivered at the task's next await. Cancellation is the
+    expected outcome; any other failure of the task is raised.
+    """
+    while not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=interval)
+    error = None if task.cancelled() else task.exception()
+    if error is not None:
+        raise error
+
+
 async def finish_cleanup(operation: Coroutine[Any, Any, _T]) -> _T:
     """Join owned cleanup even when its caller is cancelled repeatedly."""
     task = asyncio.create_task(
