@@ -1068,6 +1068,24 @@ def test_reconcile_pre_spawn_memory_error_archives_journal_and_preserves_pending
     )
 
 
+def test_reconcile_accepts_legacy_top_level_host_activation_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, receipts, meta = _uncertain_budget_deployment(tmp_path)
+    # This is the saved pre-nesting shape: only the exact completed receipt and
+    # readback are top-level; the deployment journal has no host_activation key.
+    record["runtime_deployment"].pop("host_activation")
+    _configure_reconciliation(tmp_path, monkeypatch, record, receipts, meta)
+
+    result = deployer.reconcile_runtime_deployment(meta["deployment_id"])
+
+    assert result["status"] == "reconciled_no_effect"
+    archived = deployer.state()["runtime_deployment_history"][0]
+    assert "host_activation" not in archived["journal"]
+    assert archived["live_readback"]["api_version"] == meta["previous"]
+    assert archived["live_readback"]["target_execution_version"] == meta["version"]
+
+
 def test_reconcile_rejects_unknown_error_and_changed_api_or_resident_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
