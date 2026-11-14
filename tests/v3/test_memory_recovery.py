@@ -508,3 +508,129 @@ async def test_crashed_controller_releases_real_group_after_verified_cleanup(
                     await runner._force_remove(
                         job.launch_groups.group_id, require_removed=True
                     )
+
+
+EARLIER_BOOT = "00000000-1111-4222-8333-444444444444"
+
+
+def _earlier_boot_owner(**changes):
+    kind, _boot, label, inode = process_origin().split(":")
+    values = dict(
+        process_id=2_000_000_000,
+        process_birth=f"linux:{EARLIER_BOOT}:12345",
+        runner_fingerprint="a" * 64,
+        process_origin=":".join((kind, EARLIER_BOOT, label, inode)),
+    )
+    values.update(changes)
+    return MemoryLaunchOwner(**values)
+
+
+async def _no_runner(_job):
+    raise AssertionError("a prelaunch release never contacts a cleanup runner")
+
+
+@pytest.mark.skipif(process_origin() is None, reason="Linux process origins")
+@pytest.mark.parametrize("boot_ended", [True, False, None])
+async def test_prelaunch_owner_from_an_earlier_boot_is_released_only_with_lease_proof(
+    budgets, boot_ended
+):
+    """After a reboot the old owner's charge is freed once its boot is quiet."""
+    service, _ = budgets
+    await create(service)
+    await service.reserve("job", capability(), owner=_earlier_boot_owner())
+    asked = []
+
+    async def ended(boot):
+        asked.append(boot)
+        return boot_ended
+
+    reconciler = MemoryReconciler(
+        service,
+        _no_runner,
+        previous_boot_ended=None if boot_ended is None else ended,
+    )
+    released = await reconciler.once()
+    job = await service.get_job("job")
+    if boot_ended:
+        assert released == ["job"] and asked == [EARLIER_BOOT]
+        assert (job.state, job.outcome, job.reserved_bytes) == (
+            "finished",
+            "worker_lost",
+            0,
+        )
+    else:
+        # A live lease from that boot, or a reconciler that cannot check
+        # leases (a project worker), keeps the reservation charged.
+        assert released == [] and job.state == "reserved"
+        assert job.reserved_bytes == 2 * GIB
+
+
+@pytest.mark.skipif(process_origin() is None, reason="Linux process origins")
+async def test_earlier_boot_owner_releases_its_prelaunch_reservation(budgets):
+    service, _ = budgets
+    await create(service)
+    owner = _earlier_boot_owner()
+    job = await service.reserve("job", capability(), owner=owner)
+    released = await service.release_prelaunch(
+        "job", job.revision, owner=owner, owner_dead=True
+    )
+    assert (released.state, released.outcome, released.reserved_bytes) == (
+        "finished",
+        "worker_lost",
+        0,
+    )
+
+
+@pytest.mark.skipif(process_origin() is None, reason="Linux process origins")
+async def test_same_boot_namespace_change_never_proves_owner_death(budgets):
+    service, _ = budgets
+    await create(service)
+    kind, boot, label, _inode = process_origin().split(":")
+    owner = MemoryLaunchOwner(
+        process_id=2_000_000_000,
+        process_birth=f"linux:{boot}:12345",
+        runner_fingerprint="a" * 64,
+        process_origin=":".join((kind, boot, label, "4026599999")),
+    )
+    job = await service.reserve("job", capability(), owner=owner)
+
+    async def ended(_boot):
+        raise AssertionError("a same-boot namespace change is not a boot change")
+
+    reconciler = MemoryReconciler(service, _no_runner, previous_boot_ended=ended)
+    assert await reconciler.once() == []
+    with pytest.raises(MemoryBudgetError):
+        await service.release_prelaunch(
+            "job", job.revision, owner=owner, owner_dead=True
+        )
+    assert (await service.get_job("job")).reserved_bytes == 2 * GIB
+
+
+@pytest.mark.skipif(process_origin() is None, reason="Linux process origins")
+async def test_launched_earlier_boot_job_still_needs_verified_group_removal(budgets):
+    """Owner death never frees groups; the verified-removal path still applies."""
+    service, _ = budgets
+    await create(service)
+    owner = _earlier_boot_owner()
+    reserved = await service.reserve("job", capability())
+    claimed = await service.claim_start("job", reserved.revision, owner=owner)
+    await service.groups_created(
+        "job", claimed.revision, MemoryLaunchGroups(group_id="b" * 64)
+    )
+    resolved = []
+
+    async def resolve(job):
+        resolved.append(job.id)
+        return SimpleNamespace(
+            profile=SimpleNamespace(
+                model_dump=lambda **_kw: {"socket": "different-runner"}
+            )
+        )
+
+    async def ended(_boot):
+        return True
+
+    reconciler = MemoryReconciler(service, resolve, previous_boot_ended=ended)
+    assert await reconciler.once() == []
+    assert resolved == ["job"]
+    assert (await service.get_job("job")).reserved_bytes == 2 * GIB
