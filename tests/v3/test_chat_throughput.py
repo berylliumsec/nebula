@@ -528,6 +528,66 @@ async def test_final_answer_retry_resumes_synthesis_through_admission(tmp_path):
     (await scenario())
 
 
+async def test_a_failed_run_cleaning_up_cannot_end_the_retry_after_it(tmp_path):
+    """A run that gave its claim back no longer owns the turn it failed."""
+
+    async def scenario():
+        async def reasoning_only(request):
+            del request
+            return _subagent_response(text="")
+
+        provider = RoutedProvider(
+            parent=[
+                _finish("p1"),
+                reasoning_only,
+                reasoning_only,
+                _subagent_response(text="Recovered answer."),
+            ],
+            child=[],
+        )
+        store, project, _, chat = await _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Answer me.", allow_subagents=True)
+        )
+        turn_id = await chat.start_provider_turn(prepared)
+        failed_run = chat._active_provider_turns[turn_id]
+        retry_started = asyncio.Event()
+        read = store.get
+
+        async def held_cleanup_read(model, entity_id):
+            # The failed run's cleanup, after its viewers were told it ended,
+            # reads the turn only once the operator's retry has begun.
+            if (
+                model is ChatTurn
+                and failed_run.done
+                and asyncio.current_task() is failed_run.task
+            ):
+                await retry_started.wait()
+            return await read(model, entity_id)
+
+        store.get = held_cleanup_read  # type: ignore[method-assign]
+        with pytest.raises(ProviderResponseError, match="no operator-facing answer"):
+            await _drain(chat, turn_id)
+
+        retry = await chat.prepare_resume(turn_id)
+        retry_started.set()
+        assert failed_run.task is not None
+        await failed_run.task
+        # Before the fix the cleanup saw no claim on either side, took the
+        # retry for its own turn and marked it failed again.
+        assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.FINALIZING
+
+        (await chat.start_provider_turn(retry))
+        events = await _drain(chat, turn_id)
+        assert events[-1] == "done"
+        completed = await store.get(ChatTurn, turn_id)
+        assert completed.status == ChatTurnStatus.COMPLETE
+        assert completed.final_message_id is not None
+        await chat.shutdown()
+
+    (await scenario())
+
+
 async def test_startup_closes_the_admission_of_a_turn_that_no_longer_exists(tmp_path):
     async def scenario():
         store, project, profile, session = await _store(tmp_path)

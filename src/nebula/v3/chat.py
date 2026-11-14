@@ -1045,6 +1045,9 @@ class PreparedChat:
     inputs_persisted: bool = False
     queue_claim: tuple[str, int, str] | None = None
     execution_claim_id: str | None = None
+    # Set once this run gives its claim back. The turn then has no owner, so
+    # an empty claim on it no longer proves this run still owns it.
+    execution_claim_released: bool = False
     hook_snapshots: list[Any] = field(default_factory=list)
     last_provider_request: ProviderRequestInput | None = None
     provider_request_attempts: int = 0
@@ -4172,6 +4175,7 @@ class ChatService:
             ) from exc
         prepared.turn = claimed_turn
         prepared.execution_claim_id = claim_id
+        prepared.execution_claim_released = False
 
     async def _assert_execution_owner(self, prepared: PreparedChat) -> ChatTurn:
         turn = prepared.turn
@@ -4259,6 +4263,7 @@ class ChatService:
                     )
                 )
         prepared.execution_claim_id = None
+        prepared.execution_claim_released = True
 
     async def start_provider_turn(
         self,
@@ -5412,6 +5417,10 @@ class ChatService:
                         ChatTurnStatus.CANCELLED,
                         ChatTurnStatus.WAITING_APPROVAL,
                     }
+                    # A run that gave its claim back already recorded how the
+                    # turn ended (failed, parked or completed); an empty claim
+                    # now may belong to a retry the operator just started.
+                    and not prepared.execution_claim_released
                     and latest.execution_claim_id == prepared.execution_claim_id
                 ):
                     status = (
