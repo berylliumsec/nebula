@@ -242,7 +242,11 @@ def stable_listener_config(
     # hold a stop open, so every listener gets a positive bound.
     if "timeout_graceful_shutdown" in options:
         raise TypeError("set the listener's bound with grace_seconds")
-    if isinstance(grace_seconds, bool) or not isinstance(grace_seconds, int) or grace_seconds <= 0:
+    if (
+        isinstance(grace_seconds, bool)
+        or not isinstance(grace_seconds, int)
+        or grace_seconds <= 0
+    ):
         raise ValueError("a stable listener needs a positive graceful-shutdown bound")
     return uvicorn.Config(
         app,
@@ -265,7 +269,9 @@ def serve_listener_config(
         port=port,
         ssl_certfile=str(tls_cert) if tls_cert else None,
         ssl_keyfile=str(tls_key) if tls_key else None,
-        grace_seconds=relay_stop_bound() if inherited else STABLE_LISTENER_GRACE_SECONDS,
+        grace_seconds=relay_stop_bound()
+        if inherited
+        else STABLE_LISTENER_GRACE_SECONDS,
     )
 
 
