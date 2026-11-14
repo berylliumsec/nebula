@@ -50,6 +50,13 @@ async def _project(tmp_path):
     return store, project, notebooks
 
 
+def _policy_runtime(policy):
+    async def project_policy(self, _engagement_id):
+        return policy
+
+    return type("Runtime", (), {"project_policy": project_policy})()
+
+
 async def test_notebook_documents_are_atomic_and_reject_stale_cell_edits(tmp_path):
     store, project, notebooks = await _project(tmp_path)
 
@@ -300,9 +307,7 @@ async def test_package_search_respects_project_network_policy(tmp_path):
         host_access_acknowledged=True,
         network_enabled=False,
     )
-    notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
-    )()
+    notebooks.automation_runtime = _policy_runtime(policy)
 
     async def scenario():
         await notebooks.create(project.id, "packages.ipynb")
@@ -322,9 +327,7 @@ async def test_package_install_requires_host_consent(tmp_path):
         host_access_acknowledged=False,
         network_enabled=True,
     )
-    notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
-    )()
+    notebooks.automation_runtime = _policy_runtime(policy)
 
     async def scenario():
         await notebooks.create(project.id, "packages.ipynb")
@@ -341,17 +344,17 @@ async def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
     old_folder = tmp_path / "workspace"
     new_folder = tmp_path / "new-workspace"
     new_folder.mkdir()
-    notebooks.documents.workspace_resolver = lambda engagement_id: Path(
-        store.get(Engagement, engagement_id).workspace_path
-    )
+
+    async def current_folder(engagement_id):
+        return Path((await store.get(Engagement, engagement_id)).workspace_path)
+
+    notebooks.documents.workspace_resolver = current_folder
     policy = AutomationProjectPolicy(
         engagement_id=project.id,
         execution_mode="host",
         host_access_acknowledged=True,
     )
-    notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
-    )()
+    notebooks.automation_runtime = _policy_runtime(policy)
     launched: list[Path] = []
 
     async def command(*_args):
@@ -459,7 +462,7 @@ async def test_notebook_event_stream_authenticates_and_replays_in_order(tmp_path
         "GET", url, headers={"Authorization": "Bearer test-token"}
     ) as response:
         assert response.status_code == 200
-        frames = "".join(response.iter_text())
+        frames = "".join([text async for text in response.aiter_text()])
     assert frames.index("id: 1") < frames.index("id: 2")
     assert "event: notebook" in frames
     assert '"text": "first"' in frames
@@ -470,9 +473,7 @@ async def test_mode_change_exposes_active_runs_and_waits_for_an_explicit_interru
 ):
     store, project, notebooks = await _project(tmp_path)
     policy = AutomationProjectPolicy(engagement_id=project.id, execution_mode="docker")
-    notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
-    )()
+    notebooks.automation_runtime = _policy_runtime(policy)
     run = await store.create(
         NotebookRun(
             engagement_id=project.id,
@@ -506,9 +507,7 @@ async def test_queued_interrupt_during_kernel_start_remains_interrupted(tmp_path
         execution_mode="host",
         host_access_acknowledged=True,
     )
-    notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
-    )()
+    notebooks.automation_runtime = _policy_runtime(policy)
 
     async def scenario():
         created = await notebooks.create(project.id, "queued.ipynb")

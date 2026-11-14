@@ -66,11 +66,12 @@ async def test_project_prefers_index_then_falls_back_and_removal_persists(
     )
     index = _inventory(tmp_path, root)
     scans = []
-    monkeypatch.setattr(
-        service.documents,
-        "list",
-        lambda _: scans.append(True) or [{"path": "fallback.ipynb"}],
-    )
+
+    async def fallback_scan(_):
+        scans.append(True)
+        return [{"path": "fallback.ipynb"}]
+
+    monkeypatch.setattr(service.documents, "list", fallback_scan)
 
     async def scenario():
         assert (await service.set_file_index(project.id, str(index)))[

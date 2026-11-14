@@ -197,8 +197,14 @@ async def test_restart_keeps_projected_results_and_marks_only_the_open_effect_un
     assert recovery["unknown_tool_call_ids"] == [command.id]
     assert recovery["rerunnable_tool_call_ids"] == [read.id]
 
-    service.prepare_resume = lambda turn_id: turn_id  # type: ignore[method-assign]
-    service.start_provider_turn = lambda prepared, **_: prepared  # type: ignore[method-assign]
+    async def prepare_resume(turn_id):
+        return turn_id
+
+    async def start_provider_turn(prepared, **_):
+        return prepared
+
+    service.prepare_resume = prepare_resume  # type: ignore[method-assign]
+    service.start_provider_turn = start_provider_turn  # type: ignore[method-assign]
     assert (await service.resume_turns_stopped_by_core()) == [turn.id]
 
     recovered = await store.get(ChatTurn, turn.id)
@@ -350,9 +356,12 @@ async def test_idle_running_goal_continues_after_two_idle_passes(tmp_path):
         store, provider_factory=lambda _: FakeProvider(profile.id, local=True)
     )
     started: list = []
-    service.start_provider_turn = lambda prepared, **_: (
-        started.append(prepared) or prepared.turn.id
-    )  # type: ignore[method-assign]
+
+    async def start_provider_turn(prepared, **_):
+        started.append(prepared)
+        return prepared.turn.id
+
+    service.start_provider_turn = start_provider_turn  # type: ignore[method-assign]
 
     first = await service.reconcile_idle_running_goals()
     second = await service.reconcile_idle_running_goals()
@@ -969,7 +978,9 @@ async def test_due_schedule_is_dispatched_without_holding_the_recovery_tick(tmp_
     (await scenario())
 
 
-async def test_foreground_command_cancelled_while_core_stops_is_interrupted(tmp_path):
+async def test_foreground_command_cancelled_while_core_stops_is_interrupted(
+    tmp_path, monkeypatch
+):
     """Owners cancel foreground commands before the runtime itself shuts down.
 
     A command cancelled once Core began stopping ends interrupted, the state
@@ -979,6 +990,9 @@ async def test_foreground_command_cancelled_while_core_stops_is_interrupted(tmp_
 
     async def scenario():
         manager, store, _, engagement, _ = await runtime(tmp_path)
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         (
             await manager.update_project_policy(
                 engagement.id,
@@ -995,7 +1009,7 @@ async def test_foreground_command_cancelled_while_core_stops_is_interrupted(tmp_
             command = asyncio.create_task(
                 manager.run_command(
                     engagement_id=engagement.id,
-                    owner_kind="api",
+                    owner_kind="chat",
                     owner_id=owner_id,
                     request=RunCommandRequest(command="sleep 5"),
                 )

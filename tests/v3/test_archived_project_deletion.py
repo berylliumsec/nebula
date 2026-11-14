@@ -27,8 +27,8 @@ async def setup(tmp_path):
     return store, project, client, folder
 
 
-def remove(client, project, revision=None):
-    return client.delete(
+async def remove(client, project, revision=None):
+    return await client.delete(
         f"/api/v1/engagements/{project.id}",
         headers={
             "Authorization": "Bearer test-token",
@@ -70,7 +70,7 @@ async def test_archive_deletion_cleans_owned_records_and_preserves_folder_and_ot
                     )
                 )
             )
-    assert remove(client, project).status_code == 204
+    assert (await remove(client, project)).status_code == 204
     for model, id in ((Engagement, project.id), (Asset, asset.id), (AgentRun, run.id)):
         with pytest.raises(NotFoundError):
             (await store.get(model, id))
@@ -97,7 +97,7 @@ async def test_archive_deletion_cleans_owned_records_and_preserves_folder_and_ot
             assert list((await session.scalars(select(table.c.project_id)))) == [
                 other.id
             ]
-    assert remove(client, project).status_code == 404
+    assert (await remove(client, project)).status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -145,7 +145,7 @@ async def test_archive_deletion_rejects_stale_or_busy_requests_without_partial_c
             )
         )
         if mode == "missing_revision"
-        else remove(client, project, 99 if mode == "revision" else None)
+        else (await remove(client, project, 99 if mode == "revision" else None))
     )
     assert response.status_code == 409
     assert (await store.get(Asset, asset.id)).name == "Keep until safe"
@@ -167,7 +167,7 @@ async def test_session_envelope_without_live_turn_does_not_block_archive_deletio
             status=status,
         )
     )
-    assert remove(client, project).status_code == 204
+    assert (await remove(client, project)).status_code == 204
     with pytest.raises(NotFoundError):
         (await store.get(HarnessSession, session.id))
     assert (folder / "keep.txt").read_text() == "host data"
@@ -195,7 +195,7 @@ async def test_actual_harness_turn_still_blocks_archive_deletion(tmp_path, statu
             status=status,
         )
     )
-    response = remove(client, project)
+    response = await remove(client, project)
     assert response.status_code == 409
     assert "unfinished harness turns" in response.json()["detail"]
     assert (await store.get(HarnessTurn, turn.id)).status == status

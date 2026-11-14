@@ -735,20 +735,20 @@ async def test_workspace_file_actions_reject_fifo_without_blocking(tmp_path):
     def timeout(_signum, _frame):
         raise TimeoutError("workspace file action blocked on a FIFO")
 
-    def reject_within_deadline(action):
+    async def reject_within_deadline(action):
         previous_handler = signal.signal(signal.SIGALRM, timeout)
         previous_timer = signal.setitimer(signal.ITIMER_REAL, 2.0)
         try:
             with pytest.raises(ExecutionServiceError) as error:
-                action()
+                await action()
             assert error.value.status_code == 422
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, previous_handler)
             signal.setitimer(signal.ITIMER_REAL, *previous_timer)
 
-    reject_within_deadline(lambda: workspace.download(engagement.id, "pipe"))
-    reject_within_deadline(
+    await reject_within_deadline(lambda: workspace.download(engagement.id, "pipe"))
+    await reject_within_deadline(
         lambda: workspace.rename(
             engagement.id,
             WorkspaceRenameRequest(
@@ -756,7 +756,7 @@ async def test_workspace_file_actions_reject_fifo_without_blocking(tmp_path):
             ),
         )
     )
-    reject_within_deadline(
+    await reject_within_deadline(
         lambda: workspace.delete(engagement.id, "pipe", expected_sha256="a" * 64)
     )
     assert pipe.exists()

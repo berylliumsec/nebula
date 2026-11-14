@@ -531,6 +531,9 @@ async def test_allowed_host_runs_through_the_broker_and_records_output(
     tmp_path, monkeypatch
 ):
     _local_shell(monkeypatch)
+    # 64e0379 holds SSH compute without a memory-runner/v1 agent; only chat
+    # commands of a project named by the temporary override (#976) still run.
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", "eng-1")
     store = NebulaStore(tmp_path / "nebula.db")
     environment = SshEnvironment(
         id="ssh:lab",
@@ -560,6 +563,9 @@ async def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(
     environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
     plugin = build_ssh_tool_plugins((environment,))[0]
     recorded = []
+    # 64e0379 holds SSH compute without a memory-runner/v1 agent; only chat
+    # commands of a project named by the temporary override (#976) still run.
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", "eng-1")
 
     async def failed_command(*_args, **_kwargs):
         raise OSError("private remote path /secret/work was unavailable")
@@ -570,7 +576,14 @@ async def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(
         "record_caught_exception",
         lambda *args, **kwargs: recorded.append((args, kwargs)),
     )
-    result = await plugin.execute(SimpleNamespace(arguments={"command": "true"}), None)
+    result = await plugin.execute(
+        SimpleNamespace(
+            engagement_id="eng-1",
+            origin=ToolCallOrigin.CHAT,
+            arguments={"command": "true"},
+        ),
+        None,
+    )
 
     assert result.exit_code == 1
     assert recorded[0][0][:3] == (
@@ -589,6 +602,9 @@ async def test_ask_host_stops_for_approval_then_runs_once_approved(
     tmp_path, monkeypatch
 ):
     _local_shell(monkeypatch)
+    # 64e0379 holds SSH compute without a memory-runner/v1 agent; only chat
+    # commands of a project named by the temporary override (#976) still run.
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", "eng-1")
     store = NebulaStore(tmp_path / "nebula.db")
     environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
     components = await _platform_components(tmp_path, store, environment)
@@ -618,6 +634,9 @@ async def test_project_never_policy_auto_approves_provider_ssh_tool(
     tmp_path, monkeypatch
 ):
     _local_shell(monkeypatch)
+    # 64e0379 holds SSH compute without a memory-runner/v1 agent; only chat
+    # commands of a project named by the temporary override (#976) still run.
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", "eng-1")
     store = NebulaStore(tmp_path / "nebula.db")
     (
         await store.create(

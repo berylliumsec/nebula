@@ -272,8 +272,13 @@ async def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     return manager, store, artifacts, engagement, sessions
 
 
-async def test_host_session_refuses_project_relink_after_workspace_resolution(tmp_path):
+async def test_host_session_refuses_project_relink_after_workspace_resolution(
+    tmp_path, monkeypatch
+):
     manager, store, _, project, _ = await runtime(tmp_path)
+    # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+    # commands of a project named by the temporary override (#976) still run.
+    monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", project.id)
     old = tmp_path / "workspaces" / project.id
     new = tmp_path / "new-workspace"
     new.mkdir()
@@ -309,7 +314,7 @@ async def test_host_session_refuses_project_relink_after_workspace_resolution(tm
     async def attempt():
         with pytest.raises(ConflictError, match="Project workspace changed"):
             await manager._get_or_create_session(
-                engagement_id=project.id, owner_kind="api", owner_id="late-start"
+                engagement_id=project.id, owner_kind="chat", owner_id="late-start"
             )
 
     (await attempt())
@@ -744,7 +749,7 @@ async def test_inherited_shared_search_hook_blocks_process_write_without_parent_
 
 
 async def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     async def scenario():
         repository = tmp_path / "repository"
@@ -753,6 +758,9 @@ async def test_inherited_shared_search_hook_enforces_real_host_run_command_and_p
         manager, store, artifacts, engagement, _fake_sessions = await runtime(
             tmp_path, workspace_parent=repository / "projects"
         )
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         (await create_tool_chat(store, engagement))
         workspace = repository / "projects" / engagement.id
         (workspace / "AGENTS.md").write_text("needle\n", encoding="utf-8")
@@ -2513,7 +2521,7 @@ async def test_temporary_host_chat_command_on_disposable_lan_core(
 
 
 async def test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     async def scenario():
         manager, store, _, legacy_project, containers = await runtime(tmp_path)
@@ -2544,8 +2552,11 @@ async def test_new_project_defaults_to_host_pending_consent_and_legacy_project_k
         manager.runtime_image = ""
         manager.runtime_digest = ""
         assert (await manager.runtime_info(engagement_id=created.id)).ready
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", created.id)
         session = await manager.session(
-            engagement_id=created.id, owner_kind="api", owner_id="default-host"
+            engagement_id=created.id, owner_kind="chat", owner_id="default-host"
         )
         assert session.execution_mode == "host"
         assert containers == []
@@ -2577,9 +2588,14 @@ async def test_docker_mode_rejects_host_paths_and_host_network_requests(tmp_path
     (await scenario())
 
 
-async def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
+async def test_host_command_timeout_and_exact_approval_are_enforced(
+    tmp_path, monkeypatch
+):
     async def scenario():
         manager, store, _, engagement, _ = await runtime(tmp_path)
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         (
             await manager.update_project_policy(
                 engagement.id,
@@ -2595,7 +2611,7 @@ async def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
         with pytest.raises(CommandApprovalRequired) as pending:
             await manager.run_command(
                 engagement_id=engagement.id,
-                owner_kind="api",
+                owner_kind="chat",
                 owner_id="host-timeout",
                 request=request,
             )
@@ -2613,7 +2629,7 @@ async def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
         )
         result = await manager.run_command(
             engagement_id=engagement.id,
-            owner_kind="api",
+            owner_kind="chat",
             owner_id="host-timeout",
             request=request,
             approval=approval,
@@ -2634,7 +2650,7 @@ async def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
     (await scenario())
 
 
-async def test_cancelled_foreground_command_stops_its_process(tmp_path):
+async def test_cancelled_foreground_command_stops_its_process(tmp_path, monkeypatch):
     """Stop cancels the caller of a foreground command; the command stops too.
 
     Cancelling the wait used to cancel finalization as well, which also
@@ -2643,6 +2659,9 @@ async def test_cancelled_foreground_command_stops_its_process(tmp_path):
 
     async def scenario():
         manager, store, _, engagement, _ = await runtime(tmp_path)
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         (
             await manager.update_project_policy(
                 engagement.id,
@@ -2658,7 +2677,7 @@ async def test_cancelled_foreground_command_stops_its_process(tmp_path):
         command = asyncio.create_task(
             manager.run_command(
                 engagement_id=engagement.id,
-                owner_kind="api",
+                owner_kind="chat",
                 owner_id="host-cancel",
                 request=RunCommandRequest(command=f"sleep 1; touch {marker}"),
             )
@@ -2685,12 +2704,15 @@ async def test_cancelled_foreground_command_stops_its_process(tmp_path):
     (await scenario())
 
 
-async def test_host_scope_expiry_closes_running_commands(tmp_path):
+async def test_host_scope_expiry_closes_running_commands(tmp_path, monkeypatch):
     import time
     from datetime import timedelta
 
     async def scenario():
         manager, store, _, engagement, _ = await runtime(tmp_path)
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         not_after = utc_now() + timedelta(seconds=0.5)
         (
@@ -2714,7 +2736,7 @@ async def test_host_scope_expiry_closes_running_commands(tmp_path):
         )
         result = await manager.run_command(
             engagement_id=engagement.id,
-            owner_kind="api",
+            owner_kind="chat",
             owner_id="expiring-host",
             request=RunCommandRequest(command="sleep 30", background=True),
         )
@@ -2902,7 +2924,7 @@ async def test_startup_sweeps_stale_capture_directories(tmp_path):
 
 
 async def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     import os
     import signal
@@ -2913,6 +2935,9 @@ async def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(
     async def scenario():
         nonlocal daemon_pid
         manager, _store, _, engagement, _ = await runtime(tmp_path)
+        # 64e0379 holds Host commands without a memory-runner/v1 agent; only chat
+        # commands of a project named by the temporary override (#976) still run.
+        monkeypatch.setenv("NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS", engagement.id)
         (
             await manager.update_project_policy(
                 engagement.id,
@@ -2929,7 +2954,7 @@ async def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(
         result = await asyncio.wait_for(
             manager.run_command(
                 engagement_id=engagement.id,
-                owner_kind="api",
+                owner_kind="chat",
                 owner_id="detached-daemon",
                 request=RunCommandRequest(
                     command="setsid sleep 30 </dev/null & echo launched $!"

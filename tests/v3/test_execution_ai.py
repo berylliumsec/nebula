@@ -100,7 +100,7 @@ class StubHarnessRuntime:
             usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
         )
 
-    def create_session(self, **request):
+    async def create_session(self, **request):
         self.requests.append({"create_session": request})
         return SimpleNamespace(id="harness-session-1")
 

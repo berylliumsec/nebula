@@ -192,8 +192,9 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
             "Only the selected",
         ),
         (
+            # bef388e replaced native drag-select with F12 Copy mode.
             "How can I select and copy text from the nebula-chat screen?",
-            "Drag across the chat screen",
+            "F12 Copy",
         ),
         (
             "nebula-chat standing tool-result consent",

@@ -62,11 +62,17 @@ def test_host_capacity_help_explains_saved_deferral_and_recovery():
         for match in matches
         if match.article.article_id == "host-capacity"
     )
-    assert "starts automatically" in article.body
-    assert "nebula.settings.api_request" in article.body
-    assert "nebula.work.host_load" in article.body
-    assert "nebula.global.host_load" in article.body
-    assert "sample age" in article.body
+    # 8c49457 and #958 (0d95449) rewrote this article for the configurable
+    # host-pressure gate: work is queued while a reading is at or above its
+    # threshold and admitted once every reading falls below it; Butler reads
+    # host_pressure (host_load stays a telemetry read) and current readings.
+    body = " ".join(article.body.split())
+    assert "queues new work" in body
+    assert "Falling below every threshold permits admission" in body
+    assert "nebula.settings.api_request" in body
+    assert "nebula.work.host_load" in body
+    assert "nebula.global.host_pressure" in body
+    assert "current readings" in body
 
 
 def test_operator_help_search_requires_product_or_failure_intent_and_ranks_details():

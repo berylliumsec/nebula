@@ -159,11 +159,30 @@ async def test_missing_waiter_preserves_decision_and_interrupts_instead_of_repla
     (await scenario())
 
 
+async def _parked(runtime, *approval_ids, timeout=30.0):
+    """Wait until each broker approval waiter is suspended on its decision.
+
+    Storage is async, so a waiter needs many loop turns to attach its tool
+    call, register its future and mark the turn waiting. It parks on the
+    future only after adding its done callback, so a registered future with a
+    callback means that waiter has finished its setup writes.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not all(
+        (future := runtime._approval_futures.get(approval_id)) is not None
+        and future._callbacks
+        for approval_id in approval_ids
+    ):
+        assert loop.time() < deadline, "approval waiter never parked"
+        await asyncio.sleep(0.01)
+
+
 async def test_cancelled_waiter_does_not_resurrect_terminal_turn(tmp_path):
     async def scenario():
         _, store, runtime, approval, turn, owner = await fixture(tmp_path)
         task = asyncio.create_task(runtime._wait_for_broker_approval(turn, approval))
-        await asyncio.sleep(0)
+        await _parked(runtime, approval.id)
         current = await store.get(HarnessTurn, turn.id)
         (
             await store.update(
@@ -228,10 +247,13 @@ async def test_resolving_one_request_keeps_the_other_pending(tmp_path):
         first_task = asyncio.create_task(
             runtime._wait_for_broker_approval(turn, approval)
         )
+        # Set the waiters up one after the other, as one sleep(0) did while
+        # storage was synchronous: the second starts once the first is parked.
+        await _parked(runtime, approval.id)
         second_task = asyncio.create_task(
             runtime._wait_for_broker_approval(turn, second)
         )
-        await asyncio.sleep(0)
+        await _parked(runtime, approval.id, second.id)
         decided = await store.update(
             Approval,
             approval.id,

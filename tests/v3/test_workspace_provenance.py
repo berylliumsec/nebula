@@ -318,7 +318,9 @@ async def test_large_unchanged_checkout_shares_chunks_and_queries_only_compact_i
     assert first.supported
     assert len(first.attribution["preexisting"]) == len(paths)
     async with store.database.session() as session:
-        first_blobs = list(session.query(WorkspaceProvenanceBlobRow))
+        first_blobs = list(
+            (await session.scalars(select(WorkspaceProvenanceBlobRow))).all()
+        )
         first_bytes = sum(len(str(row.payload)) for row in first_blobs)
         stored = await session.get(EntityRow, first.id)
         assert stored is not None
@@ -343,7 +345,9 @@ async def test_large_unchanged_checkout_shares_chunks_and_queries_only_compact_i
     ]
     assert len(second.attribution["preexisting"]) == len(paths) - 1
     async with store.database.session() as session:
-        next_blobs = list(session.query(WorkspaceProvenanceBlobRow))
+        next_blobs = list(
+            (await session.scalars(select(WorkspaceProvenanceBlobRow))).all()
+        )
         next_bytes = sum(len(str(row.payload)) for row in next_blobs)
         assert len(next_blobs) - len(first_blobs) <= 4
         assert next_bytes - first_bytes < 80_000

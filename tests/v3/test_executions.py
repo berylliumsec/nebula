@@ -131,11 +131,11 @@ class StubExecutionPlatform:
         )
         self.image = "sha256:" + "b" * 64
 
-    def workspace_for(self, engagement_id: str):
+    async def workspace_for(self, engagement_id: str):
         del engagement_id
         return self.workspace
 
-    def resolve_operator_runtime(
+    async def resolve_operator_runtime(
         self, engagement_id: str, language: str, *, network: bool
     ) -> OperatorRuntimeResolution:
         del engagement_id, network

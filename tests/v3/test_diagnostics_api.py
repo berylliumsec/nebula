@@ -4,6 +4,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+import asyncio
 import json
 import threading
 import zipfile
@@ -423,10 +424,11 @@ async def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
                     "/api/v1/diagnostics/errors", headers=_auth()
                 )
 
-            viewer = threading.Thread(target=fetch_errors)
-            viewer.start()
+            # The viewer's request runs on Core's loop; wait for its flush from
+            # a worker thread so this test does not block that loop itself.
+            viewer = asyncio.create_task(fetch_errors())
             try:
-                assert flushing.wait(timeout=5)
+                assert await asyncio.to_thread(flushing.wait, 5)
                 # While the viewer waits for the writer, Core keeps serving
                 # everything else: this request comes back while the disk is
                 # still stuck. A viewer that stalled the loop would hold it
@@ -438,7 +440,7 @@ async def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
                 assert not released.is_set()
             finally:
                 gate.set()
-                viewer.join(timeout=10)
+                await asyncio.wait_for(viewer, timeout=10)
             errors = responses["errors"]
             assert errors.status_code == 200
             assert error_id in [item["error_id"] for item in errors.json()["errors"]]

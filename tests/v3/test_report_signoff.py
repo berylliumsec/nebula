@@ -3,6 +3,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 import base64
+from io import BytesIO
 
 import pytest
 from tests.v3.async_test_support import AsyncTestClient as TestClient
@@ -24,6 +25,7 @@ from nebula.v3.operators import OperatorProfileService
 from nebula.v3.reporting import ReportRenderService
 from nebula.v3.report_signoff import ReportSignoffRequest, sign_off_report
 from nebula.v3.storage import ConflictError, NebulaStore, StoreTransaction
+from tests.v3.test_reporting import _held_snapshot_pdf
 
 
 async def test_signoff_finalizes_review_with_active_operator_and_validated_findings(
@@ -253,20 +255,21 @@ async def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
     )
 
     async def render() -> tuple[ReportRender, str]:
+        # 64e0379 holds Core's PDF render until a memory-managed CPU runner
+        # exists: check that hold and render the snapshot Core saved for the
+        # signed revision with the worker entry such a runner would call.
         service = ReportRenderService(store=store, artifact_store=artifacts)
         queued = await service.request_render(
             signed.id, report_revision=signed.revision
         )
-        await service._tasks[queued.id]
-        completed = await store.get(ReportRender, queued.id)
-        artifact, path = await service.pdf(completed.id)
-        assert artifacts.verify(artifact)
-        return completed, "\n".join(
-            page.extract_text() or "" for page in PdfReader(path).pages
+        pdf, _warnings = await _held_snapshot_pdf(service, store, artifacts, queued.id)
+        return await store.get(ReportRender, queued.id), "\n".join(
+            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
         )
 
-    completed, pdf_text = await render()
-    assert completed.status == ReportRenderStatus.COMPLETED
+    held, pdf_text = await render()
+    assert held.status == ReportRenderStatus.FAILED
+    assert held.report_revision == signed.revision
     assert "Signed validation report" in pdf_text
     assert "FINAL" in pdf_text
     assert "Evidence-backed issue" in pdf_text
@@ -355,25 +358,29 @@ async def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
 
     # The sign-off timestamp is taken right before the committing transaction
     # opens; a status change landing at that moment must still be caught by the
-    # validation that runs inside the transaction.
-    import nebula.v3.report_signoff as signoff_module
+    # validation that runs inside the transaction. The finding update is async
+    # since #939, so it cannot run inside the synchronous clock; it lands as the
+    # operator read returns, the last await before that timestamp.
+    from nebula.v3.domain import OperatorProfile
 
-    real_utc_now = signoff_module.utc_now
+    real_get = store.get
 
-    async def flip_finding_then_now():
-        current = await store.get(Finding, flipped.id)
-        if current.status == FindingStatus.VALIDATED:
-            (
-                await store.update(
-                    Finding,
-                    flipped.id,
-                    {"status": FindingStatus.FALSE_POSITIVE},
-                    expected_revision=current.revision,
+    async def get_then_flip_finding(model, *args, **kwargs):
+        entity = await real_get(model, *args, **kwargs)
+        if model is OperatorProfile:
+            current = await real_get(Finding, flipped.id)
+            if current.status == FindingStatus.VALIDATED:
+                (
+                    await store.update(
+                        Finding,
+                        flipped.id,
+                        {"status": FindingStatus.FALSE_POSITIVE},
+                        expected_revision=current.revision,
+                    )
                 )
-            )
-        return real_utc_now()
+        return entity
 
-    monkeypatch.setattr(signoff_module, "utc_now", flip_finding_then_now)
+    monkeypatch.setattr(store, "get", get_then_flip_finding)
     with pytest.raises(ConflictError, match="must be validated"):
         (
             await sign_off_report(

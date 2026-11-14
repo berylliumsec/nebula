@@ -58,7 +58,8 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 25
+    # host-pressure (#958, 0d95449) and memory-budgets (64e0379) joined.
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 27
     assert any(item["id"] == "butler-check-interval" for item in result["settings"])
     assert any(item["id"] == "typesafe" for item in result["settings"])
     assert (
@@ -79,6 +80,9 @@ def test_catalog_covers_settings_destinations_without_secrets():
         item for item in result["capability_families"] if item["id"] == "host-capacity"
     )
     assert host["operations"] == [
+        # Host pressure admission reads (#958, 0d95449).
+        "nebula.work.host_pressure",
+        "nebula.global.host_pressure",
         "nebula.work.host_load",
         "nebula.global.host_load",
         "nebula.work.host_cpu_budget",
@@ -121,8 +125,16 @@ def test_catalog_covers_settings_destinations_without_secrets():
     )
     assert "running conversation" in settings_destination["aliases"]
     assert "selection feedback" in settings_destination["aliases"]
-    assert "RUN/WAIT/IDLE conversation status" in settings_destination["guide"]
-    assert "local LOADING feedback" in settings_destination["guide"]
+    # #935 (ff480db) reworded the terminal guide: full status labels in the
+    # rail, compact RUN/WAIT/IDLE in the picker, animated local feedback.
+    assert (
+        "Running/Waiting for action/Idle/State unknown labels in the rail and "
+        "compact RUN/WAIT/IDLE in the F3 picker" in settings_destination["guide"]
+    )
+    assert (
+        "animated local opening, sending and reconnecting feedback"
+        in settings_destination["guide"]
+    )
     assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
         == "/settings#storage-integration-settings"
@@ -367,6 +379,12 @@ async def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
         "nebula.settings.set_post_tool",
         "nebula.settings.models",
         "nebula.settings.set_default_model",
+        # Memory budgets (64e0379).
+        "nebula.settings.memory_budget",
+        "nebula.settings.set_memory_budget",
+        "nebula.settings.memory_usage",
+        "nebula.settings.verify_memory_job",
+        "nebula.settings.apply_memory_limit",
     }
 
 

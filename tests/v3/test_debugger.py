@@ -31,7 +31,7 @@ class _Workspace:
     def __init__(self, source: bytes) -> None:
         self.source = source
 
-    def download(self, engagement_id: str, path: str):
+    async def download(self, engagement_id: str, path: str):
         assert engagement_id == "engagement-1"
         assert path == "probe.py"
         return SimpleNamespace(stream=io.BytesIO(self.source))

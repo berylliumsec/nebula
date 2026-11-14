@@ -517,8 +517,14 @@ def test_core_archive_rejects_nltk_and_its_pyinstaller_runtime_hook():
 
 
 def test_core_archive_requires_timeout_capable_regex_runtime():
-    with pytest.raises(ArtifactAuditError, match="required members absent: regex"):
-        validate_members(["nebula.v3.cli", "nebula.v3.mcp_gateway"])
+    # c5120f7 added the runtime worker, launcher, service and compatibility
+    # manifest ahead of regex: start from an otherwise complete archive so
+    # regex is the only member reported absent.
+    complete = {
+        candidate for alternatives in REQUIRED_MEMBERS for candidate in alternatives[:1]
+    }
+    with pytest.raises(ArtifactAuditError, match="required members absent: regex$"):
+        validate_members(complete - {"regex"})
 
 
 def test_core_archive_requires_playwright_module_and_driver():

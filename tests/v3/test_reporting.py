@@ -5,9 +5,11 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import json
 import time
 import zipfile
 from functools import wraps
+from io import BytesIO
 
 import pytest
 from tests.v3.async_test_support import AsyncTestClient as TestClient
@@ -17,6 +19,7 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     AIWritingProvenance,
+    Artifact,
     Engagement,
     Observation,
     Report,
@@ -24,8 +27,42 @@ from nebula.v3.domain import (
     ReportRender,
     ReportRenderStatus,
 )
-from nebula.v3.reporting import ReportRenderError, ReportRenderService
+from nebula.v3.reporting import (
+    ReportRenderError,
+    ReportRenderService,
+    render_pdf_snapshot,
+)
 from nebula.v3.storage import NebulaStore
+
+# 64e0379 holds every Core PDF render until a memory-managed CPU runner exists
+# (docs/design/memory-budgets.md: a service-level hold before any dispatch).
+PDF_HOLD = "PDF computation requires a memory-managed CPU runner"
+
+
+async def _held_snapshot_pdf(service, store, artifacts, render_id):
+    """Check Core's hold on a render, then render the snapshot it saved.
+
+    Core still prepares and stores the render's input snapshot. The importable
+    worker entry a protected CPU runner would call turns that snapshot into
+    the PDF bytes and warnings.
+    """
+
+    await service._tasks[render_id]
+    held = await store.get(ReportRender, render_id)
+    assert held.status == ReportRenderStatus.FAILED
+    assert PDF_HOLD in (held.error_detail or "")
+    assert held.pdf_artifact_id is None
+    with pytest.raises(ReportRenderError, match="not ready"):
+        await service.pdf(render_id)
+    saved = await store.get(Artifact, held.snapshot_artifact_id)
+    assert artifacts.verify(saved)
+    snapshot = json.loads(artifacts.path_for(saved).read_bytes())
+    return await asyncio.to_thread(
+        render_pdf_snapshot,
+        snapshot,
+        str(service.font_root),
+        tuple(sorted(service.font_hashes.items())),
+    )
 
 
 def async_test(function):
@@ -141,9 +178,10 @@ async def test_pdf_uses_saved_report_local_note_transform(tmp_path):
     service = ReportRenderService(store=store, artifact_store=artifacts)
 
     queued = await service.request_render(report.id, report_revision=report.revision)
-    await service._tasks[queued.id]
-    _artifact, path = await service.pdf(queued.id)
-    text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+    pdf, _warnings = await _held_snapshot_pdf(service, store, artifacts, queued.id)
+    text = "\n".join(
+        page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+    )
 
     assert "Reviewed note section" in text
     assert "Polished operator-reviewed report prose." in text
@@ -180,12 +218,18 @@ async def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_e
             if detail.json()["status"] in {"completed", "failed", "interrupted"}:
                 break
             await asyncio.sleep(0.02)
-        assert detail.json()["status"] == "completed"
+        # 64e0379: Core holds the render until a memory-managed CPU runner
+        # exists, and the authenticated download refuses a PDF that is not ready.
+        assert detail.json()["status"] == "failed"
+        assert PDF_HOLD in detail.json()["error_detail"]
         pdf = await client.get(
             f"/api/v1/report-renders/{render_id}/pdf", headers=headers
         )
-        assert pdf.status_code == 200
-        assert pdf.content.startswith(b"%PDF-")
+        assert pdf.status_code == 409
+        assert pdf.json()["detail"] == "report PDF is not ready"
+        assert (
+            await client.get(f"/api/v1/report-renders/{render_id}/pdf")
+        ).status_code == 401
 
         refused = await client.post(
             f"/api/v1/engagements/{engagement.id}/export-bundle", headers=headers
@@ -336,13 +380,11 @@ async def test_glyph_warnings_are_aggregated_into_one_bounded_warning(tmp_path):
     assert len(unsupported) > 100
 
     queued = await service.request_render(report.id, report_revision=report.revision)
-    await service._tasks[queued.id]
-    completed = await store.get(ReportRender, queued.id)
+    _pdf, warnings = await _held_snapshot_pdf(service, store, artifacts, queued.id)
 
-    assert completed.status == ReportRenderStatus.COMPLETED
     glyph_warnings = [
         warning
-        for warning in completed.warnings
+        for warning in warnings
         if warning.startswith("Unsupported glyphs replaced")
     ]
     assert len(glyph_warnings) == 1

@@ -758,11 +758,18 @@ async def test_error_records_on_an_event_loop_return_before_the_writer_acknowled
         )
 
         # Synchronous callers with no loop to stall still wait for durability.
+        # This test runs on a loop, so the synchronous caller is a worker thread.
         gate[0] = threading.Event()
         threading.Timer(0.3, gate[0].set).start()
-        started = time.monotonic()
-        manager.record("error", "api", "api.test.sync_error", "A synchronous error.")
-        assert time.monotonic() - started >= 0.3
+
+        def synchronous_record() -> float:
+            started = time.monotonic()
+            manager.record(
+                "error", "api", "api.test.sync_error", "A synchronous error."
+            )
+            return time.monotonic() - started
+
+        assert await asyncio.to_thread(synchronous_record) >= 0.3
         assert any(
             item["event_code"] == "api.test.sync_error"
             for item in _records(manager.log_dir / "errors.log")

@@ -442,7 +442,17 @@ async def test_benchmark_lifespan_reads_the_capacity_gate_with_inert_executor(
     )
     monkeypatch.setattr(benchmark, "ComputeClient", InertCompute)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr("uvicorn.run", run_app)
+
+    class InertServer:
+        # The benchmark serves with ``await uvicorn.Server(config).serve()``
+        # since #939; run the startup check in place of a listening server.
+        def __init__(self, config):
+            self.config = config
+
+        async def serve(self):
+            await run_app(self.config.app)
+
+    monkeypatch.setattr("uvicorn.Server", InertServer)
     (
         await benchmark.serve(
             Namespace(
