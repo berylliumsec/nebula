@@ -89,6 +89,19 @@ def accepted_receipt(response: httpx.Response) -> str | None:
     return command
 
 
+# Reading a saved result can meet a busy or briefly unavailable Core. That is
+# not an answer: the request stays saved under its ID, so keep waiting for it.
+_NOT_YET_STATUSES = frozenset({429, 503})
+
+
+def saved_result_pending(response: httpx.Response) -> bool:
+    """Whether a read of a saved request's result has no result yet."""
+    if accepted_receipt(response) is not None:
+        return True
+    marker = response.headers.get(REQUEST_STATE_HEADER, "").strip().lower()
+    return response.status_code in _NOT_YET_STATUSES and marker in {"", "pending"}
+
+
 def _retry_after(response: httpx.Response) -> float:
     try:
         value = float(response.headers.get("retry-after", "1"))
@@ -295,7 +308,7 @@ def saved_response(
 ) -> httpx.Response:
     """Read an accepted request's one saved result; never resend it (sync)."""
     deadline = time.monotonic() + wait
-    while accepted_receipt(response) is not None:
+    while saved_result_pending(response):
         if time.monotonic() >= deadline:
             raise AcceptedRequest(command)
         time.sleep(_retry_after(response))
@@ -362,7 +375,7 @@ class AsyncApi:
         """Read the one saved result of an accepted request; never resend it."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.receipt_wait
-        while accepted_receipt(response) is not None:
+        while saved_result_pending(response):
             if loop.time() >= deadline:
                 raise AcceptedRequest(command)
             await asyncio.sleep(_retry_after(response))
@@ -421,9 +434,9 @@ class AsyncApi:
                 timeout=httpx.Timeout(30, read=300),
                 headers={"Accept": "text/event-stream"},
             ) as response:
-                if response.status_code == 202:
+                if response.status_code in {202, *_NOT_YET_STATUSES}:
                     await response.aread()
-                    if accepted_receipt(response) is not None:
+                    if saved_result_pending(response):
                         delay = _retry_after(response)
                         continue
                 async for item in self._frames(response):
