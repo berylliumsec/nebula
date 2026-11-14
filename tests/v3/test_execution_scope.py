@@ -1,5 +1,6 @@
 """Real connection isolation of existing ORM and raw ledger write paths."""
 
+import asyncio
 import time
 
 import pytest
@@ -458,6 +459,101 @@ async def test_existing_entity_updates_keep_project_fencing(execution):
             Engagement, "other", {"name": "wrong"}, expected_revision=1
         )
     assert (await control.get(Engagement, "other")).name == "other"
+
+
+async def _ownership(control, project_id):
+    async with control.database.session() as session:
+        row = await session.get(ProjectOwnershipRow, project_id)
+        return (
+            row.runtime_id,
+            row.fencing_token,
+            row.command_sequence,
+            row.admission_requested,
+            row.retirement_requested,
+        )
+
+
+def _owned_chat(identity, **changes):
+    return ChatSession(
+        id=identity,
+        engagement_id="mine",
+        title="Synthetic conversation",
+        model="inert",
+        provider_profile_id="provider",
+        **changes,
+    )
+
+
+async def _idle_for_retirement(control):
+    await control.update(ChatTurn, "turn-mine", {"status": ChatTurnStatus.COMPLETE})
+
+
+async def test_execution_worker_starts_and_reopens_owned_chats_without_host_writes(
+    execution,
+):
+    # A fresh project's first chat is written by its own execution worker.
+    # The retirement guard must not mutate the host-owned ownership row.
+    control, runtime, _, lease = execution
+    archived = await control.create(
+        _owned_chat("archived-mine", metadata={"archived_at": "2026-11-13T00:00:00Z"})
+    )
+    before = await _ownership(control, "mine")
+    with execution_context(lease):
+        await runtime.create(_owned_chat("first-chat"))
+        await runtime.update(
+            ChatSession,
+            archived.id,
+            {"metadata": {}},
+            expected_revision=archived.revision,
+        )
+    assert (await control.get(ChatSession, "first-chat")).engagement_id == "mine"
+    assert "archived_at" not in (await control.get(ChatSession, archived.id)).metadata
+    assert await _ownership(control, "mine") == before
+
+
+async def test_execution_worker_chat_starts_honor_project_retirement_hold(execution):
+    control, runtime, _, lease = execution
+    await _idle_for_retirement(control)
+    archived = await control.create(
+        _owned_chat("archived-mine", metadata={"archived_at": "2026-11-13T00:00:00Z"})
+    )
+    assert await DeploymentCoordinator(control.database).request_project_retirement(
+        lease
+    )
+    held = await _ownership(control, "mine")
+    assert held[-1] is True
+    with execution_context(lease):
+        with pytest.raises(ConflictError, match="worker is closing"):
+            await runtime.create(_owned_chat("chat-during-retirement"))
+        with pytest.raises(ConflictError, match="worker is closing"):
+            await runtime.update(
+                ChatSession,
+                archived.id,
+                {"metadata": {}},
+                expected_revision=archived.revision,
+            )
+    with pytest.raises(NotFoundError):
+        await control.get(ChatSession, "chat-during-retirement")
+    assert (await control.get(ChatSession, archived.id)).metadata["archived_at"]
+    assert await _ownership(control, "mine") == held
+
+
+async def test_retirement_waits_for_an_uncommitted_execution_chat_start(execution):
+    control, runtime, _, lease = execution
+    await _idle_for_retirement(control)
+    deployments = DeploymentCoordinator(control.database)
+    with execution_context(lease):
+        async with runtime.transaction() as transaction:
+            await transaction.add(_owned_chat("racing-chat"))
+            retirement = asyncio.create_task(
+                deployments.request_project_retirement(lease)
+            )
+            await asyncio.sleep(0.5)
+            assert not retirement.done()
+    # The retirement observes the committed open chat and keeps the worker.
+    assert await retirement is False
+    assert (await control.get(ChatSession, "racing-chat")).engagement_id == "mine"
+    assert (await _ownership(control, "mine"))[-1] is False
 
 
 async def test_existing_raw_event_writer_is_fenced(execution):
