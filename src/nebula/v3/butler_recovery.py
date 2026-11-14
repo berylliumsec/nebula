@@ -1137,6 +1137,9 @@ class ButlerRecoveryService:
             return False
         now = utc_now()
         async with self.store.transaction(immediate=True) as transaction:
+            # Every Act project's worker may reach this check; the first to
+            # record it wins and the others read that it is not yet due.
+            (await transaction.lock_shared_rows())
             current = await _entity_in_transaction(
                 transaction, ButlerGlobalState, GLOBAL_STATE_ID
             )
