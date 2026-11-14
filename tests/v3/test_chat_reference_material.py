@@ -15,7 +15,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 import json
 
 import nebula.v3.chat as chat_module
@@ -70,8 +69,10 @@ async def _knowledge_chat(tmp_path, provider: FakeProvider | None = None):
     return store, service, engagement, profile, provider
 
 
-def _ask(service, profile, content, *, engagement_id=None, session_id=None, **fields):
-    prepared = service.prepare(
+async def _ask(
+    service, profile, content, *, engagement_id=None, session_id=None, **fields
+):
+    prepared = await service.prepare(
         ChatCompletionRequest(
             engagement_id=engagement_id,
             session_id=session_id,
@@ -80,7 +81,7 @@ def _ask(service, profile, content, *, engagement_id=None, session_id=None, **fi
             **fields,
         )
     )
-    return prepared, asyncio.run(service.complete(prepared))
+    return prepared, await service.complete(prepared)
 
 
 async def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
@@ -90,10 +91,10 @@ async def test_reference_material_leaves_the_instructions_byte_identical_across_
 
     # The first message matches Nebula's operator help and the project
     # document; the second matches only the document.
-    first_prepared, first = _ask(
+    first_prepared, first = await _ask(
         service, profile, HELP_QUESTION, engagement_id=engagement.id
     )
-    second_prepared, second = _ask(
+    second_prepared, second = await _ask(
         service, profile, PORT_QUESTION, session_id=first.session_id
     )
 
@@ -178,7 +179,7 @@ async def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_pa
     provider = ScriptedTurnProvider(profile.id)
     service = ChatService(store, provider_factory=lambda _: provider)
 
-    prepared, completion = _ask(
+    prepared, completion = await _ask(
         service,
         profile,
         HELP_QUESTION,
@@ -322,7 +323,13 @@ async def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
     assert prepared.reference_material == reference
     assert prepared.context_snapshot is not None
     sent = prepared.model_request
-    assert sent.messages[-1].content.startswith(f"{PORT_QUESTION}\n\n{HEADING}")
+    # At the 60% target (6509bd4) this history is compacted whole, so the
+    # memory standing for it leads the current message; the question and its
+    # reference material follow that memory.
+    memory = chat_module._compacted_memory_text(prepared.context_snapshot.memory, "")
+    last = sent.messages[-1].content
+    assert last.startswith(memory)
+    assert last[len(memory) :].startswith(f"{PORT_QUESTION}\n\n{HEADING}")
     assert estimate_model_request(sent) + reserve <= limits.target_input_tokens
     assert [item.source_id for item in prepared.citations] == ["source-a"]
 

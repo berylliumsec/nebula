@@ -393,7 +393,7 @@ async def test_routing_prose_stays_visible_and_separate_from_reasoning(
         assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
         [stored] = [
             item
-            for item in service.session_messages("session")
+            for item in await service.session_messages("session")
             if item.role == ChatRole.ASSISTANT
         ]
         assert stored.content == visible
@@ -545,7 +545,7 @@ async def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_
             calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
         )
         store, service, prepared, _ = await _prepared(tmp_path, [routing], broker)
-        service.start_provider_turn(prepared)
+        await service.start_provider_turn(prepared)
         await asyncio.wait_for(broker.started.wait(), 2)
 
         stopped = await service.stop_provider_turn("turn")
@@ -783,7 +783,7 @@ async def test_routing_thoughts_reach_the_transcript(tmp_path):
     assert streamed == episode
     stored = [
         item
-        for item in service.session_messages("session")
+        for item in await service.session_messages("session")
         if item.role == ChatRole.ASSISTANT
     ]
     assert stored[-1].reasoning == episode
@@ -1115,7 +1115,7 @@ async def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
     # A reload reads the same name, without re-deriving it from the digest.
     stored = [
         item
-        for item in service.session_messages("session")
+        for item in await service.session_messages("session")
         if item.role == ChatRole.ASSISTANT
     ]
     [result] = stored[-1].metadata["tool_results"]

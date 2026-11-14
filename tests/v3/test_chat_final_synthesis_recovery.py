@@ -11,7 +11,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 import json
 
 import httpx
@@ -49,11 +48,8 @@ def _finish() -> ToolCall:
     return ToolCall(id="finish-1", name="finish_response", arguments={})
 
 
-def _stream(service, prepared):
-    async def scenario():
-        return [event async for event in service.stream(prepared)]
-
-    return asyncio.run(scenario())
+async def _stream(service, prepared):
+    return [event async for event in service.stream(prepared)]
 
 
 def _visible(events) -> str:
@@ -189,7 +185,7 @@ async def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_p
         [_ROUTE_READ, _ROUTE_FINISH, fragment, _text_stream("Recovered answer.")],
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     done = [payload for name, payload in events if name == "done"]
     assert done[-1]["message"]["content"] == "Recovered answer."
@@ -234,7 +230,7 @@ async def test_final_synthesis_recovers_when_the_upstream_refuses_a_function_cal
         [_ROUTE_READ, _ROUTE_FINISH, refusal, _text_stream("Recovered answer.")],
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     done = [payload for name, payload in events if name == "done"]
     assert done[-1]["message"]["content"] == "Recovered answer."
@@ -257,7 +253,7 @@ async def test_answer_text_before_a_refused_call_completes_the_turn_when_recover
         [_ROUTE_READ, _ROUTE_FINISH, answer_then_refusal(), answer_then_refusal()],
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     done = [payload for name, payload in events if name == "done"]
     assert done[-1]["message"]["content"] == ANSWER
@@ -301,7 +297,7 @@ async def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path
     provider = RejectingSynthesisProvider(prepared.provider.responses)
     prepared.provider = provider
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _visible(events) == "Recovered answer."
     turn = await store.get(ChatTurn, "turn")
@@ -350,7 +346,7 @@ async def test_final_synthesis_keeps_answer_text_beside_a_tool_call(
         broker,
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _visible(events) == ANSWER
     assert "DSML" not in json.dumps(events, ensure_ascii=False)
@@ -383,7 +379,7 @@ async def test_final_synthesis_strips_a_trailing_unparsed_frame(tmp_path, frame)
         broker,
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _visible(events) == ANSWER
     done = [payload for name, payload in events if name == "done"]
@@ -412,7 +408,7 @@ async def test_final_synthesis_tool_call_with_budget_routes_again(tmp_path):
         broker,
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _visible(events) == "The stored values are a and b."
     assert [call.arguments for call in broker.calls] == [{"value": "a"}, {"value": "b"}]
@@ -451,7 +447,7 @@ async def test_final_synthesis_routes_again_only_once_per_turn(tmp_path):
         broker,
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _visible(events) == ANSWER
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
@@ -482,7 +478,7 @@ async def test_final_synthesis_tool_call_without_budget_is_re_asked(tmp_path):
         max_tool_calls=1,
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _visible(events) == ANSWER
     assert len(broker.calls) == 1
@@ -512,7 +508,7 @@ async def test_reasoning_only_synthesis_fails_saying_the_model_never_answered(tm
     )
 
     with pytest.raises(ProviderResponseError, match="only reasoning"):
-        _stream(service, prepared)
+        await _stream(service, prepared)
 
     failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED

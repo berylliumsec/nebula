@@ -11,7 +11,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 
 import httpx
 import pytest
@@ -44,11 +43,8 @@ def _turn_requests(provider: ScriptedProvider):
     ]
 
 
-def _stream(service, prepared):
-    async def scenario():
-        return [event async for event in service.stream(prepared)]
-
-    return asyncio.run(scenario())
+async def _stream(service, prepared):
+    return [event async for event in service.stream(prepared)]
 
 
 def _probe_spec() -> ToolSpec:
@@ -83,7 +79,7 @@ async def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
     ]
     store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
@@ -133,7 +129,7 @@ async def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     ]
     store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     answer = "".join(payload["delta"] for name, payload in events if name == "delta")
     assert answer == "The value is a."
@@ -162,7 +158,7 @@ async def test_unreadable_routing_control_frame_finishes_through_synthesis(tmp_p
     responses = [_response(text=frame), _response(text="Nothing to read yet.")]
     store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     shown = "".join(
         payload["delta"]
@@ -233,7 +229,7 @@ async def test_unknown_tool_is_answered_with_an_error_result(tmp_path):
     ]
     store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     # The valid call in the same batch still ran; the unknown one never
     # reached the broker.

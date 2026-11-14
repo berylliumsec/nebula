@@ -1431,9 +1431,11 @@ async def test_restart_keeps_terminal_tool_status_without_a_receipt_unknown(tmp_
         item["recovered_from_restart_unknown"] for item in recovered.tool_history
     )
     assert all(
-        (await store.get(ToolCall, call_id)).status
-        in {ToolCallStatus.FAILED, ToolCallStatus.CANCELLED}
-        for call_id in ("failed-without-receipt", "cancelled-after-start")
+        [
+            (await store.get(ToolCall, call_id)).status
+            in {ToolCallStatus.FAILED, ToolCallStatus.CANCELLED}
+            for call_id in ("failed-without-receipt", "cancelled-after-start")
+        ]
     )
 
 
@@ -3643,6 +3645,10 @@ async def test_durable_session_rejects_divergent_or_forged_history(
         "tools_enabled": False,
         "initial_title_state": "generated",
         "mcp_server_ids": [],
+        # Recorded with every provider turn since #974 (8770094): the
+        # next turn's MCP context choice round-trips like the selection.
+        "excluded_mcp_server_ids": [],
+        "mcp_context_mode": "always_loaded",
         "hook_ids": [],
         # Recorded even when unset: "the model's own default" is a choice the
         # operator can return to, so it has to round-trip as one.
@@ -3729,6 +3735,10 @@ async def test_existing_session_cursor_and_messages_roll_back_together(
         "tools_enabled": False,
         "initial_title_state": "generated",
         "mcp_server_ids": [],
+        # Recorded with every provider turn since #974 (8770094): the
+        # next turn's MCP context choice round-trips like the selection.
+        "excluded_mcp_server_ids": [],
+        "mcp_context_mode": "always_loaded",
         "hook_ids": [],
         # Recorded even when unset: "the model's own default" is a choice the
         # operator can return to, so it has to round-trip as one.
@@ -4884,9 +4894,13 @@ async def test_persist_turn_inputs_refuses_a_waiting_callback_turn(tmp_path):
     service = ChatService(
         store, provider_factory=lambda _: FakeProvider(profile.id, local=True)
     )
+
+    async def no_pending_turn(session_id):
+        return None
+
     # The turn parked between prepare_async's pending_turn check and the
     # persist; the write-time guard must catch it on its own.
-    service.pending_turn = lambda session_id: None
+    service.pending_turn = no_pending_turn
 
     with pytest.raises(ChatHistoryConflict, match="already has an active response"):
         (

@@ -4,6 +4,7 @@ from tests.v3.async_test_support import (
 )
 import asyncio
 from datetime import datetime, timedelta
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +12,8 @@ from pydantic import ValidationError
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
+from nebula.v3.async_utils import drain_callback_tasks
+from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 from nebula.v3.chat import ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.chat_schedules import (
@@ -226,16 +229,25 @@ async def _running_goal(
     )
 
 
-async def _fire_and_settle(service: ChatService) -> None:
-    """Fire due schedules, then wait for the turns they dispatched."""
+async def _settle(service: ChatService) -> None:
+    """Wait for the turns schedules dispatched and the outcomes they saved."""
 
-    await service.fire_due_schedules()
     while pending := [
         runtime.task
         for runtime in service._active_provider_turns.values()
         if runtime.task is not None and not runtime.task.done()
     ]:
         await asyncio.gather(*pending, return_exceptions=True)
+    # Each occurrence's outcome is saved by a supervised persistence callback
+    # once its turn ends (async_done_callback since #939); wait for it too.
+    await drain_callback_tasks()
+
+
+async def _fire_and_settle(service: ChatService) -> None:
+    """Fire due schedules, then wait for the turns they dispatched."""
+
+    await service.fire_due_schedules()
+    await _settle(service)
 
 
 async def test_due_schedule_runs_a_goal_turn(tmp_path):
@@ -545,6 +557,22 @@ class _GatedProvider(FakeProvider):
         return await super().complete(request)
 
 
+class _AvailableHost(HostLoadMonitor):
+    def cached(self):
+        return self.sample()
+
+    def sample(self):
+        return HostLoadSnapshot(
+            sampled_at=time.monotonic(),
+            cpu_capacity=4,
+            cpu_ratio=0.0,
+            memory_available_ratio=1.0,
+            busy=False,
+            reason=None,
+            measurements_available=True,
+        )
+
+
 async def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
     tmp_path, monkeypatch
 ):
@@ -577,9 +605,16 @@ async def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
     async def entered():
         await asyncio.wait_for(provider.entered.wait(), 5)
 
-    async with TestClient(create_app(store, auth_token="test-token")) as client:
-        client.portal.call(services[0].fire_due_schedules)
-        client.portal.call(entered)
+    # The occurrence is admitted like any provider turn; this host's own load
+    # must not hold it (create_app shares one host-load gate).
+    app = create_app(
+        store,
+        auth_token="test-token",
+        host_load_gate=HostLoadGate(_AvailableHost()),
+    )
+    async with TestClient(app) as client:
+        await services[0].fire_due_schedules()
+        await entered()
         started = await ChatScheduleService(store).get("session")
         assert started.last_status == "started"
         turn_id = started.last_turn_id
@@ -609,7 +644,8 @@ async def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
             await asyncio.wait_for(follower, 5)
             return frames
 
-        frames = client.portal.call(follow_while_it_runs)
+        frames = await follow_while_it_runs()
+        await _settle(services[0])
 
         types = [frame["type"] for frame in frames]
         assert types[0] == "queued" and "admitted" in types

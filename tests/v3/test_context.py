@@ -1347,17 +1347,15 @@ async def test_concurrent_identical_compaction_reuses_one_snapshot_and_provider_
     async def compact_twice():
         return await asyncio.gather(
             *[
-                (
-                    await ContextCompactor(store).compact(
-                        owner_type=ContextOwnerType.CHAT_SESSION,
-                        owner_id=session.id,
-                        engagement_id=session.engagement_id,
-                        provider_profile=profile,
-                        provider=provider,
-                        model="model-a",
-                        sources=[source],
-                        compacted_through=1,
-                    )
+                ContextCompactor(store).compact(
+                    owner_type=ContextOwnerType.CHAT_SESSION,
+                    owner_id=session.id,
+                    engagement_id=session.engagement_id,
+                    provider_profile=profile,
+                    provider=provider,
+                    model="model-a",
+                    sources=[source],
+                    compacted_through=1,
                 )
                 for _ in range(2)
             ]
@@ -1510,19 +1508,17 @@ class ScriptedProvider(MemoryProvider):
         )
 
 
-def _compact(store, session, profile, provider, sources, **kwargs):
-    return asyncio.run(
-        ContextCompactor(store).compact(
-            owner_type=ContextOwnerType.CHAT_SESSION,
-            owner_id=session.id,
-            engagement_id=session.engagement_id,
-            provider_profile=profile,
-            provider=provider,
-            model="model-a",
-            sources=sources,
-            compacted_through=max(source.reference.sequence or 0 for source in sources),
-            **kwargs,
-        )
+async def _compact(store, session, profile, provider, sources, **kwargs):
+    return await ContextCompactor(store).compact(
+        owner_type=ContextOwnerType.CHAT_SESSION,
+        owner_id=session.id,
+        engagement_id=session.engagement_id,
+        provider_profile=profile,
+        provider=provider,
+        model="model-a",
+        sources=sources,
+        compacted_through=max(source.reference.sequence or 0 for source in sources),
+        **kwargs,
     )
 
 
@@ -1581,7 +1577,7 @@ async def test_eight_k_fallback_compaction_succeeds_with_a_useful_allowance(tmp_
     )
     provider = SourcedMemoryProvider(profile.id)
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     assert result.snapshot.status == ContextSnapshotStatus.READY
     assert result.snapshot.quality == ContextSnapshotQuality.COMPLETE
@@ -1607,7 +1603,7 @@ async def test_objective_none_sends_no_objective_and_reserves_nothing_for_it(tmp
             store, session, {1: (ChatRole.USER, "Check port 8443.")}
         )
         provider = MemoryProvider(profile.id)
-        _compact(store, session, profile, provider, sources, objective=objective)
+        await _compact(store, session, profile, provider, sources, objective=objective)
         prompts.append(json.loads(str(provider.requests[0].messages[0].content)))
 
     without, with_objective = prompts
@@ -1640,7 +1636,7 @@ async def test_unparseable_answers_twice_give_a_degraded_extractive_snapshot(tmp
     )
     provider = ScriptedProvider(profile.id, ["not json", "still not json"])
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     assert len(provider.requests) == 2
     snapshot = result.snapshot
@@ -1682,7 +1678,7 @@ async def test_a_failing_model_is_not_called_again_for_later_groups(tmp_path):
     )
     provider = ScriptedProvider(profile.id, ["{broken", "{broken"] * 20)
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     assert result.snapshot.segment_count > 1
     # The first group's answer and its repair; every later group, and the
@@ -1705,7 +1701,7 @@ async def test_provider_failure_falls_back_to_a_degraded_extract(tmp_path):
     )
     provider = ScriptedProvider(profile.id, [ProviderError("upstream unavailable")])
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     assert len(provider.requests) == 1
     assert result.snapshot.status == ContextSnapshotStatus.READY
@@ -1724,10 +1720,12 @@ async def test_a_degraded_snapshot_is_retried_when_compaction_is_asked_again(tmp
         store, session, {1: (ChatRole.USER, "Keep port 8443.")}
     )
 
-    degraded = _compact(
+    degraded = await _compact(
         store, session, profile, ScriptedProvider(profile.id, ["x", "y"]), sources
     )
-    retried = _compact(store, session, profile, MemoryProvider(profile.id), sources)
+    retried = await _compact(
+        store, session, profile, MemoryProvider(profile.id), sources
+    )
 
     assert degraded.snapshot.quality == ContextSnapshotQuality.DEGRADED
     assert retried.created is True
@@ -1763,7 +1761,7 @@ async def test_identifier_missing_from_its_cited_source_is_dropped(tmp_path):
     )
     provider = ScriptedProvider(profile.id, [answer, answer])
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     repair = str(provider.requests[1].messages[-1].content)
     assert "confirmed_facts[0] names '10.0.0.9'" in repair
@@ -1802,7 +1800,7 @@ async def test_a_repaired_answer_replaces_an_invalid_first_answer(tmp_path):
     )
     provider = ScriptedProvider(profile.id, [wrong, right])
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     assert result.snapshot.quality == ContextSnapshotQuality.COMPLETE
     assert result.snapshot.dropped_items == 0
@@ -1831,7 +1829,7 @@ async def test_a_truncated_answer_is_repaired_by_asking_for_a_shorter_one(
         ],
     )
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     repair = str(provider.requests[1].messages[-1].content)
     assert "cut off at the output limit" in repair
@@ -1876,7 +1874,7 @@ async def test_unknown_evidence_and_artifact_ids_are_dropped(tmp_path):
         ],
     )
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     # Unknown IDs are dropped without a repair round.
     assert len(provider.requests) == 1
@@ -1908,15 +1906,15 @@ async def test_second_compaction_of_an_appended_archive_reuses_leaf_segments(tmp
     profile, session, sources = await history(store, 32)
     provider = SourcedMemoryProvider(profile.id)
 
-    first = _compact(store, session, profile, provider, sources[:24])
+    first = await _compact(store, session, profile, provider, sources[:24])
     first_calls = len(provider.requests)
-    second = _compact(store, session, profile, provider, sources)
+    second = await _compact(store, session, profile, provider, sources)
     second_calls = len(provider.requests) - first_calls
 
     fresh_store = NebulaStore(tmp_path / "fresh-context.db")
     fresh_profile, fresh_session, fresh_sources = await history(fresh_store, 32)
     fresh_provider = SourcedMemoryProvider(fresh_profile.id)
-    fresh = _compact(
+    fresh = await _compact(
         fresh_store, fresh_session, fresh_profile, fresh_provider, fresh_sources
     )
 
@@ -1944,7 +1942,9 @@ async def test_source_digest_is_the_snapshot_hash(tmp_path):
         store, session, {1: (ChatRole.USER, "Keep port 8443.")}
     )
 
-    result = _compact(store, session, profile, MemoryProvider(profile.id), sources)
+    result = await _compact(
+        store, session, profile, MemoryProvider(profile.id), sources
+    )
 
     assert source_digest(sources) == result.snapshot.source_sha256
     edited = [_source(1, "role=user\nKeep port 8444.")]
@@ -2084,7 +2084,7 @@ async def test_the_model_cites_short_source_ids_that_map_to_canonical_references
         * 2,
     )
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     prompt = json.loads(str(provider.requests[0].messages[0].content))
     assert [source["id"] for source in prompt["sources"]] == ["m1", "m2"]
@@ -2127,7 +2127,7 @@ async def test_an_answer_cut_off_twice_keeps_its_complete_items(tmp_path):
     )
     provider = ScriptedProvider(profile.id, [(cut_off, "length")] * 2)
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     assert len(provider.requests) == 2
     assert "cut off at the output limit" in str(
@@ -2169,7 +2169,7 @@ async def test_compaction_usage_keeps_the_prompt_cache_counts(tmp_path):
     )
     provider = CachingProvider(profile.id, ["not json"])
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     # The failed answer and its repair are both counted.
     assert len(provider.requests) == 2
@@ -2202,7 +2202,7 @@ async def test_the_objective_is_context_the_model_never_writes_or_answers(tmp_pa
         ],
     )
 
-    result = _compact(
+    result = await _compact(
         store, session, profile, provider, sources, objective="Reply with only OK"
     )
 
@@ -2273,7 +2273,7 @@ async def test_memories_that_fit_together_are_merged_without_a_model_call(tmp_pa
     sources = await _long_history(store, session, 24)
     provider = _listing_provider(profile.id, 1, json.dumps({"summary": "unused"}))
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     snapshot = result.snapshot
     assert snapshot.segment_count >= 3
@@ -2293,7 +2293,7 @@ async def test_a_roll_up_that_loses_the_history_is_replaced_by_the_union(tmp_pat
         profile.id, 8, json.dumps({"summary": "The operator asked for risks."})
     )
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     snapshot = result.snapshot
     # The leaves' items outgrow the allowance together, so the model is asked
@@ -2366,7 +2366,7 @@ async def test_an_answer_without_a_summary_gets_one_composed_from_its_items(tmp_
     )
     provider = ScriptedProvider(profile.id, [answer, answer])
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await _compact(store, session, profile, provider, sources)
 
     # One repair asked for the summary; the second answer had none either.
     assert len(provider.requests) == 2

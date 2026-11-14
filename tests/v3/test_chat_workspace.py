@@ -238,10 +238,10 @@ async def _retract(store, message_id):
     )
 
 
-def _walk(client, path, params):
+async def _walk(client, path, params):
     seen, offset = [], 0
     while offset is not None:
-        response = client.get(path, params={**params, "offset": offset})
+        response = await client.get(path, params={**params, "offset": offset})
         assert response.status_code == 200, response.text
         data = response.json()
         seen.extend(data["items"])
@@ -266,7 +266,9 @@ async def test_search_pages_are_complete_after_an_in_place_edit(tmp_path):
         )
     (await _retract(store, "s-2"))
 
-    items = _walk(client, "/chat/projects/p/search", {"q": "document", "limit": 2})
+    items = await _walk(
+        client, "/chat/projects/p/search", {"q": "document", "limit": 2}
+    )
 
     assert sorted(item["message_id"] for item in items) == ["s-3", "s-4", "s-5"]
 
@@ -293,10 +295,10 @@ async def test_results_pages_are_complete_after_an_in_place_edit(tmp_path):
     app.include_router(results_router(store, None))
     client = TestClient(app, raise_server_exceptions=False)
 
-    items = _walk(client, "/chat/sessions/s/results", {"limit": 2})
+    items = await _walk(client, "/chat/sessions/s/results", {"limit": 2})
 
     assert sorted(item["message_id"] for item in items) == ["s-5", "s-6", "s-7", "s-8"]
-    assert _walk(client, "/chat/sessions/s/context-sources", {}) == []
+    assert (await _walk(client, "/chat/sessions/s/context-sources", {})) == []
 
 
 async def test_results_survive_a_missing_diff_artifact(tmp_path):

@@ -378,10 +378,13 @@ async def test_chat_image_upload_preview_and_arbitrary_message_fork(
     original_transaction = store.transaction
     fork_transactions = 0
 
-    async def count_fork_transaction():
+    # NebulaStore.transaction is an async context manager factory: calling it
+    # returns the context manager that `async with` enters, so the counter
+    # stays a plain function and passes the fork's arguments through.
+    def count_fork_transaction(*args, **kwargs):
         nonlocal fork_transactions
         fork_transactions += 1
-        return original_transaction()
+        return original_transaction(*args, **kwargs)
 
     monkeypatch.setattr(store, "transaction", count_fork_transaction)
     latest_side = await client.post(
@@ -1372,10 +1375,12 @@ async def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert cleared.json()["metadata"]["allow_subagents"] is False
     assert cleared.json()["metadata"]["max_active_subagents"] is None
     # Everything else about the conversation still waits for the response.
+    # (A provider chat's next-turn MCP selection is no longer among them:
+    # #974 applies it to the next turn, see test_next_turn_mcp_exclusion.py.)
     selections = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
-        json={"reasoning_effort": "low", "mcp_server_ids": []},
+        json={"reasoning_effort": "low", "hook_ids": []},
     )
     assert selections.status_code == 409
     assert "response is active" in selections.json()["detail"]
@@ -1556,8 +1561,11 @@ async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
     )
     active = await client.post(endpoint, headers=_auth(), json=request)
     assert active.status_code == 200, active.text
-    assert active.json()["reason_code"] == "harness_not_idle"
-    assert "active response" in active.json()["reason"]
+    # Since #939 (831d0d0) busy work no longer refuses the switch: Core keeps
+    # the selection pending and activates it once that work has finished.
+    assert active.json()["compatible"] is True
+    assert active.json()["activation"] == "after_active_work"
+    assert "current response" in active.json()["activation_reason"]
     (await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE}))
     queue = await store.create(
         ChatQueue(
@@ -1567,8 +1575,8 @@ async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
         )
     )
     queued = await client.post(endpoint, headers=_auth(), json=request)
-    assert queued.json()["reason_code"] == "harness_not_idle"
-    assert "queued follow-ups" in queued.json()["reason"]
+    assert queued.json()["activation"] == "after_active_work"
+    assert "saved follow-ups" in queued.json()["activation_reason"]
     (await store.update(ChatQueue, queue.id, {"items": []}))
     (
         await store.create(
@@ -1582,8 +1590,10 @@ async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
         )
     )
     running = await client.post(endpoint, headers=_auth(), json=request)
-    assert running.json()["reason_code"] == "harness_not_idle"
-    assert "Pause the running goal" in running.json()["reason"]
+    # A running goal between turns follows the selected runtime at its next
+    # turn boundary (#939), so it holds no work that the switch waits for.
+    assert running.json()["compatible"] is True
+    assert running.json()["activation"] == "immediate"
     assert (await store.get(ChatSession, session.id)).backend == ChatBackend.HARNESS
 
 
@@ -2057,7 +2067,7 @@ async def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_
     profile = await store.create(
         ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
     )
-    parent, other, child = (
+    parent, other, child = [
         (
             await store.create(
                 ChatSession(
@@ -2078,7 +2088,7 @@ async def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_
                 {"parent_session_id": "parent", "metadata": {"subagent_id": "sub"}},
             ),
         )
-    )
+    ]
     (
         await store.create(
             ChatSubagent(

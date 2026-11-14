@@ -102,9 +102,9 @@ async def test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat(
     assert not expected.intersection(ordinary.specs)
     assert expected.issubset(control.specs)
     assert "nebula.work.manage" not in control.specs
-    assert app.state.control_assistant_work.catalog(project.id)["scope"].startswith(
-        "selected project"
-    )
+    assert (await app.state.control_assistant_work.catalog(project.id))[
+        "scope"
+    ].startswith("selected project")
 
 
 async def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(
@@ -136,7 +136,7 @@ async def test_managed_goal_tools_are_discoverable_without_advertising_every_sch
             "nebula.work.manage",
             {"operation": "nebula.work.goals", "arguments": {}},
         )
-    ) == work.goals_overview(project.id, 0)
+    ) == (await work.goals_overview(project.id, 0))
     with pytest.raises(ValueError, match="managed operation"):
         (
             await dispatch_work_tool(
@@ -164,7 +164,7 @@ async def test_harness_control_session_advertises_work_tools_but_ordinary_chat_d
         )
     )
     harness = app.state.harness_runtime_service
-    _, _, ordinary_turn = harness.prepare_chat(
+    _, _, ordinary_turn = await harness.prepare_chat(
         engagement_id=project.id,
         profile_id=profile.id,
         model=None,
@@ -173,7 +173,7 @@ async def test_harness_control_session_advertises_work_tools_but_ordinary_chat_d
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    _, _, control_turn = harness.prepare_chat(
+    _, _, control_turn = await harness.prepare_chat(
         engagement_id=project.id,
         profile_id=profile.id,
         model=None,
@@ -184,11 +184,11 @@ async def test_harness_control_session_advertises_work_tools_but_ordinary_chat_d
         control_assistant=True,
     )
     expected = BUTLER_TOOL_NAMES
-    ordinary = harness._gateway_catalog(
+    ordinary = await harness._gateway_catalog(
         (await store.get(HarnessSession, ordinary_turn.harness_session_id)),
         turn=ordinary_turn,
     )
-    control = harness._gateway_catalog(
+    control = await harness._gateway_catalog(
         (await store.get(HarnessSession, control_turn.harness_session_id)),
         turn=control_turn,
     )
@@ -241,18 +241,18 @@ async def test_work_roster_and_details_reject_another_project_or_control_chat(tm
         AgentRun(engagement_id=other.id, objective="Other work")
     )
     work = app.state.control_assistant_work
-    overview = work.overview(selected.id)
+    overview = await work.overview(selected.id)
     assert [item["id"] for item in overview["chats"]] == [own.id]
     assert [item["id"] for item in overview["missions"]] == [run.id]
     assert overview["chats"][0]["url"].endswith(f"session={own.id}")
     assert overview["missions"][0]["url"].endswith(f"mission={run.id}")
-    assert work.chat_detail(selected.id, own.id)["pending_turn"] is None
-    assert work.mission_detail(selected.id, run.id)["status"] == "queued"
+    assert (await work.chat_detail(selected.id, own.id))["pending_turn"] is None
+    assert (await work.mission_detail(selected.id, run.id))["status"] == "queued"
     for target in (private.id, foreign.id):
         with pytest.raises(ValueError, match="this project's work roster"):
-            work.chat_detail(selected.id, target)
+            (await work.chat_detail(selected.id, target))
     with pytest.raises(ValueError, match="this project's work roster"):
-        work.mission_detail(selected.id, foreign_run.id)
+        (await work.mission_detail(selected.id, foreign_run.id))
 
 
 async def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
@@ -328,15 +328,19 @@ async def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_
         )
     )
     work = app.state.control_assistant_work
-    overview = work.overview(project.id)
+    overview = await work.overview(project.id)
     assert [item["id"] for item in overview["chats"]] == [parent.id]
     assert overview["chats"][0]["goal"]["status"] == "draft"
     assert overview["subagents"][0]["id"] == record.id
     assert overview["subagents"][0]["parent_session_id"] == parent.id
-    assert work.chat_detail(project.id, child.id)["kind"] == "subagent"
-    assert work.chat_detail(project.id, goal_child.id)["kind"] == "goal_child"
-    assert work.subagent_detail(project.id, record.id)["view"]["status"] == "running"
-    assert {item["kind"] for item in work.goals_overview(project.id)["goals"]} == {
+    assert (await work.chat_detail(project.id, child.id))["kind"] == "subagent"
+    assert (await work.chat_detail(project.id, goal_child.id))["kind"] == "goal_child"
+    assert (await work.subagent_detail(project.id, record.id))["view"][
+        "status"
+    ] == "running"
+    assert {
+        item["kind"] for item in (await work.goals_overview(project.id))["goals"]
+    } == {
         "main",
         "goal_child",
     }
@@ -407,12 +411,16 @@ async def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
         )
     )
     work = app.state.control_assistant_work
-    assert work.catalog(selected.id, "nebula.work.chat_messages")["read_only"] is True
-    assert work.catalog(selected.id, "nebula.work.rewind_chat")["read_only"] is False
-    first = work.chat_messages(selected.id, {"session_id": session.id})
+    assert (await work.catalog(selected.id, "nebula.work.chat_messages"))[
+        "read_only"
+    ] is True
+    assert (await work.catalog(selected.id, "nebula.work.rewind_chat"))[
+        "read_only"
+    ] is False
+    first = await work.chat_messages(selected.id, {"session_id": session.id})
     assert len(first["messages"]) == 30
     assert all(item["id"] != messages[3].id for item in first["messages"])
-    second = work.chat_messages(
+    second = await work.chat_messages(
         selected.id,
         {
             "session_id": session.id,
@@ -430,13 +438,15 @@ async def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
         is True
     )
     with pytest.raises(ValueError, match="work roster"):
-        work.chat_messages(selected.id, {"session_id": foreign.id})
+        (await work.chat_messages(selected.id, {"session_id": foreign.id}))
     with pytest.raises(ValueError, match="child goal chat"):
-        work.chat_messages(selected.id, {"session_id": child.id})
+        (await work.chat_messages(selected.id, {"session_id": child.id}))
     with pytest.raises(ChatHistoryConflict, match="cursor does not belong"):
-        work.chat_messages(
-            selected.id,
-            {"session_id": session.id, "before_message_id": foreign_message.id},
+        (
+            await work.chat_messages(
+                selected.id,
+                {"session_id": session.id, "before_message_id": foreign_message.id},
+            )
         )
 
     async def rewind(arguments):
@@ -458,7 +468,11 @@ async def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
     with pytest.raises(ValueError, match="child goal chat"):
         (await rewind({**base, "session_id": child.id}))
     assert (
-        len(work.chat_messages(selected.id, {"session_id": session.id})["messages"])
+        len(
+            (await work.chat_messages(selected.id, {"session_id": session.id}))[
+                "messages"
+            ]
+        )
         == 30
     )
 
@@ -468,10 +482,12 @@ async def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
     assert changed["active_message_count"] == 3
     assert changed["retracted_message_count"] == 31
     assert changed["retracted_from_message_id"] == messages[4].id
-    assert [item.id for item in work.chat.session_messages(session.id)] == [
+    assert [item.id for item in (await work.chat.session_messages(session.id))] == [
         item.id for item in messages[:3]
     ]
-    assert work.chat_detail(selected.id, session.id)["revision"] == changed["revision"]
+    assert (await work.chat_detail(selected.id, session.id))["revision"] == changed[
+        "revision"
+    ]
     assert (await store.get(ChatMessage, messages[4].id)).metadata[
         "retracted_reason"
     ] == "operator_edit"
@@ -560,13 +576,16 @@ async def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_p
         assert (await store.get(ChatSession, fork["session_id"])).metadata[
             "butler_initiated"
         ] is True
-        ordinary_fork = work.chat.fork_session(source.id, through_message_id=message.id)
-        assert ordinary_fork.metadata.get("butler_initiated") is not True
-        assert work.chat_detail(selected.id, fork["session_id"])["kind"] == "main"
-        assert (
-            work.chat_detail(selected.id, source.id)["recent_messages"][0]["id"]
-            == message.id
+        ordinary_fork = await work.chat.fork_session(
+            source.id, through_message_id=message.id
         )
+        assert ordinary_fork.metadata.get("butler_initiated") is not True
+        assert (await work.chat_detail(selected.id, fork["session_id"]))[
+            "kind"
+        ] == "main"
+        assert (await work.chat_detail(selected.id, source.id))["recent_messages"][0][
+            "id"
+        ] == message.id
         with pytest.raises(ValueError, match="title changed"):
             await work.delete_chat(
                 selected.id,
@@ -630,10 +649,9 @@ async def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(
         )
     )
     work = app.state.control_assistant_work
-    assert (
-        work.chat_detail(selected.id, source.id)["recent_harness_turns"][0]["id"]
-        == turn.id
-    )
+    assert (await work.chat_detail(selected.id, source.id))["recent_harness_turns"][0][
+        "id"
+    ] == turn.id
     requests = []
 
     async def fake_request(method, path, body, **kwargs):
@@ -784,7 +802,9 @@ async def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets
             },
         )
         assert cancelled["goal"]["status"] == "cancelled"
-        assert work.goals_overview(selected.id)["goals"][0]["status"] == "cancelled"
+        assert (await work.goals_overview(selected.id))["goals"][0][
+            "status"
+        ] == "cancelled"
         with pytest.raises(ValueError, match="this project's work roster"):
             await dispatch_work_tool(
                 work,
@@ -828,8 +848,10 @@ async def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
         )
         assert created["kind"] == "main"
         assert created["goal"]["status"] == "draft"
-        assert work.overview(project.id)["chats"][0]["id"] == created["session_id"]
-        assert work.goals_overview(project.id)["goals"][0]["status"] == "draft"
+        assert (await work.overview(project.id))["chats"][0]["id"] == created[
+            "session_id"
+        ]
+        assert (await work.goals_overview(project.id))["goals"][0]["status"] == "draft"
         assert (await store.get(ChatSession, created["session_id"])).metadata[
             "butler_initiated"
         ] is True
@@ -898,11 +920,10 @@ async def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
         assert (
             await store.get(ChatSession, created["session_id"])
         ).parent_session_id == parent.id
-        assert (
-            work.goal_detail(selected.id, parent.id)["children"][0]["session_id"]
-            == created["session_id"]
-        )
-        assert work.overview(selected.id)["chats"][0]["id"] == parent.id
+        assert (await work.goal_detail(selected.id, parent.id))["children"][0][
+            "session_id"
+        ] == created["session_id"]
+        assert (await work.overview(selected.id))["chats"][0]["id"] == parent.id
 
     (await scenario())
 
@@ -938,7 +959,7 @@ async def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_t
         )
     )
     work = app.state.control_assistant_work
-    assert work.schedule_detail(selected.id, chat.id)["schedule"] is None
+    assert (await work.schedule_detail(selected.id, chat.id))["schedule"] is None
 
     async def scenario():
         created = await dispatch_work_tool(
@@ -975,7 +996,7 @@ async def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_t
                 },
             )
         with pytest.raises(ValueError, match="this project's work roster"):
-            work.schedule_detail(selected.id, foreign.id)
+            (await work.schedule_detail(selected.id, foreign.id))
 
     (await scenario())
 
@@ -1035,10 +1056,9 @@ async def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
             },
         )
         assert stopped["status"] == "stopped"
-        assert (
-            work.subagents_overview(selected.id, {})["subagents"][0]["status"]
-            == "stopped"
-        )
+        assert (await work.subagents_overview(selected.id, {}))["subagents"][0][
+            "status"
+        ] == "stopped"
 
     (await scenario())
 
@@ -1096,8 +1116,8 @@ async def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_
             ],
         )
     )
-    assert work.queue_detail(selected.id, chat.id)["paused"] is True
-    resumed = work.queue_action(
+    assert (await work.queue_detail(selected.id, chat.id))["paused"] is True
+    resumed = await work.queue_action(
         selected.id,
         {
             "session_id": chat.id,
@@ -1106,7 +1126,7 @@ async def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_
         },
     )
     assert resumed["paused"] is False
-    edited = work.queue_action(
+    edited = await work.queue_action(
         selected.id,
         {
             "session_id": chat.id,
@@ -1121,16 +1141,18 @@ async def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_
         "content"
     ] == "Revised wording"
     with pytest.raises(ValueError, match="queue changed"):
-        work.queue_action(
-            selected.id,
-            {
-                "session_id": chat.id,
-                "expected_revision": queue.revision,
-                "action": "pause",
-            },
+        (
+            await work.queue_action(
+                selected.id,
+                {
+                    "session_id": chat.id,
+                    "expected_revision": queue.revision,
+                    "action": "pause",
+                },
+            )
         )
     with pytest.raises(ValueError, match="this project's work roster"):
-        work.queue_detail(selected.id, foreign.id)
+        (await work.queue_detail(selected.id, foreign.id))
 
 
 async def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
@@ -1194,14 +1216,14 @@ async def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_
         )
     )
     work = app.state.control_assistant_work
-    attention = work.attention(selected.id)
+    attention = await work.attention(selected.id)
     assert [item["action_id"] for item in attention["items"]] == [approval.id]
-    detail = work.approval_detail(selected.id, approval.id)
+    detail = await work.approval_detail(selected.id, approval.id)
     assert detail["tool_name"] == "write_file"
     assert detail["expected_effects"] == ["Write report.md"]
     assert detail["revision"] == approval.revision
     with pytest.raises(ValueError, match="this project's attention list"):
-        work.approval_detail(selected.id, foreign.id)
+        (await work.approval_detail(selected.id, foreign.id))
 
     async def scenario():
         with pytest.raises(ValueError, match="approval changed"):
@@ -1232,7 +1254,7 @@ async def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_
     assert result["status"] == "approved"
     assert result["decision_recorded"] is True
     assert "session=" + chat.id in result["url"]
-    assert work.attention(selected.id)["count"] == 0
+    assert (await work.attention(selected.id))["count"] == 0
     assert (
         await store.get(Approval, approval.id)
     ).decision_note == "Operator approved this exact file write"
@@ -1288,14 +1310,16 @@ async def test_control_assistant_answers_pending_harness_question_without_leakin
         )
     )
     work = app.state.control_assistant_work
-    assert {item["action_id"] for item in work.attention(selected.id)["items"]} == {
+    assert {
+        item["action_id"] for item in (await work.attention(selected.id))["items"]
+    } == {
         question.id,
         secret.id,
     }
-    detail = work.question_detail(selected.id, question.id)
+    detail = await work.question_detail(selected.id, question.id)
     assert detail["prompt"] == "Which area should I inspect?"
     with pytest.raises(ValueError, match="this project's attention list"):
-        work.question_detail(other.id, question.id)
+        (await work.question_detail(other.id, question.id))
 
     async def scenario():
         with pytest.raises(ValueError, match="contains a secret"):
@@ -1340,7 +1364,9 @@ async def test_control_assistant_answers_pending_harness_question_without_leakin
     assert delivered == {"action": "answer", "response": {"area": "API"}}
     assert declined["status"] == "declined"
     assert secret_delivery == {"action": "decline", "response": {}}
-    assert work.question_detail(selected.id, question.id)["status"] == "answered"
+    assert (await work.question_detail(selected.id, question.id))[
+        "status"
+    ] == "answered"
 
 
 async def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
@@ -1386,7 +1412,7 @@ async def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
     changed = await update()
     assert changed["title"] == "New title"
     assert changed["archived"] is True
-    assert work.chat_detail(selected.id, chat.id)["archived"] is True
+    assert (await work.chat_detail(selected.id, chat.id))["archived"] is True
     with pytest.raises(ValueError, match="chat changed"):
         (await update())
     with pytest.raises(ValueError, match="this project's work roster"):
@@ -1485,7 +1511,7 @@ async def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
         )
     )
     work = app.state.control_assistant_work
-    descriptor = work.catalog(project.id, "nebula.work.update_chat")
+    descriptor = await work.catalog(project.id, "nebula.work.update_chat")
     assert {"pinned", "flag_color"}.issubset(descriptor["parameters"]["properties"])
     assert "pin" in descriptor["description"]
 
@@ -1505,7 +1531,7 @@ async def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
         item.id for item in chats
     }
     with pytest.raises(ValueError, match="work roster"):
-        work.chat_detail(project.id, other_chat.id)
+        (await work.chat_detail(project.id, other_chat.id))
 
     target = chats[0]
 
@@ -1527,12 +1553,12 @@ async def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
     pinned = await change(target.revision, pinned=True, flag_color="purple")
     assert (pinned["pinned"], pinned["flag_color"]) == (True, "purple")
     assert (
-        work.chat_detail(project.id, target.id)["pinned"],
-        work.chat_detail(project.id, target.id)["flag_color"],
+        (await work.chat_detail(project.id, target.id))["pinned"],
+        (await work.chat_detail(project.id, target.id))["flag_color"],
     ) == (True, "purple")
     assert any(
         item["id"] == target.id and item["pinned"] and item["flag_color"] == "purple"
-        for item in work.chats(project.id, 30)["chats"]
+        for item in (await work.chats(project.id, 30))["chats"]
     )
     with pytest.raises(ValueError, match="chat changed"):
         (await change(target.revision, pinned=False))
@@ -1583,9 +1609,9 @@ async def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
     work = app.state.control_assistant_work
     assert (
         "request_id"
-        in work.catalog(project.id, "nebula.work.create_work_item")["parameters"][
-            "required"
-        ]
+        in (await work.catalog(project.id, "nebula.work.create_work_item"))[
+            "parameters"
+        ]["required"]
     )
 
     async def invoke(operation, arguments):
@@ -1713,7 +1739,7 @@ async def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
     chunks = []
     offset = 0
     while True:
-        detail = work.work_item(
+        detail = await work.work_item(
             project.id, {"item_id": long_item.id, "description_offset": offset}
         )
         assert model_result_bytes(detail) <= MAX_EXCERPT_BYTES
@@ -1774,10 +1800,9 @@ async def test_butler_controls_work_agent_access_and_reads_complete_check_in_his
         "work_updates",
         "work_update",
     ):
-        assert (
-            work.catalog(project.id, f"nebula.work.{operation}")["name"]
-            == f"nebula.work.{operation}"
-        )
+        assert (await work.catalog(project.id, f"nebula.work.{operation}"))[
+            "name"
+        ] == f"nebula.work.{operation}"
 
     async def invoke(operation, arguments):
         return await dispatch_work_tool(
@@ -1907,16 +1932,15 @@ async def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
             {"session_id": session.id, "text": "Check the latest result"},
         )
         assert queued["delivery"] == "queued"
-        saved = work.queue.get(session.id)
+        saved = await work.queue.get(session.id)
         assert saved.items[0]["id"] == queued["item_id"]
         assert (
             saved.items[0]["request"]["messages"][0]["content"]
             == "Check the latest result"
         )
-        assert (
-            work.chat_detail(selected.id, session.id)["queued_follow_ups"][0]["status"]
-            == "queued"
-        )
+        assert (await work.chat_detail(selected.id, session.id))["queued_follow_ups"][
+            0
+        ]["status"] == "queued"
         with pytest.raises(ValueError, match="active harness chat"):
             await work.message_chat(
                 selected.id,
@@ -1966,11 +1990,11 @@ async def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paus
         return SimpleNamespace(turn=SimpleNamespace(id="new-turn"))
 
     monkeypatch.setattr(work.chat, "prepare_async", prepare)
-    monkeypatch.setattr(
-        work.chat,
-        "start_provider_turn",
-        lambda prepared: calls.append(prepared.turn.id),
-    )
+
+    async def start_provider_turn(prepared):
+        calls.append(prepared.turn.id)
+
+    monkeypatch.setattr(work.chat, "start_provider_turn", start_provider_turn)
     result = await work.message_chat(
         project.id,
         {
@@ -1985,8 +2009,8 @@ async def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paus
         "turn_id": "new-turn",
     }
     assert calls == ["Check the checkpoint", "new-turn"]
-    assert work.queue.get(session.id).paused
-    assert [item["id"] for item in work.queue.get(session.id).items] == ["old"]
+    assert (await work.queue.get(session.id)).paused
+    assert [item["id"] for item in (await work.queue.get(session.id)).items] == ["old"]
 
 
 async def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
@@ -2010,6 +2034,9 @@ async def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
             executable="/bin/true",
             default_model="grok-model",
             capabilities=HarnessCapabilities(models=["grok-model"], mcp=True),
+            # Saving MCP servers on a harness needs a harness that may receive
+            # project tool results (#939, chat_assistant_config).
+            privacy={"local_only": True, "permits_sensitive_data": True},
         )
     )
     child = await store.create(
@@ -2038,9 +2065,9 @@ async def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
         )
     )
     work = app.state.control_assistant_work
-    mcp = app.state.agent_security_tools.register_profile()
-    before = work.chat_settings(project.id, chat.id)
-    saved = work.set_chat_settings(
+    mcp = await app.state.agent_security_tools.register_profile()
+    before = await work.chat_settings(project.id, chat.id)
+    saved = await work.set_chat_settings(
         project.id,
         {
             "session_id": chat.id,
@@ -2060,12 +2087,16 @@ async def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
     assert saved["settings"]["profile_id"] == grok.id
     prepared = []
 
-    def prepare_chat(**kwargs):
+    async def prepare_chat(**kwargs):
         prepared.append(kwargs)
         return None, SimpleNamespace(id="chat-turn"), SimpleNamespace(id="harness-turn")
 
     monkeypatch.setattr(work.harness, "prepare_chat", prepare_chat)
-    monkeypatch.setattr(work.harness, "start_chat_turn", lambda _: None)
+
+    async def start_chat_turn(_):
+        return None
+
+    monkeypatch.setattr(work.harness, "start_chat_turn", start_chat_turn)
     result = await work.message_chat(
         project.id,
         {
@@ -2129,8 +2160,8 @@ async def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp
                 model="old-model",
             )
         )
-        before = work.chat_settings(project.id, chat.id)
-        saved = work.set_chat_settings(
+        before = await work.chat_settings(project.id, chat.id)
+        saved = await work.set_chat_settings(
             project.id,
             {
                 "session_id": chat.id,
@@ -2143,9 +2174,11 @@ async def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp
             },
         )
         assert saved["settings"]["profile_id"] == next_profile.id
-        assert (
-            await store.get(ChatSession, chat.id)
-        ).harness_session_id == old_harness.id
+        # Since 7c1db8e an idle chat's saved switch creates and binds the new
+        # harness session when it is saved; the next message runs there.
+        switched = await store.get(ChatSession, chat.id)
+        assert switched.harness_session_id != old_harness.id
+        assert switched.harness_profile_id == next_profile.id
         sent = await work.message_chat(
             project.id,
             {"session_id": chat.id, "text": "Continue here", "delivery": "immediate"},
@@ -2154,6 +2187,7 @@ async def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp
         rebound = await store.get(ChatSession, chat.id)
         assert rebound.id == chat.id
         assert rebound.harness_session_id != old_harness.id
+        assert rebound.harness_session_id == switched.harness_session_id
         assert rebound.harness_profile_id == next_profile.id
         assert rebound.model == "next-model"
         assert (await store.get(ChatTurn, sent["turn_id"])).session_id == chat.id
@@ -2211,11 +2245,11 @@ async def test_immediate_guidance_steers_active_harness_and_holds_active_provide
         )
     )
     work = app.state.control_assistant_work
-    monkeypatch.setattr(
-        work.chat,
-        "pending_turn",
-        lambda _: SimpleNamespace(id="turn", harness_turn_id=harness_turn.id),
-    )
+
+    async def pending_turn(_):
+        return SimpleNamespace(id="turn", harness_turn_id=harness_turn.id)
+
+    monkeypatch.setattr(work.chat, "pending_turn", pending_turn)
     seen = []
 
     async def steer(turn_id, text, **kwargs):
@@ -2232,7 +2266,7 @@ async def test_immediate_guidance_steers_active_harness_and_holds_active_provide
     )
     assert steered["delivery"] == "steered" and steered["turn_id"] == "turn"
     assert seen == [(harness_turn.id, "Focus on saved evidence", "Butler guidance")]
-    assert work.queue.get(session.id).items == []
+    assert (await work.queue.get(session.id)).items == []
 
     provider = await store.create(
         ProviderProfile(
@@ -2259,7 +2293,7 @@ async def test_immediate_guidance_steers_active_harness_and_holds_active_provide
         },
     )
     assert held["delivery"] == "held" and held["reason"] == "active_turn_cannot_steer"
-    assert work.queue.get(provider_session.id).items == []
+    assert (await work.queue.get(provider_session.id)).items == []
 
 
 async def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
@@ -2302,11 +2336,11 @@ async def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_qu
         )
     )
     work = app.state.control_assistant_work
-    monkeypatch.setattr(
-        work.chat,
-        "pending_turn",
-        lambda _: SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id),
-    )
+
+    async def pending_turn(_):
+        return SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id)
+
+    monkeypatch.setattr(work.chat, "pending_turn", pending_turn)
 
     async def unexpected_steer(*args, **kwargs):
         raise AssertionError("Grok must not receive a live steer")
@@ -2327,7 +2361,7 @@ async def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_qu
             "reason": "active_turn_cannot_steer",
             "turn_id": "chat-turn",
         }
-    assert work.queue.get(chat.id).items == []
+    assert (await work.queue.get(chat.id)).items == []
     assert (await store.find_entities(ChatMessage, {"session_id": chat.id})) == []
 
 
@@ -2374,11 +2408,11 @@ async def test_start_chat_saves_a_separate_turn_for_core_owned_work(
         work.chat, "provider_factory", lambda profile: InertProvider(profile.id)
     )
     starts = []
-    monkeypatch.setattr(
-        work.chat,
-        "start_provider_turn",
-        lambda prepared: starts.append(prepared.turn.id),
-    )
+
+    async def start_provider_turn(prepared):
+        starts.append(prepared.turn.id)
+
+    monkeypatch.setattr(work.chat, "start_provider_turn", start_provider_turn)
 
     async def scenario():
         result = await work.start_chat(
@@ -2391,10 +2425,9 @@ async def test_start_chat_saves_a_separate_turn_for_core_owned_work(
         assert saved.engagement_id == project.id
         assert saved.metadata.get("control_assistant") is not True
         assert saved.metadata["butler_initiated"] is True
-        assert (
-            work.chat_detail(project.id, saved.id)["pending_turn"]["id"]
-            == result["turn_id"]
-        )
+        assert (await work.chat_detail(project.id, saved.id))["pending_turn"][
+            "id"
+        ] == result["turn_id"]
 
     (await scenario())
 
@@ -2416,9 +2449,11 @@ async def test_start_remote_harness_chat_keeps_peer_messaging_off(
     )
     work = app.state.control_assistant_work
     started = []
-    monkeypatch.setattr(
-        work.harness, "start_chat_turn", lambda turn_id: started.append(turn_id)
-    )
+
+    async def start_chat_turn(turn_id):
+        started.append(turn_id)
+
+    monkeypatch.setattr(work.harness, "start_chat_turn", start_chat_turn)
 
     async def scenario():
         result = await work.start_chat(
@@ -2478,7 +2513,9 @@ async def test_mission_start_uses_existing_core_route_and_reads_back(
         assert result["url"].endswith(f"mission={result['run_id']}")
         assert calls[0]["engagement_id"] == selected.id
         assert calls[0]["tool_names"] == []
-        assert work.mission_detail(selected.id, result["run_id"])["name"] == "Survey"
+        assert (await work.mission_detail(selected.id, result["run_id"]))[
+            "name"
+        ] == "Survey"
 
     (await scenario())
 
@@ -2644,17 +2681,16 @@ async def test_butler_discovers_project_browser_and_starts_scoped_mission(
             selected.id,
             "nebula.work.manage",
             {"operation": "nebula.work.browser_sessions", "arguments": {}},
-        ) == work.browser_sessions(selected.id)
-        listed = work.browser_sessions(selected.id)
+        ) == (await work.browser_sessions(selected.id))
+        listed = await work.browser_sessions(selected.id)
         assert [item["id"] for item in listed["sessions"]] == [session.id]
         assert listed["sessions"][0]["eligible_for_autonomy"] is True
         result = await work.start_mission(selected.id, request)
         assert result["browser_session_id"] == session.id
         assert result["status"] == "queued"
-        assert (
-            work.mission_detail(selected.id, result["run_id"])["browser_session_id"]
-            == session.id
-        )
+        assert (await work.mission_detail(selected.id, result["run_id"]))[
+            "browser_session_id"
+        ] == session.id
         assert started[0]["browser_autonomy"].targets == ["https://example.test/"]
         assert started[0]["browser_autonomy"].model_dump(mode="json") == {
             **request["browser_autonomy"],
@@ -2688,7 +2724,7 @@ async def test_butler_discovers_project_browser_and_starts_scoped_mission(
                 selected.id, {**request, "name": "Mismatched lease"}
             )
         (await store.delete(BrowserIdentity, identity.id))
-        stale = work.browser_sessions(selected.id)["sessions"][0]
+        stale = (await work.browser_sessions(selected.id))["sessions"][0]
         assert stale["id"] == session.id
         assert stale["eligible_for_autonomy"] is False
 
@@ -2734,9 +2770,11 @@ async def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkey
     work = app.state.control_assistant_work
     active = [SimpleNamespace(id="chat-turn", harness_turn_id=harness_turn.id)]
     calls = []
-    monkeypatch.setattr(
-        work.chat, "pending_turn", lambda _id: active[0] if active else None
-    )
+
+    async def pending_turn(_id):
+        return active[0] if active else None
+
+    monkeypatch.setattr(work.chat, "pending_turn", pending_turn)
 
     async def steer(turn_id, text, *, actor_id):
         calls.append(("steer", turn_id, text, actor_id))
@@ -2803,7 +2841,7 @@ async def test_mission_interrupt_uses_core_route_and_rejects_foreign_target(tmp_
         stopped = await work.stop_mission(selected.id, run.id)
         assert stopped["run_id"] == run.id
         assert stopped["stopped"] is True
-        assert work.mission_detail(selected.id, run.id)["status"] == "cancelled"
+        assert (await work.mission_detail(selected.id, run.id))["status"] == "cancelled"
 
     (await scenario())
 
@@ -2831,21 +2869,23 @@ async def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next
         )
     )
     work = app.state.control_assistant_work
-    before = work.chat_settings(project.id, chat.id)
+    before = await work.chat_settings(project.id, chat.id)
     assert before["revision"] == chat.revision
     assert before["settings"]["model"] == "model-a"
     with pytest.raises(ValueError, match="work roster"):
-        work.chat_settings(other.id, chat.id)
+        (await work.chat_settings(other.id, chat.id))
     with pytest.raises(ValueError, match="conversation changed"):
-        work.set_chat_settings(
-            project.id,
-            {
-                "session_id": chat.id,
-                "expected_revision": chat.revision + 1,
-                "settings": {"reasoning_effort": "high"},
-            },
+        (
+            await work.set_chat_settings(
+                project.id,
+                {
+                    "session_id": chat.id,
+                    "expected_revision": chat.revision + 1,
+                    "settings": {"reasoning_effort": "high"},
+                },
+            )
         )
-    changed = work.set_chat_settings(
+    changed = await work.set_chat_settings(
         project.id,
         {
             "session_id": chat.id,
@@ -2870,7 +2910,7 @@ async def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next
         )
 
     (await queue_next())
-    request = work.queue.get(chat.id).items[0]["request"]
+    request = (await work.queue.get(chat.id)).items[0]["request"]
     assert request["reasoning_effort"] == "high"
     assert request["include_knowledge"] is False
     assert request["allow_agent_messaging"] is True
@@ -2889,6 +2929,9 @@ async def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_a
             executable="/bin/true",
             default_model="model-a",
             capabilities=HarnessCapabilities(models=["model-a"]),
+            # Saving MCP servers on a harness needs a harness that may receive
+            # project tool results (#939, chat_assistant_config).
+            privacy={"local_only": True, "permits_sensitive_data": True},
         )
     )
     harness = await store.create(
@@ -2908,9 +2951,9 @@ async def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_a
             model="model-a",
         )
     )
-    security = app.state.agent_security_tools.register_profile()
+    security = await app.state.agent_security_tools.register_profile()
     work = app.state.control_assistant_work
-    before = work.chat_settings(project.id, chat.id)
+    before = await work.chat_settings(project.id, chat.id)
     offered = next(
         item for item in before["available"]["mcp_servers"] if item["id"] == security.id
     )
@@ -2922,16 +2965,22 @@ async def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_a
     assert offered["tools"] >= 2
     assert (
         "does not attach an MCP browser"
-        in (work.catalog(project.id, "nebula.work.chat_settings")["description"])
+        in (
+            (await work.catalog(project.id, "nebula.work.chat_settings"))["description"]
+        )
     )
     assert (
         "does not rebind a harness chat to a provider"
-        in (work.catalog(project.id, "nebula.work.set_chat_settings")["description"])
+        in (
+            (await work.catalog(project.id, "nebula.work.set_chat_settings"))[
+                "description"
+            ]
+        )
     )
     with pytest.raises(ValueError, match="work roster"):
-        work.chat_settings(other.id, chat.id)
+        (await work.chat_settings(other.id, chat.id))
 
-    saved = work.set_chat_settings(
+    saved = await work.set_chat_settings(
         project.id,
         {
             "session_id": chat.id,
@@ -2946,7 +2995,7 @@ async def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_a
         {"session_id": chat.id, "text": "Use the browser tool to find the result"},
     )
     assert queued["delivery"] == "queued"
-    assert work.queue.get(chat.id).items[0]["request"]["mcp_server_ids"] == [
+    assert (await work.queue.get(chat.id)).items[0]["request"]["mcp_server_ids"] == [
         security.id
     ]
     pending = await work.await_chat_result(
@@ -2959,7 +3008,7 @@ async def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_a
     )
     assert pending["result"] == "still in progress"
     assert "saved_reply" not in pending
-    queue = work.queue.get(chat.id)
+    queue = await work.queue.get(chat.id)
     (
         await store.update(
             ChatQueue,
@@ -3036,7 +3085,7 @@ async def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
         )
     )
     work = app.state.control_assistant_work
-    advertised = work.catalog(project.id, "nebula.work.await_chat_result")
+    advertised = await work.catalog(project.id, "nebula.work.await_chat_result")
     assert "turn_id" in advertised["parameters"]["properties"]
     assert {"required": ["turn_id"]} in advertised["parameters"]["oneOf"]
     target = {"session_id": chat.id, "turn_id": turn.id, "timeout_seconds": 0}
@@ -3129,10 +3178,10 @@ async def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
         )
     )
     work = app.state.control_assistant_work
-    before = work.chat_settings(project.id, "self")
+    before = await work.chat_settings(project.id, "self")
     assert before["session_id"] == control.id
     assert before["available"]["harness_service_tiers"][0]["id"] == "fast"
-    changed = work.set_chat_settings(
+    changed = await work.set_chat_settings(
         project.id,
         {
             "session_id": "self",
@@ -3148,13 +3197,15 @@ async def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
     assert changed["settings"]["harness_service_tier"] == "fast"
     assert changed["settings"]["harness_cyber_access_program"] == "standard"
     with pytest.raises(ValueError, match="does not advertise that speed"):
-        work.set_chat_settings(
-            project.id,
-            {
-                "session_id": "self",
-                "expected_revision": changed["revision"],
-                "settings": {"harness_service_tier": "imaginary"},
-            },
+        (
+            await work.set_chat_settings(
+                project.id,
+                {
+                    "session_id": "self",
+                    "expected_revision": changed["revision"],
+                    "settings": {"harness_service_tier": "imaginary"},
+                },
+            )
         )
 
 

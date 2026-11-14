@@ -280,7 +280,7 @@ async def test_large_chat_json_is_compressed_and_timed_but_small_and_sse_are_not
         async def events():
             yield b"data: " + (b"x" * 4_000) + b"\n\n"
 
-        return StreamingResponse((await events()), media_type="text/event-stream")
+        return StreamingResponse(events(), media_type="text/event-stream")
 
     app.add_api_route("/api/v1/chat/test-stream", test_stream, methods=["GET"])
 

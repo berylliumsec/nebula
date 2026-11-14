@@ -3,6 +3,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 import asyncio
+import inspect
 import json
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -355,9 +356,21 @@ async def _drain(chat: ChatService, turn_id: str) -> list[str]:
     return [event async for event, _ in chat.follow_provider_turn(turn_id)]
 
 
-async def _until(predicate, timeout: float = 5.0) -> None:
+async def _until(predicate, timeout: float = 30.0) -> None:
+    """Wait until ``predicate`` holds; an async predicate reads the async store.
+
+    The bound covers a whole async chain (a child's turn, the parent's resume
+    and the report's post) on a busy runner; a hang still fails here.
+    """
+
+    async def holds() -> bool:
+        value = predicate()
+        if inspect.isawaitable(value):
+            value = await value
+        return bool(value)
+
     deadline = asyncio.get_running_loop().time() + timeout
-    while not predicate():
+    while not await holds():
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition was not reached in time")
         await asyncio.sleep(0.01)
@@ -746,25 +759,29 @@ async def test_supervisor_discovers_and_assigns_a_lifecycle_hook_to_one_child(
             "tool_names": [],
         }
         await _drain(chat, (await chat.start_provider_turn(prepared)))
-        await _until(
-            lambda: any(
-                item.child_turn_id for item in store.list_entities(ChatSubagent)
+
+        async def condition():
+            return any(
+                item.child_turn_id for item in (await store.list_entities(ChatSubagent))
             )
-        )
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: (
+
+        async def condition():
+            return (
                 len(
                     [
                         item
-                        for item in store.list_entities(NativeHookExecution)
+                        for item in (await store.list_entities(NativeHookExecution))
                         if item.chat_turn_id == record.child_turn_id
                         and item.status != "running"
                     ]
                 )
                 == 2
             )
-        )
+
+        await _until(condition)
         executions = [
             item
             for item in (await store.list_entities(NativeHookExecution))
@@ -893,13 +910,19 @@ async def test_conversation_child_can_discover_and_delegate_to_its_own_child(
             _request(project, content="Review routes.", allow_subagents=True)
         )
         await _drain(chat, (await chat.start_provider_turn(prepared)))
-        await _until(lambda: len(store.list_entities(ChatSubagent)) == 2)
-        await _until(
-            lambda: all(
+
+        async def condition():
+            return len(await store.list_entities(ChatSubagent)) == 2
+
+        await _until(condition)
+
+        async def condition():
+            return all(
                 record.status == ChatSubagentStatus.COMPLETED
-                for record in store.list_entities(ChatSubagent)
+                for record in (await store.list_entities(ChatSubagent))
             )
-        )
+
+        await _until(condition)
         reviewer, counter = sorted(
             (await store.list_entities(ChatSubagent)),
             key=lambda record: record.started_at,
@@ -921,12 +944,14 @@ async def test_conversation_child_can_discover_and_delegate_to_its_own_child(
                 reviewer.parent_session_id
             )
         ) is False
-        await _until(
-            lambda: any(
+
+        async def condition():
+            return any(
                 "Nested subagent Counter" in message.content
-                for message in store.list_entities(ChatSubagentMessage)
+                for message in (await store.list_entities(ChatSubagentMessage))
             )
-        )
+
+        await _until(condition)
         await chat.shutdown()
 
     (await scenario())
@@ -973,12 +998,14 @@ async def test_provider_mission_supervisor_creates_child_and_records_result(
             tools_enabled=False,
             allow_cloud_tool_results=False,
         )
-        await _until(
-            lambda: (
-                store.get(type(run), run.id).status
-                in {RunStatus.COMPLETE, RunStatus.FAILED}
-            )
-        )
+
+        async def condition():
+            return (await store.get(type(run), run.id)).status in {
+                RunStatus.COMPLETE,
+                RunStatus.FAILED,
+            }
+
+        await _until(condition)
         final = await store.get(type(run), run.id)
         assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
         assert final.metadata["final_summary"] == "Final Mission result."
@@ -1035,7 +1062,11 @@ async def test_fixed_plan_recovery_leaves_live_delegated_mission_with_its_chat_o
         assert not fixed.active_run_ids
         await fixed.shutdown()
         provider.gate.set()
-        await _until(lambda: store.get(type(run), run.id).status == RunStatus.COMPLETE)
+
+        async def condition():
+            return (await store.get(type(run), run.id)).status == RunStatus.COMPLETE
+
+        await _until(condition)
         await delegated.shutdown()
         await chat.shutdown()
 
@@ -1228,7 +1259,7 @@ async def test_supervisor_can_enable_ready_command_runtime_for_one_child(
     from nebula.v3.tools import ToolSpec
 
     class ReadyRuntime:
-        def chat_components(self, *, engagement_id: str, extra_components=None):
+        async def chat_components(self, *, engagement_id: str, extra_components=None):
             assert extra_components is None
             return RuntimeToolComponents(
                 broker=object(),
@@ -1285,11 +1316,14 @@ async def test_supervisor_can_enable_ready_command_runtime_for_one_child(
         }
         assert "run_command" in catalog["tool_names"]
         await _drain(chat, (await chat.start_provider_turn(prepared)))
-        await _until(
-            lambda: any(
-                record.child_turn_id for record in store.list_entities(ChatSubagent)
+
+        async def condition():
+            return any(
+                record.child_turn_id
+                for record in (await store.list_entities(ChatSubagent))
             )
-        )
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
         child = await store.get(ChatTurn, record.child_turn_id)
         assert record.parent_request["tools_enabled"] is True
@@ -1454,11 +1488,13 @@ async def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) 
         ] == "Waiting for delegated work."
 
         provider.child_gate.set()
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
 
         parent = await store.get(ChatTurn, parent_turn_id)
         wait_entry = (await _history(store, parent))[1]
@@ -1483,9 +1519,13 @@ async def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) 
                 tool.name.endswith("subagent") or tool.name == "wait_subagents"
                 for tool in request.tools
             )
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
         messages = await _messages(store, parent.session_id)
         assert [item.metadata.get("kind") for item in messages][-1] == "subagent_result"
         assert messages[-1].content.startswith("Subagent finished: Count routes")
@@ -1529,9 +1569,13 @@ async def test_late_report_is_posted_after_parent_reply(tmp_path: Path) -> None:
         )
 
         provider.child_gate.set()
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
         messages = await _messages(store, parent.session_id)
         assert messages[-2].content == "Started a review; it will report back."
         assert messages[-1].metadata["subagent_status"] == "completed"
@@ -1583,50 +1627,47 @@ async def test_stopping_parent_stops_its_subagents(tmp_path: Path) -> None:
     (await scenario())
 
 
-def _fan_out(
+async def _fan_out(
     tmp_path: Path, count: int, **flags
 ) -> tuple[NebulaStore, ChatTurn, RoutedProvider]:
     """Start ``count`` subagents in one response while every child is held."""
 
-    async def scenario() -> tuple[NebulaStore, ChatTurn, RoutedProvider]:
-        starts = [
-            _call(
-                f"p{index}",
-                "start_subagent",
-                task=f"Task {index}.",
-                name=None,
-                context=None,
-            )
-            for index in range(count)
-        ]
-        provider = RoutedProvider(
-            parent=[*starts, _finish("done"), _response(text="Fanned out.")],
-            child=[],
+    starts = [
+        _call(
+            f"p{index}",
+            "start_subagent",
+            task=f"Task {index}.",
+            name=None,
+            context=None,
         )
-        store, project, _, chat = await _setup(tmp_path, provider)
-        provider.child_gate = asyncio.Event()
-        prepared = await chat.prepare_async(
-            _request(project, content="Fan out.", allow_subagents=True, **flags)
-        )
-        parent_turn_id = await chat.start_provider_turn(prepared)
-        await _drain(chat, parent_turn_id)
-        parent = await store.get(ChatTurn, parent_turn_id)
-        for record in await store.list_entities(ChatSubagent):
-            await chat.subagents.stop(record.id)
-        assert {item.status for item in (await store.list_entities(ChatSubagent))} == {
-            ChatSubagentStatus.STOPPED
-        }
-        await chat.shutdown()
-        return store, parent, provider
-
-    return asyncio.run(scenario())
+        for index in range(count)
+    ]
+    provider = RoutedProvider(
+        parent=[*starts, _finish("done"), _response(text="Fanned out.")],
+        child=[],
+    )
+    store, project, _, chat = await _setup(tmp_path, provider)
+    provider.child_gate = asyncio.Event()
+    prepared = await chat.prepare_async(
+        _request(project, content="Fan out.", allow_subagents=True, **flags)
+    )
+    parent_turn_id = await chat.start_provider_turn(prepared)
+    await _drain(chat, parent_turn_id)
+    parent = await store.get(ChatTurn, parent_turn_id)
+    for record in await store.list_entities(ChatSubagent):
+        await chat.subagents.stop(record.id)
+    assert {item.status for item in (await store.list_entities(ChatSubagent))} == {
+        ChatSubagentStatus.STOPPED
+    }
+    await chat.shutdown()
+    return store, parent, provider
 
 
 async def test_subagents_are_unlimited_unless_the_operator_sets_a_limit(
     tmp_path: Path,
 ) -> None:
     # More than the three-at-once and six-per-response caps that used to apply.
-    store, parent, provider = _fan_out(tmp_path, 8)
+    store, parent, provider = await _fan_out(tmp_path, 8)
 
     assert [entry["status"] for entry in (await _history(store, parent))] == [
         "complete"
@@ -1637,7 +1678,7 @@ async def test_subagents_are_unlimited_unless_the_operator_sets_a_limit(
 
 
 async def test_operator_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> None:
-    store, parent, provider = _fan_out(tmp_path, 3, max_active_subagents=2)
+    store, parent, provider = await _fan_out(tmp_path, 3, max_active_subagents=2)
 
     statuses = [entry["status"] for entry in (await _history(store, parent))]
     assert statuses == ["complete", "complete", "failed"]
@@ -1838,15 +1879,21 @@ async def test_deleting_parent_removes_finished_subagent_conversations(
             _request(project, content="Go.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
         parent_session_id = (await store.get(ChatTurn, parent_turn_id)).session_id
 
         (await store.delete_chat_session(parent_session_id))
@@ -2054,9 +2101,21 @@ async def test_failed_parent_resume_fails_the_turn_and_posts_reports(
         )
         provider.child_gate.set()
 
-        await _until(
-            lambda: store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.FAILED
-        )
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.FAILED
+
+        await _until(condition)
+
+        # The finished child's report is posted once the failed parent has
+        # freed the conversation, after the FAILED write itself.
+        async def reported():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(reported)
 
         parent = await store.get(ChatTurn, parent_turn_id)
         assert "no longer enabled" in (parent.error or "")
@@ -2119,12 +2178,13 @@ async def test_stopping_an_interrupted_parent_posts_finished_reports(
             )
         )
         provider.child_gate.set()
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status
-                == ChatSubagentStatus.COMPLETED
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).status == ChatSubagentStatus.COMPLETED
+
+        await _until(condition)
         assert (await store.get(ChatSubagent, record.id)).result_message_id is None
 
         await chat.stop_provider_turn(parent_turn_id)
@@ -2329,11 +2389,13 @@ async def test_subagents_use_the_models_choice_or_provider_default_without_an_ov
             )
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
 
         child_efforts = {
             request.messages[-1].content: request.reasoning_effort
@@ -2403,11 +2465,13 @@ async def test_operator_effort_overrides_the_supervisors_subagent_choice(
             )
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         assert (await store.get(ChatTurn, parent_turn_id)).request_snapshot[
             "subagent_reasoning_effort"
         ] == "medium"
@@ -2497,13 +2561,38 @@ async def test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_lev
             if "Subagent reports are ready" in str(request.messages[-1].content)
         )
         assert continued.reasoning_effort == "high"
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status
-                == ChatSubagentStatus.COMPLETED
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).status == ChatSubagentStatus.COMPLETED
+
+        await _until(condition)
+
+        async def condition():
+            return len(await store.list_entities(ChatGoalUsageCharge)) == 1
+
+        await _until(condition)
+
+        # The continuation that picked up the report charges the goal for its
+        # own responses until it settles; read the usage after that.
+        async def conversation_settled():
+            turns = [
+                turn
+                for turn in await store.list_entities(ChatTurn)
+                if turn.session_id == prepared.session.id
+            ]
+            return len(turns) >= 2 and all(
+                turn.status
+                in {
+                    ChatTurnStatus.COMPLETE,
+                    ChatTurnStatus.FAILED,
+                    ChatTurnStatus.CANCELLED,
+                }
+                for turn in turns
             )
-        )
-        await _until(lambda: len(store.list_entities(ChatGoalUsageCharge)) == 1)
+
+        await _until(conversation_settled)
         charged_usage = (await store.get(type(goal), goal.id)).usage
 
         # Startup may revisit terminal children after either the settlement,
@@ -2636,7 +2725,10 @@ async def test_parent_and_subagent_message_each_other_while_both_work(
         store: NebulaStore
 
         async def instruct_child(request: ModelRequest) -> ModelResponse:
-            await _until(lambda: bool(_sent(store, "to_parent")))
+            async def condition():
+                return bool(await _sent(store, "to_parent"))
+
+            await _until(condition)
             (record,) = await store.list_entities(ChatSubagent)
             return _call(
                 "p2",
@@ -2646,16 +2738,19 @@ async def test_parent_and_subagent_message_each_other_while_both_work(
             )
 
         async def wait_for_report(request: ModelRequest) -> ModelResponse:
-            await _until(
-                lambda: (
-                    store.list_entities(ChatSubagent)[0].status
-                    == ChatSubagentStatus.COMPLETED
-                )
-            )
+            async def condition():
+                return (await store.list_entities(ChatSubagent))[
+                    0
+                ].status == ChatSubagentStatus.COMPLETED
+
+            await _until(condition)
             return _finish("p3")
 
         async def note_progress(request: ModelRequest) -> ModelResponse:
-            await _until(lambda: bool(_sent(store, "to_child")))
+            async def condition():
+                return bool(await _sent(store, "to_child"))
+
+            await _until(condition)
             return _call(
                 "c2", "message_parent", message="Still scanning.", wait_for_reply=None
             )
@@ -2692,9 +2787,13 @@ async def test_parent_and_subagent_message_each_other_while_both_work(
         parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
 
         # The parent heard from the child before a later step, without asking.
         parent = await store.get(ChatTurn, parent_turn_id)
@@ -2722,12 +2821,14 @@ async def test_parent_and_subagent_message_each_other_while_both_work(
             "message_parent",
             "read_parent_messages",
         }
-        await _until(
-            lambda: all(
+
+        async def condition():
+            return all(
                 item.status == ChatSubagentMessageStatus.DELIVERED
-                for item in store.list_entities(ChatSubagentMessage)
+                for item in (await store.list_entities(ChatSubagentMessage))
             )
-        )
+
+        await _until(condition)
         assert (await store.get(ChatSubagent, record.id)).reported_at is not None
         await chat.shutdown()
 
@@ -2779,11 +2880,13 @@ async def test_subagent_question_pauses_it_until_the_waiting_parent_answers(
             _request(project, content="Check the deploy.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
 
         # The wait ended on the question, which says the child is paused.
@@ -2849,9 +2952,13 @@ async def test_idle_parent_releases_a_question_and_it_is_posted(tmp_path: Path) 
 
         provider.child_gate.set()
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
         # Nobody was working to answer, so the child went on and said so.
         child = await store.get(ChatTurn, record.child_turn_id)
         (asked,) = await _entries(store, child, "message_parent")
@@ -2903,9 +3010,13 @@ async def test_message_to_a_finished_subagent_starts_another_round(
         first_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, first_turn_id)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
         first_post = (await store.get(ChatSubagent, record.id)).result_message_id
         # Older child records inherited a planning flag. A later message must
         # execute the delegated task without starting a second planner.
@@ -2941,11 +3052,13 @@ async def test_message_to_a_finished_subagent_starts_another_round(
             )
         )
         second_turn_id = await chat.start_provider_turn(follow_up)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, second_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, second_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         second = await store.get(ChatTurn, second_turn_id)
         sent = _result((await _entries(store, second, "message_subagent"))[0])
         assert sent["delivery"] == "new_round"
@@ -2971,12 +3084,14 @@ async def test_message_to_a_finished_subagent_starts_another_round(
         assert record.parent_turn_id == second_turn_id
         child_messages = await _messages(store, record.child_session_id)
         assert "Now check the backups." in child_messages[-2].content
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).result_message_id
-                not in {None, first_post}
-            )
-        )
+
+        async def condition():
+            return (await store.get(ChatSubagent, record.id)).result_message_id not in {
+                None,
+                first_post,
+            }
+
+        await _until(condition)
         await chat.shutdown()
 
     (await scenario())
@@ -3012,11 +3127,13 @@ async def test_failed_subagent_reports_its_error_and_failed_steps(
             _request(project, content="Get the logs.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         parent = await store.get(ChatTurn, parent_turn_id)
         (report,) = _result((await _entries(store, parent, "wait_subagents"))[0])[
             "subagents"
@@ -3031,9 +3148,13 @@ async def test_failed_subagent_reports_its_error_and_failed_steps(
         assert report["last_step"]["tool"] == "message_parent"
 
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(condition)
         posted = (await _messages(store, prepared.session.id))[-1]
         assert posted.content.startswith("Subagent failed: Logs")
         assert "upstream returned 503" in posted.content
@@ -3075,11 +3196,13 @@ async def test_core_bookkeeping_failure_fails_the_subagent_with_its_cause(
             _request(project, content="Map routes.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
         assert record.status == ChatSubagentStatus.FAILED
         assert record.error == (
@@ -3142,11 +3265,13 @@ async def test_stopped_subagent_reports_messages_it_never_read(tmp_path: Path) -
             _request(project, content="Audit it.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatTurn, parent_turn_id)
+            ).status == ChatTurnStatus.COMPLETE
+
+        await _until(condition)
         parent = await store.get(ChatTurn, parent_turn_id)
         queued = _result((await _entries(store, parent, "message_subagent"))[0])
         assert queued["delivery"] == "queued"

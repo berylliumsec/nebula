@@ -190,13 +190,27 @@ async def test_failed_parent_stops_its_running_subagents_and_says_why(
             _request(project, content="Split the work.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(lambda: bool(store.list_entities(ChatSubagent)))
+
+        async def condition():
+            return bool(await store.list_entities(ChatSubagent))
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status != ChatSubagentStatus.RUNNING
-            )
-        )
+
+        async def condition():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).status != ChatSubagentStatus.RUNNING
+
+        await _until(condition)
+
+        # The stop is reported to the conversation just after the STOPPED write.
+        async def reported():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).result_message_id is not None
+
+        await _until(reported)
 
         parent = await store.get(ChatTurn, parent_turn_id)
         assert parent.status == ChatTurnStatus.FAILED
@@ -816,14 +830,20 @@ async def test_goal_token_budget_stops_subagents_while_they_spend(
             )
         )
         (await chat.start_provider_turn(prepared))
-        await _until(lambda: bool(store.list_entities(ChatSubagent)))
+
+        async def condition():
+            return bool(await store.list_entities(ChatSubagent))
+
+        await _until(condition)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status
-                in {ChatSubagentStatus.STOPPED, ChatSubagentStatus.FAILED}
-            )
-        )
+
+        async def condition():
+            return (await store.get(ChatSubagent, record.id)).status in {
+                ChatSubagentStatus.STOPPED,
+                ChatSubagentStatus.FAILED,
+            }
+
+        await _until(condition)
 
         stopped = await store.get(ChatSubagent, record.id)
         assert "budget" in (stopped.error or "")
