@@ -122,4 +122,25 @@ describe("authoritative session state", () => {
     await waitFor(() => expect(result.current.state?.revision).toBe(2), {timeout: 4000});
     expect(result.current.error).toBeUndefined();
   });
+  it("stops waiting for one conversation's worker when another conversation opens", async () => {
+    const probe = vi.fn(async () => ({answered: false}));
+    const recovery = new ProjectRuntimeRecovery(probe);
+    const request = vi.fn(async (path: string) => {
+      if (path.includes("/away/")) {
+        recovery.unavailable(path);
+        throw Object.assign(new Error("idle"), {status: 503, code: PROJECT_RUNTIME_UNAVAILABLE});
+      }
+      return state("ready-chat");
+    });
+    const api = {...conditional(request), projectRuntime: recovery} as unknown as ApiClient;
+    const {result, rerender} = renderHook(({id}) => useSessionState(api, id, true), {initialProps: {id: "away"}});
+    await waitFor(() => expect(recovery.state).toBe("reconnecting"));
+    rerender({id: "ready-chat"});
+    await waitFor(() => expect(result.current.state?.session_id).toBe("ready-chat"));
+    // Nothing waits any more, so no notice and no probe of the other project.
+    await waitFor(() => expect(recovery.state).toBe("available"));
+    const probes = probe.mock.calls.length;
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    expect(probe.mock.calls.length).toBe(probes);
+  });
 });

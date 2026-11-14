@@ -83,7 +83,7 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
         } catch (e) {
           if (disposed) return "stop";
           // diagnostic-expected: the client recorded this read; the queue backs off and reads again when the runtime answers.
-          if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value + 1); return "idle"; }
+          if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return "idle"; }
           void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");
           setReadError(e instanceof Error ? e.message : "Queue could not be read. Reload to retry.");
           return "active";
@@ -115,6 +115,6 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
   };
   return {queue, error: error ?? readError, busy, mutate, enqueue, reload: async () => {try {await reload(); setError(undefined); setReadError(undefined);} catch (e) {
     // diagnostic-expected: the client recorded this read; the shared reconnecting notice explains the wait.
-    if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value + 1); return; }
+    if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return; }
     void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");setError(e instanceof Error ? e.message : "Queue reload failed");}}};
 }

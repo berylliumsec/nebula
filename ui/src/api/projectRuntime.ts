@@ -10,38 +10,49 @@
  *
  * Only waiting views keep the probe alive: one GET of the most recent failed
  * read, honouring Retry-After and backing off to five seconds, paused while the
- * page is hidden.
+ * page is hidden. Core says why the worker is away: "starting" and "closing"
+ * end on their own, while an "idle" project waits for the operator to resume
+ * work in it (reads never admit a worker), so it is probed less often and
+ * described differently.
  */
 
 export const PROJECT_RUNTIME_UNAVAILABLE = "project_runtime_unavailable";
 
-/** An execution worker older than the coded response sends only this. */
-const UNCODED_STARTING_DETAIL = "Project execution is reconnecting;";
 const BASE_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 5_000;
+const IDLE_DELAY_MS = 15_000;
 const MAX_RETRY_AFTER_MS = 10_000;
 const MAX_TRACKED_READS = 16;
 
-export type ProjectRuntimeState = "available" | "reconnecting";
+/** Why no ready worker owns the project. */
+export type ProjectRuntimeReason = "starting" | "closing" | "idle";
+/** "reconnecting" or "idle" while a view waits; "available" otherwise. */
+export type ProjectRuntimeState = "available" | "reconnecting" | "idle";
 
 export interface ProjectRuntimeProbeResult {
   /** The runtime answered the read (with anything but runtime unavailability). */
   answered: boolean;
   retryAfterMs?: number;
+  reason?: ProjectRuntimeReason;
 }
 
 export type ProjectRuntimeProbe = (path: string, signal: AbortSignal) => Promise<ProjectRuntimeProbeResult>;
 
-/** True when a read failed only because no ready worker owns its project yet. */
+/**
+ * True when a read failed only because no ready worker owns its project yet.
+ * Core marks exactly these 503s; a failed worker or a Core outage is not one.
+ */
 export function isProjectRuntimeUnavailable(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const value = error as { status?: unknown; code?: unknown; details?: unknown };
-  if (value.status !== 503) return false;
-  if (value.code === PROJECT_RUNTIME_UNAVAILABLE) return true;
-  const details = value.details && typeof value.details === "object"
-    ? (value.details as { detail?: unknown }).detail
-    : undefined;
-  return typeof details === "string" && details.startsWith(UNCODED_STARTING_DETAIL);
+  const value = error as { status?: unknown; code?: unknown };
+  return value.status === 503 && value.code === PROJECT_RUNTIME_UNAVAILABLE;
+}
+
+/** Core's reason for a project runtime 503; "starting" when it gave none. */
+export function projectRuntimeReason(error: unknown): ProjectRuntimeReason {
+  const details = error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
+  const reason = details && typeof details === "object" ? (details as { reason?: unknown }).reason : undefined;
+  return reason === "idle" || reason === "closing" ? reason : "starting";
 }
 
 /** Milliseconds from a Retry-After header (delta seconds or an HTTP date). */
@@ -53,17 +64,19 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
   return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
 }
 
-/** 1 s, 2 s, 4 s, then 5 s; a longer Retry-After (up to 10 s) is honoured. */
-export function projectRuntimeRetryDelay(attempt: number, retryAfterMs?: number): number {
-  const backoff = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.max(0, Math.min(attempt, 8)));
+/** 1 s, 2 s, 4 s, then 5 s (15 s for an idle project); a longer Retry-After (up to 10 s) is honoured. */
+export function projectRuntimeRetryDelay(attempt: number, retryAfterMs?: number, reason: ProjectRuntimeReason = "starting"): number {
+  const ceiling = reason === "idle" ? IDLE_DELAY_MS : MAX_DELAY_MS;
+  const backoff = Math.min(ceiling, BASE_DELAY_MS * 2 ** Math.max(0, Math.min(attempt, 8)));
   const floor = retryAfterMs !== undefined && Number.isFinite(retryAfterMs)
     ? Math.min(MAX_RETRY_AFTER_MS, Math.max(0, retryAfterMs))
     : 0;
   return Math.max(backoff, floor);
 }
 
+/** The exact read, query included: another project's read of the same route must not count. */
 function readKey(path: string): string {
-  return path.replace(/^\//, "").split(/[?#]/, 1)[0];
+  return path.replace(/^\//, "").split("#", 1)[0];
 }
 
 function pageHidden(): boolean {
@@ -75,7 +88,7 @@ function aborted(): DOMException {
 }
 
 export class ProjectRuntimeRecovery {
-  private readonly failed = new Map<string, { path: string; retryAfterMs?: number }>();
+  private readonly failed = new Map<string, { path: string; retryAfterMs?: number; reason: ProjectRuntimeReason }>();
   private readonly waiters = new Set<() => void>();
   private readonly listeners = new Set<(state: ProjectRuntimeState) => void>();
   private timer?: ReturnType<typeof setTimeout>;
@@ -86,9 +99,10 @@ export class ProjectRuntimeRecovery {
 
   constructor(private readonly probe: ProjectRuntimeProbe) {}
 
-  /** "reconnecting" while a view waits for a project read that Core could not route yet. */
+  /** While a view waits for a project read Core could not route yet: "reconnecting", or "idle" when nothing will start the worker until the operator resumes work. */
   get state(): ProjectRuntimeState {
-    return this.failed.size > 0 && this.waiters.size > 0 ? "reconnecting" : "available";
+    if (!this.failed.size || !this.waiters.size) return "available";
+    return this.latest()?.reason === "idle" ? "idle" : "reconnecting";
   }
 
   subscribe(listener: (state: ProjectRuntimeState) => void): () => void {
@@ -97,10 +111,10 @@ export class ProjectRuntimeRecovery {
   }
 
   /** A project read answered 503 project_runtime_unavailable. */
-  unavailable(path: string, retryAfterMs?: number): void {
+  unavailable(path: string, retryAfterMs?: number, reason: ProjectRuntimeReason = "starting"): void {
     const key = readKey(path);
     this.failed.delete(key);
-    this.failed.set(key, { path, retryAfterMs });
+    this.failed.set(key, { path, retryAfterMs, reason });
     while (this.failed.size > MAX_TRACKED_READS) this.failed.delete(this.failed.keys().next().value!);
     this.notify();
     this.schedule();
@@ -127,19 +141,16 @@ export class ProjectRuntimeRecovery {
       };
       signal?.addEventListener("abort", abort, { once: true });
       this.waiters.add(done);
-      // A success already cleared every failed read: read again now.
-      if (!this.failed.size) { queueMicrotask(() => { if (this.waiters.delete(done)) { this.notify(); done(); } }); return; }
+      // A success already cleared every failed read: read again shortly. The
+      // delay keeps a caller whose failure was not recorded from spinning.
+      if (!this.failed.size) { setTimeout(() => { if (this.waiters.delete(done)) { this.notify(); done(); } }, BASE_DELAY_MS); return; }
       this.notify();
       this.schedule();
     });
   }
 
-  /** Stop probing and release no one; for a client that is being replaced. */
-  dispose(): void {
-    this.stop();
-    this.failed.clear();
-    this.waiters.clear();
-    this.notify();
+  private latest() {
+    return [...this.failed.values()].at(-1);
   }
 
   private notify(): void {
@@ -153,15 +164,15 @@ export class ProjectRuntimeRecovery {
     if (this.timer !== undefined || this.probing) return;
     if (!this.failed.size || !this.waiters.size) { this.stop(); return; }
     if (pageHidden()) { this.watchVisibility(); return; }
-    const latest = [...this.failed.values()].at(-1);
+    const latest = this.latest();
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.run();
-    }, projectRuntimeRetryDelay(this.attempt, latest?.retryAfterMs));
+    }, projectRuntimeRetryDelay(this.attempt, latest?.retryAfterMs, latest?.reason));
   }
 
   private async run(): Promise<void> {
-    const latest = [...this.failed.values()].at(-1);
+    const latest = this.latest();
     if (!latest || !this.waiters.size) return;
     if (pageHidden()) { this.watchVisibility(); return; }
     const controller = new AbortController();
@@ -178,7 +189,11 @@ export class ProjectRuntimeRecovery {
     if (controller.signal.aborted) return;
     if (result.answered) { this.recovered(); return; }
     const current = this.failed.get(readKey(latest.path));
-    if (current && result.retryAfterMs !== undefined) current.retryAfterMs = result.retryAfterMs;
+    if (current) {
+      if (result.retryAfterMs !== undefined) current.retryAfterMs = result.retryAfterMs;
+      if (result.reason) current.reason = result.reason;
+      this.notify();
+    }
     this.attempt += 1;
     this.schedule();
   }

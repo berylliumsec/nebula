@@ -31,7 +31,7 @@ export function ChatCatchUp({api, sessionId, ready, atLatest, isShown, actionRev
     const path = `chat/sessions/${encodeURIComponent(sessionId)}`;
     const report = (e: unknown) => {if (!controller.signal.aborted) {
       // diagnostic-expected: the client recorded this read; the shared reconnecting notice explains the wait.
-      if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value + 1); return; }
+      if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return; }
       void logCaughtDiagnostic("interface.assistant_chat.cursor_failed", "The device read cursor could not be synchronized.", e, "assistant_chat"); setError("Read state could not sync. Pending actions remain available.");}};
     let device: string;
     try {device = readDeviceId();} catch(e) {void logCaughtDiagnostic("interface.assistant_chat.cursor_operation_failed", "The read cursor operation failed.", e, "assistant_chat"); report(e); return;}
