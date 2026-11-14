@@ -26,7 +26,11 @@ from .runtime_coordination import (
 )
 from .runtime_delivery import DurableHttpRunner, RuntimeDelivery
 from .runtime_host_services import host_service_client
-from .runtime_ipc import RuntimeIpcError
+from .runtime_ipc import (
+    RuntimeIpcError,
+    project_runtime_unavailable_body,
+    project_runtime_unavailable_headers,
+)
 from .runtime_vault import RuntimeVault
 from .shared_memory_rpc import MemoryAuthority, RemoteButlerMemory
 
@@ -724,10 +728,11 @@ class ProjectExecution:
                 await send({"type": "websocket.close", "code": 4413})
             elif scope["type"] == "http":
                 await JSONResponse(
-                    {
-                        "detail": "Project execution is reconnecting; accepted work remains saved"
-                    },
+                    project_runtime_unavailable_body(
+                        "Project execution is reconnecting; accepted work remains saved"
+                    ),
                     status_code=503,
+                    headers=project_runtime_unavailable_headers(),
                 )(scope, receive, send)
             return
         if scope["type"] == "http" and scope["method"] not in {

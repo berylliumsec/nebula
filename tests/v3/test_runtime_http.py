@@ -825,6 +825,10 @@ async def test_retirement_during_eviction_returns_a_reconnect_response(monkeypat
         response = await asyncio.wait_for(pending, timeout=5)
         assert response.status_code == 503
         assert response.json()["detail"].startswith("The runtime connection")
+        # A lost channel is transient: the viewer may repeat the read.
+        assert response.json()["code"] == "project_runtime_unavailable"
+        assert response.json()["retryable"] is True
+        assert response.headers["retry-after"] == "1"
     assert proxy.active == {}
     await proxy.close()
 

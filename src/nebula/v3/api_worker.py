@@ -36,7 +36,12 @@ from .runtime_delivery import (
     replayed_headers,
 )
 from .runtime_http import HttpUpstream, RuntimeHttpProxy
-from .runtime_ipc import RuntimeIpcError
+from .runtime_ipc import (
+    ProjectRuntimeUnavailable,
+    RuntimeIpcError,
+    project_runtime_unavailable_body,
+    project_runtime_unavailable_headers,
+)
 from .runtime_routes import command_lane
 from .runtime_identity import mount_runtime_identity
 from .runtime_static import RuntimeStatic
@@ -178,7 +183,17 @@ def create_api_worker(
         )
 
     @app.exception_handler(RuntimeIpcError)
-    async def private_channel_unavailable(_request, _error):
+    async def private_channel_unavailable(_request, error):
+        if isinstance(error, ProjectRuntimeUnavailable):
+            # Reads never admit a worker. An idle project's worker has retired,
+            # or a readmitted one is still starting: the read can be repeated.
+            return JSONResponse(
+                project_runtime_unavailable_body(
+                    "The project runtime is idle or starting. Saved work is unchanged; read again shortly."
+                ),
+                status_code=503,
+                headers=project_runtime_unavailable_headers(),
+            )
         return JSONResponse(
             {
                 "detail": "Runtime delivery is unavailable. The saved request has not been retried."

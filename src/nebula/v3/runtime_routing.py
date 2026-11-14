@@ -23,7 +23,7 @@ from .deployment_protocol import GLOBAL_EXECUTION_PROJECT, ReleaseManifest
 from .runtime_coordination import CoordinationConflict, RuntimeCoordination
 from .runtime_delivery import HttpIntent
 from .runtime_http import HttpUpstream
-from .runtime_ipc import RuntimeCredentials, RuntimeIpcError
+from .runtime_ipc import ProjectRuntimeUnavailable, RuntimeCredentials
 from .runtime_routes import forwarding_lane
 
 
@@ -198,7 +198,7 @@ class RuntimeRouting:
             or process.state != "ready"
             or instance.lease_expires_at_ms <= now
         ):
-            raise RuntimeIpcError(
+            raise ProjectRuntimeUnavailable(
                 "The authoritative runtime is unavailable; saved work remains queued"
             )
         return HttpUpstream(
@@ -213,12 +213,14 @@ class RuntimeRouting:
         async with self.coordination.database.session() as session:
             owner = await session.get(ProjectOwnershipRow, project)
             if owner is not None and owner.retirement_requested:
-                raise RuntimeIpcError(
+                raise ProjectRuntimeUnavailable(
                     "The project worker is closing; retry after a chat is opened"
                 )
             now = await self.coordination._clock_ms(session)
             if owner is None or owner.lease_expires_at_ms <= now:
-                raise RuntimeIpcError("The project has no live execution owner")
+                raise ProjectRuntimeUnavailable(
+                    "The project has no live execution owner"
+                )
             lane = forwarding_lane(scope)
             return await self._target(session, owner.runtime_id, "execution", lane)
 

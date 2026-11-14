@@ -183,7 +183,12 @@ async def test_unassigned_worker_starts_no_controllers_and_holds_reads(runtime):
         transport=httpx.ASGITransport(app=runtime.execution.app),
         base_url="http://fixture",
     ) as client:
-        assert (await client.get("/api/v1/fixture")).status_code == 503
+        held = await client.get("/api/v1/fixture")
+    # A starting worker tells viewers to read again, not that work failed.
+    assert held.status_code == 503
+    assert held.headers["retry-after"] == "1"
+    assert held.json()["code"] == "project_runtime_unavailable"
+    assert held.json()["retryable"] is True
     assert runtime.seen == []
 
 
