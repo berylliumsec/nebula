@@ -1016,7 +1016,7 @@ class AutomationToolPlatform:
                         McpServerProfile.model_validate(item)
                         for item in run.runtime_snapshot.get("mcp_snapshot", [])
                     )
-                    extra_components = self.mcp_platform.chat_components(
+                    extra_components = await self.mcp_platform.chat_components(
                         engagement_id=run.engagement_id,
                         turn_id=run.id,
                         provider=provider,
