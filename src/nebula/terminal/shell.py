@@ -13,6 +13,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from .state import Cursor, Draft, View, main_chat, visible_message
 from .transport import (
+    AcceptedRequest,
     ApiError,
     AsyncApi,
     ClientError,
@@ -104,6 +105,7 @@ class Shell:
             available.discard("attachments")
         if view.session is None:
             available -= {
+                *(() if view.receipt else ("follow",)),
                 "chat",
                 "history",
                 "context",
@@ -113,7 +115,6 @@ class Shell:
                 "schedule",
                 "approvals",
                 "input",
-                "follow",
                 "detach",
                 "steer",
                 "stop",
@@ -127,7 +128,7 @@ class Shell:
                 available.discard("approvals")
             if "input" not in self._pending_kinds:
                 available.discard("input")
-        if not busy:
+        if not busy and not (view.session is None and view.receipt):
             available -= {"follow", "detach", "steer", "stop"}
         elif view.config.get("backend") != "harness":
             available.discard("steer")
@@ -648,6 +649,30 @@ class Shell:
 
     async def state(self, view: View | None = None) -> dict[str, Any]:
         view = view or self.current()
+        if view.session is None and view.receipt:
+            saved = await self.api.request(
+                "GET", f"runtime/requests/{key(view.receipt)}"
+            )
+            if saved.get("session_id"):
+                view.session = await self.api.request(
+                    "GET", f"chat-sessions/{key(saved['session_id'])}"
+                )
+                view.receipt = None
+                view.submitting = False
+                if self.view is view:
+                    if isinstance(self.ui, TuiUI):
+                        self.ui.set_identity(view.project, view.session)
+                    self.remember()
+            else:
+                return {
+                    "busy": True,
+                    "pending": [],
+                    "actions": [],
+                    "turn_id": saved.get("turn_id"),
+                    "detail": "Saved in Core as a new conversation; "
+                    f"{terminal_text(saved.get('state') or 'queued')}, "
+                    "waiting for its execution owner.",
+                }
         if view.session is None:
             return {
                 "busy": view.submitting,
@@ -841,6 +866,13 @@ class Shell:
         from .settings import select_skill
 
         view = self.current()
+        if view.session is None and view.receipt and not view.submitting:
+            view.draft.text = text
+            raise ClientError(
+                "Core saved your previous message as a new conversation and has "
+                "not started it yet. /follow attaches when it starts; /new starts "
+                "a separate conversation. Nothing was resent."
+            )
         if view.submitting or view.uncertain:
             if view.submitting:
                 view.draft.text = text
@@ -931,7 +963,23 @@ class Shell:
                     method, path, body=body, params=params
                 ):
                     event = payload.get("type") or event
+                    if event == "accepted" and payload.get("command_id"):
+                        # Core saved the submission; it is not lost or unsent.
+                        accepted = True
+                        view.uncertain = False
+                        view.receipt = str(payload["command_id"])
+                        if submission:
+                            view.pending_draft = None
+                            if isinstance(self.ui, TuiUI):
+                                self.ui.mark_submission("saved")
+                                self.ui.set_turn_phase("queued")
+                        if self.view is view:
+                            self.update_toolbar(
+                                "Saved in Core; waiting for its execution owner"
+                            )
+                        continue
                     if payload.get("turn_id"):
+                        view.receipt = None
                         view.cursor.turn_id = payload["turn_id"]
                     if event in {
                         "started",
@@ -1166,6 +1214,20 @@ class Shell:
                         "\nConnection lost. Nothing was resent. Review /status and /history, then /follow; use /chats if no conversation identity was confirmed."
                     )
                 return
+            except AcceptedRequest:
+                # Saved on Core but not started: keep it out of the draft and
+                # never present it as lost. /follow attaches when it starts.
+                view.submitting = False
+                if isinstance(self.ui, TuiUI):
+                    self.ui.set_turn_phase("queued")
+                if self.view is view:
+                    self.update_toolbar("Saved in Core; not started yet")
+                    self.ui.say(
+                        "\nCore saved this message but has not started it yet. "
+                        "Nothing was resent. /follow attaches when it starts; "
+                        "/status reads its state."
+                    )
+                return
             except ClientError as exc:
                 view.submitting = False
                 if isinstance(self.ui, TuiUI):
@@ -1194,12 +1256,23 @@ class Shell:
         view = self.current()
         state = (
             await self.state()
-            if view.session
+            if view.session or view.receipt
             else {
                 "turn_id": view.cursor.turn_id,
                 "harness_turn_id": view.cursor.harness_turn_id,
             }
         )
+        if not state.get("turn_id") and view.session is None and view.receipt:
+            # Attach to the saved request itself until Core binds its turn.
+            await self.detach()
+            view.cursor = Cursor()
+            self.stream_task = asyncio.create_task(
+                self.stream(
+                    view, "GET", f"runtime/requests/{key(view.receipt)}/response"
+                )
+            )
+            self.ui.say(state.get("detail") or "Waiting for Core to start it.")
+            return
         if not state.get("turn_id"):
             await self.history()
             return

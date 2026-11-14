@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from nebula.terminal.transport import (
+    AcceptedRequest,
     AsyncApi,
     ApiError,
     Settings,
@@ -96,3 +97,167 @@ def test_mutation_keys_cover_requests_streams_and_do_not_retry(tmp_path, asynchr
     assert len(keys) == len(set(keys)) == 7
     assert seen[8].headers["Idempotency-Key"] == "explicit-fixture-key"
     assert sum(req.url.path.endswith("fail") for req in seen) == 1
+
+
+def _settings(tmp_path):
+    return Settings(
+        tmp_path / "chat.json",
+        {
+            "cores": {
+                "https://core.example": {
+                    "device_id": "fixture",
+                    "device_token": "fixture-device",
+                    "csrf_token": "fixture-csrf",
+                }
+            }
+        },
+        "https://core.example",
+    )
+
+
+def _receipt(command="command-a"):
+    return httpx.Response(
+        202,
+        json={
+            "state": "accepted",
+            "receipt": {"command_id": command, "project_id": "project-a"},
+            "detail": "Saved; waiting for its execution owner",
+        },
+        headers={"X-Nebula-Command-Id": command, "Retry-After": "1"},
+    )
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    waits = []
+
+    async def wait(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("nebula.terminal.transport.asyncio.sleep", wait)
+    return waits
+
+
+def test_accepted_mutation_reads_its_saved_response_without_resending(
+    tmp_path, no_wait
+):
+    seen = []
+    polls = iter(
+        [
+            httpx.Response(202, json={"state": "queued", "command_id": "command-a"}),
+            httpx.Response(200, json={"id": "chat-a", "title": "Renamed"}),
+        ]
+    )
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        if request.method == "PATCH":
+            return _receipt()
+        assert request.url.path == "/api/v1/runtime/requests/command-a/response"
+        assert "Idempotency-Key" not in request.headers
+        return next(polls)
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            return await api.request("PATCH", "chat-sessions/chat-a", json={})
+        finally:
+            await api.close()
+
+    assert asyncio.run(run()) == {"id": "chat-a", "title": "Renamed"}
+    assert [method for method, _ in seen] == ["PATCH", "GET", "GET"]
+    assert no_wait == [1.0, 1.0]
+
+
+def test_accepted_mutation_stops_waiting_without_resending(tmp_path, no_wait):
+    seen = []
+
+    def handler(request):
+        seen.append(request.method)
+        if request.method == "PATCH":
+            return _receipt()
+        return httpx.Response(202, json={"state": "queued", "command_id": "command-a"})
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        api.receipt_wait = 0
+        try:
+            await api.request("PATCH", "chat-sessions/chat-a", json={})
+        finally:
+            await api.close()
+
+    with pytest.raises(AcceptedRequest, match="Nothing was resent") as raised:
+        asyncio.run(run())
+    assert raised.value.command_id == "command-a"
+    assert seen == ["PATCH"]
+
+
+def test_other_accepted_bodies_and_reconciliation_conflicts_are_not_receipts(
+    tmp_path, no_wait
+):
+    def handler(request):
+        if request.url.path.endswith("job"):
+            return httpx.Response(202, json={"id": "job-a", "state": "accepted"})
+        if request.method == "PATCH":
+            return _receipt()
+        return httpx.Response(
+            409,
+            json={
+                "detail": "The saved request needs reconciliation. It has not been retried.",
+                "command_id": "command-a",
+                "state": "uncertain",
+            },
+        )
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            assert await api.request("POST", "job") == {
+                "id": "job-a",
+                "state": "accepted",
+            }
+            with pytest.raises(ApiError, match="needs reconciliation"):
+                await api.request("PATCH", "chat-sessions/chat-a", json={})
+        finally:
+            await api.close()
+
+    asyncio.run(run())
+
+
+def test_accepted_stream_reports_saved_then_reads_the_saved_turn(tmp_path, no_wait):
+    seen = []
+    polls = iter(
+        [
+            httpx.Response(202, json={"state": "queued", "command_id": "command-a"}),
+            httpx.Response(
+                200,
+                text='event: started\ndata: {"type":"started","turn_id":"turn-a"}\n\n'
+                'event: done\ndata: {"type":"done","turn_id":"turn-a"}\n\n',
+            ),
+        ]
+    )
+
+    def handler(request):
+        seen.append((request.method, request.url.path, request.url.query))
+        if request.method == "POST":
+            return _receipt()
+        return next(polls)
+
+    async def run():
+        api = AsyncApi(_settings(tmp_path), transport=httpx.MockTransport(handler))
+        try:
+            return [item async for item in api.events("POST", "chat/completions")]
+        finally:
+            await api.close()
+
+    assert asyncio.run(run()) == [
+        ("accepted", {"type": "accepted", "command_id": "command-a"}),
+        ("started", {"type": "started", "turn_id": "turn-a"}),
+        ("done", {"type": "done", "turn_id": "turn-a"}),
+    ]
+    assert [row[:2] for row in seen] == [
+        ("POST", "/api/v1/chat/completions"),
+        ("GET", "/api/v1/runtime/requests/command-a/response"),
+        ("GET", "/api/v1/runtime/requests/command-a/response"),
+    ]
+    assert seen[1][2] == b"after=0"

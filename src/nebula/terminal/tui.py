@@ -1126,7 +1126,7 @@ class TuiUI(TerminalUI):
     def mark_submission(self, state: str) -> None:
         for index in range(len(self._entries) - 1, -1, -1):
             label, content = self._entries[index]
-            if label == "You · sending":
+            if label in {"You · sending", "You · saved"}:
                 self._entries[index] = (
                     "You" if state == "accepted" else f"You · {state}",
                     content,

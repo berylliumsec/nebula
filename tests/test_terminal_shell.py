@@ -1398,3 +1398,140 @@ def test_restore_scopes_missing_chat_and_only_recovers_missing_selection(
         assert len(calls) == 2
 
     asyncio.run(run())
+
+
+def _saved_receipt():
+    return httpx.Response(
+        202,
+        json={
+            "state": "accepted",
+            "receipt": {"command_id": "command-a", "project_id": "project-a"},
+            "detail": "Saved; waiting for its execution owner",
+        },
+        headers={"X-Nebula-Command-Id": "command-a", "Retry-After": "1"},
+    )
+
+
+def test_saved_first_message_is_not_reported_lost_while_core_starts_it(
+    tmp_path, monkeypatch
+):
+    seen = []
+    waiting = iter([True, False])
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        if request.method == "POST":
+            return _saved_receipt()
+        if next(waiting):
+            return httpx.Response(
+                202, json={"state": "queued", "command_id": "command-a"}
+            )
+        return httpx.Response(
+            200,
+            content=frame("started", session_id="chat-a", turn_id="turn-a", sequence=1)
+            + frame("delta", delta="Saved answer", sequence=2)
+            + frame("done", message={"content": "Saved answer"}, sequence=3),
+        )
+
+    async def no_wait(*args):
+        return None
+
+    monkeypatch.setattr("nebula.terminal.transport.asyncio.sleep", no_wait)
+
+    async def run():
+        shell = make_shell(tmp_path, handler, saved=False)
+        view = shell.current()
+        view.draft.text = "Hello on a cold project"
+        view.pending_draft, view.draft = view.draft, Draft()
+        await shell.stream(view, "POST", "chat/completions", {"backend": "provider"})
+        assert view.session_id == "chat-a"
+        assert not view.uncertain and view.receipt is None
+        assert view.draft == Draft() and view.pending_draft is None
+        assert not any("Connection lost" in line for line in shell.ui.output)
+        assert "Response complete." in shell.ui.output
+        assert [method for method, _ in seen] == ["POST", "GET", "GET"]
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_unstarted_saved_message_blocks_duplicates_and_follow_attaches(
+    tmp_path, monkeypatch
+):
+    seen = []
+    bound = {"value": False}
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        path = request.url.path.removeprefix("/api/v1/")
+        if request.method == "POST":
+            return _saved_receipt()
+        if path == "runtime/requests/command-a/response":
+            return httpx.Response(
+                202, json={"state": "queued", "command_id": "command-a"}
+            )
+        if path == "runtime/requests/command-a":
+            return httpx.Response(
+                200,
+                json={
+                    "command_id": "command-a",
+                    "project_id": "project-a",
+                    "state": "running" if bound["value"] else "queued",
+                    **(
+                        {"turn_id": "turn-a", "session_id": "chat-a"}
+                        if bound["value"]
+                        else {}
+                    ),
+                },
+            )
+        if path == "chat-sessions/chat-a":
+            return httpx.Response(200, json=SESSION)
+        if path == "chat/sessions/chat-a/state":
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "chat-a",
+                    "turn_id": "turn-a",
+                    "busy": True,
+                    "pending": [],
+                    "actions": ["stop"],
+                    "detail": "Working",
+                },
+            )
+        if path == "chat/turns/turn-a/events":
+            return httpx.Response(
+                200, content=frame("done", message={"content": "late"}, sequence=4)
+            )
+        pytest.fail(path)
+
+    async def no_wait(*args):
+        return None
+
+    monkeypatch.setattr("nebula.terminal.transport.asyncio.sleep", no_wait)
+
+    async def run():
+        shell = make_shell(tmp_path, handler, saved=False)
+        shell.api.receipt_wait = 0
+        view = shell.current()
+        view.draft.text = "Hello on a cold project"
+        view.pending_draft, view.draft = view.draft, Draft()
+        await shell.stream(view, "POST", "chat/completions", {"backend": "provider"})
+        assert view.receipt == "command-a" and view.session is None
+        assert not view.uncertain and view.draft == Draft()
+        assert any("has not started it yet" in line for line in shell.ui.output)
+        assert not any("Connection lost" in line for line in shell.ui.output)
+        assert "follow" in shell.available_commands()
+        with pytest.raises(ClientError, match="/follow attaches"):
+            await shell.send("Hello on a cold project")
+        assert view.draft.text == "Hello on a cold project"
+        status = await shell.state()
+        assert status["busy"] and "waiting for its execution owner" in status["detail"]
+        bound["value"] = True
+        await shell.follow()
+        await shell.stream_task
+        assert view.session_id == "chat-a" and view.receipt is None
+        assert [method for method, _ in seen].count("POST") == 1
+        assert ("GET", "/api/v1/chat/turns/turn-a/events") in seen
+        await shell.api.close()
+
+    asyncio.run(run())
