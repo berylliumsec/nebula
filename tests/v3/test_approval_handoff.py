@@ -259,6 +259,160 @@ async def test_real_permission_consumers_acknowledge_one_exact_transport_write(
     (await scenario())
 
 
+@pytest.mark.parametrize("adapter", ["codex", "grok"])
+@pytest.mark.parametrize("fail_write", [False, True])
+async def test_runtime_permission_ticket_saves_the_handoff_after_the_operator_decides(
+    tmp_path, adapter, fail_write
+):
+    """Core's own ticket records the handoff once the adapter writes the decision.
+
+    The ticket comes from the runtime's permission handler, the operator
+    decides through the approvals API, and the real Codex or Grok consumer
+    writes the decision to its transport.
+    """
+    from types import SimpleNamespace
+    from nebula.v3.domain import HarnessSession
+    from nebula.v3.harnesses import CodexAppServerConnection, GrokAcpConnection
+
+    async def scenario():
+        app, store, runtime, _, turn, owner = await fixture(tmp_path, "read_fixture")
+        session = await store.get(HarnessSession, turn.harness_session_id)
+        (
+            await store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "execution_mode": "host",
+                        # Shell asks for Codex commands; skills ask for Grok's
+                        # session/request_permission.
+                        "native_capabilities": {"shell": True, "skills": True},
+                    }
+                },
+                expected_revision=session.revision,
+            )
+        )
+        tickets = []
+        writes = []
+
+        async def permission_handler(request):
+            # The gateway's permission handler makes this exact call.
+            ticket = await runtime._request_permission(
+                turn.id, request, adapter_handoff="transport_write"
+            )
+            tickets.append(ticket)
+            return ticket
+
+        async def respond(request_id, result):
+            writes.append(request_id)
+            if fail_write:
+                raise OSError("injected transport exit")
+
+        rpc = SimpleNamespace(respond=respond, events=asyncio.Queue())
+        if adapter == "codex":
+            connection = CodexAppServerConnection(
+                rpc, external_session_id="inert", permission_handler=permission_handler
+            )
+            events = connection._approval(
+                {"id": "original-request"},
+                "item/commandExecution/requestApproval",
+                {"command": "inert fixture; never executed"},
+            )
+        else:
+            connection = GrokAcpConnection(
+                rpc, external_session_id="inert", permission_handler=permission_handler
+            )
+            events = connection._permission(
+                {"id": "original-request"},
+                {"options": [{"optionId": "allow", "kind": "allow_once"}]},
+            )
+
+        async def consume():
+            return [event async for event in events]
+
+        consumer = asyncio.create_task(consume())
+        for _ in range(500):
+            if tickets:
+                break
+            await asyncio.sleep(0.01)
+        (ticket,) = tickets
+        assert ticket.approval_id is not None and ticket.handoff_receipt is not None
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": "Bearer fixture"},
+        ) as client:
+            response = await client.post(
+                f"/api/v1/approvals/{ticket.approval_id}/decision",
+                json={"decision": "approve"},
+            )
+            assert response.status_code == 200, response.text
+        assert response.json()["continuation"]["adapter_status"] == "pending"
+        if fail_write:
+            with pytest.raises(OSError, match="injected transport"):
+                await asyncio.wait_for(consumer, 10)
+        else:
+            await asyncio.wait_for(consumer, 10)
+        assert writes == ["original-request"]
+        saved = await store.get(Approval, ticket.approval_id)
+        assert saved.status.value == "approved"
+        assert saved.continuation.adapter_status == ("failed" if fail_write else "sent")
+        assert saved.continuation.adapter_detail
+        # A restart keeps the recorded handoff instead of calling it unknown.
+        await runtime.startup()
+        restarted = await store.get(Approval, ticket.approval_id)
+        assert (
+            restarted.continuation.adapter_status == saved.continuation.adapter_status
+        )
+        assert writes == ["original-request"]
+
+    (await scenario())
+
+
+@pytest.mark.parametrize("interrupted", ["receipt", "delivery"])
+async def test_delivery_writes_reread_an_approval_the_other_writer_changed(
+    tmp_path, monkeypatch, interrupted
+):
+    """The decision task and the adapter receipt both update a fulfilled
+    approval; whichever loses the revision race keeps the other's change."""
+    from nebula.v3.approval_delivery import record_adapter_handoff, record_delivery
+
+    async def scenario():
+        store, _, approval, turn, _, _ = await decide_native(tmp_path)
+        original = store.update
+        raced = []
+
+        async def racing_update(model, entity_id, changes, **kwargs):
+            if model is Approval and not raced:
+                raced.append(entity_id)
+                # The other writer lands between this write's read and update.
+                if interrupted == "receipt":
+                    await record_delivery(
+                        store, approval.id, turn.id, "delivered", "Concurrent record"
+                    )
+                else:
+                    await record_adapter_handoff(store, approval.id, turn.id, "sent")
+            return await original(model, entity_id, changes, **kwargs)
+
+        monkeypatch.setattr(store, "update", racing_update)
+        if interrupted == "receipt":
+            saved = await record_adapter_handoff(store, approval.id, turn.id, "sent")
+            assert saved.continuation.detail == "Concurrent record"
+        else:
+            saved = await record_delivery(
+                store, approval.id, turn.id, "failed", "The turn stopped."
+            )
+            assert saved.continuation.detail == "The turn stopped."
+        assert raced == [approval.id]
+        # The receipt is kept either way; it is never downgraded to unknown.
+        assert saved.continuation.status == "delivered"
+        assert saved.continuation.adapter_status == "sent"
+        assert (await store.get(Approval, approval.id)) == saved
+
+    (await scenario())
+
+
 async def test_receipt_storage_failure_after_write_never_resends_and_restart_is_uncertain(
     tmp_path,
 ):
@@ -272,7 +426,7 @@ async def test_receipt_storage_failure_after_write_never_resends_and_restart_is_
         async def respond(request_id, result):
             writes.append(request_id)
 
-        def unavailable(status):
+        async def unavailable(status):
             raise RuntimeError("injected receipt persistence failure")
 
         ticket = PermissionTicket(
