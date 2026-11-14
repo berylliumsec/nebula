@@ -536,19 +536,30 @@ class FederatedSearch:
                 )
             )
             if exclude_private_chats:
-                visible_chats = select(EntityRow.id).where(
-                    EntityRow.kind == "chat_sessions",
-                    not_temporary_chat_session(),
-                    func.coalesce(
-                        EntityRow.payload["metadata"]["control_assistant"].as_boolean(),
-                        False,
-                    ).is_(False),
-                )
-                statement = statement.where(
+                # Join the chat rather than test membership in a subquery: an
+                # execution worker scopes a joined mapped entity to its own
+                # project and refuses a project table seen only in a subquery.
+                # EntityRow.id is the primary key, so the join adds no rows.
+                statement = statement.outerjoin(
+                    EntityRow,
+                    and_(
+                        EntityRow.id == SearchDocumentRow.resource_id,
+                        EntityRow.kind == "chat_sessions",
+                    ),
+                ).where(
                     or_(
                         SearchDocumentRow.resource_kind
                         != ResourceKind.CONVERSATION.value,
-                        SearchDocumentRow.resource_id.in_(visible_chats),
+                        and_(
+                            EntityRow.id.is_not(None),
+                            not_temporary_chat_session(),
+                            func.coalesce(
+                                EntityRow.payload["metadata"][
+                                    "control_assistant"
+                                ].as_boolean(),
+                                False,
+                            ).is_(False),
+                        ),
                     )
                 )
             if scope == SearchScope.ACTIVE:

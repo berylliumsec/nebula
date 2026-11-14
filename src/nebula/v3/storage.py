@@ -1210,14 +1210,19 @@ class NebulaStore:
         kind exist; a first-page scan stops seeing newer rows past 1,000.
         """
 
-        statement = select(
-            exists().where(
+        # Select a mapped column, not a bare EXISTS: execution workers scope
+        # mapped reads to their project and refuse a table seen only in a
+        # subquery.
+        statement = (
+            select(EntityRow.id)
+            .where(
                 EntityRow.kind == model.entity_kind,
                 EntityRow.payload["metadata"][key].as_string() == value,
             )
+            .limit(1)
         )
         async with self.database.session() as session:
-            return bool((await session.scalar(statement)))
+            return (await session.scalar(statement)) is not None
 
     async def find_entity(
         self, model: type[EntityT], field: str, value: str
@@ -3161,8 +3166,11 @@ class NebulaStore:
         )
         if exclude_entity_ids:
             predicate = and_(predicate, EntityRow.id.not_in(exclude_entity_ids))
+        # A mapped column keeps this read valid in an execution worker, which
+        # refuses a Core EXISTS over a project table.
+        statement = select(EntityRow.id).where(predicate).limit(1)
         async with self.database.session() as session:
-            return bool((await session.scalar(select(exists().where(predicate)))))
+            return (await session.scalar(statement)) is not None
 
     async def provider_has_history_references(self, provider_id: str) -> bool:
         """Return whether durable chat or run history references a provider."""
