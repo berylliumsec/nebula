@@ -18,6 +18,7 @@ from nebula.v3.domain import Engagement, PairedDeviceSession, utc_now
 from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_coordination import RuntimeCoordination
 from nebula.v3.runtime_delivery import DurableHttpRunner, RuntimeDelivery
+from nebula.v3.runtime_ipc import ProjectRuntimeUnavailable, RuntimeIpcError
 from nebula.v3.runtime_vault import RuntimeVault
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_runtime_coordination import location as location
@@ -470,6 +471,85 @@ async def test_decisions_and_revocation_bypass_running_work(boundary, path):
     ).run_one(boundary.lease, lane="control")
     assert calls == ["/api/v1/" + path]
     assert await boundary.coordination.claim_next(boundary.lease, lane="work") is None
+
+
+@pytest.mark.parametrize("reason", ["starting", "closing", "idle"])
+async def test_project_read_without_a_ready_worker_is_a_retryable_503(
+    boundary, location, tmp_path, reason
+):
+    # An idle project's worker has retired, or its readmitted worker is still
+    # starting. Reads never admit one, so the viewer is told to read again.
+    async def upstream_for(_scope):
+        raise ProjectRuntimeUnavailable("The project has no live owner", reason=reason)
+
+    store = NebulaStore(Database(location, bootstrap=False, pool_settings=_POOL))
+    delivery = RuntimeDelivery(
+        RuntimeCoordination(store.database), RuntimeVault(tmp_path / "read-only")
+    )
+    app = create_api_worker(
+        store,
+        delivery,
+        operator_token=_TOKEN,
+        project_for=None,
+        upstream_for=upstream_for,
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://synthetic.test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/chat/sessions/synthetic/bookmarks",
+                headers={"Authorization": "Bearer " + _TOKEN},
+            )
+    finally:
+        await app.state.viewer_proxy.close()
+        await store.event_history.close()
+        await store.database.dispose()
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    body = response.json()
+    assert body["code"] == "project_runtime_unavailable"
+    assert body["reason"] == reason
+    assert body["retryable"] is True
+    assert "saved request" not in body["detail"]
+
+
+async def test_other_private_channel_failures_keep_their_nonretryable_body(
+    boundary, location, tmp_path
+):
+    async def upstream_for(_scope):
+        raise RuntimeIpcError(
+            "The runtime socket directory is not private; saved work remains queued"
+        )
+
+    store = NebulaStore(Database(location, bootstrap=False, pool_settings=_POOL))
+    delivery = RuntimeDelivery(
+        RuntimeCoordination(store.database), RuntimeVault(tmp_path / "read-only")
+    )
+    app = create_api_worker(
+        store,
+        delivery,
+        operator_token=_TOKEN,
+        project_for=None,
+        upstream_for=upstream_for,
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://synthetic.test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/chat/sessions/synthetic/bookmarks",
+                headers={"Authorization": "Bearer " + _TOKEN},
+            )
+    finally:
+        await app.state.viewer_proxy.close()
+        await store.event_history.close()
+        await store.database.dispose()
+    assert response.status_code == 503
+    assert "retry-after" not in response.headers
+    assert response.json() == {
+        "detail": "Runtime delivery is unavailable. The saved request has not been retried."
+    }
 
 
 def test_api_role_import_does_not_import_the_execution_factory_or_chat_runtime():

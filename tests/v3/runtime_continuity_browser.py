@@ -20,7 +20,7 @@ if __package__ in {None, ""}:
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn
 
-from nebula.v3.domain import ChatSession
+from nebula.v3.domain import ChatBookmark, ChatMessage, ChatSession
 from nebula.v3.release_store import ReleaseStore
 from tests.v3.runtime_continuity_bundle import (
     build_bundle,
@@ -166,6 +166,36 @@ async def serve(root: Path):
                     metadata={"initial_title_state": "operator"},
                 )
             )
+            if body.get("saved_history", False):
+                # Synthetic saved turns let a journey read the transcript and a
+                # bookmark without any provider traffic.
+                question = await fixture.store.create(
+                    ChatMessage(
+                        engagement_id="continuity-project",
+                        session_id="continuity-chat",
+                        sequence=1,
+                        role="user",
+                        content="Synthetic saved question before the project went idle.",
+                    )
+                )
+                await fixture.store.create(
+                    ChatMessage(
+                        engagement_id="continuity-project",
+                        session_id="continuity-chat",
+                        sequence=2,
+                        role="assistant",
+                        content="Synthetic saved answer before the project went idle.",
+                        provider_profile_id="continuity-provider",
+                        model="model-a",
+                    )
+                )
+                await fixture.store.create(
+                    ChatBookmark(
+                        engagement_id="continuity-project",
+                        session_id="continuity-chat",
+                        message_id=question.id,
+                    )
+                )
             scenario_receipt = None
             if scenario is not None:
                 scenario_receipt = await fixture.control(
