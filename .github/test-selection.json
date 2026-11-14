@@ -5,7 +5,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 304,
+    "python": 310,
     "frontend": 116,
     "native": 0,
     "playwright": 6
@@ -73,5 +73,5 @@
     "entry:project-view-lease/model-webkit-390"
   ],
   "checks": [],
-  "change_digest": "92e8e7d338e8b1c65803fbf8c4727a4ee4c0b7493056b2d123a401b0a22ae4f3"
+  "change_digest": "457bbe646f90b71102e135d20d5f2ebfd44d7da19f7b6db096779be31d52ea61"
 }
