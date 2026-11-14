@@ -1,22 +1,25 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Fixes archived projects showing as active in the terminal (the picker filtered by metadata.archived_at, a chat marker Core never sets on projects; the rail and startup restore did not filter) and adds the GUI's project management: create with client name, Core-host folder and Host/Docker mode; Archived projects with restore and permanent delete (If-Match); /project rename, relink, execution mode and command policy (whole-policy write, Host confirmation, degrades when Core has no command runtime), network scope (whole-scope write, confirmations for wide access) and archive. Selected: the new projects unit contracts, shell and TUI suites (picker and rail), the client wheel allowlist (new module), a real paired TLS LAN Core PTY journey (create, rename, policy unavailability, scope, archive, restore, delete), the product-knowledge search and Chroma digest sync, the settings-catalog terminal test, and existing real-Core cases for the project picker (child project) and remembered-chat restore.",
-  "exclusions": "No full suites. No native or Playwright changes: only the separate Python terminal client, docs and settings catalog keywords changed; browser viewport projects do not exercise this terminal workflow and the catalog change is covered by its Vitest file. tests/test_terminal_pty.py and other tests/v3/test_terminal_core.py cases are not selected: 6 fail identically on pristine origin/main locally and test_paired_full_screen_tui_shows_progress_and_saved_answer is timing-racy on main; none touch project management. Editing the execution policy needs Core's command runtime, absent from the fixture Core; it is covered by unit cases and the scratch supervisor Core evidence in the PR. No live provider calls or Core deployment.",
+  "reason": "Stacked on #1050 (its commit is included until #1050 merges). Adds the GUI's project tool follow-up (after-tool assistant) and Docker-mode VPN route to the terminal /project menu: suggest-next-steps and take-notes toggles, analysis runtime from enabled project providers/harnesses with models limited to the provider allowlist or harness models, cloud runtimes only when they permit sensitive data and with explicit cloud confirmation, whole-config PUT with the engagement revision and readback; VPN route via the whole-policy PUT, network forced on with a VPN, cleared when network is turned off, refused in Host mode. Also carries #1050 (archived projects fix, project create/rename/relink/policy/scope/archive/restore/delete). Selected: both projects unit suites, shell and TUI suites, the client wheel allowlist, both real paired TLS LAN Core PTY journeys (/project management and tool follow-up), both product-knowledge tests, the settings-catalog terminal test, and the existing project-picker and remembered-chat real-Core cases.",
+  "exclusions": "No full suites. No native or Playwright changes: only the separate Python terminal client, docs and settings catalog keywords changed; browser viewport projects do not exercise this terminal workflow and the catalog change is covered by its Vitest file. The VPN route needs Core's automation runtime, which the fixture Core lacks (automation-policy returns 501), so it is covered by MockTransport unit cases. tests/test_terminal_pty.py and other tests/v3/test_terminal_core.py cases are not selected: 6 fail identically on pristine origin/main locally and test_paired_full_screen_tui_shows_progress_and_saved_answer races Core acceptance against an 80 ms render delay; none touch project settings. No live provider calls or Core deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 90,
+    "python": 98,
     "frontend": 1,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/test_terminal_project_settings.py",
     "tests/test_terminal_projects.py",
     "tests/test_terminal_shell.py",
     "tests/test_terminal_tui.py",
     "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies",
     "tests/v3/test_terminal_projects_core.py",
+    "tests/v3/test_terminal_project_settings_core.py",
     "tests/v3/test_terminal_projects_knowledge.py",
+    "tests/v3/test_terminal_project_settings_knowledge.py",
     "tests/v3/test_terminal_core.py::test_paired_tui_finds_and_opens_child_project",
     "tests/v3/test_terminal_core.py::test_paired_tui_recovers_missing_remembered_chat"
   ],
@@ -26,5 +29,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "990f4e0230b36d494b307dbb9ff3d51ca1c54c0956d6c6f4bc88910dba45968a"
+  "change_digest": "5e1452b8d8c44b39831401b75b526264244c8c62ed0b3b8ba2268165e0ea237c"
 }

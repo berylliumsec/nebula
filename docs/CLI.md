@@ -151,6 +151,18 @@ and always-loaded tools), or archives it. Host mode, all destinations and bypass
 Nebula permissions each ask for confirmation, and every change is read back from
 Core. A remembered archived project is not reopened at startup.
 
+The execution policy menu also sets the project's **VPN route** in Docker mode:
+direct, scope-filtered egress or a saved OpenVPN profile whose credentials are
+available. Choosing a VPN turns network access on, as the GUI's "Use for this
+project" does, and turning network access off clears the route; Host mode does
+not use container VPN routes. Upload or remove VPN profiles in Settings ›
+Automation runtime. `/project followup` edits **Tool follow-up** (the after-tool
+assistant): suggest next steps, take notes, and the analysis runtime and model
+from enabled providers' allowed models or harness models. A cloud runtime must
+permit sensitive data and needs an explicit confirmation that redacted tool
+output may be sent to it. Each change saves the whole setting with the project's
+revision and is read back from Core.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -161,7 +173,7 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | Command | Workflow |
 | --- | --- |
 | `/core`, `/projects`, `/chats`, `/new`, `/butler` | Switch paired Cores, select, create or restore a project, resume a main agent chat, or open Butler |
-| `/project` | Rename, relink, set execution mode, command policy and network scope, or archive the selected project |
+| `/project` | Rename, relink, set execution mode, command policy, VPN route, network scope and tool follow-up, or archive the selected project |
 | `/chat` | Rename, pin, flag, archive, restore, branch, rewind, edit and resend, retry, finish an unfinished answer, export visible text, delete, or act on several conversations (`/chat bulk`) |
 | `/search`, `/bookmark` | Search saved messages in this conversation or project, optionally bookmarked only, and open a match; bookmark a message |
 | `/side` | Open, start, leave or close a side chat of the current conversation |
