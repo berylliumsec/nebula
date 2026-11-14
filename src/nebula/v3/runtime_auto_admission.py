@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -27,6 +28,12 @@ from .runtime_coordination import CoordinationConflict, project_worker_commands
 from .setup import bootstrap_scratch_project
 
 _RECOVERY_ACTOR = "runtime-auto-recovery"
+# A failed project admission is retried after these delays, and at once when
+# the host or memory policy changes. After _ADMISSION_PERSISTENT failures in a
+# row the diagnostic says the failure is not transient.
+_ADMISSION_BACKOFF_SECONDS = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
+_ADMISSION_PERSISTENT = 5
+_ATTACHABLE = ("reserved", "starting", "ready")
 _RECOVERY_WINDOW_MS = 10 * 60_000
 _RECOVERY_LIMIT = 3
 _RECOVERY_RETRY_MS = 30_000
@@ -38,13 +45,22 @@ REFUSED_RECOVERY_RETRY_MS = 30_000
 REFUSED_RECOVERY_MAX_RETRY_MS = 600_000
 
 
+@dataclass(frozen=True)
+class _AdmissionRetry:
+    signature: tuple[int, int | None]
+    failures: int
+    retry_at: float
+
+
 class RuntimeAutoAdmission:
     def __init__(self, supervisor, *, default_version: str):
         self.supervisor = supervisor
         self.default_version = default_version
         self.task = None
         self._pending: dict[str, str] = {}
+        # Cold API recovery only; projects use _admission_retry.
         self._blocked: dict[str, tuple[int, int | None]] = {}
+        self._admission_retry: dict[str, _AdmissionRetry] = {}
         self._retirement_cursor: str | None = None
         self._legacy_chat_cursor: tuple[str, int, str] | None = None
         self._legacy_chat_scan_complete = False
@@ -183,27 +199,37 @@ class RuntimeAutoAdmission:
                 active_work = project_worker_commands(
                     ProjectOwnershipRow.project_id, ("queued", "running")
                 )
-                demands = list(
-                    await session.execute(
-                        select(ProjectOwnershipRow, queued_work)
-                        # A verified quiescence clears the owner while retaining
-                        # its fencing history. Reopening may claim the next fence;
-                        # expired or uncertain owners still have a runtime ID.
-                        .where(
-                            ProjectOwnershipRow.runtime_id.is_(None),
-                            # A held project refuses the grant; preparing a
-                            # worker for it would only leave one unassigned.
-                            ProjectOwnershipRow.retirement_requested.is_(False),
-                            or_(
-                                open_chat,
-                                pending_chat_start,
-                                legacy_chat_start,
-                                queued_work,
-                            ),
-                        )
-                        .limit(16)
+                now = asyncio.get_running_loop().time()
+                # Projects waiting out a retry delay must not fill the batch
+                # and starve projects that could be admitted now.
+                waiting = [
+                    project_id
+                    for project_id, retry in self._admission_retry.items()
+                    if retry.signature == signature and now < retry.retry_at
+                ]
+                demand_query = (
+                    select(ProjectOwnershipRow, queued_work)
+                    # A verified quiescence clears the owner while retaining
+                    # its fencing history. Reopening may claim the next fence;
+                    # expired or uncertain owners still have a runtime ID.
+                    .where(
+                        ProjectOwnershipRow.runtime_id.is_(None),
+                        # A held project refuses the grant; preparing a
+                        # worker for it would only leave one unassigned.
+                        ProjectOwnershipRow.retirement_requested.is_(False),
+                        or_(
+                            open_chat,
+                            pending_chat_start,
+                            legacy_chat_start,
+                            queued_work,
+                        ),
                     )
                 )
+                if waiting:
+                    demand_query = demand_query.where(
+                        ProjectOwnershipRow.project_id.not_in(waiting)
+                    )
+                demands = list(await session.execute(demand_query.limit(16)))
                 idle_query = select(
                     ProjectOwnershipRow.project_id,
                     ProjectOwnershipRow.runtime_id,
@@ -289,8 +315,14 @@ class RuntimeAutoAdmission:
                                     "kind": "project",
                                 },
                             )
+            await self._forget_settled_pending()
             for demand, has_project_work in demands:
-                if self._blocked.get(demand.project_id) == signature:
+                retry = self._admission_retry.get(demand.project_id)
+                if (
+                    retry is not None
+                    and retry.signature == signature
+                    and asyncio.get_running_loop().time() < retry.retry_at
+                ):
                     continue
                 try:
                     project = await supervisor.store.get(Engagement, demand.project_id)
@@ -342,16 +374,59 @@ class RuntimeAutoAdmission:
                         self._pending[project.id] = runtime_id
                     await supervisor.attach_execution(project.id, runtime_id)
                     self._pending.pop(project.id, None)
-                    self._blocked.pop(project.id, None)
+                    self._admission_retry.pop(project.id, None)
                 except Exception as error:
-                    self._blocked[demand.project_id] = signature
+                    failures = (retry.failures if retry is not None else 0) + 1
+                    delay = _ADMISSION_BACKOFF_SECONDS[
+                        min(failures, len(_ADMISSION_BACKOFF_SECONDS)) - 1
+                    ]
+                    self._admission_retry[demand.project_id] = _AdmissionRetry(
+                        signature,
+                        failures,
+                        asyncio.get_running_loop().time() + delay,
+                    )
                     record_caught_exception(
                         "runtime",
                         "runtime.project_admission.waiting",
-                        "This project's first work remains queued until admission succeeds.",
+                        "This project's saved work stays queued; Core retries starting its worker automatically."
+                        if failures < _ADMISSION_PERSISTENT
+                        else "This project's worker keeps failing to start, so its saved work stays queued. Check the memory budget and runtime status; Core keeps retrying every minute.",
                         error,
                         stage="admission",
+                        metadata={
+                            "entity_id": demand.project_id,
+                            "kind": "project",
+                            "attempt": failures,
+                        },
                     )
+
+    async def _forget_settled_pending(self) -> None:
+        """Drop a prepared worker that can no longer start its project.
+
+        An attach can time out after the worker already took the project, and
+        that worker can later retire. Reusing its runtime ID would retry a dead
+        process forever. Only SQL state settles this, never an IPC error: a
+        live worker that is still unassigned stays reserved for its project.
+        """
+        if not self._pending:
+            return
+        async with self.supervisor.coordinator.database.session() as session:
+            for project_id, runtime_id in list(self._pending.items()):
+                process = await session.get(RuntimeProcessRow, runtime_id)
+                owners = set(
+                    await session.scalars(
+                        select(ProjectOwnershipRow.project_id).where(
+                            ProjectOwnershipRow.runtime_id == runtime_id
+                        )
+                    )
+                )
+                if project_id in owners:
+                    # The timed-out attach succeeded; the project is owned.
+                    self._pending.pop(project_id, None)
+                    self._admission_retry.pop(project_id, None)
+                elif process is None or process.state not in _ATTACHABLE or owners:
+                    # Retired, failed or serving another project: prepare anew.
+                    self._pending.pop(project_id, None)
 
     @staticmethod
     def _recovery_operation_id(owner: dict, stage: str) -> str:
