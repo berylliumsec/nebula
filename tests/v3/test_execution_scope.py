@@ -15,6 +15,7 @@ from nebula.v3.database import (
     SearchDocumentRow,
 )
 from nebula.v3.database_pool import PoolSettings
+from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.domain import (
     ChatGoal,
     ChatMessage,
@@ -101,6 +102,7 @@ async def test_existing_read_helpers_only_see_owned_projects(execution):
 
 async def test_execution_worker_can_start_chat_under_lease_and_retirement_hold(execution):
     control, runtime, coordinator, lease = execution
+    retirement = DeploymentCoordinator(control.database)
     service = ChatGoalService(runtime)
     body = GoalConversationCreate(
         engagement_id="mine",
@@ -114,11 +116,11 @@ async def test_execution_worker_can_start_chat_under_lease_and_retirement_hold(e
 
     assert (await control.get(ChatSession, created.session.id)).engagement_id == "mine"
     assert (await control.get(ChatGoal, created.goal.id)).session_id == created.session.id
-    assert await coordinator.request_project_retirement(lease) is False
+    assert await retirement.request_project_retirement(lease) is False
 
     await control.create(Engagement(id="retiring", name="Retiring"))
     retiring_lease = await coordinator.claim_project("retiring", "execution")
-    assert await coordinator.request_project_retirement(retiring_lease) is True
+    assert await retirement.request_project_retirement(retiring_lease) is True
     retiring_body = body.model_copy(update={"engagement_id": "retiring"})
     with execution_context(retiring_lease):
         with pytest.raises(ConflictError, match="worker is closing"):
