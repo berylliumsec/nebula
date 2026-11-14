@@ -726,7 +726,12 @@ class RuntimeProcessHost:
                 raise
 
     async def reconcile_idle_project_retirements(self, *, limit: int = 8) -> list[str]:
-        """Finish bounded idle-project retirements interrupted after quiescence."""
+        """Finish bounded retirements of quiesced workers.
+
+        Covers idle-project retirements interrupted after quiescence and
+        workers a host shutdown quiesced before it was aborted. Callers run
+        this only while no host shutdown holds admission.
+        """
         if not 1 <= limit <= 32:
             raise ValueError("idle-project retirement limit is outside its bound")
         async with self.coordinator.database.session() as session:
@@ -740,8 +745,9 @@ class RuntimeProcessHost:
                     )
                     .where(
                         DeploymentReceiptRow.action == "project.quiesced",
-                        DeploymentReceiptRow.result["reason"].as_string()
-                        == "idle_chat_project",
+                        DeploymentReceiptRow.result["reason"]
+                        .as_string()
+                        .in_(("idle_chat_project", "host_shutdown")),
                         RuntimeProcessRow.state != "retired",
                         ~select(ProjectOwnershipRow.project_id)
                         .where(

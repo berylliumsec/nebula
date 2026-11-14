@@ -1093,6 +1093,15 @@ class DeploymentCoordinator:
             if project_retirement:
                 owner.retirement_requested = False
                 owner.admission_requested = False
+            # The worker's application is closed for good: an execution process
+            # attaches once. Draining keeps any later claim off it and stops it
+            # counting as an unassigned process until it is retired.
+            process = await session.get(
+                RuntimeProcessRow, lease.runtime_id, with_for_update=True
+            )
+            if process is not None and process.state == "ready":
+                process.state = "draining"
+                process.updated_at_ms = await self.coordination._clock_ms(session)
             await self._receipt(
                 session,
                 "project.quiesced",

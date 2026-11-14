@@ -1,23 +1,26 @@
 {
   "reviewed_by": "Claude",
-  "reason": "chat_catchup.source_message is awaited again: #939 made Database.session() yield an AsyncSession but left this helper sync, so the catch-up card (once a failed, interrupted or cancelled turn is newer than the device cursor) and GET /chat/sessions/{id}/turns/{turn_id}/summary raised AttributeError and returned 500. test_chat_catchup.py covers the catch-up projection with failures and outputs plus a new summary-route test for both the final-message and prompt-fallback branches; test_chat_polling_cost's catch-up test checks only failures are linked; the Butler inspection projections include turn_summary. Three of these failed on main from this defect.",
-  "exclusions": "No UI, native or frontend code changed. Playwright area catch-up matches chat_catchup.py but is excluded: its fixture (tests/v3/workspace_recovery_fixture.py) has no chat turn that failed after a device read cursor, and the spec mocks a 503 and then recovers on the no-failure path that already worked on main, so it does not reach the changed branch. That branch is covered by the selected Python route tests, and the real-Core journey was checked on scratch Postgres Cores (main: catch-up 500 and turn summary 500 for both a failed and a completed turn; this branch: catch-up 200 with the failure linked to its prompt, summary 200 linking the prompt and the final answer).",
+  "reason": "A host shutdown that quiesced some projects and then aborted left their workers alive, closed and unowned with process rows still 'ready'. Auto-admission then skipped every new demand (any unowned execution process blocks it), and a stale pending entry re-claimed a released project onto its closed worker (claim committed before the worker refused the attach), so the heartbeat kept that project owned by a worker that could never run it. Releasing a quiesced project now drains its worker's process row in the same transaction, attach_execution claims only for an unassigned worker and refuses a bound worker that does not hold the current grant, the retirement reconciler also retires workers quiesced by an aborted host shutdown, and auto-admission drops a pending process that is no longer reserved, starting or ready. Selected suites cover quiescence with an aborted shutdown, the retirement reconciler, deployment status and lifecycle, the execution worker, automatic recovery, Work batch idle retirement and the recovery attach path.",
+  "exclusions": "Process-level and LAN-fixture suites (test_runtime_reconciliation, test_runtime_integration_credentials, test_runtime_host_settings, test_runtime_host_operator, test_shutdown_readmission, most of test_recovery_reconciliation) fail locally with 24 identical cases on pristine main and on this branch, so they are not selected. No UI, native or Playwright cases: no frontend code changed. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 20,
+    "python": 214,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_catchup.py",
-    "tests/v3/test_chat_polling_cost.py::test_catch_up_reads_headers_and_links_only_failures",
-    "tests/v3/test_butler_inspection.py::test_butler_inspection_uses_owned_core_conversation_projections"
+    "tests/v3/test_runtime_quiescence.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_runtime_work_batches.py",
+    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "da99e1f86c77126ce8431f6633da219c9004ccd821d54ea325d58de4b2377670"
+  "change_digest": "9cd310ac5efec419ee89cc6ad48ebdc6f26905577cda95bae3f9e65037514541"
 }
