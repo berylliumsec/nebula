@@ -10,6 +10,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from functools import partial
 import json
 from pathlib import Path
 import re
@@ -23,7 +24,7 @@ from .authentication_api import AuthenticationApi
 from .deployments import DeploymentCoordinator
 from .domain import ChatTurn
 from .runtime_chat_stream import RuntimeChatJournal
-from .runtime_coordination import CoordinationConflict
+from .runtime_coordination import CoordinationConflict, ProjectRetiring
 from .runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, RuntimeDelivery
 from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
@@ -56,6 +57,26 @@ class _ViewerResponse(StreamingResponse):
 
 _ApiStatic = RuntimeStatic
 
+# A retiring project worker refuses new commands until it has released the
+# project, normally within a second and bounded by its 30 s quiesce call. Waiting
+# here admits a fresh worker for the request instead of returning a 409.
+RETIREMENT_WAIT_SECONDS = 35.0
+
+
+async def _accept_after_retirement(accept: Callable[[], Awaitable], *, wait: float):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait
+    delay = 0.1
+    while True:
+        try:
+            return await accept()
+        except ProjectRetiring:
+            # diagnostic-expected: retirement is a short, expected hold; the same idempotent request is resubmitted until the bound, then the 409 is returned.
+            if loop.time() + delay > deadline:
+                raise
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 1.0)
+
 
 def create_api_worker(
     store: NebulaStore,
@@ -71,6 +92,7 @@ def create_api_worker(
     maximum_control_views: int = 8,
     command_start_timeout: float = 15,
     poll_interval: float = 0.25,
+    retirement_wait: float = RETIREMENT_WAIT_SECONDS,
     allow_insecure_device_pairing: bool = False,
     global_api=None,
     work_batches=None,
@@ -84,7 +106,11 @@ def create_api_worker(
         raise ValueError(
             "API workers require authentication and bounded viewer capacity"
         )
-    if not 0.01 <= poll_interval <= 2 or not 0.01 <= command_start_timeout <= 60:
+    if (
+        not 0.01 <= poll_interval <= 2
+        or not 0.01 <= command_start_timeout <= 60
+        or not 0 <= retirement_wait <= 60
+    ):
         raise ValueError("API delivery polling is outside its configured bounds")
     if store.database._bootstrap:
         raise ValueError(
@@ -431,7 +457,8 @@ def create_api_worker(
                 requested = False
             if requested and chat_acceptance_for is not None:
                 chat_acceptance = await chat_acceptance_for(project_id)
-        receipt = await delivery.accept(
+        accept = partial(
+            delivery.accept,
             intent,
             project_id=project_id,
             actor_id=actor,
@@ -441,7 +468,8 @@ def create_api_worker(
             chat_resume=chat_resume,
             chat_start=chat_start,
         )
-        del body, intent
+        receipt = await _accept_after_retirement(accept, wait=retirement_wait)
+        del body, intent, accept
         return await response_view(
             actor,
             receipt.command_id,

@@ -53,6 +53,7 @@ from .runtime_coordination import (
     ProjectLease,
     RuntimeCoordination,
     ShutdownBlocked,
+    project_worker_commands,
 )
 from .process_identity import same_process
 
@@ -940,9 +941,9 @@ class DeploymentCoordinator:
     async def request_project_retirement(self, lease: ProjectLease) -> bool:
         """Fence one idle project's admission before its controller quiesces.
 
-        A false result means an open chat or a pending chat start still needs the
-        owner. Other unresolved project work raises a blocker and leaves the
-        ownership grant unchanged.
+        A false result means an open chat, a pending chat start or queued
+        project work still needs the owner. Other unresolved project work raises
+        a blocker and leaves the ownership grant unchanged.
         """
         async with self.coordination._write() as session:
             owner = await session.get(
@@ -964,6 +965,13 @@ class DeploymentCoordinator:
                     return False
                 if await self._project_has_pending_chat_start(
                     session, lease.project_id
+                ):
+                    return False
+                # Queued project work (a rename or delete) would be stranded
+                # by releasing its only worker. Submit and this check share
+                # the ownership row lock, so none can be queued after the hold.
+                if await session.scalar(
+                    select(project_worker_commands(lease.project_id))
                 ):
                     return False
                 host = await session.get(DeploymentHostRow, "host")

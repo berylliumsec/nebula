@@ -1224,3 +1224,256 @@ async def test_legacy_staged_invalid_domain_fails_and_next_batch_advances(batch)
             await session.get(RuntimeCommandRow, unknown.command_id)
         ).state == "uncertain"
     assert await accepted(batch, "POST", body, key="legacy-invalid") == failed
+
+
+def _project_admission(batch, *, prepared, leases, retired):
+    async def prepare(_version):
+        runtime_id = f"project-command-worker-{len(prepared)}"
+        prepared.append(runtime_id)
+        await runtime(batch, runtime_id)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        leases[project_id] = await batch.coordination.claim_project(
+            project_id, runtime_id
+        )
+        return leases[project_id]
+
+    async def retire_idle_project(project_id):
+        retired.append(project_id)
+        return True
+
+    async def reconcile_idle_project_retirements():
+        return []
+
+    return RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+            host=SimpleNamespace(
+                # Also runs the legacy chat-start scan over these saved rows.
+                data_root=batch.host.data_root,
+                retire_idle_project=retire_idle_project,
+                reconcile_idle_project_retirements=reconcile_idle_project_retirements,
+            ),
+        ),
+        default_version="supported",
+    )
+
+
+def _project_ingress(batch, tmp_path, **options):
+    routing = RuntimeRouting(
+        batch.coordination, tmp_path / "credentials", request_admission=True
+    )
+
+    async def upstream(_scope):
+        pytest.fail("A saved project command must wait for its execution owner")
+
+    app = create_api_worker(
+        batch.store,
+        batch.delivery,
+        operator_token=TOKEN,
+        project_for=routing.project_for,
+        upstream_for=upstream,
+        command_start_timeout=0.02,
+        poll_interval=0.01,
+        dispose_database=False,
+        **options,
+    )
+    batch.apps.append(app)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://synthetic.test"
+    )
+    batch.clients.append(client)
+    return client
+
+
+async def test_project_edit_and_archived_delete_without_a_chat_admit_their_workers(
+    batch, tmp_path
+):
+    # Neither project has a chat. "two" is archived, as deletion requires;
+    # "parent" is archived too but nothing is asked of it.
+    for project_id in ("two", "parent"):
+        current = await batch.store.get(Engagement, project_id)
+        await batch.store.update(
+            Engagement,
+            project_id,
+            {"status": "archived"},
+            expected_revision=current.revision,
+        )
+    async with batch.database.session() as session:
+        # A known archived project with nothing queued keeps no worker.
+        session.add(
+            ProjectOwnershipRow(
+                project_id="parent",
+                runtime_id=None,
+                fencing_token=0,
+                lease_expires_at_ms=0,
+                command_sequence=0,
+                admission_requested=False,
+            )
+        )
+        (await session.get(DeploymentHostRow, "host")).api_runtime_id = "api"
+    prepared, leases, retired = [], {}, []
+    automatic = _project_admission(
+        batch, prepared=prepared, leases=leases, retired=retired
+    )
+    await automatic.reconcile()
+    assert prepared == [] and retired == []
+
+    client = _project_ingress(batch, tmp_path)
+    one = await batch.store.get(Engagement, "one")
+    rename = await client.patch(
+        "/api/v1/engagements/one",
+        headers={**AUTH, "Idempotency-Key": "rename-chatless-project"},
+        json={"changes": {"name": "Renamed"}, "expected_revision": one.revision},
+    )
+    two = await batch.store.get(Engagement, "two")
+    delete = await client.delete(
+        "/api/v1/engagements/two",
+        headers={
+            **AUTH,
+            "Idempotency-Key": "delete-archived-project",
+            "If-Match": str(two.revision),
+        },
+    )
+    assert (rename.status_code, delete.status_code) == (202, 202), (
+        rename.text,
+        delete.text,
+    )
+    saved = {
+        "one": rename.headers["x-nebula-command-id"],
+        "two": delete.headers["x-nebula-command-id"],
+    }
+    async with batch.database.session() as session:
+        for project_id, command_id in saved.items():
+            row = await session.get(RuntimeCommandRow, command_id)
+            assert (row.project_id, row.chat_start, row.state) == (
+                project_id,
+                False,
+                "queued",
+            )
+
+    # The saved commands alone admit exactly their projects, archived or not.
+    await automatic.reconcile()
+    assert len(prepared) == 2 and set(leases) == {"one", "two"}
+    async with batch.database.session() as session:
+        assert (await session.get(ProjectOwnershipRow, "parent")).runtime_id is None
+    claimed = {
+        project_id: await batch.coordination.claim_next(lease)
+        for project_id, lease in leases.items()
+    }
+    assert {
+        project_id: command.receipt.command_id
+        for project_id, command in claimed.items()
+    } == saved
+
+    # A running project command keeps its worker; finishing it makes it idle.
+    await automatic.reconcile()
+    assert retired == [] and len(prepared) == 2
+    for project_id, command in claimed.items():
+        await batch.coordination.finish_command(
+            leases[project_id],
+            command.receipt.command_id,
+            result={"http_status": 200},
+        )
+    await automatic.reconcile()
+    assert sorted(retired) == ["one", "two"] and len(prepared) == 2
+
+
+async def test_retirement_does_not_strand_queued_project_work(batch):
+    await runtime(batch, "chatless-worker")
+    lease = await batch.coordination.claim_project("one", "chatless-worker")
+    receipt = await batch.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="queued-project-edit",
+        name="http.invoke/v1",
+        payload={"format": 1, "request_reference": "synthetic-edit"},
+    )
+    # The project has no chat, but releasing its only worker would strand
+    # the saved edit: retirement declines until the edit has run.
+    assert await batch.coordinator.request_project_retirement(lease) is False
+    async with batch.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert (owner.runtime_id, owner.retirement_requested) == (
+            "chatless-worker",
+            False,
+        )
+    claimed = await batch.coordination.claim_next(lease)
+    assert claimed is not None and claimed.receipt.command_id == receipt.command_id
+    await batch.coordination.finish_command(
+        lease, receipt.command_id, result={"http_status": 200}
+    )
+    assert await batch.coordinator.request_project_retirement(lease) is True
+    # Barriers are committed by the host and never need the worker.
+    await runtime(batch, "barrier-worker")
+    other = await batch.coordination.claim_project("two", "barrier-worker")
+    async with batch.database.session() as session:
+        session.add(
+            RuntimeCommandRow(
+                id="synthetic-barrier",
+                project_id="two",
+                actor_id="work-batch:synthetic",
+                idempotency_key="two",
+                sequence=1,
+                name=WORK_BATCH_BARRIER,
+                lane="work",
+                payload={"format": 1, "batch_id": "synthetic"},
+                payload_hash="0" * 64,
+                accepted_at_ms=batch.clock[0],
+                state="queued",
+            )
+        )
+    assert await batch.coordinator.request_project_retirement(other) is True
+
+
+async def test_request_waits_out_a_retiring_project_worker(batch, tmp_path):
+    await runtime(batch, "retiring-worker")
+    await batch.coordination.claim_project("one", "retiring-worker")
+
+    async def hold(value):
+        async with batch.database.session() as session:
+            (await session.get(ProjectOwnershipRow, "one")).retirement_requested = value
+
+    await hold(True)
+    one = await batch.store.get(Engagement, "one")
+
+    async def release_soon():
+        await asyncio.sleep(0.3)
+        await hold(False)
+
+    waiting = _project_ingress(batch, tmp_path, retirement_wait=10)
+    released = asyncio.create_task(release_soon())
+    response = await waiting.patch(
+        "/api/v1/engagements/one",
+        headers={**AUTH, "Idempotency-Key": "edit-during-retirement"},
+        json={
+            "changes": {"name": "After retirement"},
+            "expected_revision": one.revision,
+        },
+    )
+    await released
+    # Accepted once the hold cleared, instead of a 409 to retry by hand.
+    assert response.status_code == 202, response.text
+
+    await hold(True)
+    bounded = _project_ingress(batch, tmp_path, retirement_wait=0.3)
+    refused = await bounded.patch(
+        "/api/v1/engagements/one",
+        headers={**AUTH, "Idempotency-Key": "edit-while-still-retiring"},
+        json={"changes": {"name": "Still retiring"}, "expected_revision": one.revision},
+    )
+    assert refused.status_code == 409
+    assert "worker is closing" in refused.json()["detail"]
+    async with batch.database.session() as session:
+        keys = set(
+            await session.scalars(
+                select(RuntimeCommandRow.idempotency_key).where(
+                    RuntimeCommandRow.project_id == "one"
+                )
+            )
+        )
+    assert keys == {"edit-during-retirement"}
