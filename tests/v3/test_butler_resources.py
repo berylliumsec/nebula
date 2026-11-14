@@ -408,8 +408,9 @@ async def test_ordinary_openrouter_completion_checks_credits_after_exchange_comm
         )
     )
     observed: list[tuple[str, int]] = []
+    checks: list[asyncio.Task[None]] = []
 
-    async def check_after_commit(provider_id: str) -> None:
+    async def count_answers(provider_id: str) -> None:
         messages = await store.list_session_entities(ChatMessage, "session")
         observed.append(
             (
@@ -417,6 +418,12 @@ async def test_ordinary_openrouter_completion_checks_credits_after_exchange_comm
                 sum(message.role == ChatRole.ASSISTANT for message in messages),
             )
         )
+
+    def check_after_commit(provider_id: str) -> None:
+        # The observer is synchronous, as Core's credit observer is: it only
+        # hands the check to the loop. The exchange's write must be over.
+        assert store.database.task_session() is None
+        checks.append(asyncio.ensure_future(count_answers(provider_id)))
 
     chat = ChatService(
         store,
@@ -438,6 +445,7 @@ async def test_ordinary_openrouter_completion_checks_credits_after_exchange_comm
     assert prepared.tools_enabled is False
     completion = await chat.complete(prepared)
     assert completion.usage.total_tokens == 4
+    (await asyncio.gather(*checks))
     assert observed == [(profile.id, 1)]
 
 
@@ -474,11 +482,13 @@ async def test_native_mission_attempt_usage_signals_account_check_after_commit(
         )
     )
     observed = []
-    store.on_provider_usage_change(
-        lambda profile_id: observed.append(
-            (profile_id, store.get(AgentAttempt, attempt.id).tokens_used)
-        )
-    )
+
+    async def observe(profile_id: str) -> None:
+        # Storage awaits its listeners after the write commits.
+        saved = await store.get(AgentAttempt, attempt.id)
+        observed.append((profile_id, saved.tokens_used))
+
+    store.on_provider_usage_change(observe)
     updated = await store.update(AgentAttempt, attempt.id, {"tokens_used": 4})
     assert updated.tokens_used == 4
     assert observed == [("provider", 4)]
