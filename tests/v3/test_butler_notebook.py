@@ -7,12 +7,15 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import gc
 import json
 from types import SimpleNamespace
+import warnings
 
 import pytest
 
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.automation_runtime import AutomationRuntimeManager
 from nebula.v3.butler_capabilities import ButlerCapabilities
 from nebula.v3.domain import (
     AutomationProjectPolicy,
@@ -23,7 +26,7 @@ from nebula.v3.domain import (
 from nebula.v3.notebook_mcp import NotebookMcpTools
 from nebula.v3 import notebooks as notebooks_module
 from nebula.v3.notebooks import NotebookService
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.tools import CapabilityInputError, GuidedToolError
 
 
@@ -744,6 +747,147 @@ async def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp
             await invoke("run", {"run_id": foreign_run.id})
 
     (await scenario())
+
+
+async def _settings_fixture(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    root = tmp_path / "selected"
+    root.mkdir()
+    selected = await store.create(Engagement(name="Selected", workspace_path=str(root)))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+
+    async def no_execution(_launch):
+        raise AssertionError("notebook settings must not start a command session")
+
+    runtime = AutomationRuntimeManager(
+        store=store,
+        artifact_store=artifacts,
+        data_root=tmp_path / "runtime",
+        workspace_resolver=lambda _: root,
+        runtime_image="registry.invalid/nebula-automation@sha256:" + "a" * 64,
+        session_factory=no_execution,
+    )
+    notebooks = NotebookService(
+        store=store,
+        workspace_resolver=lambda _: root,
+        automation_runtime=runtime,
+        data_root=tmp_path / "runtime",
+    )
+    capabilities = await ButlerCapabilities.create(
+        store, artifacts, selected.id, notebooks=notebooks
+    )
+
+    async def set_notebook(arguments):
+        return await capabilities.invoke(
+            {"operation": "nebula.settings.set_notebook", "arguments": arguments},
+            change=True,
+        )
+
+    return store, selected, runtime, set_notebook
+
+
+def _unawaited(caught):
+    return [
+        str(item.message)
+        for item in caught
+        if issubclass(item.category, RuntimeWarning)
+        and "never awaited" in str(item.message)
+    ]
+
+
+async def test_butler_notebook_settings_save_and_read_back_from_core(tmp_path):
+    store, selected, runtime, set_notebook = await _settings_fixture(tmp_path)
+
+    async def scenario():
+        before = await runtime.project_policy(selected.id)
+        assert (before.execution_mode, before.network_enabled) == ("docker", True)
+
+        network = await set_notebook({"network_enabled": False})
+        saved = await runtime.project_policy(selected.id)
+        assert saved.network_enabled is False
+        assert saved.revision > before.revision
+        assert network["saved"] is True
+        assert network["network_enabled"] is False
+        assert network["revision"] == saved.revision
+
+        with pytest.raises(ValueError, match="acknowledgement"):
+            await set_notebook({"mode": "host"})
+        assert (await runtime.project_policy(selected.id)).execution_mode == "docker"
+
+        # The operator gives the one-time Host consent in Project settings.
+        consented = await runtime.update_project_policy(
+            selected.id,
+            approval_policy=saved.approval_policy,
+            network_enabled=saved.network_enabled,
+            runner_profile_id=saved.runner_profile_id,
+            max_timeout_ms=saved.max_timeout_ms,
+            host_access_acknowledged=True,
+            expected_revision=saved.revision,
+        )
+        host = await set_notebook({"mode": "host"})
+        assert host["mode"] == "host"
+        assert (await runtime.project_policy(selected.id)).execution_mode == "host"
+        # A finished mode change releases notebook admission, so the operator
+        # can switch back without restarting Core.
+        docker = await set_notebook({"mode": "docker"})
+        stored = await runtime.project_policy(selected.id)
+        assert docker["mode"] == stored.execution_mode == "docker"
+        assert stored.host_access_acknowledged is True
+        assert stored.network_enabled is False
+        assert stored.revision > consented.revision
+
+        granted = await set_notebook({"mcp_enabled": True})
+        profile = await NotebookMcpTools.ensure_profile(store, selected.id)
+        assert granted["mcp_enabled"] is profile.enabled is True
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        (await scenario())
+        gc.collect()
+    assert _unawaited(caught) == []
+
+
+async def test_butler_notebook_mode_change_refused_by_core_releases_admission(
+    tmp_path, monkeypatch
+):
+    _, selected, runtime, set_notebook = await _settings_fixture(tmp_path)
+
+    async def scenario():
+        current = await runtime.project_policy(selected.id)
+        await runtime.update_project_policy(
+            selected.id,
+            approval_policy=current.approval_policy,
+            network_enabled=current.network_enabled,
+            runner_profile_id=current.runner_profile_id,
+            max_timeout_ms=current.max_timeout_ms,
+            host_access_acknowledged=True,
+            expected_revision=current.revision,
+        )
+        original = runtime.update_project_policy
+        refusals = []
+
+        async def refuse_once(*args, **kwargs):
+            if not refusals:
+                refusals.append(kwargs["execution_mode"])
+                raise ConflictError("policy changed; refresh and retry")
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(runtime, "update_project_policy", refuse_once)
+        with pytest.raises(ConflictError):
+            await set_notebook({"mode": "host"})
+        assert refusals == ["host"]
+        assert (await runtime.project_policy(selected.id)).execution_mode == "docker"
+        # The refused change must not leave the project's notebooks paused
+        # behind "Project mode is changing" until Core restarts.
+        retried = await set_notebook({"mode": "host"})
+        assert retried["mode"] == "host"
+        assert (await runtime.project_policy(selected.id)).execution_mode == "host"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        (await scenario())
+        gc.collect()
+    assert _unawaited(caught) == []
 
 
 pytestmark = pytest.mark.anyio
