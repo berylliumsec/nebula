@@ -21,6 +21,7 @@ from nebula.v3.runtime_coordination import (
     LEASE_MS,
     LeaseLost,
     MAX_STREAM_BATCH,
+    RuntimeCoordination,
     STREAM_EPOCH,
 )
 from nebula.v3.runtime_delivery import RuntimeDelivery
@@ -214,6 +215,7 @@ async def test_started_segment_seeds_legacy_prefix_once_and_default_follow_exclu
         inputs_persisted=True,
         provider_profile=SimpleNamespace(id="provider"),
         resolved_model="model-a",
+        source_request=None,
     )
 
     async def noop(*_args, **_kwargs):
@@ -261,7 +263,9 @@ async def test_new_segment_waits_until_the_prior_segment_end_commits(
     journal, monkeypatch
 ):
     service = ChatService(journal.stores[0], stream_journal=journal.writer)
-    prepared = SimpleNamespace(turn=journal.turn, inputs_persisted=False)
+    prepared = SimpleNamespace(
+        turn=journal.turn, inputs_persisted=False, source_request=None
+    )
     entered, release = asyncio.Event(), asyncio.Event()
     close = journal.writer.close
 
@@ -334,7 +338,9 @@ async def test_stop_before_first_producer_step_persists_cancelled_end_once(
     monkeypatch.setattr(service, "_run_provider_turn", forbidden)
     try:
         with execution_context(journal.lease):
-            await service.start_provider_turn(SimpleNamespace(turn=journal.turn))
+            await service.start_provider_turn(
+                SimpleNamespace(turn=journal.turn, source_request=None)
+            )
             stopped = await service.stop_provider_turn("turn")
             await service.stop_provider_turn("turn")
         assert entered == []
@@ -443,9 +449,11 @@ async def test_api_replacement_replays_sql_without_contacting_an_execution_proce
                 pool_settings=PoolSettings(5, 12, 2, 5),
             )
         )
-        delivery = RuntimeDelivery(
-            journal.coordination[0], RuntimeVault(tmp_path / "payloads")
-        )
+        # The API worker's global receipts share its store's transaction
+        # owner, as runtime_worker provides in production (17ec988).
+        coordination = RuntimeCoordination(api_store.database)
+        coordination._clock_ms = journal.coordination[0]._clock_ms
+        delivery = RuntimeDelivery(coordination, RuntimeVault(tmp_path / "payloads"))
         app = create_api_worker(
             api_store,
             delivery,
