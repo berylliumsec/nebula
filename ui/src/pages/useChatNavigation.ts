@@ -36,7 +36,7 @@ export function useChatNavigation(api: ApiClient | undefined, projectId: string 
     }).catch((e: unknown) => {
       if (controller.signal.aborted) return;
       // diagnostic-expected: the client recorded this read; the shared reconnecting notice explains the wait.
-      if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value + 1); return; }
+      if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return; }
       void logCaughtDiagnostic("interface.assistant_chat.read_failed", "Assistant chat state could not be read.", e, "assistant_chat");
       setError(e instanceof Error ? e.message : "Bookmarks could not be loaded.");
     });

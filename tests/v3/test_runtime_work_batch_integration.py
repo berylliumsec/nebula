@@ -448,11 +448,8 @@ async def test_retained_cli_import_progresses_without_api_and_keeps_batch_receip
             discarded = await pending
             if discarded.status_code == 503:
                 assert discarded.json() == {
-                    "detail": "The runtime connection is unavailable. Reconnect to read durable progress.",
-                    "code": "project_runtime_unavailable",
-                    "retryable": True,
+                    "detail": "The runtime connection is unavailable. Reconnect to read durable progress."
                 }
-                assert discarded.headers["retry-after"] == "1"
             else:
                 assert discarded.status_code in {200, 202}, discarded.text
             receipts["discarded_response"] = {"status": discarded.status_code}

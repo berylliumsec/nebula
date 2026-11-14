@@ -55,6 +55,8 @@ export function useChatSubagents(
   useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); refresh(); });
 
   useEffect(() => {
+    // Another conversation never inherits this one's wait for its worker.
+    setRuntimeWait(0);
     if (!api || !sessionId || !enabled) {
       if (shown.current.length) {
         shown.current = [];
@@ -94,7 +96,7 @@ export function useChatSubagents(
       } catch (caught) {
         if (controller.signal.aborted || stopped) return "stop";
         // diagnostic-expected: the client recorded this read; the list reads again when the project runtime answers.
-        if (isProjectRuntimeUnavailable(caught)) { setRuntimeWait((value) => value + 1); return "stop"; }
+        if (isProjectRuntimeUnavailable(caught)) { setRuntimeWait((value) => value || 1); return "stop"; }
         failures += 1;
         void logCaughtDiagnostic("interface.chat_subagents.list_failed", "Delegated subagents could not be read.", caught, "chat_subagents");
         errorShown.current = true;

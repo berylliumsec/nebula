@@ -196,7 +196,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const awaitProjectRuntime = useCallback((resource: WorkspaceResource) => {
     runtimeWaitingResources.current.add(resource);
     setResourceStatus((current) => current[resource]?.state === "loading" ? current : { ...current, [resource]: { state: "loading" } });
-    setResourceRuntimeWait((value) => value + 1);
+    setResourceRuntimeWait((value) => value || 1);
   }, []);
   const [engagements, setEngagements] = useState<EngagementSummary[]>([]);
   const [operatorProfiles, setOperatorProfiles] = useState<OperatorProfile[]>([]);

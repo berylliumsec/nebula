@@ -56,6 +56,8 @@ export function useSessionState(api: ApiClient | undefined, sessionId: string | 
   const [runtimeWait, setRuntimeWait] = useState(0);
   useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); refreshRef.current(); });
   useEffect(() => {
+    // Another conversation never inherits this one's wait for its worker.
+    setRuntimeWait(0);
     if (!api || !sessionId || !ready) return;
     const controller = new AbortController();
     const path = `chat/sessions/${encodeURIComponent(sessionId)}/state`;
@@ -85,7 +87,7 @@ export function useSessionState(api: ApiClient | undefined, sessionId: string | 
         } catch (error) {
           if (signal.aborted) return "stop";
           // diagnostic-expected: the client recorded this read; the status backs off and reads again when the runtime answers.
-          if (isProjectRuntimeUnavailable(error)) { setRuntimeWait(value => value + 1); return "idle"; }
+          if (isProjectRuntimeUnavailable(error)) { setRuntimeWait(value => value || 1); return "idle"; }
           void logCaughtDiagnostic("interface.chat.session_state_unavailable", "Authoritative response status could not be refreshed.", error, "sessions_page");
           failed = true;
           setFailure({sessionId, text: "Response status could not sync. Check the connection and retry."});

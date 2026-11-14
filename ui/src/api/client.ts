@@ -1,6 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
-import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, type ProjectRuntimeProbeResult } from "./projectRuntime";
+import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
   receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
   type RuntimeRequestStatus } from "./durableRequests";
@@ -5081,6 +5081,7 @@ export class ApiClient {
     const response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
       headers: this.authorizeHeaders(new Headers({ Accept: "application/json" })),
       credentials: "same-origin",
+      cache: "no-store",
       signal,
     });
     if (response.status !== 503) {
@@ -5088,7 +5089,9 @@ export class ApiClient {
       return { answered: true };
     }
     const error = await responseError(response);
-    return isProjectRuntimeUnavailable(error) ? { answered: false, retryAfterMs: error.retryAfterMs } : { answered: true };
+    return isProjectRuntimeUnavailable(error)
+      ? { answered: false, retryAfterMs: error.retryAfterMs, reason: projectRuntimeReason(error) }
+      : { answered: true };
   }
 
   getContinuityScope(): ContinuityScope { return this.pendingStore.scope; }
@@ -5408,7 +5411,7 @@ export class ApiClient {
       // An idle project's worker has retired, or a readmitted one is starting.
       // The read is repeated when it is back; it is not an operation failure.
       const runtimeAway = read && isProjectRuntimeUnavailable(error);
-      if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs);
+      if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error));
       else if (read) this.projectRuntime.answered(path);
       void logDiagnostic({
         level: runtimeAway ? "warning" : response.status >= 500 ? "error" : "warning",
