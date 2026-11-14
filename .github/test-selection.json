@@ -1,23 +1,36 @@
 {
-  "reviewed_by": "Claude",
-  "reason": "chat_catchup.source_message is awaited again: #939 made Database.session() yield an AsyncSession but left this helper sync, so the catch-up card (once a failed, interrupted or cancelled turn is newer than the device cursor) and GET /chat/sessions/{id}/turns/{turn_id}/summary raised AttributeError and returned 500. test_chat_catchup.py covers the catch-up projection with failures and outputs plus a new summary-route test for both the final-message and prompt-fallback branches; test_chat_polling_cost's catch-up test checks only failures are linked; the Butler inspection projections include turn_summary. Three of these failed on main from this defect.",
-  "exclusions": "No UI, native or frontend code changed. Playwright area catch-up matches chat_catchup.py but is excluded: its fixture (tests/v3/workspace_recovery_fixture.py) has no chat turn that failed after a device read cursor, and the spec mocks a 503 and then recovers on the no-failure path that already worked on main, so it does not reach the changed branch. That branch is covered by the selected Python route tests, and the real-Core journey was checked on scratch Postgres Cores (main: catch-up 500 and turn summary 500 for both a failed and a completed turn; this branch: catch-up 200 with the failure linked to its prompt, summary 200 linking the prompt and the final answer).",
+  "reviewed_by": "Claude Code",
+  "reason": "Since #987 auto-admission started a project worker only for an open chat or a chat-start command, so every other project-routed write (rename, archive, delete and anything else the API delivers to the project's worker) on a project without an open chat stayed queued with 202 forever; archived projects were skipped outright, so deleting one could never run, and the stranded rows blocked runtime-stop. Queued non-barrier project commands now admit exactly their project (archived included, retirement-held excluded); idle retirement waits for queued or running project commands and request_project_retirement declines while one is queued; a request arriving during a retirement hold waits (bounded) and is then admitted instead of a 409. Selection covers chatless edit and archived delete through real API ingress, routing and auto-admission; retirement declining with queued work and ignoring host-committed barriers; the bounded ingress wait and its 409 bound; the existing chat-scoped admission, child/parent, legacy goal-create, metadata-batch and read no-admission cases; retirement hold and release contracts (the #987 hold test now records that retirement declines while project commands are queued); readmission fence and held-project cases; and the API worker suite for the changed ingress.",
+  "exclusions": "No UI, native or frontend code changed, so no frontend, native or Playwright tests; the operator journey (empty project rename, archive and delete through the API and the desktop project switcher, delete right after the last chat, runtime-stop afterwards) was checked on scratch supervisor Cores (see the PR). test_runtime_reconciliation.py, test_runtime_chat_resume.py, test_runtime_chat_stream.py and the real-Core test in test_shutdown_readmission.py fail identically on main in this environment (pidfd, fixture and LAN prerequisites); across the 13 related files no test fails only with this change. PostgreSQL parametrizations are collected but skip in CI; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 20,
+    "python": 57,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_catchup.py",
-    "tests/v3/test_chat_polling_cost.py::test_catch_up_reads_headers_and_links_only_failures",
-    "tests/v3/test_butler_inspection.py::test_butler_inspection_uses_owned_core_conversation_projections"
+    "tests/v3/test_runtime_work_batches.py::test_project_edit_and_archived_delete_without_a_chat_admit_their_workers",
+    "tests/v3/test_runtime_work_batches.py::test_retirement_does_not_strand_queued_project_work",
+    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker",
+    "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
+    "tests/v3/test_runtime_work_batches.py::test_open_chat_created_without_routing_gets_its_exact_project_worker",
+    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
+    "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
+    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
+    "tests/v3/test_deployment_lifecycle.py::test_open_parent_chat_does_not_keep_child_project_worker",
+    "tests/v3/test_deployment_lifecycle.py::test_open_child_chat_keeps_its_exact_project_worker",
+    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_uses_its_own_hold_and_releases_exact_owner",
+    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation",
+    "tests/v3/test_shutdown_readmission.py::test_quiesced_and_fresh_projects_readmit_without_resetting_fences",
+    "tests/v3/test_shutdown_readmission.py::test_non_null_or_archived_projects_remain_held",
+    "tests/v3/test_shutdown_readmission.py::test_partial_shutdown_abort_keeps_unknown_worker_until_positive_retirement",
+    "tests/v3/test_api_worker.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "da99e1f86c77126ce8431f6633da219c9004ccd821d54ea325d58de4b2377670"
+  "change_digest": "0abb6417dcd8402a3e8c778bd42f477bcb05be7f5b27731304e8271e64eca636"
 }
