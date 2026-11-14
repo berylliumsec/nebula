@@ -1,26 +1,30 @@
 {
-  "reviewed_by": "Codex",
-  "reason": "Verify project chat creation through an execution-scoped store uses its locked owner row without forbidden host-coordination DML, while preserving chat-start serialization with project retirement.",
-  "exclusions": "CI runs one focused execution-scope regression across supported Python versions. No local tests, UI/native suites, live Core mutation, database backup, or deployment.",
-  "python_versions": [
-    "3.11",
-    "3.12",
-    "3.13"
-  ],
+  "reviewed_by": "Claude Code",
+  "reason": "After #987, archiving a project's only chat retires its execution worker, and a later unarchive (PATCH /api/v1/chat-sessions/{id} {\"archived\": false}) stayed queued until another chat message admitted the project, because ingress did not classify the unarchive as a chat start. The unarchive PATCH is now a chat-start intent, and the legacy queued-command scan promotes an older unclassified unarchive only when the named chat belongs to the command's project. Selection covers the classifier (positive, negative and malformed bodies), the unchanged session-creation intents, exact-project admission, archive retirement, unarchive admission through real API ingress without a message, legacy promotion for the exact chat project, the refactored legacy goal-conversation promotion, and a real Core archive, retirement and unarchive journey.",
+  "exclusions": "No UI, native or frontend code changed, so no frontend, native or Playwright tests; the UI journey was checked by hand in desktop Chromium and phone WebKit against disposable LAN Cores (see the PR). The real Core case also needs execution workers to write the unarchive, which #1000 fixed on main. PostgreSQL parametrizations are collected but skip in CI because these files are not in the workflow's PostgreSQL list; they passed locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 1,
+    "python": 40,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_scope.py::test_execution_worker_can_start_chat_under_lease_and_retirement_hold"
+    "tests/v3/test_work_batch_contracts.py::test_session_creation_routes_are_explicit_chat_start_intents",
+    "tests/v3/test_work_batch_contracts.py::test_only_unarchive_patch_is_a_chat_session_start_intent",
+    "tests/v3/test_work_batch_contracts.py::test_malformed_unarchive_body_is_not_a_chat_start_intent",
+    "tests/v3/test_work_batch_contracts.py::test_project_admission_requires_an_exact_chat_start",
+    "tests/v3/test_runtime_work_batches.py::test_unarchive_after_final_chat_retirement_admits_its_project_without_a_message",
+    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_unarchive_is_promoted_only_for_its_chat_project",
+    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
+    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
+    "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
+    "tests/v3/test_chat_unarchive_readmission.py::test_actual_core_unarchive_after_final_chat_retirement_readmits_project"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "c709638ed20f01435b850702220d00614c350032c69c3a317c0446627dc7d6cc"
+  "change_digest": "4ed7ef7d44bba3881f1e4362cc095d40945eff34d57a07b8bd2c3f66d26746b2"
 }
