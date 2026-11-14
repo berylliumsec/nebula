@@ -522,3 +522,79 @@ async def test_safety_claims_deliver_without_any_probe_hint(runtime, monkeypatch
     assert (await terminal(runtime, work)).state == "succeeded"
     control = await accept(runtime, "control-safety", lane="control", name="Control")
     assert (await terminal(runtime, control)).state == "succeeded"
+
+
+async def test_project_kernel_builds_while_the_worker_loop_keeps_running(
+    location, tmp_path, monkeypatch
+):
+    # On a busy host the kernel import and build take many seconds of wall
+    # time. The worker's lease heartbeat shares this loop; if the build holds
+    # it, the lease reserved at spawn lapses and the worker exits at once.
+    import threading
+
+    import nebula.v3.execution_kernel as kernel
+
+    settings = PoolSettings(5, 12, 3, 5)
+    database = Database(location, pool_settings=settings)
+    store = NebulaStore(database)
+    coordinator = DeploymentCoordinator(database)
+    await store.create(Engagement(id="project", name="Synthetic project"))
+    await coordinator.coordination.register_runtime("worker", "fixture")
+    lease = await coordinator.coordination.claim_project("project", "worker")
+
+    class HostServices:
+        async def call(self, name, payload, **_options):
+            assert name == "host.services/v1"
+            return {
+                "protocol": "nebula.host-services/v1",
+                "memory": True,
+                "capacity": True,
+                "knowledge": False,
+            }
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(
+        execution_worker, "host_service_client", lambda *_args: HostServices()
+    )
+    building, released = threading.Event(), threading.Event()
+    builds = []
+
+    def slow_kernel(_store, **_options):
+        building.set()
+        # Only a running worker loop can let this build finish.
+        builds.append((released.wait(timeout=5), current_execution_lease()))
+        return FastAPI()
+
+    monkeypatch.setattr(kernel, "create_execution_kernel", slow_kernel)
+
+    async def loop_work():
+        while not building.is_set():
+            await asyncio.sleep(0.01)
+        released.set()
+
+    context = SimpleNamespace(
+        bootstrap=SimpleNamespace(
+            identity=SimpleNamespace(runtime_id="worker"),
+            data_root=str(tmp_path),
+            operator_token=SecretStr("synthetic-operator"),
+            database=database.url,
+            pool_settings=asdict(settings),
+        ),
+        secret=b"k" * 32,
+        manifest=SimpleNamespace(features=[]),
+        coordinator=coordinator,
+    )
+    other_work = asyncio.create_task(loop_work())
+    try:
+        with execution_context(lease):
+            async with execution_worker.project_application(context, lease) as app:
+                assert isinstance(app, FastAPI)
+    finally:
+        other_work.cancel()
+        await asyncio.gather(other_work, return_exceptions=True)
+        await database.dispose()
+    # The build ran while the loop kept working, under this project's grant.
+    assert builds == [(True, lease)]
+    assert context.restore_cleanup_completed

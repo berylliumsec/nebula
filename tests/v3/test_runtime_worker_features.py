@@ -19,6 +19,7 @@ from sqlalchemy import inspect, text
 from nebula.v3.database import (
     Database,
     ProviderToolManifestRow,
+    RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeWorkBatchProjectRow,
 )
@@ -129,6 +130,41 @@ async def worker_host(location, tmp_path):
                 path.chmod(0o700)
 
 
+async def bind_this_process(value, release, role, suffix):
+    """Reserve and bind a worker incarnation that names this test process."""
+    reference = str(uuid4())
+    endpoint = value.host.socket_root / (uuid4().hex + suffix)
+    runtime_id = await value.coordinator.reserve_worker(
+        release.manifest.version,
+        role=role,
+        endpoint="unix://" + str(endpoint),
+        credential_reference=reference,
+    )
+    value.host.credentials.create(reference=reference)
+    identity = WorkerIdentity(
+        runtime_id=runtime_id,
+        role=role,
+        version=release.manifest.version,
+        pid=os.getpid(),
+        process_birth=process_birth(os.getpid()),
+        endpoint="unix://" + str(endpoint),
+    )
+    await value.coordinator.bind_spawn(identity)
+    bootstrap = WorkerBootstrap(
+        identity=identity,
+        data_root=str(value.host.data_root),
+        release_root=str(release.installed),
+        manifest_sha256=release.digest,
+        database=value.database.url,
+        credential_reference=reference,
+        credential_directory=str(value.host.credentials.directory),
+        process_origin=value.host.launch_origin,
+        pool_settings=asdict(SETTINGS),
+        operator_token=SecretStr(TOKEN),
+    )
+    return runtime_id, endpoint, bootstrap
+
+
 @pytest.mark.parametrize("role", ["api", "execution"])
 async def test_actual_main_admits_canonical_features_for_each_role(worker_host, role):
     value = worker_host
@@ -201,35 +237,8 @@ async def test_actual_worker_refuses_before_factory_or_readiness(
             await connection.run_sync(lambda sync: missing.__table__.drop(sync))
     async with value.database.session() as session:
         head = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    reference = str(uuid4())
-    endpoint = value.host.socket_root / (uuid4().hex + ".refused.sock")
-    runtime_id = await value.coordinator.reserve_worker(
-        release.manifest.version,
-        role=role,
-        endpoint="unix://" + str(endpoint),
-        credential_reference=reference,
-    )
-    value.host.credentials.create(reference=reference)
-    identity = WorkerIdentity(
-        runtime_id=runtime_id,
-        role=role,
-        version=release.manifest.version,
-        pid=os.getpid(),
-        process_birth=process_birth(os.getpid()),
-        endpoint="unix://" + str(endpoint),
-    )
-    await value.coordinator.bind_spawn(identity)
-    bootstrap = WorkerBootstrap(
-        identity=identity,
-        data_root=str(value.host.data_root),
-        release_root=str(release.installed),
-        manifest_sha256=release.digest,
-        database=value.database.url,
-        credential_reference=reference,
-        credential_directory=str(value.host.credentials.directory),
-        process_origin=value.host.launch_origin,
-        pool_settings=asdict(SETTINGS),
-        operator_token=SecretStr(TOKEN),
+    runtime_id, endpoint, bootstrap = await bind_this_process(
+        value, release, role, ".refused.sock"
     )
     factories = []
 
@@ -261,3 +270,46 @@ async def test_actual_worker_refuses_before_factory_or_readiness(
             assert not await connection.run_sync(
                 lambda sync: inspect(sync).has_table(missing.__tablename__)
             )
+
+
+class _RenewalObserved(Exception):
+    pass
+
+
+async def test_worker_renews_its_reserved_lease_before_building_its_role(
+    worker_host, monkeypatch
+):
+    # The supervisor's reservation starts the lease before the process even
+    # imports; a slow start can spend most of it. The worker must renew it
+    # before building its role, not one heartbeat interval later.
+    value = worker_host
+    release = await value.stage("prompt-renewal")
+    runtime_id, endpoint, bootstrap = await bind_this_process(
+        value, release, "execution", ".renewal.sock"
+    )
+    monkeypatch.setattr(runtime_worker, "HEARTBEAT_SECONDS", 60.0)
+    monkeypatch.setattr(
+        "nebula.v3.diagnostics.configure_diagnostics",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
+    )
+
+    async def lease_expiry():
+        async with value.database.session() as session:
+            row = await session.get(
+                RuntimeInstanceRow, runtime_id, populate_existing=True
+            )
+            return row.lease_expires_at_ms
+
+    reserved = await lease_expiry()
+
+    @asynccontextmanager
+    async def observing_factory(_context):
+        # Building a role's application can hold the loop for many seconds,
+        # so the lease must already be renewed when the build begins.
+        assert await lease_expiry() > reserved
+        raise _RenewalObserved
+        yield  # pragma: no cover
+
+    with pytest.raises(_RenewalObserved):
+        await runtime_worker.run_worker(bootstrap, execution_factory=observing_factory)
+    assert not endpoint.exists()

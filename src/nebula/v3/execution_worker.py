@@ -56,6 +56,13 @@ def failure_summary(error: BaseException) -> str:
     return text[:MAX_FAILURE_CHARS]
 
 
+def _build_kernel(store, **options):
+    """Import and construct the project kernel; called off the event loop."""
+    from .execution_kernel import create_execution_kernel
+
+    return create_execution_kernel(store, **options)
+
+
 @asynccontextmanager
 async def project_application(context, lease) -> AsyncIterator[object]:
     """Construct controllers only after SQL grants this exact project lease.
@@ -65,7 +72,6 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     process never constructs a Chroma or legacy Butler-memory owner.
     """
     from .artifacts import ArtifactStore
-    from .execution_kernel import create_execution_kernel
     from .remote_knowledge import RemoteKnowledgeIndex
     from .runtime_platform import default_runtime_platform
     from .runtime_chat_stream import RuntimeChatJournal
@@ -137,7 +143,12 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             else None
         )
         recovery = await context.coordinator.recovery_status(lease.project_id)
-        app = create_execution_kernel(
+        # Importing and building the kernel takes seconds of CPU, and many
+        # more on a busy host. On the event loop it would stall this worker's
+        # lease heartbeat, and a lease that lapses while the project starts
+        # ends the worker. Build it on a thread so the heartbeat keeps running.
+        app = await asyncio.to_thread(
+            _build_kernel,
             store,
             artifact_store=artifacts,
             credential_store=RemoteExecutionCredentials(client)

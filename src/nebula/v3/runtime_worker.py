@@ -329,6 +329,11 @@ async def run_worker(
                         server.should_exit = True
                     raise
 
+        # The supervisor started this lease when it reserved the process, and
+        # a slow start may have spent most of it. Renew it before building the
+        # role's application, which can hold this loop for seconds on a busy
+        # host before the first interval heartbeat can run.
+        await coordinator.coordination.heartbeat(bootstrap.identity.runtime_id)
         # diagnostic-expected: heartbeat failure requests server exit and is awaited before the worker returns.
         heartbeat = asyncio.create_task(pulse(), name="nebula-worker-heartbeat")
         async with factory(context) as application:
