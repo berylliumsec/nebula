@@ -44,6 +44,7 @@ class Cursor:
     sequence: int = 0
     epoch: str | None = None
     text: str = ""
+    thinking: bool = False
 
     def accept(self, payload: dict[str, Any]) -> bool:
         if payload.get("epoch") and payload["epoch"] != self.epoch:
@@ -72,6 +73,12 @@ class View:
     environments: list[str] | None = None
     # Core's saved-request ID while a submission waits for its execution owner.
     receipt: str | None = None
+    # A saved user message being edited; sending rewinds to it first.
+    editing: dict[str, Any] | None = None
+    # Saved reasoning read on demand, by message ID.
+    reasoning: dict[str, str] = field(default_factory=dict)
+    # The main conversation a side chat was opened from.
+    parent: dict[str, Any] | None = None
 
     @property
     def project_id(self) -> str:

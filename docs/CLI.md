@@ -112,6 +112,32 @@ copying; press Ctrl-R twice to discard it and reload Core's version. Chat work
 continues while Notes is open. Notes editing requires an interactive full-screen
 terminal.
 
+Each answer heading shows the turn's elapsed time and token usage from Core, for
+example `ASSISTANT · 8.2s · 1,234 tokens`; a stopped answer shows `Stopped`.
+The model's thinking stays collapsed to one `Thinking · N words` line while it
+streams and in saved history. `/thinking` shows the full thinking above each
+answer and reads saved thinking from Core on demand for the latest 20 answers;
+run it again to collapse it.
+
+`/chat edit` puts a sent message back in the composer without changing Core.
+Enter rewinds the conversation to that message and sends the edited text, keeping
+any images it carried; Ctrl-C cancels the edit. `/chat bulk` selects several
+conversations (or all of them) and archives, restores, pins, unpins, flags,
+clears flags or deletes them; deletion requires typing the count, and every
+result is verified against Core. `/chat finish` asks the model to write the
+missing final answer of a provider turn that stopped without one; in a harness
+conversation, `/chat retry` starts a linked retry of a failed or stopped turn.
+
+`/search` finds saved messages in this conversation; its menu widens the search
+to every conversation in the project or limits it to bookmarked messages, and
+choosing a match opens that conversation at the match. `/bookmark` bookmarks a
+saved message or removes its bookmark. `/side` opens a side chat: a temporary
+branch with the conversation's history, for a quick aside without tools, MCP or
+attachments. Its menu lists the conversation's side chats, starts a new one,
+returns to the main chat, or closes and discards the current side chat. F3 and
+`/chats` mark pinned, flagged and archived conversations, list pinned ones first
+and archived ones last, and search every conversation in the project.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -122,7 +148,10 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | Command | Workflow |
 | --- | --- |
 | `/core`, `/projects`, `/chats`, `/new`, `/butler` | Switch paired Cores, select/create a project, resume a main agent chat, or open Butler |
-| `/chat` | Rename, pin, flag, archive, restore, branch, rewind/edit, retry in a branch, export visible text, or explicitly delete |
+| `/chat` | Rename, pin, flag, archive, restore, branch, rewind, edit and resend, retry, finish an unfinished answer, export visible text, delete, or act on several conversations (`/chat bulk`) |
+| `/search`, `/bookmark` | Search saved messages in this conversation or project, optionally bookmarked only, and open a match; bookmark a message |
+| `/side` | Open, start, leave or close a side chat of the current conversation |
+| `/thinking` | Show or collapse the model's thinking in the transcript |
 | `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
 | `/notes` | Browse, create, edit, refresh and delete the selected project's saved Notes in the full-screen TUI |
 | `/board` | Read the project's Work board, search tasks, inspect descriptions/check-ins and refresh without changing chat |

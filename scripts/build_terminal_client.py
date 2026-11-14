@@ -29,6 +29,7 @@ CLIENT_FILES = (
     "terminal/notes.py",
     "terminal/board.py",
     "terminal/attachments.py",
+    "terminal/conversations.py",
 )
 
 

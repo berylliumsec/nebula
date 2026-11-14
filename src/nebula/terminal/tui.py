@@ -115,6 +115,40 @@ def _plain_title(value: Any) -> str:
     return " ".join(clean.strip(" *|#").split()) or "Conversation"
 
 
+def turn_elapsed(ms: Any) -> str:
+    """A finished turn as the GUI shows it: 8.2s, 4m 12s or 1h 04m."""
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return ""
+    if ms < 60_000:
+        return f"{ms / 1000:.1f}s"
+    if ms < 3_600_000:
+        return f"{int(ms // 60_000)}m {int(ms % 60_000 // 1000):02}s"
+    return f"{int(ms // 3_600_000)}h {int(ms % 3_600_000 // 60_000):02}m"
+
+
+def turn_details(elapsed_ms: Any = None, usage: Any = None) -> str:
+    """Compact elapsed and token usage for an assistant heading."""
+    parts = []
+    elapsed = turn_elapsed(elapsed_ms)
+    if elapsed:
+        parts.append(elapsed)
+    usage = usage if isinstance(usage, dict) else {}
+    total = usage.get("total_tokens")
+    if not isinstance(total, int):
+        inputs, outputs = usage.get("input_tokens"), usage.get("output_tokens")
+        total = (
+            (inputs or 0) + (outputs or 0)
+            if isinstance(inputs, int) or isinstance(outputs, int)
+            else None
+        )
+    if isinstance(total, int) and total > 0:
+        parts.append(f"{total:,} tokens")
+        reasoning = usage.get("reasoning_tokens")
+        if isinstance(reasoning, int) and reasoning > 0:
+            parts.append(f"{reasoning:,} reasoning")
+    return " · ".join(parts)
+
+
 @lru_cache(maxsize=96)
 def _readable_markdown(source: str, width: int) -> str:
     """Render Markdown to selectable text at a comfortable reading width."""
@@ -203,6 +237,9 @@ class TuiUI(TerminalUI):
             "no",
         }
         self._source_view = False
+        self._show_thinking = False
+        self._editing = ""
+        self._read_at_match = False
         self._mouse_scrolling = True
         self._render_width = 0
         self._mode = "main"
@@ -469,6 +506,9 @@ class TuiUI(TerminalUI):
                     "transcript-assistant-body": "#e7eef3",
                     "transcript-repeat-body": "#8497a4 italic",
                     "transcript-notice-body": "#91a5b3",
+                    "transcript-thinking-heading": "#a99bd3 bold",
+                    "transcript-thinking-body": "#9a91b8 italic",
+                    "transcript-thinking-gutter": "#6d6391",
                     "transcript-user-gutter": "#6485a3",
                     "transcript-assistant-gutter": "#568e86",
                     "transcript-notice-gutter": "#677d8b",
@@ -668,6 +708,8 @@ class TuiUI(TerminalUI):
         if style.startswith("assistant-"):
             marker = "✦  " if style == "assistant-heading" and not wrap_count else "│  "
             return [("class:transcript-assistant-gutter", marker)]
+        if style.startswith("thinking-"):
+            return [("class:transcript-thinking-gutter", "┊  ")]
         if style == "notice-body":
             return [("class:transcript-notice-gutter", "·  ")]
         return [("", " " * TRANSCRIPT_PREFIX_WIDTH)]
@@ -693,6 +735,24 @@ class TuiUI(TerminalUI):
                 lines.extend(note_lines)
                 styles.extend("notice-body" for _ in note_lines)
                 continue
+            if kind == "Thinking":
+                words = len(source.split())
+                if not self._show_thinking:
+                    summary = (
+                        f"Thinking · {words:,} word{'s' if words != 1 else ''}"
+                        if words
+                        else "Thinking saved"
+                    ) + " · /thinking shows it"
+                    lines.append(summary)
+                    styles.append("thinking-body")
+                    continue
+                lines.append("THINKING")
+                styles.append("thinking-heading")
+                body = source.strip("\n") or "Saved reasoning is not loaded."
+                body_lines = body.split("\n")
+                lines.extend(body_lines)
+                styles.extend("thinking-body" for _ in body_lines)
+                continue
             role = "user" if kind.startswith("You") else "assistant"
             repeated = (
                 role == "user"
@@ -703,7 +763,12 @@ class TuiUI(TerminalUI):
             )
             if role == "user" and kind == "You":
                 seen_requests.add(source)
-            heading = kind.upper() + (" · REPEATED" if repeated else "")
+            name, _, meta = kind.partition(" · ")
+            heading = (
+                kind.upper()
+                if role == "user"
+                else name.upper() + (" · " + meta if meta else "")
+            ) + (" · REPEATED" if repeated else "")
             lines.append(heading)
             styles.append(f"{role}-heading")
             if repeated:
@@ -907,6 +972,11 @@ class TuiUI(TerminalUI):
                 " Project Notes    ↑↓ Select    Tab Edit    ^N New    ^S Save    ^R Refresh    D Delete    Esc Chat",
                 width - 1,
             )
+        if self._mode == "main" and self._editing:
+            return _edge(
+                " Editing saved message · Enter resends from here · ^C cancels edit",
+                width - 1,
+            )
         if self._mode == "main" and self._recall_index is not None:
             return _edge(
                 f" Recalled message {self._recall_index + 1}/{len(self._message_history)}"
@@ -929,6 +999,7 @@ class TuiUI(TerminalUI):
         self, project: dict[str, Any], session: dict[str, Any] | None
     ) -> None:
         self.set_identity(project, session)
+        self._editing = ""
         self._draft_skill = ""
         self._selected_mcp_count = 0
         self._entries.clear()
@@ -952,6 +1023,7 @@ class TuiUI(TerminalUI):
         self._projects = []
         self._chats = []
         self._chat_activity = None
+        self._editing = ""
         self._draft_skill = ""
         self._selected_mcp_count = 0
         self._context = "Choose a project"
@@ -1102,6 +1174,70 @@ class TuiUI(TerminalUI):
             self._prune_entries()
             self._schedule_render()
 
+    def reasoning(self, value: str) -> None:
+        """Collect live thinking in its own collapsed entry, before the answer."""
+        clean = terminal_text(value)
+        if not clean:
+            return
+        self._streaming = True
+        self.set_turn_phase("working")
+        if self._entries and self._entries[-1][0] == "Thinking":
+            _kind, previous = self._entries[-1]
+            self._entries[-1] = "Thinking", (previous + clean)[-100_000:]
+        else:
+            self._entries.append(("Thinking", clean))
+        self._prune_entries()
+        self._schedule_render()
+
+    def turn_meta(self, detail: str, *, stopped: bool = False) -> None:
+        """Label the latest answer with Core's elapsed time and token usage."""
+        clean = terminal_text(detail).strip()
+        for index in range(len(self._entries) - 1, -1, -1):
+            kind, content = self._entries[index]
+            if kind.startswith("You"):
+                break
+            if kind.partition(" · ")[0] == "Assistant":
+                label = " · ".join(
+                    part for part in ("Stopped" if stopped else "", clean) if part
+                )
+                self._entries[index] = (
+                    "Assistant" + (" · " + label if label else ""),
+                    content,
+                )
+                self._schedule_render()
+                return
+
+    @property
+    def show_thinking(self) -> bool:
+        return self._show_thinking
+
+    def set_show_thinking(self, value: bool) -> None:
+        self._show_thinking = value
+        self._render()
+
+    def set_editing(self, label: str) -> None:
+        """Show that Enter rewinds to a saved message and resends the draft."""
+        self._editing = terminal_text(label)
+        self._invalidate()
+
+    def reveal(self, text: str) -> bool:
+        """Move the reading position to a search match already in the transcript."""
+        needle = " ".join(terminal_text(text).split())[:60]
+        if not needle:
+            return False
+        flat = self.transcript.text
+        index = flat.find(needle)
+        if index < 0:
+            words = needle.split()
+            index = flat.find(" ".join(words[:6])) if len(words) >= 3 else -1
+        if index < 0:
+            return False
+        self.transcript.buffer.cursor_position = index
+        # The next prompt opens at the match; Tab returns to the composer.
+        self._read_at_match = True
+        self._invalidate()
+        return True
+
     def submission(self, text: str, *, queued: bool = False) -> None:
         self.clear_loading()
         self._streaming = not queued
@@ -1159,7 +1295,15 @@ class TuiUI(TerminalUI):
                         )
                         + "]"
                     )
-            saved.append(("You" if row["role"] == "user" else "Assistant", content))
+            if row["role"] == "user":
+                saved.append(("You", content))
+                continue
+            metadata = row.get("metadata") or {}
+            reasoning = terminal_text(row.get("reasoning") or "")
+            if reasoning or metadata.get("reasoning_available"):
+                saved.append(("Thinking", reasoning))
+            details = turn_details(row.get("elapsed_ms"), row.get("usage"))
+            saved.append(("Assistant" + (" · " + details if details else ""), content))
         if older:
             self._entries = saved + self._entries
             self._message_history = (saved_inputs + self._message_history)[
@@ -1191,7 +1335,8 @@ class TuiUI(TerminalUI):
                 self._streaming
                 and live is not None
                 and not any(
-                    row[0] == "Assistant" and row[1] == live[1] for row in saved
+                    row[0].partition(" · ")[0] == "Assistant" and row[1] == live[1]
+                    for row in saved
                 )
             ):
                 self._entries.append(live)
@@ -1464,7 +1609,10 @@ class TuiUI(TerminalUI):
             if default and not self.composer.text:
                 self.composer.text = default
             self._mode = "main"
-            self.app.layout.focus(self.composer)
+            self.app.layout.focus(
+                self.transcript if self._read_at_match else self.composer
+            )
+            self._read_at_match = False
             self._main_future = asyncio.get_running_loop().create_future()
             self._invalidate()
             try:

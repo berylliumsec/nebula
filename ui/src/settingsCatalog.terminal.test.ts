@@ -26,4 +26,9 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   expect(pairing).toContain("/goal skills");
   expect(pairing).toContain("mcp server picker");
   expect(pairing).toContain("/mcp");
+  for (const command of ["/thinking", "/chat edit", "/chat bulk", "/chat finish", "/search", "/bookmark", "/side"]) {
+    expect(pairing).toContain(command);
+  }
+  expect(pairing).toContain("turn elapsed time");
+  expect(pairing).toContain("token usage");
 });
