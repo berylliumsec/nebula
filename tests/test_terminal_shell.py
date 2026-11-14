@@ -1535,3 +1535,29 @@ def test_unstarted_saved_message_blocks_duplicates_and_follow_attaches(
         await shell.api.close()
 
     asyncio.run(run())
+
+
+def test_queued_turn_shows_core_reason_with_its_position(tmp_path):
+    class FeedbackUI(UI):
+        def activity(self, value):
+            self.output.append("Activity: " + value)
+
+    reason = "Waiting for host pressure: CPU use (82% >= 80%)"
+
+    def handler(_request):
+        return httpx.Response(
+            200,
+            content=frame(
+                "queued", turn_id="turn-a", queue_position=1, detail=reason, sequence=1
+            )
+            + frame("done", turn_id="turn-a", message={"content": "ok"}, sequence=2),
+        )
+
+    async def run():
+        ui = FeedbackUI()
+        shell = make_shell(tmp_path, handler, ui=ui)
+        await shell.stream(shell.current(), "GET", "chat/turns/turn-a/events")
+        assert f"Activity: Queued at position 1: {reason}" in ui.output
+        await shell.api.close()
+
+    asyncio.run(run())

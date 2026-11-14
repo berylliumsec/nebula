@@ -10,4 +10,12 @@ describe("Butler host-load discovery", () => {
     }
     expect(setup.target).toBe("setup-settings");
   });
+  it("lets an operator whose chats wait for host pressure find how to turn a check off", () => {
+    const pressure = settingCatalogEntry("settings.host-pressure");
+    const text = settingCatalogText(pressure).toLowerCase();
+    for (const term of ["waiting for host pressure", "100% turns a check off", "turn off", "never starts"]) {
+      expect(text).toContain(term);
+    }
+    expect(pressure.target).toBe("setup-settings");
+  });
 });
