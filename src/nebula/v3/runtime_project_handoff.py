@@ -208,6 +208,7 @@ class ProjectHandoffAgent:
         self.context, self.lease, self.app = context, lease, app
         self.coordinator = context.coordinator
         self.chat = app.state.control_assistant_work.chat
+        self.queue = getattr(app.state.control_assistant_work, "queue", None)
         self.restored_digest = restored_digest
 
     def handles(self):
@@ -413,8 +414,14 @@ class ProjectHandoffAgent:
         busy = busy or any(
             not item.task.done() for item in self.chat._precompactions.values()
         )
+        blockers = ["Conversation maintenance is finishing"] if busy else []
+        # A follow-up claimed by this worker's dispatcher but not yet linked to
+        # a durable turn looks settled in SQL; its target would then review it
+        # as a crash. Read after the checkpoint: a claim committed before that
+        # read is still in flight here, or its turn has since changed the
+        # checkpointed revisions and transfer refuses the stale proof.
+        if self.queue is not None and getattr(self.queue, "_inflight", None):
+            blockers.append("A queued follow-up is being dispatched")
         return await self.coordinator.checkpoint(
-            self.lease,
-            checkpoint=checkpoint,
-            blockers=["Conversation maintenance is finishing"] if busy else [],
+            self.lease, checkpoint=checkpoint, blockers=blockers
         )

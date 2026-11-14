@@ -25,8 +25,16 @@ MAX_RPC_BYTES = 2 * 1024**2
 RPC_CLOCK_WINDOW = 30
 
 
+# Set by a gateway that rejected a call before dispatching its operation.
+UNDISPATCHED_HEADER = "X-Nebula-IPC-Undispatched"
+
+
 class RuntimeIpcError(RuntimeError):
     pass
+
+
+class RuntimeIpcUndispatched(RuntimeIpcError):
+    """The peer proved it did not run the operation; sending it again is safe."""
 
 
 # A handler that refuses with RuntimeIpcError or CoordinationConflict wrote its
@@ -267,6 +275,11 @@ class RuntimeRpcClient:
                 ),
             },
         ) as response:
+            if (
+                response.status_code == 503
+                and response.headers.get(UNDISPATCHED_HEADER) == "1"
+            ):
+                raise RuntimeIpcUndispatched("runtime IPC peer is reconnecting (503)")
             failed = RuntimeIpcError(
                 f"runtime IPC operation failed ({response.status_code})"
             )
