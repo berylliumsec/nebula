@@ -1,26 +1,23 @@
 {
   "reviewed_by": "Claude",
-  "reason": "A host shutdown that quiesced some projects and then aborted left their workers alive, closed and unowned with process rows still 'ready'. Auto-admission then skipped every new demand (any unowned execution process blocks it), and a stale pending entry re-claimed a released project onto its closed worker (claim committed before the worker refused the attach), so the heartbeat kept that project owned by a worker that could never run it. Releasing a quiesced project now drains its worker's process row in the same transaction, attach_execution claims only for an unassigned worker and refuses a bound worker that does not hold the current grant, the retirement reconciler also retires workers quiesced by an aborted host shutdown, and auto-admission drops a pending process that is no longer reserved, starting or ready. Selected suites cover quiescence with an aborted shutdown, the retirement reconciler, deployment status and lifecycle, the execution worker, automatic recovery, Work batch idle retirement and the recovery attach path.",
-  "exclusions": "Process-level and LAN-fixture suites (test_runtime_reconciliation, test_runtime_integration_credentials, test_runtime_host_settings, test_runtime_host_operator, test_shutdown_readmission, most of test_recovery_reconciliation) fail locally with 24 identical cases on pristine main and on this branch, so they are not selected. No UI, native or Playwright cases: no frontend code changed. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set.",
+  "reason": "Ask Nebula could not open over any conversation or with a harness assistant: #939 made ChatService.session_messages and HarnessRuntimeService.create_session async but POST /chat/temporary-sessions still called both without await (TypeError 'coroutine' object is not subscriptable / AttributeError on harness.model/.id). The fix awaits both. Selected: the popup route suite (its create() helper now awaits the client, the harness fork test awaits an AsyncMock, and two new tests drive the real route over a real HarnessRuntimeService), the execution-scope suite with the new worker-context Ask Nebula route test (provider and harness, the route a project worker runs for this chat-start command), and the expired-popup collector case of the same router.",
+  "exclusions": "test_chat_workspace.py and test_chat_decisions.py exercise neighbouring side-chat/fork code but each has a test-only unawaited call that fails identically on pristine main (_walk does not await client.get; test_chat_decisions does not await fork_session), so they are not selected. Only the popup-collector case of test_control_plane_reads.py is selected: its other cases do not use this route and test_mixed_settings_read_burst_retains_capacity_after_cancellation is load-sensitive on this host (fails on pristine main under PostgreSQL, passes alone). test_runtime_delivery.py passes on main and branch but its chat-start classification is unchanged. PostgreSQL variants of test_execution_scope.py were run locally (all pass); CI runs the SQLite variants. No UI, native or Playwright cases: no frontend code changed; the real-Core Playwright popup journey in real-core.spec.ts is not run on main. Scratch supervisor Core evidence (provider popup, harness popup with and without an open harness chat, discard) is in the PR body.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 214,
+    "python": 96,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_runtime_work_batches.py",
-    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work"
+    "tests/v3/test_temporary_chat.py",
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_control_plane_reads.py::test_cleanup_yields_and_only_discards_expired_detached_popups"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "9cd310ac5efec419ee89cc6ad48ebdc6f26905577cda95bae3f9e65037514541"
+  "change_digest": "f814ae22b9ba738b6755e9f941df4b361233023e9292a8780bd9c3229eee3e4b"
 }

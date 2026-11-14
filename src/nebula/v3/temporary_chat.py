@@ -144,14 +144,14 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         if backend == ChatBackend.HARNESS:
             # A fresh vendor session receives the snapshot through the existing
             # history-handoff path. It never resumes the parent's live runtime.
-            harness = harness_runtime.create_session(
+            harness = await harness_runtime.create_session(
                 engagement_id=request.engagement_id,
                 profile_id=profile_id or "",
                 model=model,
                 mcp_server_ids=[],
                 tools_enabled=False,
             )
-        messages = chat_service().session_messages(source.id) if source else []
+        messages = (await chat_service().session_messages(source.id)) if source else []
         chat = ChatSession(
             id=str(uuid4()),
             engagement_id=request.engagement_id,

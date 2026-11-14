@@ -25,6 +25,9 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessKind,
+    HarnessProfile,
+    HarnessSession,
     HarnessTurn,
     HarnessTurnOrigin,
     HarnessTurnStatus,
@@ -41,6 +44,8 @@ from nebula.v3.runtime_coordination import (
 )
 from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 from nebula.v3.chat import ChatService
+from nebula.v3.credentials import CredentialStore
+from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.temporary_chat import temporary_chat_router
 from tests.v3.async_test_support import AsyncTestClient
 from tests.v3.test_runtime_coordination import location as location
@@ -290,6 +295,98 @@ async def test_side_chat_discard_route_on_execution_worker_preserves_parent(exec
     assert (
         await control.get(ChatMessage, "parent-message")
     ).content == "Keep this history"
+
+
+@pytest.mark.parametrize("backend", ["provider", "harness"])
+async def test_ask_nebula_open_route_on_execution_worker_copies_history(
+    execution, tmp_path, backend
+):
+    # Ask Nebula is a chat-start request, so its execution worker runs the
+    # real route with the real chat and harness services under the lease.
+    control, runtime, _, lease = execution
+    harness = backend == "harness"
+    if harness:
+        await control.create(
+            HarnessProfile(
+                id="harness",
+                name="Inert Codex fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="inert",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
+        )
+        await control.create(
+            HarnessSession(
+                id="parent-runtime",
+                engagement_id="mine",
+                harness_profile_id="harness",
+                model="inert",
+            )
+        )
+    await control.create(
+        ChatSession(
+            id="parent",
+            engagement_id="mine",
+            title="Parent",
+            model="inert",
+            backend=backend,
+            provider_profile_id=None if harness else "provider",
+            harness_profile_id="harness" if harness else None,
+            harness_session_id="parent-runtime" if harness else None,
+        )
+    )
+    await control.create(
+        ChatMessage(
+            id="parent-message",
+            engagement_id="mine",
+            session_id="parent",
+            sequence=1,
+            role="user",
+            content="Keep this history",
+        )
+    )
+    harness_runtime = HarnessRuntimeService(
+        runtime,
+        credential_store=CredentialStore(),
+        workspace_resolver=lambda _: tmp_path,
+        adapter_factory=lambda _: None,
+    )
+    app = FastAPI()
+    app.include_router(
+        temporary_chat_router(runtime, lambda: ChatService(runtime), harness_runtime)
+    )
+    client = AsyncTestClient(app)
+    try:
+        with execution_context(lease):
+            response = await client.post(
+                "/chat/temporary-sessions",
+                json={"engagement_id": "mine", "session_id": "parent"},
+            )
+            assert response.status_code == 201, response.text
+            popup = response.json()
+            assert (
+                await client.delete(f"/chat/temporary-sessions/{popup['id']}")
+            ).status_code == 204
+    finally:
+        await harness_runtime.shutdown()
+    assert popup["parent_session_id"] == "parent"
+    assert popup["forked_from_message_id"] == "parent-message"
+    assert popup["metadata"]["harness_context_handoff_pending"] is harness
+    assert (popup["harness_session_id"] is not None) is harness
+    with pytest.raises(NotFoundError):
+        await control.get(ChatSession, popup["id"])
+    if harness:
+        assert popup["harness_session_id"] != "parent-runtime"
+        with pytest.raises(NotFoundError):
+            await control.get(HarnessSession, popup["harness_session_id"])
+        assert (await control.get(HarnessSession, "parent-runtime")).id
+    assert [
+        message.content
+        for message in await control.find_entities(
+            ChatMessage, {"session_id": "parent"}, engagement_id="mine"
+        )
+    ] == ["Keep this history"]
 
 
 async def test_first_raw_statement_loads_current_transaction_authority(execution):
