@@ -1,25 +1,30 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Idle project execution workers polled claim_next every 100 ms per lane; each empty claim was a fenced write transaction (~15 statements incl. a no-op row-lock UPDATE) and the handoff watcher opened another fenced transaction every second. The fix adds a lock-free RuntimeCoordination.dispatch_snapshot that shares claim_next's hold and lane-head rules, a per-worker probe that wakes per-lane consumers (0.1 s while a lane, a chat turn or a recent delivery is active; 0.5 s idle), 30 s safety claims and ticks, fail-open probe failure handling, handoff ticks only while a source handoff applies, and cancellation-safe waits. Selected suites cover the worker lifecycle and loops, claim/snapshot equivalence, the coordination fence, the handoff agent contract, durable delivery, and the diagnostic boundary that fakes the coordinator.",
-  "exclusions": "Process-level suites (test_execution_worker_process, test_runtime_continuity_acceptance, chat resume/acceptance, memory control, restart recovery) need a pidfd-capable interpreter and a production UI build; locally all 69 of those that fail did so identically on pristine main with and without this patch (no new failures). No UI, native or Playwright cases: no frontend code changed. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Staging before/after evidence (idle CPU 3.24 -> 0.75 cores, 601 -> 190 DB transactions/s for 16 idle workers; chat-start and mid-turn Stop pickup medians 4.27 -> 1.21 s and 2.47 -> 0.84 s) is recorded in the PR, not executed by CI.",
+  "reason": "ProviderScheduler.settle() read the turn only inside correlated EXISTS/scalar subqueries; ExecutionSQLScope refuses that shape (the bare entities table is not mapped by the outer statement), so every project worker's recovery pass failed and queued/parked admissions of ended turns never closed, inflating queue positions and metrics and blocking project retirement and Core shutdown. The read now joins the turn so the scope fences it through loader criteria. Selected suites cover the execution scope (new worker settle regression on sqlite and PostgreSQL), recovery settle, admission cleanup, queue positions, runtime switching, handoff participants and admission, host load/pressure and runtime capacity.",
+  "exclusions": "test_chat_throughput.py is limited to the settle recovery test it fixes: test_final_answer_retry_resumes_synthesis_through_admission is flaky on main (3/15 runs, revision conflict expected 11 found 12) and unrelated. test_api.py, test_chat.py, test_execution_worker_process.py, test_performance.py, test_runtime_host_settings.py and test_runtime_integration_credentials.py already fail on main for unrelated reasons; across all 18 related files no test fails only with this change. No UI, native or Playwright cases: no frontend code changed.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 169,
+    "python": 198,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_coordination.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_runtime_delivery.py"
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_chat_throughput.py::test_recovery_closes_admissions_that_ended_turns_left_open",
+    "tests/v3/test_async_admission_cleanup.py",
+    "tests/v3/test_async_queue_positions.py",
+    "tests/v3/test_async_runtime_switching.py",
+    "tests/v3/test_handoff_participants.py",
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_host_pressure.py",
+    "tests/v3/test_project_handoff_admission.py",
+    "tests/v3/test_runtime_capacity.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "42a1e05ca07ffe6ee9314d7a07001932a93f66413e695f9b7d29c00d71d99a56"
+  "change_digest": "53cd127937dc58d2daf58e059eb0d63f7303a5ff8355c0987b1a9dac894e639f"
 }

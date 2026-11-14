@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import ColumnElement, case, exists, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select, update
 
 from .database import EntityRow, ProviderTurnQueueRow
 from .domain import ChatTurn, ChatTurnStatus, utc_now
@@ -464,14 +464,31 @@ class ProviderScheduler:
         ]
         if turn_id is not None:
             ended.append(ProviderTurnQueueRow.turn_id == turn_id)
-        async with self.store.database.session() as session:
-            settled = list(
-                (
-                    await session.scalars(
-                        select(ProviderTurnQueueRow.turn_id).where(*ended)
-                    )
-                )
+        # The read joins the turn instead of correlating subqueries on it: an
+        # execution worker scopes only reads whose entity tables are mapped in
+        # the statement itself, and the join carries that scope. ``ended``
+        # stays the write's own check against the stored turn.
+        read = (
+            select(ProviderTurnQueueRow.turn_id)
+            .outerjoin(
+                EntityRow,
+                and_(
+                    EntityRow.id == ProviderTurnQueueRow.turn_id,
+                    EntityRow.kind == ChatTurn.entity_kind,
+                ),
             )
+            .where(
+                ProviderTurnQueueRow.state.in_(_OPEN_ADMISSION_STATES),
+                or_(
+                    EntityRow.id.is_(None),
+                    EntityRow.payload["status"].as_string().in_(_ENDED_TURN_STATUSES),
+                ),
+            )
+        )
+        if turn_id is not None:
+            read = read.where(ProviderTurnQueueRow.turn_id == turn_id)
+        async with self.store.database.session() as session:
+            settled = list((await session.scalars(read)))
             if settled:
                 # The same conditions again, in the statement that writes: a
                 # turn resumed since the read keeps its new admission.

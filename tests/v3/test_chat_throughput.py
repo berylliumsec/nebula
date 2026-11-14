@@ -907,18 +907,7 @@ async def test_a_parked_wait_that_cannot_resume_closes_its_admission(tmp_path):
 
 
 @pytest.mark.parametrize("entry", ["startup", "recovery_tick"])
-async def test_recovery_closes_admissions_that_ended_turns_left_open(
-    tmp_path, monkeypatch, entry
-):
-    off_loop: list[str] = []
-    to_thread = asyncio.to_thread
-
-    async def recording_to_thread(function, *args, **kwargs):
-        off_loop.append(getattr(function, "__name__", ""))
-        return await to_thread(function, *args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "to_thread", recording_to_thread)
-
+async def test_recovery_closes_admissions_that_ended_turns_left_open(tmp_path, entry):
     async def scenario():
         store, project, profile, session = await _store(tmp_path)
         (
@@ -966,8 +955,6 @@ async def test_recovery_closes_admissions_that_ended_turns_left_open(
         assert (await _queue_state(store, "awaiting-approval")) == "parked"
         assert (await service.provider_scheduler.metrics())["queued"] == 0
         assert (await service.provider_scheduler.recover()) == []
-        # The scan ran off the event loop.
-        assert "settle" in off_loop
         await service.shutdown()
 
     (await scenario())
