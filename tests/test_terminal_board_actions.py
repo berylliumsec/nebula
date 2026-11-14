@@ -8,7 +8,12 @@ import json
 import httpx
 import pytest
 
-from nebula.terminal.board import BoardScreen, ProjectBoard, run_action
+from nebula.terminal.board import (
+    TRACK_CHAIN_LIMIT,
+    BoardScreen,
+    ProjectBoard,
+    run_action,
+)
 from nebula.terminal.shell import Shell
 from nebula.terminal.state import View
 from nebula.terminal.transport import AsyncApi, ClientError, Settings
@@ -30,6 +35,9 @@ class WorkCore:
             ),
         }
         self.writes = []
+        self.requests = {}
+        # Makes every new item come back Done, to check the bounded chain.
+        self.finished = False
 
     @staticmethod
     def item(identifier, title, status, **changes):
@@ -55,7 +63,9 @@ class WorkCore:
             return httpx.Response(200, json=list(self.items.values()))
         if path == "/work" and request.method == "POST":
             identifier = (
-                "tracked-" + body["source_id"]
+                self.requests.setdefault(
+                    body["request_id"], f"tracked-{len(self.requests) + 1}"
+                )
                 if body.get("request_id")
                 else f"new-{len(self.items)}"
             )
@@ -66,7 +76,7 @@ class WorkCore:
                 existing = self.item(
                     identifier,
                     body["title"],
-                    body["status"],
+                    "done" if self.finished else body["status"],
                     description=body.get("description", ""),
                     assignee_session_id=body.get("assignee_session_id"),
                 )
@@ -274,12 +284,58 @@ def test_track_creates_and_links_then_shows_cores_existing_done_item(tmp_path):
         )
         assert message == "Tracking this conversation as Parser chat (In Progress)."
         core.items[selected]["status"] = "done"
+        core.writes.clear()
         message, again = await run_action(
             "track", service, Prompter("A new effort"), item=None, session=SESSION
         )
-        # Shown as Core returned it; the client does not mask this behaviour.
-        assert again == selected
-        assert "existing tracked item Parser chat (Done)" in message
+        # Core still returns the Done item for the original request ID; like the
+        # GUI, the client follows the chain past it to a new In Progress item.
+        assert [body["request_id"] for _, _, body in core.writes] == [
+            "track:chat-a",
+            f"track:chat-a:after:{selected}",
+        ]
+        assert again != selected
+        assert core.items[again]["status"] == "in_progress"
+        assert core.items[again]["assignee_session_id"] == "chat-a"
+        assert message == "Tracking this conversation as A new effort (In Progress)."
+
+        # A retry walks the same chain and lands on the same item.
+        _, retried = await run_action(
+            "track", service, Prompter("A new effort"), item=None, session=SESSION
+        )
+        assert retried == again
+
+        # Once that item is Done too, the chain continues past both.
+        core.items[again]["status"] = "done"
+        core.writes.clear()
+        _, third = await run_action(
+            "track", service, Prompter("Third"), item=None, session=SESSION
+        )
+        assert [body["request_id"] for _, _, body in core.writes] == [
+            "track:chat-a",
+            f"track:chat-a:after:{selected}",
+            f"track:chat-a:after:{again}",
+        ]
+        assert third not in {selected, again}
+        await api.close()
+
+    run(go())
+
+
+def test_track_stops_after_the_guis_bound_when_core_returns_only_done_items(
+    tmp_path,
+):
+    core = WorkCore()
+    core.finished = True
+
+    async def go():
+        _, api = _api(tmp_path, core)
+        service = ProjectBoard(api, "project-a")
+        with pytest.raises(ClientError, match="nothing new is tracked"):
+            await run_action(
+                "track", service, Prompter("Loop"), item=None, session=SESSION
+            )
+        assert len(core.writes) == TRACK_CHAIN_LIMIT
         await api.close()
 
     run(go())

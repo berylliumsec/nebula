@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Claude",
-  "reason": "The terminal /board was read-only while the GUI's Work page creates items, checks in, tracks or links a conversation and toggles agent Work tools. The board now performs those actions with Core readback (N new Ready item; U check-in with summary/next step/blocker/status; T track this conversation as an In Progress linked item; L link the selected item, sending its revision and refusing another chat's item; A agent Work tools with the project revision), with inline prompts where Escape cancels without a write, and /board new|update|track|link|tools in the plain terminal. Selected: the board unit suites (existing and new actions with an in-memory Work Core applying Core's rules), TUI and shell suites for the footer and command text, the client wheel allowlist, the existing board real-Core journey and a new installed-wheel PTY journey on a paired TLS LAN Core, the product-knowledge search and Chroma digest sync, and the settings-catalog terminal test.",
+  "reason": "The terminal /board was read-only while the GUI's Work page creates items, checks in, tracks or links a conversation and toggles agent Work tools. The board now performs those actions with Core readback (N new Ready item; U check-in with summary/next step/blocker/status; T track this conversation as an In Progress linked item, following the GUI's request-ID chain (track:<chat>:after:<done item>, at most 50 steps) past items Core returns as Done; L link the selected item, sending its revision and refusing another chat's item; A agent Work tools with the project revision), with inline prompts where Escape cancels without a write, and /board new|update|track|link|tools in the plain terminal. Selected: the board unit suites (existing and new actions with an in-memory Work Core applying Core's rules), TUI and shell suites for the footer and command text, the client wheel allowlist, the existing board real-Core journey and a new installed-wheel PTY journey on a paired TLS LAN Core, the product-knowledge search and Chroma digest sync, and the settings-catalog terminal test.",
   "exclusions": "No full suites. No native or Playwright changes: only the separate Python terminal client, docs and settings catalog keywords changed; browser viewport projects do not exercise the terminal board and the catalog change is covered by its Vitest file. tests/test_terminal_pty.py and tests/v3/test_terminal_core.py are not selected: they do not exercise /board, and several of them fail identically on pristine origin/main locally. Locally the real-Core board tests ran under a per-worktree Python 3.12 venv (nebula from the worktree, client test deps added) because the shared .venv lacks prompt_toolkit and pip for the installed-wheel fixture. No live provider calls or Core deployment.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 100,
+    "python": 102,
     "frontend": 1,
     "native": 0,
     "playwright": 0
@@ -26,5 +26,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "d16e92fa162f5d157aade09e7cc8a647655522360683a071444dcf3bbabb83ee"
+  "change_digest": "4b5c4474ce63ffc271fc2f97c48a30f20d18b3bf8ce6a28defb206d2537b7c71"
 }

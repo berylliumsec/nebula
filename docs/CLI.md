@@ -106,8 +106,8 @@ selected item to the current conversation (refused when another conversation
 owns it); A turns agent Work tools on or off. Prompts open inside the board;
 Enter saves and Escape cancels without a write. The status line reports Core's
 result, including when Core's status differs from the one chosen (a check-in
-with a blocker is saved as Blocked) or when tracking returns this conversation's
-existing item. Work has no delete or title edit here or in the web page. The
+with a blocker is saved as Blocked). Tracking a conversation whose earlier item
+is Done creates a new In Progress item, as the web page does. Work has no delete or title edit here or in the web page. The
 plain terminal prints tasks grouped by status when `/board` runs; run it again to
 refresh, and use `/board new`, `/board update`, `/board track`, `/board link` or
 `/board tools` for the same actions.

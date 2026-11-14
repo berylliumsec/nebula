@@ -125,6 +125,26 @@ def test_paired_tui_board_creates_checks_in_tracks_links_and_toggles_tools(
     assert admin.get("engagements/terminal-project").json()["work_enabled"] is (
         tools_before
     )
+
+    # Core returns the Done item for the original request ID; like the GUI, the
+    # client follows the request-ID chain past it and tracks a new item.
+    finished = admin.post(
+        f"{PATH}/{tracked['id']}/updates",
+        json={"summary": "Shipped the tracked work", "status": "done"},
+    )
+    assert finished.is_success, finished.text
+    assert items(admin)["Tracked chat work"]["status"] == "done"
+    terminal.send("/board track")
+    terminal.expect_screen("Work item title for this conversation")
+    keys(terminal, "\x05\x15Follow-up chat work\r")  # End, then clear the default.
+    terminal.expect_screen(
+        "Tracking this conversation as Follow-up chat work (In Progress)."
+    )
+    after = items(admin)
+    assert after["Tracked chat work"]["status"] == "done"
+    assert after["Follow-up chat work"]["status"] == "in_progress"
+    assert after["Follow-up chat work"]["assignee_session_id"] == chat["id"]
+    assert after["Follow-up chat work"]["id"] != tracked["id"]
     terminal.close()
     print(
         json.dumps(
@@ -141,6 +161,7 @@ def test_paired_tui_board_creates_checks_in_tracks_links_and_toggles_tools(
                     "existing item linked to the conversation",
                     "Escape cancels without a write",
                     "/board tools outside the panel",
+                    "tracking again after Done creates a new in-progress item",
                 ],
                 "result": "passed",
             }

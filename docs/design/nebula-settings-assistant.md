@@ -11,7 +11,8 @@ refresh retains selection when the item still exists and matches. Reopening or
 reconnecting reads Core again. There is no polling. The board also performs the
 web Work page's operator actions with Core readback: N creates a Ready item, U
 saves a check-in (summary, next step, blocker, status), T tracks the current
-conversation as a linked In Progress item, L links the selected item to the
+conversation as a linked In Progress item (a new one when its earlier item is
+Done, as in the web page), L links the selected item to the
 current conversation, and A toggles agent Work tools; Escape cancels a prompt
 without a write. Title edits and deletion are not offered (Core has no delete
 route). Butler should not claim that viewing or saving a check-in verifies its

@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 STATUSES = ("backlog", "ready", "in_progress", "blocked", "review", "done")
 PAGE_SIZE = 500
+# The GUI follows at most this many Done items when tracking a conversation again.
+TRACK_CHAIN_LIMIT = 50
 ACTIONS = {
     "new": "New Work item",
     "update": "Check in on a Work item",
@@ -150,22 +152,36 @@ class ProjectBoard:
         return observed
 
     async def track(self, session_id: str, title: str) -> dict[str, Any]:
-        """The GUI's Create and link for a conversation; Core's item is shown."""
-        created = self._item(
-            await self.api.request(
-                "POST",
-                self.path,
-                json={
-                    "title": title,
-                    "status": "in_progress",
-                    "source_kind": "chat",
-                    "source_id": session_id,
-                    "assignee_session_id": session_id,
-                    "request_id": "track:" + session_id,
-                },
+        """The GUI's Create and link for a conversation.
+
+        Core's create is idempotent per request ID, so tracking again returns
+        the earlier item even once it is Done. Like the GUI, follow a chain of
+        request IDs past each Done item to the first item that is not Done; a
+        retry walks the same chain and lands on the same item.
+        """
+        request_id = "track:" + session_id
+        for _ in range(TRACK_CHAIN_LIMIT):
+            created = self._item(
+                await self.api.request(
+                    "POST",
+                    self.path,
+                    json={
+                        "title": title,
+                        "status": "in_progress",
+                        "source_kind": "chat",
+                        "source_id": session_id,
+                        "assignee_session_id": session_id,
+                        "request_id": request_id,
+                    },
+                )
             )
+            if created["status"] != "done":
+                return await self.read(created["id"])
+            request_id = f"track:{session_id}:after:{created['id']}"
+        raise ClientError(
+            "Core kept returning finished Work items for this conversation, so "
+            "nothing new is tracked. Press R to reload."
         )
-        return await self.read(created["id"])
 
     async def detail(self, item_id: str) -> str:
         path = f"{self.path}/{key(item_id)}"
@@ -249,12 +265,6 @@ async def run_action(
         if not title:
             raise ClientError("A Work item needs a title. Nothing was created.")
         tracked = await service.track(session["id"], title)
-        if tracked["status"] == "done":
-            return (
-                f"Core returned this conversation's existing tracked item "
-                f"{_label(tracked['title'])} (Done); it did not create a new one.",
-                tracked["id"],
-            )
         return (
             f"Tracking this conversation as {_label(tracked['title'])} "
             f"({_status(tracked['status'])}).",
