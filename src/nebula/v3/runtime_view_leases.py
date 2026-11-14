@@ -149,14 +149,14 @@ class ProjectViewLeases:
             )
             await self.coordination._ensure_project(session, project_id)
             insert = pg_insert if dialect == "postgresql" else sqlite_insert
-            statement = insert(ProjectViewLeaseRow).values(
+            values = insert(ProjectViewLeaseRow).values(
                 actor_id=actor_id,
                 lease_id=lease_id,
                 project_id=project_id,
                 expires_at_ms=clock + ttl_seconds * 1000,
                 renewed_at_ms=clock,
             )
-            statement = statement.on_conflict_do_update(
+            statement = values.on_conflict_do_update(
                 index_elements=[
                     ProjectViewLeaseRow.actor_id,
                     ProjectViewLeaseRow.lease_id,
