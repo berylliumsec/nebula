@@ -300,3 +300,38 @@ async def test_failed_service_stop_is_named_in_receipt_and_status(runtime):
         host = await session.get(DeploymentHostRow, "host")
         assert host.detail == "Shutdown is blocked: " + retry["result"]["reason"]
         assert (await session.get(ProjectOwnershipRow, "project")).runtime_id == "old"
+
+
+async def test_shutdown_waits_for_a_project_that_is_still_starting(runtime):
+    opened = asyncio.Event()
+
+    @asynccontextmanager
+    async def application(context, lease):
+        await opened.wait()
+        app = FastAPI()
+        chat = SimpleNamespace(
+            _active_provider_turns={}, _naming_tasks=set(), _precompactions={}
+        )
+
+        async def tick():
+            pass
+
+        app.state.runtime_handoff = SimpleNamespace(
+            chat=chat, handles=lambda: {}, restored_digest=None, tick=tick
+        )
+        try:
+            yield app
+        finally:
+            context.restore_cleanup_completed = True
+
+    runtime.execution.application_factory = application
+    await runtime.execution.attach(asdict(runtime.lease))
+    assert runtime.execution.state == "starting"
+    shutdown = asyncio.create_task(host_shutdown(runtime, "stop"))
+    await asyncio.sleep(0.3)
+    assert not shutdown.done()
+    opened.set()
+    receipt = await shutdown
+    assert receipt["state"] == "succeeded", receipt
+    async with runtime.coordination.database.session() as session:
+        assert (await session.get(ProjectOwnershipRow, "project")).runtime_id is None

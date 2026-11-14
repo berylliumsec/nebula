@@ -220,6 +220,28 @@ async def _write_bootstrap(pipe: IO[bytes], frame: bytes) -> None:
                 loop.remove_writer(descriptor)
 
 
+# A project claimed just before shutdown held admission may still be opening
+# its application. It finishes opening (no new work can reach it) and is then
+# quiesced, instead of refusing shutdown and reopening admission.
+STARTING_PROJECT_WAIT_SECONDS = 30
+
+
+async def _finish_starting(client, lease, *, timeout=STARTING_PROJECT_WAIT_SECONDS):
+    try:
+        async with asyncio.timeout(timeout):
+            while True:
+                status = await client.call("execution.status/v1", {}, timeout=5)
+                if (
+                    status.get("lease") != asdict(lease)
+                    or status.get("state") != "starting"
+                ):
+                    return
+                await asyncio.sleep(0.1)
+    except (TimeoutError, httpx.HTTPError, OSError, RuntimeIpcError):
+        # diagnostic-expected: quiescence below re-reads the worker and reports why it cannot quiesce.
+        return
+
+
 class HostRuntimeLock:
     """Releasing the host lock deliberately leaves independent workers alive."""
 
@@ -953,6 +975,7 @@ class RuntimeProcessHost:
             label = await self.coordinator.project_label(lease.project_id)
             client = await self.rpc(lease.runtime_id)
             try:
+                await _finish_starting(client, lease)
                 try:
                     status = await client.call("execution.quiesce/v1", {}, timeout=30)
                 except RuntimeIpcError as error:
