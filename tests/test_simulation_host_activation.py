@@ -867,3 +867,246 @@ def test_interrupted_rollback_restoration_replays_original_host(
     assert result["operation_id"] == restore["operation_id"]
     assert result["version"] == current
     assert record["host_active"] == current
+
+
+def _uncertain_budget_deployment(tmp_path: Path) -> tuple[dict, dict, dict]:
+    previous, version, pending, deployment_id = (
+        "a" * 40,
+        "b" * 40,
+        "c" * 40,
+        "d" * 32,
+    )
+    manifest_sha256 = "e" * 64
+    release = tmp_path / "releases" / version
+    pending_release = tmp_path / "releases" / pending
+    pending_release.mkdir(parents=True)
+    deployer.atomic_json(
+        pending_release / "simulation-acceptance.json",
+        {"commit": pending, "previous": previous, "status": "accepted_candidate"},
+    )
+    receipts = {
+        deployment_id + ":stage": {
+            "operation_id": deployment_id + ":stage",
+            "action": "stage",
+            "state": "succeeded",
+            "result": {"version": version, "manifest_sha256": manifest_sha256},
+        },
+        deployment_id + ":migrate": {
+            "operation_id": deployment_id + ":migrate",
+            "action": "migrate",
+            "state": "succeeded",
+            "result": {"revision": 40700},
+        },
+        deployment_id + ":api": {
+            "operation_id": deployment_id + ":api",
+            "action": "prepare_api",
+            "state": "uncertain",
+            "result": {"detail": "unconfirmed", "error_type": "MemoryBudgetError"},
+        },
+    }
+    steps = {
+        "stage": {
+            "operation_id": deployment_id + ":stage",
+            "action": "stage",
+            "parameters": {"source": str(release), "manifest_sha256": manifest_sha256},
+            "receipt": receipts[deployment_id + ":stage"],
+        },
+        "migrate": {
+            "operation_id": deployment_id + ":migrate",
+            "action": "migrate",
+            "parameters": {"version": version, "expected_revision": 40699},
+            "receipt": receipts[deployment_id + ":migrate"],
+        },
+        "api": {
+            "operation_id": deployment_id + ":api",
+            "action": "prepare_api",
+            "parameters": {"version": version},
+            "receipt": receipts[deployment_id + ":api"],
+        },
+    }
+    host_operation_id = deployment_id + ":host-activation"
+    host_readback = {
+        "health_commit": version,
+        "recovery_version": "package-b",
+        "api_version": previous,
+        "resident_versions": [previous],
+    }
+    host_result = {
+        "status": "host_activated",
+        "version": version,
+        "health_commit": version,
+        "operation_id": host_operation_id,
+    }
+    record = {
+        "deployment_mode": "supervisor",
+        "active": previous,
+        "pending": pending,
+        "host_active": version,
+        "host_activation": {
+            "operation_id": host_operation_id,
+            "version": version,
+            "previous_version": previous,
+            "state": "complete",
+            "readback": host_readback,
+        },
+        "runtime_deployment": {
+            "id": deployment_id,
+            "action": "promote",
+            "version": version,
+            "previous": previous,
+            "state": "running",
+            "steps": steps,
+            "host_activation": {
+                "operation_id": host_operation_id,
+                "version": version,
+                "state": "complete",
+                "result": host_result,
+            },
+        },
+    }
+    status = {
+        "protocol": "nebula.runtime/v1",
+        "health": "ready",
+        "api_version": previous,
+        "target_execution_version": version,
+        "resident_versions": [previous],
+    }
+    receipts.update(
+        {
+            "deployment/operations/" + key: value
+            for key, value in list(receipts.items())
+        }
+    )
+    receipts["deployment/status"] = status
+    meta = {
+        "previous": previous,
+        "version": version,
+        "pending": pending,
+        "deployment_id": deployment_id,
+        "manifest_sha256": manifest_sha256,
+        "package_version": "package-b",
+        "host_readback": host_readback,
+    }
+    return record, receipts, meta
+
+
+def _configure_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record: dict,
+    receipts: dict,
+    meta: dict,
+) -> None:
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "deployer-state.json")
+    deployer.atomic_json(deployer.STATE, record)
+
+    class Core:
+        def get(self, path: str) -> dict:
+            return receipts[path]
+
+    monkeypatch.setattr(deployer, "api", Core)
+    monkeypatch.setattr(
+        deployer,
+        "runtime_release",
+        lambda _version: (tmp_path / "releases" / meta["version"], meta["manifest_sha256"]),
+    )
+    monkeypatch.setattr(
+        deployer,
+        "verified_release",
+        lambda _version: tmp_path / "releases" / meta["pending"],
+    )
+    monkeypatch.setattr(deployer, "current_release_version", lambda: meta["version"])
+    monkeypatch.setattr(deployer, "unit_state", lambda _service: "active")
+    monkeypatch.setattr(
+        deployer, "runtime_package_version", lambda _version: meta["package_version"]
+    )
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **_kwargs: {"package_version": meta["package_version"], "pid": 1234},
+    )
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: {})
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
+    )
+    health = {
+        "status": "ok",
+        "database": "ok",
+        "commit": meta["version"],
+        "recovery_version": meta["package_version"],
+    }
+    monkeypatch.setattr(
+        deployer,
+        "read_supervisor_health",
+        lambda: (health, receipts["deployment/status"]),
+    )
+
+
+def test_reconcile_pre_spawn_memory_error_archives_journal_and_preserves_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, receipts, meta = _uncertain_budget_deployment(tmp_path)
+    _configure_reconciliation(tmp_path, monkeypatch, record, receipts, meta)
+
+    result = deployer.reconcile_runtime_deployment(meta["deployment_id"])
+
+    assert result["status"] == "reconciled_no_effect"
+    saved = deployer.state()
+    assert "runtime_deployment" not in saved
+    assert saved["pending"] == meta["pending"]
+    assert saved["active"] == meta["previous"]
+    assert saved["host_active"] == meta["version"]
+    archived = saved["runtime_deployment_history"][0]
+    assert archived["journal"]["id"] == meta["deployment_id"]
+    assert archived["classification"] == "pre_spawn_memory_budget_rejection"
+    assert archived["core_receipts"]["stage"]["state"] == "succeeded"
+    assert archived["core_receipts"]["migrate"]["state"] == "succeeded"
+    assert archived["core_receipts"]["api"]["state"] == "uncertain"
+    assert archived["live_readback"]["target_execution_version"] == meta["version"]
+    assert deployer.reconcile_runtime_deployment(meta["deployment_id"])["status"] == (
+        "already_reconciled"
+    )
+
+
+def test_reconcile_rejects_unknown_error_and_changed_api_or_resident_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for case in ("unknown-error", "changed-api", "changed-resident"):
+        case_path = tmp_path / case
+        case_path.mkdir()
+        with monkeypatch.context() as scoped:
+            record, receipts, meta = _uncertain_budget_deployment(case_path)
+            if case == "unknown-error":
+                receipt = receipts["deployment/operations/" + meta["deployment_id"] + ":api"]
+                receipt["result"]["error_type"] = "RuntimeError"
+                record["runtime_deployment"]["steps"]["api"]["receipt"] = receipt
+            elif case == "changed-api":
+                receipts["deployment/status"]["api_version"] = meta["version"]
+            else:
+                receipts["deployment/status"]["resident_versions"] = [meta["version"]]
+            _configure_reconciliation(case_path, scoped, record, receipts, meta)
+            with pytest.raises(RuntimeError, match="pre-spawn|state changed"):
+                deployer.reconcile_runtime_deployment(meta["deployment_id"])
+            assert deployer.state()["runtime_deployment"]["id"] == meta["deployment_id"]
+
+
+def test_prepare_rejects_replacing_candidate_under_nonterminal_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record, _receipts, meta = _uncertain_budget_deployment(tmp_path)
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "deployer-state.json")
+    deployer.atomic_json(deployer.STATE, record)
+    monkeypatch.setattr(deployer, "git_source", lambda: None)
+    monkeypatch.setattr(deployer, "baseline", lambda: meta["previous"])
+
+    def git_run(*args, capture=False, **_kwargs):
+        if "rev-parse" in args:
+            return "f" * 40 if capture else ""
+        return ""
+
+    monkeypatch.setattr(deployer, "run", git_run)
+    with pytest.raises(RuntimeError, match="different deployment operation"):
+        deployer.prepare()
+    saved = deployer.state()
+    assert saved["pending"] == meta["pending"]
+    assert saved["runtime_deployment"]["id"] == meta["deployment_id"]

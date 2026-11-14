@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -73,6 +74,7 @@ GITHUB_API = "https://api.github.com"
 CI_ARTIFACT_LIMIT = 1024 * 1024
 CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+DEPLOYMENT_HISTORY_LIMIT = 32
 
 
 class _LegacyAttempt:
@@ -1811,6 +1813,16 @@ def prepare(
     if not SHA.fullmatch(sha):
         raise RuntimeError("origin/main is not an exact commit")
     run("git", "-C", str(REPO), "merge-base", "--is-ancestor", previous, sha)
+    current_state = state()
+    journal = current_state.get("runtime_deployment")
+    if (
+        isinstance(journal, dict)
+        and journal.get("state") != "complete"
+        and journal.get("version") != sha
+    ):
+        raise RuntimeError(
+            "A different deployment operation is still unresolved; reconcile it before replacing the pending candidate"
+        )
     if (RELEASES / sha).is_dir():
         release = verified_release(sha)
         receipt = json.loads((release / "simulation-acceptance.json").read_text())
@@ -2097,6 +2109,222 @@ def prepare(
     current_state["pending"] = sha
     atomic_json(STATE, current_state)
     return receipt
+
+
+def _read_deployment_operation(operation_id: str) -> dict[str, Any]:
+    value = api().get(f"deployment/operations/{operation_id}")
+    if not isinstance(value, dict) or value.get("operation_id") != operation_id:
+        raise RuntimeError("Core returned an unrelated deployment operation receipt")
+    return value
+
+
+def _require_recorded_operation(
+    journal: dict[str, Any], *, step: str, action: str, expected_state: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    steps = journal.get("steps")
+    entry = steps.get(step) if isinstance(steps, dict) else None
+    operation_id = f"{journal['id']}:{step.replace('/', ':')}"
+    if (
+        not isinstance(entry, dict)
+        or entry.get("operation_id") != operation_id
+        or entry.get("action") != action
+        or not isinstance(entry.get("parameters"), dict)
+        or not isinstance(entry.get("receipt"), dict)
+    ):
+        raise RuntimeError(f"Deployment journal has no exact {step} operation")
+    receipt = _read_deployment_operation(operation_id)
+    if (
+        receipt.get("action") != action
+        or receipt.get("state") != expected_state
+        or receipt != entry["receipt"]
+        or not isinstance(receipt.get("result"), dict)
+    ):
+        raise RuntimeError(f"Core {step} receipt differs from the deployment journal")
+    return entry, receipt
+
+
+def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
+    """Archive only a proven pre-spawn MemoryBudgetError from API preparation."""
+    if not re.fullmatch(r"[0-9a-f]{32}", deployment_id):
+        raise ValueError("deployment ID must be a 32-character journal identity")
+    record = state()
+    history = record.get("runtime_deployment_history", [])
+    if not isinstance(history, list):
+        raise RuntimeError("Deployment history archive is malformed")
+    prior_archive = next(
+        (
+            item
+            for item in history
+            if isinstance(item, dict) and item.get("id") == deployment_id
+        ),
+        None,
+    )
+    if prior_archive is not None:
+        if prior_archive.get("classification") != "pre_spawn_memory_budget_rejection":
+            raise RuntimeError("Archived deployment reconciliation has another outcome")
+        return {"status": "already_reconciled", "deployment": prior_archive}
+
+    journal = record.get("runtime_deployment")
+    if (
+        not isinstance(journal, dict)
+        or journal.get("id") != deployment_id
+        or journal.get("action") != "promote"
+        or journal.get("state") != "running"
+    ):
+        raise RuntimeError("No matching unresolved promotion journal exists")
+    version, previous = journal.get("version"), journal.get("previous")
+    pending, active = record.get("pending"), record.get("active")
+    if (
+        not isinstance(version, str)
+        or not SHA.fullmatch(version)
+        or not isinstance(previous, str)
+        or not SHA.fullmatch(previous)
+        or not isinstance(pending, str)
+        or not SHA.fullmatch(pending)
+        or pending == version
+        or active != previous
+    ):
+        raise RuntimeError("Deployment state does not match the pending-candidate recovery")
+    pending_release = verified_release(pending)
+    pending_acceptance = json.loads(
+        (pending_release / "simulation-acceptance.json").read_text()
+    )
+    if pending_acceptance.get("previous") != previous:
+        raise RuntimeError("Pending candidate was accepted against another active release")
+    steps = journal.get("steps")
+    if not isinstance(steps, dict) or set(steps) != {"stage", "migrate", "api"}:
+        raise RuntimeError("Promotion journal contains additional or missing operations")
+
+    stage_entry, stage_receipt = _require_recorded_operation(
+        journal, step="stage", action="stage", expected_state="succeeded"
+    )
+    staged_release, manifest_sha256 = runtime_release(version)
+    if (
+        stage_entry["parameters"].get("source") != str(staged_release)
+        or stage_entry["parameters"].get("manifest_sha256") != manifest_sha256
+        or stage_receipt["result"].get("version") != version
+        or stage_receipt["result"].get("manifest_sha256") != manifest_sha256
+    ):
+        raise RuntimeError("Core stage receipt is not bound to the accepted release")
+
+    migration_entry, migration_receipt = _require_recorded_operation(
+        journal, step="migrate", action="migrate", expected_state="succeeded"
+    )
+    if (
+        migration_entry["parameters"].get("version") != version
+        or type(migration_entry["parameters"].get("expected_revision")) is not int
+    ):
+        raise RuntimeError("Migration journal is not bound to the selected release")
+
+    api_entry = steps["api"]
+    api_operation_id = f"{deployment_id}:api"
+    if (
+        not isinstance(api_entry, dict)
+        or api_entry.get("operation_id") != api_operation_id
+        or api_entry.get("action") != "prepare_api"
+        or api_entry.get("parameters") != {"version": version}
+        or not isinstance(api_entry.get("receipt"), dict)
+    ):
+        raise RuntimeError("Deployment journal has no exact API prepare operation")
+    api_receipt = _read_deployment_operation(api_operation_id)
+    api_result = api_receipt.get("result")
+    if (
+        api_receipt.get("action") != "prepare_api"
+        or api_receipt.get("state") != "uncertain"
+        or api_receipt != api_entry["receipt"]
+        or not isinstance(api_result, dict)
+        or api_result.get("error_type") != "MemoryBudgetError"
+        or any(key in api_result for key in ("runtime_id", "pid", "process_birth"))
+    ):
+        raise RuntimeError(
+            "API prepare is not the exact known pre-spawn MemoryBudgetError"
+        )
+
+    deployment_host = journal.get("host_activation")
+    host = record.get("host_activation")
+    if (
+        not isinstance(deployment_host, dict)
+        or deployment_host.get("version") != version
+        or deployment_host.get("state") != "complete"
+        or not isinstance(deployment_host.get("operation_id"), str)
+        or not isinstance(host, dict)
+        or host.get("version") != version
+        or host.get("previous_version") != previous
+        or host.get("state") != "complete"
+        or host.get("operation_id") != deployment_host.get("operation_id")
+        or record.get("host_active") != version
+    ):
+        raise RuntimeError("Deployment host activation is not durably complete")
+    host_result = deployment_host.get("result")
+    host_readback = host.get("readback")
+    if (
+        not isinstance(host_result, dict)
+        or host_result.get("status") != "host_activated"
+        or host_result.get("version") != version
+        or host_result.get("health_commit") != version
+        or host_result.get("operation_id") != deployment_host.get("operation_id")
+        or not isinstance(host_readback, dict)
+        or host_readback.get("health_commit") != version
+        or host_readback.get("api_version") != previous
+        or not isinstance(host_readback.get("resident_versions"), list)
+    ):
+        raise RuntimeError("Host activation lacks its exact version readback")
+    if current_release_version() != version or unit_state(SERVICE) != "active":
+        raise RuntimeError("Current host is not the selected healthy release")
+    package_version = runtime_package_version(version)
+    identity = host_connection(allow_stale=True)
+    if identity is None or identity.get("package_version") != package_version:
+        raise RuntimeError("Current runtime discovery does not match the selected host")
+    require_runtime_process_in_service(
+        supervisor_service_identity(), identity, version
+    )
+    health, status = read_supervisor_health()
+    residents = status.get("resident_versions")
+    if (
+        health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != version
+        or health.get("recovery_version") != package_version
+        or status.get("protocol") != "nebula.runtime/v1"
+        or status.get("health") != "ready"
+        or status.get("api_version") != previous
+        or status.get("target_execution_version") != version
+        or residents != host_readback["resident_versions"]
+        or not isinstance(residents, list)
+        or version in residents
+    ):
+        raise RuntimeError(
+            "Live API, host, or resident state changed from the proven pre-spawn state"
+        )
+
+    if len(history) >= DEPLOYMENT_HISTORY_LIMIT:
+        raise RuntimeError("Deployment history archive is full; retain existing records")
+    reconciliation = {
+        "id": deployment_id,
+        "state": "reconciled_no_effect",
+        "classification": "pre_spawn_memory_budget_rejection",
+        "reconciled_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "journal": deepcopy(journal),
+        "core_receipts": {
+            "stage": stage_receipt,
+            "migrate": migration_receipt,
+            "api": api_receipt,
+        },
+        "live_readback": {
+            "current_release": version,
+            "health_commit": health["commit"],
+            "api_version": status["api_version"],
+            "target_execution_version": status["target_execution_version"],
+            "resident_versions": residents,
+            "deployment_health": status["health"],
+        },
+        "pending_candidate_preserved": pending,
+    }
+    history.append(reconciliation)
+    record["runtime_deployment_history"] = history
+    record.pop("runtime_deployment", None)
+    atomic_json(STATE, record)
+    return {"status": "reconciled_no_effect", "deployment": reconciliation}
 
 
 def verified_release(sha: str) -> Path:
@@ -3992,6 +4220,7 @@ def main() -> int:
             "prepare",
             "promote",
             "rollback",
+            "reconcile-runtime-deployment",
             "activate-host",
             "rollback-host",
             "offline-rollback",
@@ -4033,6 +4262,10 @@ def main() -> int:
             "API/database health and exact owner continuity remain required"
         ),
     )
+    parser.add_argument(
+        "--deployment-id",
+        help="exact unresolved runtime_deployment journal ID for guarded reconciliation",
+    )
     args = parser.parse_args()
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
@@ -4045,6 +4278,10 @@ def main() -> int:
         raise RuntimeError(
             "--allow-degraded-workers is supported only with activate-host"
         )
+    if args.deployment_id is not None and args.action != "reconcile-runtime-deployment":
+        raise RuntimeError("--deployment-id is supported only with reconciliation")
+    if args.action == "reconcile-runtime-deployment" and args.deployment_id is None:
+        raise RuntimeError("reconciliation requires --deployment-id")
     with (ROOT / ".deploy.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = (
@@ -4056,6 +4293,8 @@ def main() -> int:
                 pr_playwright_run_ids=args.ci_playwright_run_id,
             )
             if args.action == "prepare"
+            else reconcile_runtime_deployment(args.deployment_id)
+            if args.action == "reconcile-runtime-deployment"
             else activate_host(allow_degraded_workers=args.allow_degraded_workers)
             if args.action == "activate-host"
             else globals()[args.action.replace("-", "_")]()

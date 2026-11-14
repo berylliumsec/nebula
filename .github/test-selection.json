@@ -1,7 +1,7 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Verify supplemental PR Playwright acceptance is exact-tree bound to merged main commits, validates the reviewed selector and artifact digest, and requires every selected browser matrix shard plus companion PR CI.",
-  "exclusions": "CI runs four focused deployer verifier cases across Python 3.11, 3.12, and 3.13. No local tests, broad suites, new workflow, database backup, or live Core mutation.",
+  "reason": "Verify exact reconciliation of a pre-spawn MemoryBudgetError operation while preserving the accepted pending candidate, plus prevent preparation from replacing a candidate under a nonterminal deployment journal.",
+  "exclusions": "CI runs three focused simulation deployer cases across Python 3.11, 3.12, and 3.13. No local tests, database backup, live Core mutation, broad suites, or new workflow.",
   "python_versions": [
     "3.11",
     "3.12",
@@ -10,19 +10,19 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 3,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_deployer_protocol.py::test_ci_acceptance_chain_accepts_exact_tree_pr_playwright_evidence",
-    "tests/test_deployer_protocol.py::test_pr_playwright_binding_checks_exact_merge_tree",
-    "tests/test_deployer_protocol.py::test_pr_playwright_matrix_requires_every_selected_shard"
+    "tests/test_simulation_host_activation.py::test_reconcile_pre_spawn_memory_error_archives_journal_and_preserves_pending",
+    "tests/test_simulation_host_activation.py::test_reconcile_rejects_unknown_error_and_changed_api_or_resident_state",
+    "tests/test_simulation_host_activation.py::test_prepare_rejects_replacing_candidate_under_nonterminal_journal"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "e7e8e7a2f2a643a97a2210be00208046bc609104dc6c82c75e85d61f98b28db9"
+  "change_digest": "5d14c01cb0a29f018b0f9849135c69a8e7c0c5abe7698139e5f3bb62f8bd972a"
 }
