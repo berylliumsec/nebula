@@ -391,3 +391,90 @@ async def test_shutdown_waits_for_a_project_that_is_still_starting(runtime):
     assert receipt["state"] == "succeeded", receipt
     async with runtime.coordination.database.session() as session:
         assert (await session.get(ProjectOwnershipRow, "project")).runtime_id is None
+
+
+async def quiesced_then_aborted(runtime):
+    """A host shutdown quiesces this project, then aborts on another one."""
+    import os
+
+    from pathlib import Path
+
+    from nebula.v3.database import RuntimeProcessRow
+    from nebula.v3.process_identity import process_birth
+    from tests.v3.test_deployment_lifecycle import manifest
+
+    await runtime.coordination.stage(
+        manifest("fixture", features=["project.quiesce/v1"]),
+        Path("/isolated/fixture"),
+        "c" * 64,
+    )
+    async with runtime.coordination.database.session() as session:
+        session.add(
+            RuntimeProcessRow(
+                runtime_id="old",
+                version="fixture",
+                role="execution",
+                pid=os.getpid(),
+                process_birth=process_birth(os.getpid()),
+                endpoint="unix:///isolated/worker.sock",
+                credential_reference="synthetic-credential",
+                state="ready",
+                updated_at_ms=1,
+            )
+        )
+    await ready(runtime)
+    await prepare(runtime)
+    assert (await runtime.execution.quiesce({}))["state"] == "closed"
+    await runtime.coordination.abort_shutdown(detail="Another project refused.")
+
+
+def worker_rpc(runtime):
+    async def rpc(runtime_id):
+        assert runtime_id == runtime.lease.runtime_id
+        return RuntimeRpcClient(
+            "unix:///isolated/worker.sock",
+            b"k" * 32,
+            transport=httpx.ASGITransport(
+                app=runtime.context.rpc.app, raise_app_exceptions=False
+            ),
+        )
+
+    return rpc
+
+
+async def test_aborted_shutdown_never_reclaims_a_project_for_its_closed_worker(runtime):
+    from nebula.v3.database import RuntimeProcessRow
+    from nebula.v3.supervisor import RuntimeSupervisor
+
+    await quiesced_then_aborted(runtime)
+    async with runtime.coordination.database.session() as session:
+        # Released with the worker drained: no claim can land on it.
+        assert (await session.get(RuntimeProcessRow, "old")).state == "draining"
+    with pytest.raises(LeaseLost):
+        await runtime.coordination.coordination.claim_project("project", "old")
+    root = RuntimeSupervisor.__new__(RuntimeSupervisor)
+    root.coordinator = runtime.coordination
+    root.host = SimpleNamespace(rpc=worker_rpc(runtime))
+    root.started, root.closed, root._shutdown_committed = True, False, False
+    root._operations = asyncio.Lock()
+    # A stale admission entry for this worker is refused before any claim.
+    with pytest.raises(CoordinationConflict, match="already ended its project grant"):
+        await root.attach_execution("project", "old")
+    async with runtime.coordination.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "project")
+        assert owner.runtime_id is None
+        assert owner.fencing_token == runtime.lease.fencing_token
+
+
+async def test_workers_quiesced_by_an_aborted_shutdown_are_retired(runtime):
+    await quiesced_then_aborted(runtime)
+    retired = []
+
+    async def retire(runtime_id):
+        retired.append(runtime_id)
+
+    host = SimpleNamespace(
+        coordinator=runtime.coordination, rpc=worker_rpc(runtime), retire=retire
+    )
+    assert await RuntimeProcessHost.reconcile_idle_project_retirements(host) == ["old"]
+    assert retired == ["old"]
