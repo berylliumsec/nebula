@@ -1265,7 +1265,12 @@ class Shell:
                             or event.replace("_", " ")
                         )
                         if event == "queued" and payload.get("queue_position"):
-                            detail = f"Queued at position {payload['queue_position']}"
+                            # Keep Core's reason, such as a host-pressure wait.
+                            reason = payload.get("detail")
+                            detail = (
+                                f"Queued at position {payload['queue_position']}"
+                                + (f": {reason}" if reason else "")
+                            )
                         elif event == "tool_started":
                             detail = "Tool: " + str(detail)
                         elif event == "tool_completed":

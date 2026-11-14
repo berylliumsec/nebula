@@ -31,6 +31,16 @@ describe("host pressure", () => {
     expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({host_id: "host-a", expected_revision: 1, thresholds: {cpu: .9}});
     await waitFor(() => expect(screen.getByRole("button", {name: "Save pressure thresholds"})).toBeDisabled());
   });
+  it("turns a check off at 100% and shows it as off", async () => {
+    const {api, request} = client(); render(<HostPressureSettings api={api} />);
+    expect(await screen.findByText(/100% turns a check off/)).toBeVisible();
+    const load = await screen.findByLabelText("Runnable tasks / CPU capacity threshold (%)");
+    fireEvent.change(load, {target: {value: "100"}});
+    fireEvent.click(screen.getByRole("button", {name: "Save pressure thresholds"}));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({thresholds: {load: 1}});
+    expect(await screen.findByText(/Saved: Off · Effective: Off/)).toBeVisible();
+  });
   it("validates thresholds and preserves the draft when saving fails", async () => {
     const {api, request} = client(); render(<HostPressureSettings api={api} />);
     const cpu = await screen.findByLabelText("CPU use threshold (%)");

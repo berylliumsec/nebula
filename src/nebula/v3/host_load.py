@@ -61,6 +61,10 @@ class HostLoadSnapshot:
         }
         for metric, value in self.readings().items():
             limit = getattr(thresholds, metric)
+            # 100% turns a check off. CPU use reads 100% on a saturated host and
+            # runnable tasks per CPU has no ceiling, so no lower value would.
+            if limit >= 1:
+                continue
             if value is not None and math.isfinite(value) and value >= limit:
                 # Waiting work saves this text, so it names the metric and the
                 # threshold only: a live reading would rewrite every queued
