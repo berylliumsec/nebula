@@ -48,6 +48,16 @@ def test_product_help_discovers_next_turn_mcp_context_choices(monkeypatch):
     assert "next turn" in text
 
 
+def test_product_help_says_how_to_stop_host_pressure_holding_turns(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "chat never starts waiting for host pressure turn off a check"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "100% turns a check off" in text
+    assert "host pressure admission" in text
+
+
 def test_product_help_explains_safe_project_runtime_recovery(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

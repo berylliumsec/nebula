@@ -243,11 +243,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.host-pressure",
     label: "Host pressure admission",
-    description: "Set live CPU, memory, runnable-load and Core I/O thresholds for new starts, and read host telemetry",
+    description: "Set live CPU, memory, runnable-load and Core I/O thresholds for new starts (100% turns a check off), and read host telemetry",
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",
-    keywords: ["host pressure", "threshold", "CPU", "memory", "runnable tasks", "load average", "Core I/O PSI", "backup disk", "some avg10", "80%", "queued", "admission", "nebula.work.host_pressure", "nebula.global.host_pressure"],
+    keywords: ["host pressure", "threshold", "CPU", "memory", "runnable tasks", "load average", "Core I/O PSI", "backup disk", "some avg10", "80%", "100%", "turn off", "waiting for host pressure", "never starts", "queued", "admission", "nebula.work.host_pressure", "nebula.global.host_pressure"],
   },
   {
     id: "settings.setup",
