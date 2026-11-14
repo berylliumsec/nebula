@@ -1033,6 +1033,242 @@ async def test_auto_admission_retires_worker_after_exact_project_chat_archives(b
     assert lease.runtime_id == "open-chat-worker"
 
 
+def _unarchive_intent(chat_id, **body):
+    return HttpIntent.capture(
+        "PATCH",
+        f"/api/v1/chat-sessions/{chat_id}",
+        b"",
+        [(b"content-type", b"application/json")],
+        json.dumps(body).encode(),
+    )
+
+
+def _chat_admission(batch, *, prepared, leases, retired):
+    async def prepare(_version):
+        runtime_id = f"restored-chat-worker-{len(prepared)}"
+        prepared.append(runtime_id)
+        await runtime(batch, runtime_id)
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        leases[project_id] = await batch.coordination.claim_project(
+            project_id, runtime_id
+        )
+        return leases[project_id]
+
+    async def retire_idle_project(project_id):
+        retired.append(project_id)
+        return True
+
+    async def reconcile_idle_project_retirements():
+        return []
+
+    return RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=batch.coordinator,
+            store=batch.store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+            host=SimpleNamespace(
+                # Enables the authenticated legacy chat-start vault scan.
+                data_root=batch.host.data_root,
+                retire_idle_project=retire_idle_project,
+                reconcile_idle_project_retirements=reconcile_idle_project_retirements,
+            ),
+        ),
+        default_version="supported",
+    )
+
+
+async def test_unarchive_after_final_chat_retirement_admits_its_project_without_a_message(
+    batch, tmp_path
+):
+    await runtime(batch, "open-chat-worker")
+    lease = await batch.coordination.claim_project("one", "open-chat-worker")
+    chat = await batch.store.create(
+        ChatSession(
+            engagement_id="one",
+            title="Only conversation",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    # Another project's archived history must stay without a worker.
+    await batch.store.create(
+        ChatSession(
+            engagement_id="two",
+            title="Other archived history",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+            metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+        )
+    )
+    async with batch.database.session() as session:
+        session.add(
+            ProjectOwnershipRow(
+                project_id="two",
+                runtime_id=None,
+                fencing_token=0,
+                lease_expires_at_ms=0,
+                command_sequence=0,
+                admission_requested=False,
+            )
+        )
+        (await session.get(DeploymentHostRow, "host")).api_runtime_id = "api"
+    prepared, leases, retired = [], {}, []
+    automatic = _chat_admission(
+        batch, prepared=prepared, leases=leases, retired=retired
+    )
+    await automatic.reconcile()
+    assert retired == [] and prepared == []
+
+    # Archiving the final chat retires the idle worker and releases ownership.
+    chat = await batch.store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {"archived_at": "2026-11-13T00:00:00+00:00"}},
+        expected_revision=chat.revision,
+    )
+    await automatic.reconcile()
+    assert retired == ["one"]
+    assert await batch.coordinator.request_project_retirement(lease) is True
+    async with batch.database.session() as session:
+        paused = await batch.coordinator._paused_inventory(session, "one")
+    await batch.coordinator.release_quiesced_project(
+        lease, checkpoint={"project_id": "one", "paused_sha256": paused}
+    )
+    async with batch.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert (owner.runtime_id, owner.retirement_requested) == (None, False)
+        (await session.get(RuntimeProcessRow, "open-chat-worker")).state = "retired"
+
+    # The operator's Unarchive control enters through public API ingress.
+    routing = RuntimeRouting(
+        batch.coordination, tmp_path / "credentials", request_admission=True
+    )
+
+    async def upstream(_scope):
+        pytest.fail("A saved mutation must wait for its execution owner")
+
+    app = create_api_worker(
+        batch.store,
+        batch.delivery,
+        operator_token=TOKEN,
+        project_for=routing.project_for,
+        upstream_for=upstream,
+        command_start_timeout=0.02,
+        poll_interval=0.01,
+        dispose_database=False,
+    )
+    batch.apps.append(app)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://synthetic.test"
+    )
+    batch.clients.append(client)
+    response = await client.patch(
+        f"/api/v1/chat-sessions/{chat.id}",
+        headers={**AUTH, "Idempotency-Key": "restore-final-chat"},
+        json={"archived": False, "expected_revision": chat.revision},
+    )
+    assert response.status_code == 202, response.text
+    restore_id = response.headers["x-nebula-command-id"]
+    async with batch.database.session() as session:
+        restore = await session.get(RuntimeCommandRow, restore_id)
+        assert (
+            restore.project_id,
+            restore.name,
+            restore.chat_start,
+            restore.state,
+        ) == ("one", "http.invoke/v1", True, "queued")
+
+    # No chat message is needed: the restore itself admits exactly its project.
+    await automatic.reconcile()
+    assert prepared == ["restored-chat-worker-0"] and set(leases) == {"one"}
+    claimed = await batch.coordination.claim_next(leases["one"])
+    assert claimed is not None and claimed.receipt.command_id == restore_id
+    await automatic.reconcile()
+    assert retired == ["one"] and len(prepared) == 1
+    async with batch.database.session() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(RuntimeCommandRow)
+                .where(RuntimeCommandRow.project_id == "one")
+            )
+            == 1
+        )
+        assert (await session.get(ProjectOwnershipRow, "two")).runtime_id is None
+
+
+async def test_legacy_queued_unarchive_is_promoted_only_for_its_chat_project(batch):
+    restored, other = [
+        await batch.store.create(
+            ChatSession(
+                engagement_id=project_id,
+                title=f"Archived {project_id}",
+                provider_profile_id="synthetic-provider",
+                model="synthetic-model",
+                metadata={"archived_at": "2026-11-13T00:00:00+00:00"},
+            )
+        )
+        for project_id in ("one", "two")
+    ]
+    # An older API accepted these without chat_start. One row claims a project
+    # that does not own the named chat; another only closes a chat.
+    receipts = {}
+    for key, intent, project_id in (
+        (
+            "legacy-restore",
+            _unarchive_intent(
+                restored.id, archived=False, expected_revision=restored.revision
+            ),
+            "one",
+        ),
+        (
+            "legacy-restore-wrong-project",
+            _unarchive_intent(
+                restored.id, archived=False, expected_revision=restored.revision
+            ),
+            "two",
+        ),
+        (
+            "legacy-archive",
+            _unarchive_intent(
+                other.id, archived=True, expected_revision=other.revision
+            ),
+            "two",
+        ),
+    ):
+        receipts[key] = await batch.delivery.accept(
+            intent, project_id=project_id, actor_id="operator", idempotency_key=key
+        )
+    async with batch.database.session() as session:
+        for receipt in receipts.values():
+            assert (
+                await session.get(RuntimeCommandRow, receipt.command_id)
+            ).chat_start is False
+        (await session.get(DeploymentHostRow, "host")).api_runtime_id = "api"
+    prepared, leases, retired = [], {}, []
+    automatic = _chat_admission(
+        batch, prepared=prepared, leases=leases, retired=retired
+    )
+    await automatic.reconcile()
+    async with batch.database.session() as session:
+        promoted = {
+            key: (await session.get(RuntimeCommandRow, receipt.command_id)).chat_start
+            for key, receipt in receipts.items()
+        }
+    assert promoted == {
+        "legacy-restore": True,
+        "legacy-restore-wrong-project": False,
+        "legacy-archive": False,
+    }
+    assert prepared == ["restored-chat-worker-0"] and set(leases) == {"one"}
+    claimed = await batch.coordination.claim_next(leases["one"])
+    assert claimed is not None
+    assert claimed.receipt.command_id == receipts["legacy-restore"].command_id
+
+
 async def test_revoked_actor_cannot_apply_and_receipt_lookup_stays_actor_scoped(batch):
     device = await batch.store.create(
         PairedDeviceSession(
