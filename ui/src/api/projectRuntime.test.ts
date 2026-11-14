@@ -24,6 +24,7 @@ describe("project runtime classification", () => {
     expect(projectRuntimeReason(away())).toBe("starting");
     expect(projectRuntimeReason(away(undefined, "idle"))).toBe("idle");
     expect(projectRuntimeReason(away(undefined, "closing"))).toBe("closing");
+    expect(projectRuntimeReason(away(undefined, "held"))).toBe("held");
     expect(projectRuntimeReason(away(undefined, "unknown"))).toBe("starting");
     // Only Core's coded answer counts: a failed worker or a Core outage stays an error.
     expect(isProjectRuntimeUnavailable(new ApiError("x", 503, undefined, { detail: "Project execution stopped; accepted work remains saved." }))).toBe(false);
@@ -174,6 +175,17 @@ describe("ProjectRuntimeRecovery", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(probe).toHaveBeenCalledTimes(6);
     expect(recovery.state).toBe("reconnecting");
+  });
+
+  it("reports a held start with Core's reason", async () => {
+    const probe = vi.fn().mockResolvedValue({ answered: false, reason: "held", detail: "Core reserve is below the minimum." });
+    const recovery = new ProjectRuntimeRecovery(probe);
+    recovery.unavailable("engagements/a/observations", undefined, "held", "Core reserve is low.");
+    void recovery.waitForRuntime();
+    expect(recovery.state).toBe("held");
+    expect(recovery.detail).toBe("Core reserve is low.");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(recovery.detail).toBe("Core reserve is below the minimum.");
   });
 
   it("ignores a nudge while nothing waits", async () => {

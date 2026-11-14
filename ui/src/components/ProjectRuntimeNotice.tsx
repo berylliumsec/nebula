@@ -10,6 +10,11 @@ import { useProjectRuntimeState } from "../hooks/useProjectRuntime";
 export function ProjectRuntimeNotice({ api }: { api?: ApiClient }) {
   const state = useProjectRuntimeState(api);
   if (state === "available") return null;
+  // Wanted, but a host gate (for example the memory budget) holds the start.
+  if (state === "held") return <div className="workspace-state-banner project-runtime-notice" role="status">
+    <CirclePause size={16} aria-hidden="true" />
+    <span><strong>Waiting to start this project</strong><small>{api?.projectRuntime.detail ?? "Core starts it when the host has room. Saved work is safe."}</small></span>
+  </div>;
   // Reads never wake an idle project: say what will, instead of promising a refresh.
   if (state === "idle") return <div className="workspace-state-banner project-runtime-notice" role="status">
     <CirclePause size={16} aria-hidden="true" />

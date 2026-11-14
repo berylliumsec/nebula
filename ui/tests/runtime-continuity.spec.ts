@@ -18,8 +18,8 @@ async function controller(request: APIRequestContext) {
   const {token, control_origin: origin} = JSON.parse(await readFile(authFile, "utf8"));
   const headers = {Authorization: `Bearer ${token}`};
   return {
-    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native" | "work-settings", savedHistory = false) => {
-      const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario, saved_history: savedHistory}});
+    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native" | "work-settings", savedHistory = false, chatlessNote = false) => {
+      const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario, saved_history: savedHistory, chatless_note: chatlessNote}});
       expect(response.ok(), await response.text()).toBe(true);
       return response.json();
     },
@@ -188,6 +188,35 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
   await expect(alerts).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument)).toBe(true);
   await page.screenshot({path: info.outputPath("recovered.png"), fullPage: true});
+});
+
+test("an open project view brings up a chatless project's worker and lets it retire after leaving", async ({page, request}, info) => {
+  test.setTimeout(420_000);
+  const control = await controller(request);
+  const fixture = await control.reset(false, false, undefined, false, true);
+  await pair(page, request, fixture);
+  // Real admission with a short idle grace: a released view retires its worker.
+  await control.control("automatic-recovery", {idle_grace_ms: 5_000});
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  const runtime = async () => {
+    const response = await request.get(`${fixture.origin}/api/v1/deployment/status`, {headers});
+    expect(response.ok()).toBe(true);
+    return (await response.json()).projects.find((item: {project_id: string}) => item.project_id === "pinned-project")?.runtime_id ?? null;
+  };
+  // A chatless project with no queued work: reads alone never start its worker.
+  expect(await runtime()).toBeNull();
+  const leases: string[] = [];
+  page.on("request", item => { if (item.url().includes("/engagements/pinned-project/view-leases/")) leases.push(item.method()); });
+  await page.goto("/projects/pinned-project/workbench?view=notes");
+  await expect(page.getByText("Synthetic chatless project note").first()).toBeVisible({timeout: 240_000});
+  await expect(page.getByText(/limited features|could not be loaded|Runtime delivery is unavailable/).filter({visible: true})).toHaveCount(0);
+  expect(leases[0]).toBe("PUT");
+  expect(await runtime()).not.toBeNull();
+  await page.screenshot({path: info.outputPath("chatless-notes.png"), fullPage: true});
+  // Leaving the project releases the view; the worker retires after the grace.
+  await page.goto("/projects");
+  await expect.poll(() => leases.includes("DELETE")).toBe(true);
+  await expect.poll(runtime, {timeout: 120_000}).toBeNull();
 });
 
 test("accepted provider work survives a lost response, API replacement and reload without another submission", async ({page, request}, info) => {
