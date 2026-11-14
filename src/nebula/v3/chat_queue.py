@@ -106,6 +106,67 @@ def queue_is_dormant(queue: ChatQueue) -> bool:
     return ready is None or ready["status"] == "needs_review"
 
 
+# The runtime fields a queued follow-up was authorized under. A change to any
+# of these parks it for review: the model or provider, its credentials, what
+# it may do (permissions, privacy, native tools) and how it runs. Everything
+# else a profile records, such as health, session and turn evidence from each
+# run, discovered models and timestamps, is bookkeeping and leaves it queued.
+_HARNESS_AUTHORIZATION = (
+    "kind",
+    "connection_mode",
+    "transport",
+    "executable",
+    "home_directory",
+    "endpoint",
+    "auth_mode",
+    "secret_ref",
+    "default_model",
+    "permission_mode",
+    "enabled",
+    "privacy",
+    "native_capabilities",
+)
+_PROVIDER_AUTHORIZATION = (
+    "provider_type",
+    "endpoint",
+    "enabled",
+    "is_local",
+    "secret_ref",
+    "openrouter_management_secret_ref",
+    "model_allowlist",
+    "capabilities",
+    "privacy",
+)
+
+
+def runtime_authorization(profile: HarnessProfile | ProviderProfile) -> str:
+    """Digest the security-relevant runtime fields of a provider or harness."""
+
+    data = profile.model_dump(mode="json")
+    if isinstance(profile, HarnessProfile):
+        selected = {key: data.get(key) for key in _HARNESS_AUTHORIZATION}
+    else:
+        selected = {key: data.get(key) for key in _PROVIDER_AUTHORIZATION}
+        selected["default_model"] = profile.metadata.get("default_model")
+        # Whether a model may run tools, not when it was last checked.
+        selected["verifications"] = {
+            model: verification.status.value
+            for model, verification in sorted(profile.capability_verifications.items())
+        }
+    encoded = json.dumps(selected, sort_keys=True, separators=(",", ":"))
+    return sha256(encoded.encode()).hexdigest()
+
+
+def _authorization_unchanged(
+    item: dict, profile: HarnessProfile | ProviderProfile
+) -> bool:
+    expected = item.get("profile_authorization")
+    if expected is None:
+        # Saved before authorization was digested: any revision change parks.
+        return profile.revision == item["profile_revision"]
+    return runtime_authorization(profile) == expected
+
+
 async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
     """Called inside the same transaction that persists the new turn."""
     if claim is None:
@@ -131,7 +192,16 @@ async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
     if (
         not profile_row
         or not profile_row.payload.get("enabled")
-        or profile_row.revision != item["profile_revision"]
+        or profile_row.kind
+        not in {HarnessProfile.entity_kind, ProviderProfile.entity_kind}
+        or not _authorization_unchanged(
+            item,
+            (
+                HarnessProfile
+                if profile_row.kind == HarnessProfile.entity_kind
+                else ProviderProfile
+            ).model_validate({**profile_row.payload, "revision": profile_row.revision}),
+        )
     ):
         raise ConflictError("Runtime authorization changed during preparation")
     if item.get("device_id"):
@@ -299,6 +369,7 @@ class ChatQueueService:
             payload = {
                 "request": request.model_dump(mode="json"),
                 "profile_revision": profile.revision,
+                "profile_authorization": runtime_authorization(profile),
                 "device_id": device_id,
             }
             if body.action == "enqueue":
@@ -449,7 +520,7 @@ class ChatQueueService:
             if request.backend == ChatBackend.HARNESS
             else request.provider_id,
         )
-        if not profile.enabled or profile.revision != item["profile_revision"]:
+        if not profile.enabled or not _authorization_unchanged(item, profile):
             raise ConflictError(
                 "Runtime configuration changed. Review and edit the follow-up before resuming"
             )
