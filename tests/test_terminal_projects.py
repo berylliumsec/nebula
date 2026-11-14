@@ -203,6 +203,10 @@ def test_host_mode_requires_confirmation_and_writes_the_whole_policy(tmp_path):
                 )
                 policy["revision"] += 1
             return httpx.Response(200, json=policy)
+        if route == "vpn-profiles":
+            return httpx.Response(
+                200, json=[{"id": "vpn-a", "name": "Lab VPN", "available": True}]
+            )
         pytest.fail(route)
 
     async def run():
