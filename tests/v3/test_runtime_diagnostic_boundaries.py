@@ -16,7 +16,12 @@ from nebula.v3.diagnostics import DiagnosticManager, diagnostic_context
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.execution_worker import ProjectExecution
 from nebula.v3.remote_knowledge import RemoteKnowledgeIndex
-from nebula.v3.runtime_coordination import LeaseLost, ProjectLease, RuntimeCoordination
+from nebula.v3.runtime_coordination import (
+    DispatchSnapshot,
+    LeaseLost,
+    ProjectLease,
+    RuntimeCoordination,
+)
 from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
 from nebula.v3.runtime_host_delivery import HostEffectDelivery
 from nebula.v3.runtime_http import HttpUpstream, RuntimeHttpProxy
@@ -300,6 +305,9 @@ async def test_lease_watcher_preserves_fencing_and_classifies_unexpected_failure
         async def run_one(self, *_args, **_kwargs):
             return False
 
+    async def idle(_lease):
+        return DispatchSnapshot(owned=True, lanes=frozenset(), handoff_active=False)
+
     monkeypatch.setattr(execution_worker, "HEARTBEAT_SECONDS", 0.001)
     monkeypatch.setattr(execution_worker, "DurableHttpRunner", Runner)
     context = SimpleNamespace(
@@ -308,7 +316,9 @@ async def test_lease_watcher_preserves_fencing_and_classifies_unexpected_failure
             identity=SimpleNamespace(runtime_id="runtime"),
             operator_token=SecretStr(PRIVATE),
         ),
-        coordinator=SimpleNamespace(coordination=SimpleNamespace(fenced=fenced)),
+        coordinator=SimpleNamespace(
+            coordination=SimpleNamespace(fenced=fenced, dispatch_snapshot=idle)
+        ),
         rpc=RuntimeRpcServer(b"k" * 32),
     )
     execution = ProjectExecution(context, application_factory=application)

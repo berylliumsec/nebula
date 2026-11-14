@@ -18,6 +18,7 @@ from .execution_memory import ExecutionMemoryBudget
 from .execution_scope import execution_context
 from .runtime_capacity import RuntimeCapacity
 from .runtime_coordination import (
+    COMMAND_LANES,
     CoordinationConflict,
     HEARTBEAT_SECONDS,
     LeaseLost,
@@ -28,6 +29,17 @@ from .runtime_host_services import host_service_client
 from .runtime_ipc import RuntimeIpcError
 from .runtime_vault import RuntimeVault
 from .shared_memory_rpc import MemoryAuthority, RemoteButlerMemory
+
+# Idle command dispatch. One lock-free probe per worker decides when a fenced
+# claim can act; consumers then claim at once. While a lane runs a command, or
+# shortly after one was delivered, the probe keeps today's pickup cadence.
+ACTIVE_PROBE_SECONDS = 0.1
+IDLE_PROBE_SECONDS = 0.5
+ACTIVE_WINDOW_SECONDS = 30.0
+# Every consumer and the handoff watcher still claim or tick at least this often
+# without a probe hint, so liveness never depends on the probe alone.
+SAFETY_CLAIM_SECONDS = 30.0
+PROBE_FAILURE_MAX_SECONDS = 5.0
 
 
 @asynccontextmanager
@@ -415,8 +427,47 @@ class ProjectExecution:
                         operator_token=self.context.bootstrap.operator_token.get_secret_value(),
                     )
 
+                    loop = asyncio.get_running_loop()
+                    coordination = self.context.coordinator.coordination
+                    # Every wake starts set so a new owner claims at once.
+                    wake = {lane: asyncio.Event() for lane in COMMAND_LANES}
+                    for event in wake.values():
+                        event.set()
+                    handoff_wake = asyncio.Event()
+                    handoff_wake.set()
+                    busy: set[str] = set()
+                    last_delivery = [loop.time()]
+
+                    async def wait_for_wake(event: asyncio.Event) -> None:
+                        # asyncio.timeout, unlike wait_for on Python 3.11, never
+                        # swallows the cancellation that stops this worker.
+                        try:
+                            async with asyncio.timeout(SAFETY_CLAIM_SECONDS):
+                                await event.wait()
+                        except TimeoutError:
+                            # diagnostic-expected: the safety interval elapsed without a probe hint; the caller claims or ticks anyway.
+                            pass
+
+                    def resident_activity() -> bool:
+                        # A chat turn runs in the background after its command
+                        # returns; Stop and approvals for it must stay prompt.
+                        state = getattr(app, "state", None)
+                        work = getattr(state, "control_assistant_work", None)
+                        turns = getattr(
+                            getattr(work, "chat", None), "_active_provider_turns", {}
+                        )
+                        return any(not turn.done for turn in turns.values())
+
                     async def consume(lane):
                         while not self._stop.is_set():
+                            await wait_for_wake(wake[lane])
+                            if self._stop.is_set():
+                                # Never start a claim once this worker is stopping.
+                                return
+                            # Clear before claiming so a hint raised during
+                            # this claim is kept for the next iteration.
+                            wake[lane].clear()
+                            busy.add(lane)
                             try:
                                 delivered = await runner.run_one(lease, lane=lane)
                             except LeaseLost:
@@ -436,8 +487,58 @@ class ProjectExecution:
                                     stage="delivery",
                                 )
                                 delivered = False
-                            if not delivered:
-                                await asyncio.sleep(0.1)
+                            finally:
+                                busy.discard(lane)
+                            if delivered:
+                                last_delivery[0] = loop.time()
+                                # Drain this lane. The active-cadence probe finds
+                                # any head this command unblocked on the other.
+                                wake[lane].set()
+
+                    async def probe():
+                        failures = 0
+                        while not self._stop.is_set():
+                            try:
+                                snapshot = await coordination.dispatch_snapshot(lease)
+                            except Exception as error:
+                                failures += 1
+                                if failures == 1:
+                                    record_caught_exception(
+                                        "runtime",
+                                        "runtime.dispatch_probe.unavailable",
+                                        "Idle command checks failed; fenced claims continue at a bounded rate.",
+                                        error,
+                                        stage="dispatch",
+                                    )
+                                # Fail open: fenced claims recheck ownership and holds.
+                                for event in wake.values():
+                                    event.set()
+                                handoff_wake.set()
+                                await asyncio.sleep(
+                                    min(
+                                        PROBE_FAILURE_MAX_SECONDS,
+                                        ACTIVE_PROBE_SECONDS * 2 ** min(failures, 10),
+                                    )
+                                )
+                                continue
+                            failures = 0
+                            if not snapshot.owned:
+                                # A fenced claim raises LeaseLost and fences promptly.
+                                for event in wake.values():
+                                    event.set()
+                            for lane in snapshot.lanes:
+                                wake[lane].set()
+                            if snapshot.handoff_active:
+                                handoff_wake.set()
+                            active = (
+                                bool(busy)
+                                or resident_activity()
+                                or loop.time() - last_delivery[0]
+                                < ACTIVE_WINDOW_SECONDS
+                            )
+                            await asyncio.sleep(
+                                ACTIVE_PROBE_SECONDS if active else IDLE_PROBE_SECONDS
+                            )
 
                     async def watch_lease():
                         while not self._stop.is_set():
@@ -464,8 +565,12 @@ class ProjectExecution:
 
                     async def watch_handoff():
                         while not self._stop.is_set():
+                            await wait_for_wake(handoff_wake)
+                            if self._stop.is_set():
+                                return
+                            handoff_wake.clear()
                             try:
-                                await handoff_agent.tick()
+                                phase = await handoff_agent.tick()
                             except LeaseLost:
                                 # diagnostic-expected: ordinary lease loss stops handoff work and fences the project.
                                 self.state = "fenced"
@@ -479,7 +584,12 @@ class ProjectExecution:
                                     error,
                                     stage="handoff",
                                 )
-                            await asyncio.sleep(1)
+                                phase = True
+                            # tick() returns None only when no source handoff
+                            # applies; otherwise keep the one-second cadence.
+                            if phase is not None:
+                                handoff_wake.set()
+                                await asyncio.sleep(1)
 
                     tasks = [
                         # diagnostic-expected: the work consumer classifies operation failures and is cancelled and joined below.
@@ -492,6 +602,8 @@ class ProjectExecution:
                         ),
                         # diagnostic-expected: the lease watcher fences and classifies failures and is cancelled and joined below.
                         asyncio.create_task(watch_lease(), name="nebula-project-lease"),
+                        # diagnostic-expected: the dispatch probe records its failure streak, fails open, and is cancelled and joined below.
+                        asyncio.create_task(probe(), name="nebula-project-dispatch"),
                     ]
                     if handoff_agent is not None:
                         tasks.append(
