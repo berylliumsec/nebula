@@ -434,7 +434,11 @@ def create_api_worker(
             receipt = await global_delivery.execute(
                 intent, actor_id=actor, idempotency_key=key
             )
-            return await response_view(actor, receipt.command_id, slots=control_slots)
+            # The write has committed. With every viewer busy, answer with its
+            # receipt to follow, never a rejection a client could resubmit.
+            return await response_view(
+                actor, receipt.command_id, receipt=receipt, slots=control_slots
+            )
         project_id = await project_for(intent)
         chat_acceptance = False
         chat_resume = False
