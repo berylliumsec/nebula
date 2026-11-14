@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .database import EntityRow, RunEventRow
 from .domain import OperatorProfile, utc_now
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, revision_conflict
 
 
 class OperatorProfileInvariantError(ConflictError):
@@ -137,9 +137,11 @@ class OperatorProfileService:
             self._assert_coherent(profiles)
             current = self._find(profiles, profile_id)
             if expected_revision is not None and current.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, "
-                    f"found {current.revision}"
+                raise revision_conflict(
+                    OperatorProfile.entity_kind,
+                    current.id,
+                    expected_revision,
+                    current.revision,
                 )
             if not changes:
                 return current
@@ -155,9 +157,11 @@ class OperatorProfileService:
             profiles = await self._locked_profiles(connection)
             target = self._find(profiles, profile_id)
             if expected_revision is not None and target.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, "
-                    f"found {target.revision}"
+                raise revision_conflict(
+                    OperatorProfile.entity_kind,
+                    target.id,
+                    expected_revision,
+                    target.revision,
                 )
             active = [profile for profile in profiles if profile.active]
             if len(active) == 1 and active[0].id == target.id:
@@ -192,9 +196,11 @@ class OperatorProfileService:
             self._assert_coherent(profiles)
             target = self._find(profiles, profile_id)
             if expected_revision is not None and target.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, "
-                    f"found {target.revision}"
+                raise revision_conflict(
+                    OperatorProfile.entity_kind,
+                    target.id,
+                    expected_revision,
+                    target.revision,
                 )
             if len(profiles) == 1:
                 raise OperatorProfileInvariantError(
