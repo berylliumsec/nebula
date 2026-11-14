@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -475,6 +477,7 @@ async def goal(shell: Shell, args: list[str]) -> None:
             "edit",
             "skills",
             "children",
+            "child",
             "start",
             "pause",
             "resume",
@@ -490,7 +493,10 @@ async def goal(shell: Shell, args: list[str]) -> None:
         else (
             await shell.ui.choose(
                 "Goal action",
-                [{"id": name, "name": name.title()} for name in operations],
+                [
+                    {"id": name, "name": GOAL_ACTION_LABELS.get(name, name.title())}
+                    for name in operations
+                ],
             )
         )["id"]
     )
@@ -560,7 +566,34 @@ async def goal(shell: Shell, args: list[str]) -> None:
         record(shell, current)
         return
     if action == "children":
-        record(shell, await shell.api.request("GET", path + "/children"))
+        await goal_children(shell, path)
+        return
+    if action == "child":
+        if current.get("status") != "running":
+            raise ClientError("Start or resume the goal before starting a child goal.")
+        objective = (await shell.ui.ask("Child goal objective")).strip()
+        if not objective:
+            raise ClientError("A child goal needs an objective. Nothing was started.")
+        child = await shell.api.request(
+            "POST",
+            path + "/children",
+            json={
+                "objective": objective,
+                # The GUI's fixed criterion: children never inherit approvals.
+                "completion_criteria": [
+                    "Child work completes without sharing parent approvals"
+                ],
+                "plan": [],
+            },
+        )
+        shell.ui.say(f"Child goal started: {terminal_text(child.get('objective'))}.")
+        if child.get("session_id") and await shell.ui.confirm(
+            "Open the child goal's conversation?"
+        ):
+            session = await shell.api.request(
+                "GET", f"chat-sessions/{key(child['session_id'])}"
+            )
+            await shell.open_view(view.project, session)
         return
     if action == "edit":
         fields = await goal_fields(shell, current)
@@ -608,17 +641,87 @@ async def goal(shell: Shell, args: list[str]) -> None:
             raise ClientError(
                 "Send the pending attachments in a normal message before starting this goal; they are not part of a goal action."
             )
-        body = {"expected_revision": current["revision"], "action": action}
+        body = {"action": action}
         if action in {"cancel", "block"}:
             body["reason"] = await shell.ui.ask("Reason")
         if action == "complete":
-            body["completion_summary"] = await shell.ui.ask("Completion summary")
-            body["completion_evidence"] = current.get("completion_evidence") or []
-        await shell.api.request("POST", path + "/actions", json=body)
+            # Core requires a summary and evidence, as the GUI's form does.
+            body["completion_summary"] = (
+                await shell.ui.ask("Completion summary")
+            ).strip()
+            evidence = []
+            while True:
+                detail = (
+                    await shell.ui.ask(
+                        "Completion evidence"
+                        if not evidence
+                        else "More evidence (blank to finish)"
+                    )
+                ).strip()
+                if not detail:
+                    break
+                evidence.append({"kind": "operator_confirmation", "detail": detail})
+            if not body["completion_summary"] or not evidence:
+                raise ClientError(
+                    "Completing a goal needs a summary and at least one evidence item. "
+                    "The goal is unchanged."
+                )
+            body["completion_evidence"] = evidence
+        try:
+            await shell.api.request(
+                "POST",
+                path + "/actions",
+                json={**body, "expected_revision": current["revision"]},
+            )
+        except ApiError as exc:
+            # A running goal's revision moves every turn; retry once on fresh state.
+            if exc.status != 409:
+                raise
+            latest = await shell.api.request("GET", path)
+            if latest.get("status") != current.get("status"):
+                raise ClientError(
+                    f"The goal changed to {latest.get('status')} before this action. "
+                    "Read /goal show and choose again."
+                ) from exc
+            await shell.api.request(
+                "POST",
+                path + "/actions",
+                json={**body, "expected_revision": latest["revision"]},
+            )
     else:
         raise ClientError("Choose a listed /goal action.")
     observed = await shell.api.request("GET", path)
     shell.ui.say(f"Core goal status: {observed['status']}.")
+
+
+GOAL_ACTION_LABELS = {
+    "children": "Child goals",
+    "child": "Start a child goal",
+    "skills": "Edit goal skills",
+}
+
+
+async def goal_children(shell: Shell, path: str) -> None:
+    view = shell.current()
+    children = await shell.api.request("GET", path + "/children")
+    if not children:
+        shell.ui.say("This goal has no child goals. /goal child starts one.")
+        return
+    chosen = await shell.ui.choose(
+        "Child goals · choose one to open its conversation",
+        [
+            {
+                **row,
+                "name": f"{terminal_text(row.get('objective') or 'Child goal')[:90]}"
+                f" · {str(row.get('status', '')).replace('_', ' ')}",
+            }
+            for row in children
+        ],
+    )
+    session = await shell.api.request(
+        "GET", f"chat-sessions/{key(chosen['session_id'])}"
+    )
+    await shell.open_view(view.project, session)
 
 
 async def steer(shell: Shell, args: list[str]) -> None:
@@ -643,6 +746,36 @@ async def steer(shell: Shell, args: list[str]) -> None:
     shell.ui.say("Guidance delivered to the active harness turn.")
 
 
+ACTIVE_SUBAGENT = {"queued", "running", "waiting_approval", "recovering"}
+SSH_TOOL = re.compile(r"^ssh\.([a-z0-9_-]+?)(?:-[0-9a-f]{6})?\.run_command$")
+SSH_DESCRIPTION = re.compile(
+    r"^Run a shell command on the operator's machine (.+) \(SSH host (\S+)\)\.$",
+    re.MULTILINE,
+)
+
+
+def ssh_target(approval: dict[str, Any]) -> tuple[str, str] | None:
+    """The SSH host (label, alias) an approval would run on, as the GUI reads it."""
+    exact = approval.get("exact_request") or approval
+    tool = exact.get("tool_name") if isinstance(exact, dict) else None
+    match = SSH_TOOL.match(tool or "")
+    if match is None:
+        return None
+    for effect in approval.get("expected_effects") or []:
+        found = SSH_DESCRIPTION.search(effect) if isinstance(effect, str) else None
+        if found:
+            return found.group(1), found.group(2)
+    return match.group(1), match.group(1)
+
+
+def subagent_label(row: dict[str, Any]) -> str:
+    seconds = int(row.get("elapsed_seconds") or 0)
+    elapsed = f"{seconds // 60}m {seconds % 60:02}s" if seconds >= 60 else f"{seconds}s"
+    name = row.get("name") or row.get("task") or row.get("objective") or row["id"]
+    status = str(row.get("status", "unknown")).replace("_", " ")
+    return f"Delegated: {terminal_text(name)[:70]} · {status} · {elapsed}"
+
+
 async def agents(shell: Shell, args: list[str]) -> None:
     view = shell.current()
     main = await shell.api.page(
@@ -650,23 +783,29 @@ async def agents(shell: Shell, args: list[str]) -> None:
     )
     from .state import main_chat
 
-    options = [
-        {"id": "main:" + row["id"], "name": row["title"], "session": row}
-        for row in main
-        if main_chat(row)
-    ]
+    options: list[dict[str, Any]] = []
     if view.session:
         listing = await shell.api.request(
             "GET", f"chat/sessions/{key(view.session_id)}/subagents"
         )
+        children = listing.get("subagents", [])
+        active = [row for row in children if row.get("status") in ACTIVE_SUBAGENT]
+        if active:
+            options.append(
+                {
+                    "id": "__stop_all",
+                    "name": f"Stop all {len(active)} running subagents",
+                }
+            )
         options.extend(
-            {
-                "id": "child:" + row["id"],
-                "name": f"Delegated: {row.get('name') or row.get('task') or row.get('objective') or row['id']} ({row.get('status', 'unknown')})",
-                "child": row,
-            }
-            for row in listing.get("subagents", [])
+            {"id": "child:" + row["id"], "name": subagent_label(row), "child": row}
+            for row in children
         )
+    options.extend(
+        {"id": "main:" + row["id"], "name": row["title"], "session": row}
+        for row in main
+        if main_chat(row)
+    )
     if not options:
         shell.ui.say("No saved agents yet. Use /new.")
         return
@@ -674,25 +813,57 @@ async def agents(shell: Shell, args: list[str]) -> None:
     if "session" in chosen:
         await shell.open_view(view.project, chosen["session"])
         return
-    record(shell, chosen["child"])
-    if await shell.ui.confirm("Stop this delegated agent through Core?"):
-        await shell.api.request(
-            "POST",
-            f"chat/sessions/{key(view.session_id)}/subagents/{key(chosen['child']['id'])}/stop",
+    path = f"chat/sessions/{key(view.session_id)}/subagents"
+    if chosen["id"] == "__stop_all":
+        if not await shell.ui.confirm(
+            "Stop every running subagent of this conversation?"
+        ):
+            return
+        await shell.api.request("POST", path + "/stop")
+        observed = (await shell.api.request("GET", path)).get("subagents", [])
+        still = [row for row in observed if row.get("status") in ACTIVE_SUBAGENT]
+        shell.ui.say(
+            "All subagents stopped in Core."
+            if not still
+            else f"{len(still)} subagents are still stopping; /agents shows them."
         )
-        observed = await shell.api.request(
-            "GET", f"chat/sessions/{key(view.session_id)}/subagents"
+        return
+    child = chosen["child"]
+    for line in (
+        subagent_label(child),
+        f"Task: {terminal_text(child.get('task') or '')}",
+        f"Result: {terminal_text(child.get('result') or '')[:400]}"
+        if child.get("result")
+        else "",
+        f"Error: {terminal_text(child.get('error') or '')}"
+        if child.get("error")
+        else "",
+    ):
+        if line:
+            shell.ui.say(line)
+    actions = []
+    if child.get("child_session_id"):
+        actions.append(
+            {"id": "open", "name": "Open its conversation (read and message it)"}
         )
-        record(
-            shell,
-            next(
-                (
-                    row
-                    for row in observed["subagents"]
-                    if row["id"] == chosen["child"]["id"]
-                ),
-                {"status": "removed"},
-            ),
+    if child.get("status") in ACTIVE_SUBAGENT:
+        actions.append({"id": "stop", "name": "Stop this subagent"})
+    actions.append({"id": "back", "name": "Back to chat"})
+    action = (await shell.ui.choose("Subagent", actions))["id"]
+    if action == "open":
+        session = await shell.api.request(
+            "GET", f"chat-sessions/{key(child['child_session_id'])}"
+        )
+        await shell.open_view(view.project, session)
+    elif action == "stop":
+        await shell.api.request("POST", f"{path}/{key(child['id'])}/stop")
+        observed = await shell.api.request("GET", path)
+        row = next(
+            (row for row in observed["subagents"] if row["id"] == child["id"]),
+            {"status": "removed"},
+        )
+        shell.ui.say(
+            f"Subagent status in Core: {str(row.get('status')).replace('_', ' ')}."
         )
 
 
@@ -700,12 +871,70 @@ async def approvals(shell: Shell, args: list[str]) -> None:
     view = shell.current()
     state = await shell.state()
     pending = [row for row in state.get("pending", []) if row["kind"] == "approval"]
-    if not pending:
-        shell.ui.say("No pending approvals in this conversation.")
+    options = [
+        {**row, "id": "main:" + row["id"], "name": row["text"]} for row in pending
+    ]
+    if view.session is not None:
+        listing = await shell.api.request(
+            "GET", f"chat/sessions/{key(view.session_id)}/subagents"
+        )
+        for row in listing.get("subagents", []):
+            approval = row.get("approval") or {}
+            if row.get("status") == "waiting_approval" and approval.get("id"):
+                reason = (
+                    approval.get("rationale")
+                    or approval.get("tool")
+                    or "wants to run a tool"
+                )
+                options.append(
+                    {
+                        "id": "sub:" + approval["id"],
+                        "name": f"Subagent {terminal_text(row.get('name') or row['id'])}: "
+                        f"{terminal_text(reason)[:100]}",
+                        "approval": approval,
+                    }
+                )
+    if not options:
+        shell.ui.say("No pending approvals in this conversation or its subagents.")
         return
-    selected = await shell.ui.choose(
-        "Pending approval", [{**row, "name": row["text"]} for row in pending]
+    selected = await shell.ui.choose("Pending approval", options)
+    if selected["id"].startswith("sub:"):
+        approval = selected["approval"]
+        shell.ui.say("Subagent request:")
+        record(
+            shell,
+            {
+                name: approval.get(name)
+                for name in ("tool", "rationale", "risk_class", "detail")
+            },
+        )
+        decision = (
+            await shell.ui.choose(
+                "Decision",
+                [
+                    {"id": "reject", "name": "Deny"},
+                    {"id": "approve", "name": "Allow once"},
+                ],
+            )
+        )["id"]
+        await shell.api.request(
+            "POST",
+            f"approvals/{key(approval['id'])}/decision",
+            json={"decision": decision},
+        )
+        observed = await shell.api.request("GET", f"approvals/{key(approval['id'])}")
+        shell.ui.say(
+            f"Decision recorded: {observed['status']}. The subagent continues on Core."
+        )
+        return
+    await decide_main_approval(
+        shell, view, {**selected, "id": selected["id"].removeprefix("main:")}
     )
+
+
+async def decide_main_approval(
+    shell: Shell, view: Any, selected: dict[str, Any]
+) -> None:
     approval = await shell.api.request("GET", f"approvals/{key(selected['id'])}")
     if approval.get("chat_session_id") not in {None, view.session_id}:
         raise ClientError(
@@ -725,17 +954,52 @@ async def approvals(shell: Shell, args: list[str]) -> None:
         )
     shell.ui.say("Exact requested action:")
     record(shell, approval.get("exact_request") or approval)
-    decision = (
-        await shell.ui.choose(
-            "Decision",
-            [
-                {"id": name, "name": name.title()}
-                for name in ["reject", "approve", "stop"]
-            ],
+    host = ssh_target(approval)
+    decisions = [
+        {"id": "reject", "name": "Reject"},
+        {"id": "approve", "name": "Approve"},
+    ]
+    if not turn.get("harness_turn_id"):
+        decisions.append({"id": "edit", "name": "Edit the request, then approve"})
+    if host is not None:
+        decisions.append(
+            {
+                "id": "always_host",
+                "name": f"Always allow on {host[0]}, then approve",
+            }
         )
-    )["id"]
+    decisions.append({"id": "stop", "name": "Stop the response"})
+    decision = (await shell.ui.choose("Decision", decisions))["id"]
+    payload: dict[str, Any] = {"decision": decision}
+    if decision == "edit":
+        exact = approval.get("exact_request") or {}
+        current_args = exact.get("arguments") if isinstance(exact, dict) else None
+        raw = await shell.ui.ask(
+            "Edited arguments (one JSON object)",
+            default=json.dumps(current_args or {}, separators=(", ", ": ")),
+        )
+        try:
+            edited = json.loads(raw)
+        except ValueError as exc:
+            raise ClientError(
+                "Edited arguments must be valid JSON. Nothing was decided."
+            ) from exc
+        if not isinstance(edited, dict):
+            raise ClientError("Edited arguments must be one JSON object.")
+        payload = {"decision": "approve", "edited_arguments": edited}
+        decision = "approve"
+    elif decision == "always_host":
+        assert host is not None
+        await shell.api.request(
+            "PUT",
+            f"ssh-environments/{key(host[1])}",
+            json={"command_approval": "allow"},
+        )
+        shell.ui.say(f"Commands on {host[0]} no longer ask for approval.")
+        payload = {"decision": "approve"}
+        decision = "approve"
     await shell.api.request(
-        "POST", f"approvals/{key(selected['id'])}/decision", json={"decision": decision}
+        "POST", f"approvals/{key(selected['id'])}/decision", json=payload
     )
     observed = await shell.api.request("GET", f"approvals/{key(selected['id'])}")
     shell.ui.say(

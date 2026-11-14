@@ -423,13 +423,19 @@ class Shell:
                     parent = await self.api.request(
                         "GET", f"chat-sessions/{key(parent_id)}"
                     )
+            delegated = bool(
+                meta.get("subagent_id") or meta.get("delegated_from_goal_id")
+            )
+            # Subagent and child-goal chats open like the GUI's: readable and
+            # messageable. Other temporary assistant chats stay out of the shell.
             if (
                 not main_chat(session)
                 and not meta.get("control_assistant")
                 and not (meta.get("side_chat") and parent is not None)
+                and not (delegated and not meta.get("temporary_assistant"))
             ):
                 raise ClientError(
-                    "Delegated conversations are inspected through /agents; message their parent main agent."
+                    "This temporary conversation is not available in the terminal. Use /chats."
                 )
         await self.detach()
         identity = (
