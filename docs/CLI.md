@@ -174,6 +174,19 @@ one to read its result, open its conversation to read or message it, or stop it,
 or stop all running subagents at once. Subagent and child-goal conversations open
 like any other chat.
 
+F2 and `/projects` list active projects only, as the GUI's project switcher does;
+**Archived projects** restores an archived project or deletes it permanently after
+a confirmation (a linked folder on the Core host is kept). **Create project** asks
+for a name, an optional client name, an optional folder chosen with Core's host
+folder browser, and Host or Docker mode. `/project` shows the selected project's
+folder, status and execution mode, and renames it, relinks its folder, edits its
+execution mode and command policy (approval, network, maximum command time), edits
+its network scope (authorization, allowed domains, CIDRs, ports and URLs, active
+window, prohibited actions, concurrency, local-only, tool suggestions, web search
+and always-loaded tools), or archives it. Host mode, all destinations and bypassing
+Nebula permissions each ask for confirmation, and every change is read back from
+Core. A remembered archived project is not reopened at startup.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -183,7 +196,8 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 
 | Command | Workflow |
 | --- | --- |
-| `/core`, `/projects`, `/chats`, `/new`, `/butler` | Switch paired Cores, select/create a project, resume a main agent chat, or open Butler |
+| `/core`, `/projects`, `/chats`, `/new`, `/butler` | Switch paired Cores, select, create or restore a project, resume a main agent chat, or open Butler |
+| `/project` | Rename, relink, set execution mode, command policy and network scope, or archive the selected project |
 | `/chat` | Rename, pin, flag, archive, restore, branch, rewind, edit and resend, retry, finish an unfinished answer, export visible text, delete, or act on several conversations (`/chat bulk`) |
 | `/search`, `/bookmark` | Search saved messages in this conversation or project, optionally bookmarked only, and open a match; bookmark a message |
 | `/side` | Open, start, leave or close a side chat of the current conversation |
