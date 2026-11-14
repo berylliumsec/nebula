@@ -38,7 +38,9 @@ async def agent(project):
         _precompactions={},
     )
     state = SimpleNamespace(
-        control_assistant_work=SimpleNamespace(chat=chat),
+        control_assistant_work=SimpleNamespace(
+            chat=chat, queue=SimpleNamespace(_inflight=set())
+        ),
         automation_runtime=SimpleNamespace(_sessions={}, _processes={}),
         notebooks=SimpleNamespace(workers={}, _drains={}),
         container_terminal_service=SimpleNamespace(
@@ -114,6 +116,23 @@ async def test_resident_handle_pins_and_releases_only_after_it_closes(project, a
         (await row(project)).checkpoint
     )
     agent.chat.restore_locally_parked_turns.assert_awaited_once()
+
+
+async def test_follow_up_dispatch_in_flight_keeps_the_project_finishing(project, agent):
+    # The dispatcher has claimed a queued follow-up in memory; SQL shows no
+    # turn yet. Transferring now would leave the target a claim it can only
+    # review as a crash, so the source keeps finishing with admission held.
+    agent.queue._inflight.add("follow-up")
+    assert await agent.tick() == "finishing"
+    handoff = await row(project)
+    assert handoff.admission_held
+    assert "A queued follow-up is being dispatched" in handoff.blockers
+    with pytest.raises(CoordinationConflict):
+        await project.coordinator.transfer("one")
+    agent.queue._inflight.clear()
+    assert await agent.tick() == "transferable"
+    lease = await project.coordinator.transfer("one")
+    assert lease.fencing_token == project.lease.fencing_token + 1
 
 
 async def test_changed_project_revision_rejects_both_transfer_and_stale_restore(

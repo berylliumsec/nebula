@@ -1,6 +1,7 @@
 """Real private host socket and detached inert workers, without live services."""
 
 import asyncio
+from dataclasses import asdict
 from pathlib import Path
 import secrets
 import threading
@@ -11,13 +12,22 @@ import pytest
 
 from nebula.v3.database import RuntimeInstanceRow, RuntimeProcessRow
 from nebula.v3.execution_scope import execution_context
+from nebula.v3.host_load import HostLoadSnapshot
+from nebula.v3.runtime_coordination import ProjectLease
+from nebula.v3.runtime_host_pressure import HOST_PRESSURE, RemoteHostLoadGate
 from nebula.v3.process_identity import same_process
 from nebula.v3.runtime_host_services import (
     HOST_SOCKET_NAME,
+    HostServiceClient,
     HostSharedServices,
     host_service_client,
 )
-from nebula.v3.runtime_ipc import RuntimeIpcError
+from nebula.v3.runtime_ipc import (
+    UNDISPATCHED_HEADER,
+    RuntimeIpcError,
+    RuntimeIpcUndispatched,
+    RuntimeRpcServer,
+)
 from nebula.v3.shared_memory_rpc import RemoteButlerMemory
 from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_runtime_coordination import location as location
@@ -358,6 +368,78 @@ async def test_service_replacement_keeps_workers_memory_and_host_capacity(shared
     assert not Path(endpoint[7:]).exists()
 
 
+async def test_worker_observation_waits_for_a_replacement_host_instead_of_failing(
+    shared,
+):
+    # A supervisor replacement removes the host socket until the next
+    # generation listens. Starting project work reads host observations in
+    # that gap; the call never reached a host, so it is resent and delayed
+    # rather than failed.
+    client = shared.remote.client
+    endpoint = shared.services.endpoint
+    await shared.services.close()
+    assert not Path(endpoint[7:]).exists()
+    waiting = asyncio.create_task(client.call("host.services/v1", {}))
+    await asyncio.sleep(0.6)
+    assert not waiting.done()
+    replacement = HostSharedServices(shared.managed.host, capacity_limits=_LIMITS)
+    try:
+        await replacement.start()
+        assert replacement.endpoint == endpoint
+        capabilities = await asyncio.wait_for(waiting, 10)
+        assert capabilities["protocol"] == "nebula.host-services/v1"
+    finally:
+        waiting.cancel()
+        await replacement.close()
+
+
+async def test_only_undispatched_observations_are_resent_within_a_bound(shared):
+    await shared.services.close()
+    client = shared.remote.client
+    client.reconnect_seconds = 0.3
+    with pytest.raises(httpx.ConnectError):
+        await client.call("host.services/v1", {})
+    # A call with effects keeps its single attempt and the caller's deadline.
+    started = asyncio.get_running_loop().time()
+    with execution_context(shared.lease), pytest.raises(httpx.ConnectError):
+        await shared.remote.list("admitted-project")
+    assert asyncio.get_running_loop().time() - started < 0.3
+    calls = []
+
+    async def rejected(request):
+        calls.append(request)
+        return httpx.Response(503, json={"detail": "operation unavailable"})
+
+    client = HostServiceClient(
+        "unix:///isolated/host.sock",
+        secrets.token_bytes(32),
+        transport=httpx.MockTransport(rejected),
+    )
+    shared.clients.append(client)
+    # An operation's own 503 may follow side effects; only the gateway's
+    # undispatched marker makes a resend safe.
+    with pytest.raises(RuntimeIpcError, match="503"):
+        await client.call("host.services/v1", {})
+    assert len(calls) == 1
+
+    async def reconnecting(request):
+        calls.append(request)
+        return httpx.Response(
+            503, headers={UNDISPATCHED_HEADER: "1"}, json={"detail": "reconnecting"}
+        )
+
+    retrying = HostServiceClient(
+        "unix:///isolated/host.sock",
+        secrets.token_bytes(32),
+        transport=httpx.MockTransport(reconnecting),
+    )
+    retrying.reconnect_seconds = 0.3
+    shared.clients.append(retrying)
+    with pytest.raises(RuntimeIpcUndispatched):
+        await retrying.call("host.services/v1", {})
+    assert len(calls) > 2
+
+
 async def test_api_peers_and_expired_execution_peers_cannot_call_host_memory(shared):
     api = await shared.managed.host.spawn("v1", "api")
     forbidden = await peer(shared.managed, api)
@@ -441,3 +523,95 @@ async def test_host_services_refuse_to_replace_a_non_socket_path(
         )
     finally:
         await services.close()
+
+
+async def test_queued_pressure_callers_share_one_host_wait(tmp_path):
+    # Three turns queued behind a missing host share one observation: they
+    # fail together within one reconnect window, not one window each.
+    client = HostServiceClient(
+        "unix://" + str(tmp_path / "missing.sock"), secrets.token_bytes(32)
+    )
+    # With this window the client gives up after about 0.7 s of backoff.
+    client.reconnect_seconds = 1.0
+    gate = RemoteHostLoadGate(client)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+
+    async def caller():
+        with execution_context(ProjectLease("project", "runtime", 1)):
+            try:
+                await gate.snapshot()
+            except httpx.ConnectError:
+                return loop.time() - began
+
+    try:
+        elapsed = await asyncio.gather(caller(), caller(), caller())
+    finally:
+        await client.close()
+    assert all(value is not None for value in elapsed)
+    # Serialized waits would end at about 0.7, 1.4 and 2.1 s.
+    assert max(elapsed) < 1.3, elapsed
+
+    calls = []
+    server = RuntimeRpcServer(key := secrets.token_bytes(32))
+
+    async def pressure(payload):
+        calls.append(payload)
+        await asyncio.sleep(0.2)
+        return {
+            "lease": payload,
+            "sample": asdict(
+                HostLoadSnapshot(
+                    sampled_at=0.0,
+                    cpu_capacity=1.0,
+                    cpu_ratio=0.1,
+                    memory_available_ratio=0.9,
+                    busy=False,
+                    reason=None,
+                    measurements_available=True,
+                )
+            ),
+        }
+
+    server.register(HOST_PRESSURE, pressure)
+    shared_client = HostServiceClient(
+        "unix:///isolated/host.sock", key, transport=httpx.ASGITransport(app=server.app)
+    )
+    gate = RemoteHostLoadGate(shared_client)
+    try:
+        with execution_context(ProjectLease("project", "runtime", 1)):
+            samples = await asyncio.gather(*(gate.snapshot() for _ in range(3)))
+    finally:
+        await shared_client.close()
+    assert len(calls) == 1 and all(not sample.busy for sample in samples)
+
+
+async def test_peer_failures_fail_at_once_and_only_replacement_is_resent(shared):
+    attempts = []
+
+    async def capacity(_runtime_id):
+        attempts.append(_runtime_id)
+        raise RuntimeIpcError("Shared host peer capacity is busy")
+
+    shared.services._peer = capacity
+    client = shared.remote.client
+    client.reconnect_seconds = 5
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(RuntimeIpcError, match="503") as failure:
+        await client.call("host.services/v1", {})
+    assert not isinstance(failure.value, RuntimeIpcUndispatched)
+    assert len(attempts) == 1
+    assert asyncio.get_running_loop().time() - started < 1
+
+    await shared.services.close()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=shared.services.app),
+        base_url="http://isolated",
+    ) as gateway:
+        closed = await gateway.post(
+            "/internal/nebula-runtime/v1/call",
+            headers={"x-nebula-ipc-worker": shared.identity.runtime_id},
+            content=b"{}",
+        )
+    assert closed.status_code == 503
+    assert closed.headers.get(UNDISPATCHED_HEADER) == "1"
