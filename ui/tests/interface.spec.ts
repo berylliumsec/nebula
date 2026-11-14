@@ -4994,6 +4994,66 @@ test("stabilization LAN connection keeps the workspace through a transient miss 
   await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
 });
 
+test("stabilization composer keeps text typed through a window resize and a Core reconnect", async ({page}) => {
+  test.setTimeout(60_000);
+  let healthReads = 0;
+  let failuresRemaining = 0;
+  await page.route(/\/api\/v1\/health(?:\?|$)/, async route => {
+    healthReads += 1;
+    if (failuresRemaining > 0) {
+      failuresRemaining -= 1;
+      await route.abort("connectionfailed");
+      return;
+    }
+    await route.fulfill({json: {
+      status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable",
+      container_terminal: "configured", diagnostics: {writable: true, degraded: false, browser_event_ingress: "enabled"},
+    }});
+  });
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
+    ...entity,
+    id: "draft-continuity-fixture",
+    name: "Draft continuity fixture",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "/bin/true",
+    auth_mode: "existing_session",
+    enabled: true,
+    default_model: "fixture",
+    privacy: {local_only: true, permits_sensitive_data: true},
+    capabilities: {models: ["fixture"], checked_at: entity.updated_at, authentication_state: "verified"},
+  }]}));
+  // A Core without a storage identity: each client keeps drafts in its own window scope.
+  await page.route(/\/api\/v1\/runtime\/identity(?:\?|$)/, route => route.fulfill({status: 404, json: {detail: "Not found"}}));
+  await page.goto("/?view=chat");
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+  await composer.click();
+  await page.keyboard.type("Typed before");
+  // On a phone the software keyboard resizes the window mid-sentence; WebKit
+  // drops later keystrokes if the caret's selection is cleared.
+  const size = page.viewportSize()!;
+  await page.setViewportSize({width: size.width, height: size.height - 160});
+  await page.keyboard.type(" and after a resize.");
+  await expect(composer).toHaveValue("Typed before and after a resize.");
+  await page.setViewportSize(size);
+
+  // A confirmed loss and a reconnect give the page a new client and scope.
+  const beforeLoss = healthReads;
+  failuresRemaining = 3;
+  await expect.poll(() => healthReads, {timeout: 12_000}).toBeGreaterThanOrEqual(beforeLoss + 3);
+  await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toBeVisible();
+  await page.locator(".connection-chip").click();
+  await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toHaveCount(0, {timeout: 10_000});
+  await expect(composer).toHaveValue("Typed before and after a resize.");
+  await expect(composer).toBeEnabled();
+  await composer.press("End");
+  await page.keyboard.type(" Still here.");
+  await expect(composer).toHaveValue("Typed before and after a resize. Still here.");
+  await expect(page.locator(".chat-composer").getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
+});
+
 test("project scope normalizes root URLs and confirms distinct authorization modes", async ({ page }) => {
   let durableScope = {
     ...entity,
