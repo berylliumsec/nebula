@@ -8,8 +8,14 @@ import json
 from uuid import uuid4
 
 from .async_utils import finish_cleanup
+from .diagnostics import record_caught_exception
 from .domain import ChatTurn
-from .database import EntityRow, RuntimeResourceRow
+from .database import (
+    OUTAGE_RETRY_MAX_SECONDS,
+    EntityRow,
+    RuntimeResourceRow,
+    transient_database_error,
+)
 from .execution_scope import current_execution_lease
 from .runtime_coordination import CoordinationConflict, LeaseLost, STREAM_EPOCH
 from .runtime_chat_acceptance import bind_stream_cursor
@@ -18,8 +24,10 @@ SEGMENT_END = "runtime_stream_end"
 
 
 class RuntimeChatJournal:
-    def __init__(self, coordination, store):
+    def __init__(self, coordination, store, *, outage_remaining=None):
         self.coordination, self.store = coordination, store
+        # Seconds the owning worker may still wait for unreachable SQL.
+        self.outage_remaining = outage_remaining
 
     async def publish(
         self, turn_id, events, *, batch_key=None, apply=None, command_id=None
@@ -27,6 +35,9 @@ class RuntimeChatJournal:
         lease = current_execution_lease()
         if lease is None:
             raise LeaseLost("Chat publication requires exact project ownership")
+        # One key for every attempt: a batch whose commit was acknowledged
+        # nowhere is found again by its key instead of being appended twice.
+        batch_key = batch_key or uuid4().hex
 
         async def publication(session, frames):
             if command_id is not None:
@@ -40,13 +51,36 @@ class RuntimeChatJournal:
                 await apply(session, frames)
 
         async def commit():
-            return await self.coordination.append_stream_batch(
-                lease,
-                turn_id,
-                batch_key=batch_key or uuid4().hex,
-                events=events,
-                apply=publication,
-            )
+            delay, retried = 0.1, False
+            while True:
+                try:
+                    return await self.coordination.append_stream_batch(
+                        lease,
+                        turn_id,
+                        batch_key=batch_key,
+                        events=events,
+                        apply=publication,
+                    )
+                except Exception as error:
+                    remaining = self.outage_remaining
+                    if (
+                        remaining is None
+                        or not transient_database_error(error)
+                        or remaining() <= delay
+                    ):
+                        raise
+                    if not retried:
+                        retried = True
+                        record_caught_exception(
+                            "chat",
+                            "chat.stream.publication_retrying",
+                            "A response batch lost its SQL connection; it is retried "
+                            "under the same key while the project lease is provable.",
+                            error,
+                            stage="stream",
+                        )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, OUTAGE_RETRY_MAX_SECONDS)
 
         return await finish_cleanup(commit())
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from nebula.v3.api_worker import create_api_worker
 from nebula.v3.chat import ChatCompletionRequest, ChatHistoryConflict, ChatService
@@ -122,6 +123,40 @@ async def test_cancellation_joins_publication_and_never_undoes_acknowledged_fram
     assert (await journal.coordination[1].replay_stream("turn"))[0].payload == {
         "delta": "saved"
     }
+
+
+async def test_batch_whose_commit_was_not_acknowledged_is_retried_once_by_key(
+    journal, monkeypatch
+):
+    """A response batch that loses its SQL connection while the worker can
+    still prove its lease is retried under the same key: a commit that landed
+    is found again instead of being appended twice, and the turn goes on."""
+    original = journal.coordination[0].append_stream_batch
+    keys = []
+
+    async def acknowledgement_lost(*args, **kwargs):
+        keys.append(kwargs["batch_key"])
+        result = await original(*args, **kwargs)
+        if len(keys) == 1:
+            raise OperationalError("COMMIT", {}, ConnectionResetError("reset"))
+        return result
+
+    monkeypatch.setattr(
+        journal.coordination[0], "append_stream_batch", acknowledgement_lost
+    )
+    journal.writer.outage_remaining = lambda: 10.0
+    published = await publish(journal, ("delta", {"delta": "exactly once"}))
+    assert len(keys) == 2 and keys[0] == keys[1]
+    replay = await journal.coordination[1].replay_stream("turn")
+    assert [(frame.sequence, frame.payload) for frame in replay] == [
+        (published[0].sequence, {"delta": "exactly once"})
+    ]
+    # Without a provable lease the lost connection fails the batch as before.
+    journal.writer.outage_remaining = None
+    keys.clear()
+    with pytest.raises(OperationalError):
+        await publish(journal, ("delta", {"delta": "not retried"}))
+    assert len(keys) == 1
 
 
 async def test_handoff_keeps_one_epoch_and_never_hides_the_next_segment(journal):
