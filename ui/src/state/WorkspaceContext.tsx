@@ -15,6 +15,8 @@ import { providerVerificationModel } from "../api/providerCapabilities";
 import { providerWithDiscoveredModels, providersWithDiscoveredModels } from "../api/providerRuntime";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import { sameJson } from "../api/visiblePoll";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 import { setCoreDiagnosticsHealth } from "../diagnostics";
 import { projectIdFromPath } from "../resourceRoutes";
 import { readStorage, removeStorage, writeStorage } from "./browserStorage";
@@ -187,6 +189,15 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [health, setHealth] = useState<HealthResponse>();
   const [setupStatus, setSetupStatus] = useState<SetupStatus>();
   const [resourceStatus, setResourceStatus] = useState<Record<WorkspaceResource, ResourceStatus>>(initialResourceStatus);
+  // Project collections whose read found the project's worker idle or starting.
+  // They stay loading, not failed, and read again when the runtime answers.
+  const runtimeWaitingResources = useRef(new Set<WorkspaceResource>());
+  const [resourceRuntimeWait, setResourceRuntimeWait] = useState(0);
+  const awaitProjectRuntime = useCallback((resource: WorkspaceResource) => {
+    runtimeWaitingResources.current.add(resource);
+    setResourceStatus((current) => current[resource]?.state === "loading" ? current : { ...current, [resource]: { state: "loading" } });
+    setResourceRuntimeWait((value) => value + 1);
+  }, []);
   const [engagements, setEngagements] = useState<EngagementSummary[]>([]);
   const [operatorProfiles, setOperatorProfiles] = useState<OperatorProfile[]>([]);
   const [engagement, setEngagement] = useState<EngagementSummary>();
@@ -261,6 +272,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
+    runtimeWaitingResources.current.clear();
+    setResourceRuntimeWait(0);
 
     void (async () => {
       const switching = bootstrappedAttempt.current === attempt && api !== undefined;
@@ -409,6 +422,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
             setResourceStatus((current) => ({ ...current, notes: { state: value.items.length ? "ready" : "empty" } }));
           }, (error: unknown) => {
             if (!active) return;
+            // diagnostic-expected: the client recorded this read; notes read again when the project runtime answers.
+            if (isProjectRuntimeUnavailable(error)) { awaitProjectRuntime("notes"); return; }
             setResourceStatus((current) => ({ ...current, notes: { state: "failed", error } }));
           });
           const detailResults = await Promise.allSettled([
@@ -425,14 +440,18 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           // Keep the observed connection loss until a successful health check
           // starts a fresh bootstrap.
           if (!active || connectionLost.current) return;
-          const labels = ["activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"];
+          const labels = ["activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"] as const;
+          // An idle project's worker is not a failure: those collections load when it answers.
+          const waiting = new Set(labels.filter((_label, index) => index !== 5
+            && detailResults[index].status === "rejected" && isProjectRuntimeUnavailable((detailResults[index] as PromiseRejectedResult).reason)));
           detailResults.forEach((result, index) => {
-            if (result.status === "rejected") loadErrors.push(labels[index]);
+            if (result.status === "rejected" && !waiting.has(labels[index]) && !isProjectRuntimeUnavailable(result.reason)) loadErrors.push(labels[index]);
           });
           setResourceStatus((current) => ({
             ...current,
-            ...Object.fromEntries(detailResults.flatMap((result, index) => index === 5 ? [] : [[labels[index], result.status === "fulfilled" ? { state: result.value.items.length ? "ready" : "empty" } : { state: "failed", error: result.reason }]])),
+            ...Object.fromEntries(detailResults.flatMap((result, index) => index === 5 || waiting.has(labels[index]) ? [] : [[labels[index], result.status === "fulfilled" ? { state: result.value.items.length ? "ready" : "empty" } : { state: "failed", error: result.reason }]])),
           }));
+          waiting.forEach((resource) => awaitProjectRuntime(resource));
           const [runResult, approvalResult, assetResult, findingResult, evidenceResult, , knowledgeResult, reportResult] = detailResults;
           if (runResult.status === "fulfilled") {
             setRuns(runResult.value.items);
@@ -506,6 +525,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         }
       } catch (error) {
         if (!controller.signal.aborted) {
+          // diagnostic-expected: the client recorded this read; activity reads again when the project runtime answers.
+          if (isProjectRuntimeUnavailable(error)) { awaitProjectRuntime("activity"); return; }
           void logCaughtDiagnostic("interface.workspace.mission_refresh_failed", "Mission state could not be refreshed from Core.", error, "workspace_context");
           setResourceStatus((current) => ({ ...current, activity: { state: "failed", error } }));
         }
@@ -672,11 +693,22 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       }
       setResourceStatus((current) => ({ ...current, [resource]: { state: count ? "ready" : "empty" } }));
     } catch (error) {
+      // diagnostic-expected: the client recorded this read; the collection reads again when the project runtime answers.
+      if (isProjectRuntimeUnavailable(error)) { awaitProjectRuntime(resource); return; }
       void logCaughtDiagnostic(`interface.workspace.resource_${resource}_retry_failed`, `The ${resource} resource could not be reloaded.`, error, "workspace_context");
       setResourceStatus((current) => ({ ...current, [resource]: { state: "failed", error } }));
       throw error;
     }
-  }, [api, engagement, refreshHarnesses]);
+  }, [api, awaitProjectRuntime, engagement, refreshHarnesses]);
+
+  useProjectRuntimeRecovery(api, resourceRuntimeWait, () => {
+    const resources = [...runtimeWaitingResources.current];
+    runtimeWaitingResources.current.clear();
+    setResourceRuntimeWait(0);
+    for (const resource of resources) {
+      void retryResource(resource).catch((error: unknown) => logCaughtDiagnostic(`interface.workspace.resource_${resource}_recovery_failed`, `The ${resource} resource could not be read after the project runtime returned.`, error, "workspace_context"));
+    }
+  });
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
