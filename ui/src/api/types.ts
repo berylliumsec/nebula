@@ -2927,7 +2927,10 @@ export interface HealthResponse {
   containerTerminal: "configured" | "unavailable";
   diagnosticsDegraded?: boolean;
   browserDiagnosticIngress: "enabled" | "disabled";
+  /** False only while Core holds API admission (memory budget recovery). */
   apiReady?: boolean;
+  /** Whether the promoted API worker answers; "not_responding" is not a budget problem. */
+  apiState?: "ready" | "not_responding" | "unavailable";
   recoveryPath?: string;
 }
 

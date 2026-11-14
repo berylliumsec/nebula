@@ -5830,6 +5830,7 @@ export class ApiClient {
         api_version?: string;
         dialect?: string;
         api_ready?: boolean;
+        api_state?: "ready" | "not_responding" | "unavailable";
         recovery_path?: string;
         container_terminal?: "configured" | "unavailable";
         diagnostics?: { degraded?: boolean; browser_event_ingress?: "enabled" | "disabled" };
@@ -5845,7 +5846,10 @@ export class ApiClient {
       containerTerminal: health.container_terminal ?? "unavailable",
       diagnosticsDegraded: health.diagnostics?.degraded === true,
       browserDiagnosticIngress: health.diagnostics?.browser_event_ingress ?? "disabled",
-      apiReady: health.api_ready,
+      // The recovery screen is for held API admission. A promoted API worker
+      // that is not answering keeps the workspace and its reconnect handling.
+      apiReady: health.api_state === undefined ? health.api_ready : health.api_state !== "unavailable",
+      apiState: health.api_state,
       recoveryPath: health.recovery_path,
     }));
   }

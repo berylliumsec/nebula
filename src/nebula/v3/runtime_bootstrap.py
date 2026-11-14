@@ -5,16 +5,26 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+import httpx
 
 from .database import RuntimeReleaseRow
 from .deployment_protocol import ReleaseManifest
 from .release_store import ReleaseIntegrityError, ReleaseStore
 from .runtime_coordination import CoordinationConflict
-from .runtime_ipc import RuntimeIpcError
+from .runtime_http import HttpUpstream
+from .runtime_ipc import RuntimeIpcError, RuntimeRpcClient
 from .runtime_static import RuntimeStatic
 from .version import build_metadata
 
 RECOVERY_PATH = "/settings#memory-budget-settings"
+# Health answers well within the desktop launcher's 2 s request timeout.
+API_PROBE_TIMEOUT = 1.0
+# Frequent health readers share one recent answer instead of probing each time.
+API_PROBE_TTL = 1.0
+
+ApiState = Literal["ready", "not_responding", "unavailable"]
 
 
 @dataclass(frozen=True)
@@ -27,6 +37,7 @@ class RuntimeBootstrap:
     def __init__(self, coordinator, routing):
         self.coordinator, self.routing = coordinator, routing
         self.assets: RecoveryAssets | None = None
+        self._probe: tuple[str, float, bool] | None = None
 
     async def select_release(self, version: str) -> None:
         """Select only a registered, completely verified retained bundle.
@@ -59,16 +70,56 @@ class RuntimeBootstrap:
             app=RuntimeStatic(directory=directory / manifest.ui_directory, html=True),
         )
 
-    async def api_ready(self) -> bool:
+    async def api_promoted(self) -> bool:
+        """SQL-only check for hot paths: an API is promoted with a live lease."""
         try:
             await self.routing.api_upstream({})
         except (RuntimeIpcError, OSError):
-            # diagnostic-expected: this readiness probe reports unavailable API admission as degraded host health.
+            # diagnostic-expected: this routing check reports unavailable API admission to the caller.
             return False
         return True
 
+    async def api_state(self) -> ApiState:
+        """Whether the promoted API worker actually answers, not only its lease."""
+        try:
+            upstream = await self.routing.api_upstream({})
+        except (RuntimeIpcError, OSError):
+            # diagnostic-expected: this readiness probe reports unavailable API admission as degraded host health.
+            return "unavailable"
+        return "ready" if await self._answers(upstream) else "not_responding"
+
+    async def _answers(self, upstream: HttpUpstream) -> bool:
+        loop = asyncio.get_running_loop()
+        cached = self._probe
+        if (
+            cached is not None
+            and cached[0] == upstream.endpoint
+            and loop.time() < cached[1]
+        ):
+            return cached[2]
+        # The signed RPC shares the worker's HTTP listener and event loop, and
+        # sends no viewer credentials to the socket.
+        client = RuntimeRpcClient(upstream.endpoint, upstream.credential)
+        try:
+            identity = await client.call(
+                "worker.identity", {}, timeout=API_PROBE_TIMEOUT
+            )
+        except (RuntimeIpcError, OSError, httpx.HTTPError):
+            # diagnostic-expected: an unanswered identity call reports the promoted API as not responding.
+            identity = None
+        finally:
+            await client.close()
+        answered = (
+            isinstance(identity, dict)
+            and identity.get("role") == "api"
+            and identity.get("endpoint") == upstream.endpoint
+        )
+        self._probe = (upstream.endpoint, loop.time() + API_PROBE_TTL, answered)
+        return answered
+
     async def health(self) -> dict:
-        ready = await self.api_ready()
+        state = await self.api_state()
+        ready = state == "ready"
         return {
             **build_metadata(),
             **(await self.coordinator.database.health()),
@@ -80,6 +131,7 @@ class RuntimeBootstrap:
             ),
             "api_version": "v1",
             "api_ready": ready,
+            "api_state": state,
             "recovery_path": RECOVERY_PATH,
             "recovery_version": self.assets.version if self.assets else None,
             # Host availability does not prove a project runtime or runner is ready.

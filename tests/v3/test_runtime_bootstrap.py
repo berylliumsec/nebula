@@ -204,3 +204,61 @@ async def test_paired_browser_repairs_memory_before_real_api_admission(recovery)
     revoked = await client.delete("/api/v1/auth/devices/" + device_id, headers=AUTH)
     assert revoked.status_code == 204
     assert (await client.get("/api/v1/health")).status_code == 401
+
+
+@pytest.mark.parametrize("failure", ["frozen", "killed"])
+async def test_health_reports_ready_only_while_the_promoted_api_answers(
+    recovery, monkeypatch, failure
+):
+    """A promoted API with a live lease is not ready if it does not answer."""
+    import asyncio
+    import os
+    import signal
+    import time
+
+    from nebula.v3 import runtime_bootstrap
+
+    monkeypatch.setattr(runtime_bootstrap, "API_PROBE_TIMEOUT", 0.3, raising=False)
+    monkeypatch.setattr(runtime_bootstrap, "API_PROBE_TTL", 0.0, raising=False)
+    root, client = recovery.root, recovery.client
+    policy = (await client.get(MEMORY, headers=AUTH)).json()
+    saved = await client.put(
+        MEMORY,
+        headers=AUTH,
+        json={
+            "expected_revision": policy["revision"],
+            "policy": reserve_policy(policy),
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    await recovery.managed.stage("v1", _API_WORKER)
+    api = await root.prepare_api("v1")
+    await root.promote_api(
+        api.runtime_id, expected_revision=(await root.coordinator.status()).revision
+    )
+    health = (await client.get("/api/v1/health", headers=AUTH)).json()
+    assert (health["api_ready"], health["status"]) == (True, "ok")
+    os.kill(api.pid, signal.SIGSTOP if failure == "frozen" else signal.SIGKILL)
+    try:
+        if failure == "killed":
+            await asyncio.to_thread(
+                recovery.managed.host.children[api.runtime_id].wait, 5
+            )
+        started = time.monotonic()
+        response = await client.get("/api/v1/health", headers=AUTH)
+        # Its lease is still live, but health no longer claims the API is ready.
+        assert response.status_code == 200
+        assert time.monotonic() - started < 2
+        health = response.json()
+        assert health["api_ready"] is False and health["status"] == "degraded"
+        # A killed worker may already be retired by reconciliation.
+        expected = {"not_responding"} | (
+            {"unavailable"} if failure == "killed" else set()
+        )
+        assert health["api_state"] in expected
+    finally:
+        if failure == "frozen":
+            os.kill(api.pid, signal.SIGCONT)
+    if failure == "frozen":
+        health = (await client.get("/api/v1/health", headers=AUTH)).json()
+        assert (health["api_ready"], health["api_state"]) == (True, "ready")
