@@ -1735,7 +1735,7 @@ async def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_pat
             harness_session_id=turn.harness_session_id,
             mcp_server_ids=[],
         )
-        await runtime.start_chat_turn(follow_up_turn.id)
+        await (await runtime.start_chat_turn(follow_up_turn.id))
         assert (
             await store.get(HarnessTurn, follow_up_turn.id)
         ).status == HarnessTurnStatus.COMPLETE
@@ -1831,7 +1831,13 @@ async def test_active_codex_turn_accepts_steering_with_stale_profile_capabilitie
         )
 
         assert adapter.connections[0].steering == ["Prioritize the parser"]
-        guidance = (await runtime.activity_events(turn.id)).events[-1]
+        # The producer keeps appending its own events (running, started)
+        # while the guidance is saved, so the guidance is not always last.
+        guidance = [
+            event
+            for event in (await runtime.activity_events(turn.id)).events
+            if event.type == "notice"
+        ][-1]
         assert guidance.type == "notice"
         assert guidance.title == "Operator guidance"
         assert guidance.payload["text"] == "Prioritize the parser"
