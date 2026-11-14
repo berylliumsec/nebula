@@ -310,6 +310,16 @@ so the next action does not wait for a new worker to start. Set
 change it. The grace ends early while another project is waiting for a worker
 that Core could not place.
 
+An open project in the GUI also keeps its worker. While a project page is
+visible it holds a view lease (renewed about every 30 seconds, lapsing after 90),
+and Core starts the project's worker for it, so Notes, Findings and Evidence load
+even when the project has no open chat. Reading a project never starts a worker
+by itself. The idle grace starts when the page leaves the project or its lease
+lapses. A view lease never overrides the memory budget: while Core cannot place
+the worker, the page shows "Waiting to start this project" with Core's reason.
+Clients hold a lease with `PUT /api/v1/engagements/{project}/view-leases/{lease_id}`
+(optional `ttl_seconds`, 30–300) and end it with `DELETE` on the same path.
+
 Core prints its host administration token once at startup. Keep it on the host;
 remote chat uses device pairing. `NEBULA_V3_API_TOKEN` can supply the host token
 for both startup and invitations. Headless mode keeps authentication enabled and

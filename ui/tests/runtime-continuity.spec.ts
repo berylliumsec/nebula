@@ -210,11 +210,13 @@ test("an open project view brings up a chatless project's worker and lets it ret
   await page.goto("/projects/pinned-project/workbench?view=notes");
   await expect(page.getByText("Synthetic chatless project note").first()).toBeVisible({timeout: 240_000});
   await expect(page.getByText(/limited features|could not be loaded|Runtime delivery is unavailable/).filter({visible: true})).toHaveCount(0);
+  // Views that loaded while the worker started waited for it instead of failing.
+  await expect(page.locator("[role=alert]").filter({visible: true}).filter({hasText: /not ready|unavailable|could not/i})).toHaveCount(0);
   expect(leases[0]).toBe("PUT");
   expect(await runtime()).not.toBeNull();
   await page.screenshot({path: info.outputPath("chatless-notes.png"), fullPage: true});
-  // Leaving the project releases the view; the worker retires after the grace.
-  await page.goto("/projects");
+  // Leaving the project in the app releases the view; the worker retires after the grace.
+  await page.evaluate(() => { history.pushState({}, "", "/projects"); window.dispatchEvent(new PopStateEvent("popstate")); });
   await expect.poll(() => leases.includes("DELETE")).toBe(true);
   await expect.poll(runtime, {timeout: 120_000}).toBeNull();
 });
