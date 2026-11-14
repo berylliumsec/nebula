@@ -3,6 +3,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 import asyncio
+import inspect
 import json
 import threading
 from types import SimpleNamespace
@@ -814,6 +815,17 @@ async def test_chat_preparation_keeps_event_loop_responsive_during_tool_preparat
     release = threading.Event()
 
     def delayed(original):
+        if inspect.iscoroutinefunction(original):
+            # Awaited on the loop since the async storage conversion: the
+            # phase is slow without holding the loop, as real async I/O is.
+            async def call_async(*args, **kwargs):
+                entered.set()
+                if not await asyncio.to_thread(release.wait, 5):
+                    raise AssertionError(f"{phase} was not released")
+                return await original(*args, **kwargs)
+
+            return call_async
+
         def call(*args, **kwargs):
             entered.set()
             if not release.wait(5):

@@ -65,7 +65,6 @@ from tests.v3.test_chat_subagents import (
     _request,
     _response,
     _setup,
-    _until,
 )
 from tests.v3.test_harness_provider_subagents import (
     SETTING,
@@ -112,6 +111,20 @@ def _provider_envelope(spec, arguments: dict, error: BaseException) -> dict:
     )
 
 
+async def _until_saved(check, timeout: float = 30.0) -> None:
+    """Wait until the async ``check`` holds; the store is read with await.
+
+    The bound covers a whole async chain (a child's turn, the parent's resume
+    and the report's post) on a busy runner; a hang still fails here.
+    """
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not await check():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition was not reached in time")
+        await asyncio.sleep(0.01)
+
+
 # -- provider chat --------------------------------------------------------
 
 
@@ -146,12 +159,12 @@ async def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: P
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            ),
-            timeout=10,
-        )
+
+        async def parent_complete() -> bool:
+            turn = await store.get(ChatTurn, parent_turn_id)
+            return turn.status == ChatTurnStatus.COMPLETE
+
+        await _until_saved(parent_complete, timeout=10)
 
         history = await _history(store, (await store.get(ChatTurn, parent_turn_id)))
         assert [(item["name"], item["status"]) for item in history] == [
@@ -458,10 +471,10 @@ async def test_harness_waits_at_the_running_limit_then_retries(tmp_path: Path):
             return "Both started."
 
         adapter.script = script
-        _, _, turn = _prepare(
+        _, _, turn = await _prepare(
             runtime, project, harness, "Fan out.", setting={**SETTING, "max_active": 1}
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
 
         assert (
             await store.get(HarnessTurn, turn.id)
@@ -540,9 +553,9 @@ async def test_harness_subagent_refusals_match_the_provider_categories(tmp_path:
             return "Refused."
 
         adapter.script = script
-        _, chat_turn, turn = _prepare(runtime, project, harness, "Delegate.")
+        _, chat_turn, turn = await _prepare(runtime, project, harness, "Delegate.")
         chat_turn_id = chat_turn.id
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
 
         assert (
             await store.get(HarnessTurn, turn.id)
@@ -618,7 +631,7 @@ async def test_harness_agent_messaging_refusals_match_the_provider_categories(
             mcp_server_ids=[],
             allow_agent_messaging=True,
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
 
         assert (
             await store.get(HarnessTurn, turn.id)

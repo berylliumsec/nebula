@@ -13,7 +13,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 import json
 
 import httpx
@@ -144,11 +143,8 @@ async def _glm_turn(tmp_path, script: list, broker: RecordingBroker | None = Non
     return store, service, prepared, broker, seen
 
 
-def _stream(service, prepared):
-    async def scenario():
-        return [event async for event in service.stream(prepared)]
-
-    return asyncio.run(scenario())
+async def _stream(service, prepared):
+    return [event async for event in service.stream(prepared)]
 
 
 def _shown(events, name: str) -> str:
@@ -179,7 +175,7 @@ async def test_glm_prose_reply_on_the_first_routing_step_is_the_answer(
         ],
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _shown(events, "delta") == "Hello!"
     assert _shown(events, "reasoning_delta") == "A greeting needs no tool."
@@ -268,7 +264,7 @@ async def test_prose_that_is_not_a_usable_answer_still_goes_to_synthesis(
         tmp_path, [routing, _synthesis("The value is a.")]
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _shown(events, "delta") == "The value is a."
     assert "DSML" not in _shown(events, "reasoning_delta")
@@ -288,7 +284,7 @@ async def test_reasoning_only_routing_reply_still_goes_to_synthesis(tmp_path):
         ],
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     assert _shown(events, "delta") == "The value is a."
     assert len(seen) == 2

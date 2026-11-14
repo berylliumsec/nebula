@@ -150,11 +150,13 @@ async def test_a_failed_preparation_cancels_its_pending_ranking(tmp_path, monkey
     service._retrieve = refuse
 
     async def prepare():
+        # The test runner's own tasks were running before the turn began.
+        before = asyncio.all_tasks()
         with pytest.raises(ChatPrivacyError):
             await service.prepare_async(request)
         # Nothing of the failed turn is left running.
         assert cancelled.is_set()
-        assert asyncio.all_tasks() == {asyncio.current_task()}
+        assert asyncio.all_tasks() - before == set()
 
     started = time.perf_counter()
     (await prepare())
@@ -442,9 +444,9 @@ async def _long_chat(tmp_path: Path):
     return store, service, session, profile, provider
 
 
-def _turn(service, session, profile, provider, content):
+async def _turn(service, session, profile, provider, content):
     before = len(provider.requests)
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -452,7 +454,7 @@ def _turn(service, session, profile, provider, content):
             messages=[{"role": "user", "content": content}],
         )
     )
-    asyncio.run(service.complete(prepared))
+    await service.complete(prepared)
     compactions = [
         request
         for request in provider.requests[before:]
@@ -468,13 +470,13 @@ async def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_p
     store, service, session, profile, provider = await _long_chat(tmp_path)
     limits = chat_module.resolve_context_limits(profile)
 
-    first, compacted = _turn(service, session, profile, provider, FOLLOW_UP)
+    first, compacted = await _turn(service, session, profile, provider, FOLLOW_UP)
     assert compacted > 0
     snapshot = first.context_snapshot
 
     calls = []
     for index in range(4):
-        prepared, compacted = _turn(
+        prepared, compacted = await _turn(
             service, session, profile, provider, f"Follow-up {index}: {FOLLOW_UP}"
         )
         calls.append(compacted)
@@ -510,7 +512,7 @@ async def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_p
     # Then a later boundary serves: compacted by the turn that needed it, or
     # in the background after the turn before.
     for _ in range(20):
-        prepared, compacted = _turn(
+        prepared, compacted = await _turn(
             service, session, profile, provider, f"Later: {FOLLOW_UP}"
         )
         if prepared.context_snapshot.id != snapshot.id:
@@ -520,9 +522,9 @@ async def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_p
 
 async def test_a_snapshot_over_a_retracted_message_is_not_reused(tmp_path):
     store, service, session, profile, provider = await _long_chat(tmp_path)
-    first, _ = _turn(service, session, profile, provider, FOLLOW_UP)
+    first, _ = await _turn(service, session, profile, provider, FOLLOW_UP)
     for index in range(2):
-        _, compacted = _turn(service, session, profile, provider, FOLLOW_UP)
+        _, compacted = await _turn(service, session, profile, provider, FOLLOW_UP)
         assert compacted == 0
     covered = await store.get(ChatMessage, "long-03")
     (
@@ -534,7 +536,7 @@ async def test_a_snapshot_over_a_retracted_message_is_not_reused(tmp_path):
         )
     )
 
-    prepared, compacted = _turn(service, session, profile, provider, FOLLOW_UP)
+    prepared, compacted = await _turn(service, session, profile, provider, FOLLOW_UP)
 
     # The memory still summarises the retracted message, so it is rebuilt.
     assert compacted > 0

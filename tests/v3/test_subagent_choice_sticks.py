@@ -86,7 +86,7 @@ class ToolProvider(ModelProvider):
         usage = ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3)
         if not request.metadata.get("operation") and self.during_first_turn:
             action, self.during_first_turn = self.during_first_turn, None
-            action()
+            await action()
         if request.tools and request.tool_choice != ToolChoice.NONE:
             return ModelResponse(
                 provider_id="provider",
@@ -488,10 +488,10 @@ async def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path
 async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, _, runtime = await _setup_harness(tmp_path)
-        chat_session, _, first = _prepare_harness_turn(
+        chat_session, _, first = await _prepare_harness_turn(
             runtime, project, harness, "Hello.", setting=None
         )
-        await runtime.start_chat_turn(first.id)
+        await (await runtime.start_chat_turn(first.id))
         client = TestClient(create_app(store, auth_token="test-token"))
         choice = {
             "provider_profile_id": "provider",
@@ -510,7 +510,7 @@ async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path)
 
         # Verification is still running, so the composer sends no subagent
         # model and the turn runs without subagent tools.
-        _, chat_turn, unverified = _prepare_harness_turn(
+        _, chat_turn, unverified = await _prepare_harness_turn(
             runtime,
             project,
             harness,
@@ -521,7 +521,7 @@ async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path)
         assert chat_turn.request_snapshot["provider_subagent"] is None
         vendor = await store.get(HarnessSession, unverified.harness_session_id)
         assert "provider_subagent" not in vendor.metadata
-        await runtime.start_chat_turn(unverified.id)
+        await (await runtime.start_chat_turn(unverified.id))
         assert (await store.get(ChatSession, chat_session.id)).metadata[
             "provider_subagent"
         ] == choice
@@ -529,7 +529,7 @@ async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path)
         # Unchecking still sticks through the next send.
         cleared = await _patch(client, chat_session.id, allow_subagents=False)
         assert "provider_subagent" not in cleared
-        _, _, off = _prepare_harness_turn(
+        _, _, off = await _prepare_harness_turn(
             runtime,
             project,
             harness,
@@ -537,7 +537,7 @@ async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path)
             chat_id=chat_session.id,
             setting=None,
         )
-        await runtime.start_chat_turn(off.id)
+        await (await runtime.start_chat_turn(off.id))
         assert not (await store.get(ChatSession, chat_session.id)).metadata.get(
             "provider_subagent"
         )
@@ -549,7 +549,7 @@ async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path)
 async def test_harness_effort_only_patch_updates_saved_subagent_setting(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, _, runtime = await _setup_harness(tmp_path)
-        chat_session, _, _ = _prepare_harness_turn(
+        chat_session, _, _ = await _prepare_harness_turn(
             runtime, project, harness, "Hello.", setting=None
         )
         client = TestClient(create_app(store, auth_token="test-token"))
