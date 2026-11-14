@@ -1,31 +1,23 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Once a provider model is verified for tool calling, Core-owned tool families (agent messages, Work, Work roster, subagents, subagent replies, skills) are offered on every chat. When no runtime that loads the project's scope came first, prepare_async/prepare_resume built them with scope=None and each builder invented a uuid5 placeholder ScopePolicy; _eligible_provider_specs compared it with the stored scope and every such chat returned 409 'project scope changed during this response' (main and production 5ec14b4). The fix passes the project's stored scope at all twelve builder hand-offs, keeps the established placeholder id only for projects without a stored scope, and makes the builders refuse a missing scope. Selected suites cover provider chat preparation/resume with these families, goals, conversation search, MCP context modes and the Work tool builders.",
-  "exclusions": "Only suites that pass on pristine main are selected: 26 related files (test_chat.py, test_chat_subagents.py, test_control_assistant_work.py and others) already fail on main for unrelated harness reasons ('coroutine' object not awaited, asyncio.run in a running loop); across all 758 related tests the failure set is identical with and without this change. test_work.py is limited to the four builder tests it changes because test_work_project_batch_links_existing_projects_and_prevents_cycles fails on main independently. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (a LAN Core whose nine projects returned 409 after verification now completes chats) is recorded in the PR.",
+  "reason": "Fix chat reads returning 503 'runtime connection is unavailable' for every project beyond the first eight an API worker reads: RuntimeHttpProxy now evicts least-recently-used idle pooled clients instead of refusing a ninth endpoint, reserves an endpoint for each forwarded exchange, returns the reconnect response if retirement or shutdown races an eviction, keeps viewer WebSockets on their own max_websockets bound, and records api.runtime.endpoint_budget_occupied when every channel is busy. The proxy, its diagnostic boundaries and the API worker that owns it are the affected integration boundary.",
+  "exclusions": "Only the proxy, its diagnostic boundary tests and the API worker tests are selected; execution workers, chat delivery and the supervisor proxy are unchanged. No UI, native or Playwright cases: no frontend code changed and the defect is in Core's API-to-worker forwarding, covered at that layer by six new regression tests (verified failing on unpatched main). PostgreSQL variants in test_api_worker.py run only where NEBULA_TEST_POSTGRES_URL is set. Real-Core evidence (staging Postgres Core at the live commit plus this patch: 15 projects readable in both first-contact orders, 0 of 144 chat reads refused under a 15-chat load versus 63 of 159 before) is recorded in the PR, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 87,
+    "python": 59,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_agent_messages.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_conversation_search.py",
-    "tests/v3/test_provider_tools_fixture.py",
-    "tests/v3/test_mcp_context_mode.py",
-    "tests/v3/test_next_turn_mcp_exclusion.py",
-    "tests/v3/test_subagent_choice_new_chats.py",
-    "tests/v3/test_work.py::test_provider_work_tools_use_chat_scope_and_opt_out",
-    "tests/v3/test_work.py::test_provider_work_tools_reach_only_linked_child_project",
-    "tests/v3/test_work.py::test_provider_work_pages_and_reads_full_long_item",
-    "tests/v3/test_work.py::test_agent_roster_matches_dashboard_scope_and_refreshes_links"
+    "tests/v3/test_runtime_http.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_api_worker.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "924b73c3f5d61cf67ce504f289ff6e221eaab0cd6270a02a5de0c3b83d849a2c"
+  "change_digest": "1abaffaa27040a3eb9242c31aff8421409822fb37b2d9b6d955ba2e9d9fb7863"
 }

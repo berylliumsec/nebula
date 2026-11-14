@@ -23,9 +23,12 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from .async_utils import finish_cleanup
 from .deployment_protocol import IPC_PROTOCOL
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 
 _PREFIX = b"x-nebula-internal-"
+# Runtime endpoints that may hold forwarding channels at once. Idle endpoints
+# are evicted least-recently-used, so this bounds connections, not projects.
+_ENDPOINT_BUDGET = 8
 _HOPS = {
     b"connection",
     b"keep-alive",
@@ -63,6 +66,15 @@ def _signature(
         ),
         hashlib.sha256,
     ).hexdigest()
+
+
+async def _runtime_unavailable(scope, receive, send) -> None:
+    await JSONResponse(
+        {
+            "detail": "The runtime connection is unavailable. Reconnect to read durable progress."
+        },
+        status_code=503,
+    )(scope, receive, send)
 
 
 def _hop_headers(headers: list[tuple[bytes, bytes]]) -> set[bytes]:
@@ -289,40 +301,119 @@ class RuntimeHttpProxy:
         self.max_websockets = max_websockets
         self.closed = False
         self.retired_endpoints: OrderedDict[str, None] = OrderedDict()
+        # Forwarded HTTP exchanges in flight per endpoint, and every endpoint
+        # holding pooled clients, ordered from least to most recently admitted.
+        self.active: dict[str, int] = {}
+        self.recent: OrderedDict[str, None] = OrderedDict()
 
-    def _check_admission(self, endpoint: str):
+    def _check_open(self, endpoint: str) -> None:
         if self.closed or endpoint in self.retired_endpoints:
             raise httpx.PoolTimeout("this runtime forwarding channel has closed")
-        endpoints = {key[0] for key in self.clients} | set(
-            self.websocket_tasks.values()
-        )
-        if endpoint not in endpoints and len(endpoints) >= 8:
-            raise httpx.PoolTimeout("the private runtime endpoint budget is occupied")
 
-    def _client(self, target: HttpUpstream) -> httpx.AsyncClient:
-        self._check_admission(target.endpoint)
+    def _admit_client(self, endpoint: str) -> list[httpx.AsyncClient]:
+        """Admit an endpoint to the pooled-client budget; return evicted clients.
+
+        The budget bounds pooled HTTP channels, not the projects a viewer may
+        read. When it is full, the least recently used endpoint with no
+        forwarded exchange in flight gives up its clients and reconnects on its
+        next use. Only a budget of busy endpoints refuses. Viewer WebSockets
+        hold their own connections and are bounded by `max_websockets`.
+        """
+        self._check_open(endpoint)
+        endpoints = {key[0] for key in self.clients}
+        for stale in [item for item in self.recent if item not in endpoints]:
+            del self.recent[stale]
+        evicted: list[httpx.AsyncClient] = []
+        if endpoint not in endpoints and len(endpoints) >= _ENDPOINT_BUDGET:
+            idle = next(
+                (item for item in self.recent if not self.active.get(item)), None
+            )
+            if idle is None:
+                raise httpx.PoolTimeout(
+                    "the private runtime endpoint budget is occupied"
+                )
+            evicted = [
+                self.clients.pop(key) for key in list(self.clients) if key[0] == idle
+            ]
+            del self.recent[idle]
+        self.recent[endpoint] = None
+        self.recent.move_to_end(endpoint)
+        return evicted
+
+    async def _close_evicted(self, clients: list[httpx.AsyncClient]) -> None:
+        try:
+            await finish_cleanup(
+                self._close_resources(clients, set(), asyncio.current_task())
+            )
+        except BaseExceptionGroup as error:
+            # The evicted channel was idle; its close failure must not fail the
+            # request that replaced it, but caller cancellation still applies.
+            cancelled, failures = error.split(asyncio.CancelledError)
+            if failures is not None:
+                record_caught_exception(
+                    "api",
+                    "api.runtime.channel_eviction_failed",
+                    "An idle runtime channel could not close cleanly.",
+                    failures,
+                    stage="cleanup",
+                )
+            if cancelled is not None:
+                raise asyncio.CancelledError() from error
+
+    def _release(self, endpoint: str) -> None:
+        remaining = self.active.get(endpoint, 0) - 1
+        if remaining > 0:
+            self.active[endpoint] = remaining
+        else:
+            self.active.pop(endpoint, None)
+
+    async def _client(self, target: HttpUpstream) -> httpx.AsyncClient:
+        """Reserve the endpoint for one exchange; the caller must `_release` it."""
+        evicted = self._admit_client(target.endpoint)
         control = target.lane == "control"
         key = (target.endpoint, control)
-        if key not in self.clients:
-            limit = 16 if control else 64
-            transport = (
-                self.transport_factory(target.endpoint)
-                if self.transport_factory
-                else httpx.AsyncHTTPTransport(
-                    uds=target.socket_path(),
-                    limits=httpx.Limits(
-                        max_connections=limit, max_keepalive_connections=min(limit, 16)
-                    ),
+        try:
+            if key not in self.clients:
+                limit = 16 if control else 64
+                transport = (
+                    self.transport_factory(target.endpoint)
+                    if self.transport_factory
+                    else httpx.AsyncHTTPTransport(
+                        uds=target.socket_path(),
+                        limits=httpx.Limits(
+                            max_connections=limit,
+                            max_keepalive_connections=min(limit, 16),
+                        ),
+                    )
                 )
-            )
-            self.clients[key] = httpx.AsyncClient(
-                transport=transport,
-                base_url="http://nebula-runtime",
-                trust_env=False,
-                cookies=_NoCookieJar(),
-                timeout=httpx.Timeout(connect=5, read=None, write=30, pool=5),
-            )
-        return self.clients[key]
+                self.clients[key] = httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://nebula-runtime",
+                    trust_env=False,
+                    cookies=_NoCookieJar(),
+                    timeout=httpx.Timeout(connect=5, read=None, write=30, pool=5),
+                )
+        except BaseException:
+            if evicted:
+                await self._close_evicted(evicted)
+            raise
+        client = self.clients[key]
+        # Reserve before the first await so a concurrent admission cannot
+        # evict the channel this exchange is about to use.
+        self.active[target.endpoint] = self.active.get(target.endpoint, 0) + 1
+        if evicted:
+            try:
+                await self._close_evicted(evicted)
+                # Retirement or shutdown may have closed this client meanwhile.
+                self._check_open(target.endpoint)
+                if self.clients.get(key) is not client:
+                    raise httpx.PoolTimeout(
+                        "this runtime forwarding channel has closed"
+                    )
+            except BaseException:
+                self._release(target.endpoint)
+                raise
+        return client
 
     async def _close_resources(
         self, clients: list[httpx.AsyncClient], endpoints: set[str] | None, caller
@@ -422,36 +513,49 @@ class RuntimeHttpProxy:
         if scope.get("query_string"):
             raw_path += b"?" + scope["query_string"]
         try:
-            client = self._client(target)
-            upstream_request = client.build_request(
-                scope["method"],
-                httpx.URL(raw_path=raw_path),
-                headers=outgoing,
-                content=request.stream(),
-            )
-            response = await client.send(upstream_request, stream=True)
-        except (httpx.HTTPError, OSError):
-            # diagnostic-expected: local runtime transport loss becomes the bounded reconnect response.
-            await JSONResponse(
-                {
-                    "detail": "The runtime connection is unavailable. Reconnect to read durable progress."
-                },
-                status_code=503,
-            )(scope, receive, send)
+            client = await self._client(target)
+        except httpx.PoolTimeout:
+            # diagnostic-expected: a closed or retired channel is an expected reconnect; a busy budget is recorded below.
+            if not (self.closed or target.endpoint in self.retired_endpoints):
+                record_diagnostic(
+                    "warning",
+                    "api",
+                    "api.runtime.endpoint_budget_occupied",
+                    "Every runtime forwarding channel was busy, so a read was refused.",
+                    stage="forward",
+                    retryable=True,
+                )
+            await _runtime_unavailable(scope, receive, send)
             return
         try:
-            stream = StreamingResponse(
-                response.aiter_raw(), status_code=response.status_code
-            )
-            excluded = _hop_headers(response.headers.raw)
-            stream.raw_headers = [
-                (name.lower(), value)
-                for name, value in response.headers.raw
-                if name.lower() not in excluded and not name.lower().startswith(_PREFIX)
-            ]
-            await stream(scope, receive, send)
+            try:
+                upstream_request = client.build_request(
+                    scope["method"],
+                    httpx.URL(raw_path=raw_path),
+                    headers=outgoing,
+                    content=request.stream(),
+                )
+                response = await client.send(upstream_request, stream=True)
+            except (httpx.HTTPError, OSError):
+                # diagnostic-expected: local runtime transport loss becomes the bounded reconnect response.
+                await _runtime_unavailable(scope, receive, send)
+                return
+            try:
+                stream = StreamingResponse(
+                    response.aiter_raw(), status_code=response.status_code
+                )
+                excluded = _hop_headers(response.headers.raw)
+                stream.raw_headers = [
+                    (name.lower(), value)
+                    for name, value in response.headers.raw
+                    if name.lower() not in excluded
+                    and not name.lower().startswith(_PREFIX)
+                ]
+                await stream(scope, receive, send)
+            finally:
+                await finish_cleanup(response.aclose())
         finally:
-            await finish_cleanup(response.aclose())
+            self._release(target.endpoint)
 
     async def _websocket(self, target: HttpUpstream, scope, receive, send):
         first = await receive()
@@ -460,7 +564,9 @@ class RuntimeHttpProxy:
         task = asyncio.current_task()
         assert task is not None
         try:
-            self._check_admission(target.endpoint)
+            # A viewer WebSocket owns its own connection, bounded by
+            # max_websockets rather than the pooled-client endpoint budget.
+            self._check_open(target.endpoint)
             if len(self.websocket_tasks) >= self.max_websockets:
                 raise httpx.PoolTimeout("the viewer WebSocket budget is occupied")
         except httpx.PoolTimeout:
