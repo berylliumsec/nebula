@@ -73,6 +73,19 @@ handoffs remain journaled and stop further target preparation until reconciled.
 The accepted runtime manifest hashes every executable/UI asset and uses the
 build's reviewed compatibility metadata, including its migration-tree digest.
 
+`nebula_deploy_gate.py` reads every project. Reads never admit a worker on a
+supervisor Core, so its chat, run, execution and notebook reads are served by the
+API worker from SQL. It reads live terminal counts only from a project's
+execution worker; for a project whose read returns 503, it checks
+`deployment/status` and skips the count only when the project has no
+execution owner. A project whose owner does not answer fails the gate closed.
+
+During a rolling release the new supervisor never asks an older release's
+worker to retire an idle project unless that release declares
+`project.idle-retirement/v1`; such workers keep their project until its
+handoff. It also holds a project for retirement only while its worker reports
+`ready`, so a prepared handoff target is not held before activation.
+
 Foreground host activation is separately guarded from API and execution worker
 promotion. `activate-host` targets only the exact accepted pending candidate
 after its durable stage and migration receipts are verified. It records a

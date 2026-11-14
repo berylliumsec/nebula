@@ -22,7 +22,9 @@ from .database import (
     RuntimeCommandRow,
     RuntimeProcessRow,
     RuntimeRecoveryRow,
+    RuntimeReleaseRow,
 )
+from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
 from .diagnostics import record_caught_exception
 from .domain import Engagement
 from .runtime_coordination import CoordinationConflict, project_worker_commands
@@ -90,6 +92,9 @@ class RuntimeAutoAdmission:
         self._legacy_chat_next_scan_at = 0.0
         self._recovery_blocked: dict[str, tuple[str, int, int]] = {}
         self._recovery_cursor: str | None = None
+        # Whether each staged release can quiesce under a project retirement
+        # hold. A staged release's manifest never changes.
+        self._idle_retirement: dict[str, bool] = {}
         self._serial = asyncio.Lock()
 
     async def start(self):
@@ -315,6 +320,16 @@ class RuntimeAutoAdmission:
                         )
                     )
                 self._retirement_cursor = idle_owners[-1][0] if idle_owners else None
+                # During a rolling release, workers of the previous release
+                # stay resident until their handoff. One that cannot quiesce
+                # outside a host shutdown would refuse every retirement, and
+                # each refused hold briefly fails the project's reads and chat
+                # admission. The deployer's handoff moves it instead.
+                idle_owners = [
+                    (project_id, runtime_id)
+                    for project_id, runtime_id in idle_owners
+                    if await self._retires_idle(session, runtime_id)
+                ]
                 api_id = host.api_runtime_id
             if api_id is None and self._blocked.get("api") != signature:
                 try:
@@ -443,6 +458,22 @@ class RuntimeAutoAdmission:
                             "attempt": failures,
                         },
                     )
+
+    async def _retires_idle(self, session, runtime_id: str) -> bool:
+        process = await session.get(RuntimeProcessRow, runtime_id)
+        if process is None:
+            return False
+        supported = self._idle_retirement.get(process.version)
+        if supported is None:
+            release = await session.get(RuntimeReleaseRow, process.version)
+            if release is None:
+                return False
+            supported = (
+                IDLE_RETIREMENT_FEATURE
+                in ReleaseManifest.model_validate(release.manifest).features
+            )
+            self._idle_retirement[process.version] = supported
+        return supported
 
     async def _forget_settled_pending(self) -> None:
         """Drop a prepared worker that can no longer start its project.

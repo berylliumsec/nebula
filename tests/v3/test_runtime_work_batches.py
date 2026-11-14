@@ -29,7 +29,10 @@ from nebula.v3.database import (
 )
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
-from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
+from nebula.v3.deployment_protocol import (
+    GLOBAL_EXECUTION_PROJECT,
+    IDLE_RETIREMENT_FEATURE,
+)
 from nebula.v3.domain import (
     ChatSession,
     Engagement,
@@ -77,7 +80,10 @@ def anyio_backend():
 async def runtime(value, identity, *, supported=True):
     version = "supported" if supported else "older"
     await value.coordinator.stage(
-        manifest(version, features=[WORK_BATCH_FEATURE] if supported else []),
+        manifest(
+            version,
+            features=[WORK_BATCH_FEATURE, IDLE_RETIREMENT_FEATURE] if supported else [],
+        ),
         Path("/synthetic/releases") / version,
         "a" * 64,
     )

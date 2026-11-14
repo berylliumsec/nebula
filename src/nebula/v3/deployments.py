@@ -1006,17 +1006,25 @@ class DeploymentCoordinator:
     async def abort_project_retirement(
         self, lease: ProjectLease, *, worker_status: dict
     ) -> None:
-        """Release a hold only after the worker refuses before cleanup."""
+        """Release a hold only after the worker refuses before cleanup.
+
+        A worker refuses before stopping anything in every state short of
+        quiescence: ready, still starting or prepared after a handoff, or
+        already failed. Keeping the hold for those would fail the project's
+        reads and chat admission with nothing left to wait for.
+        """
         blockers = worker_status.get("quiesce_blockers")
         if (
             worker_status.get("runtime_id") != lease.runtime_id
-            or worker_status.get("state") != "ready"
+            or worker_status.get("state")
+            not in {"ready", "starting", "prepared", "failed"}
             or not isinstance(blockers, list)
             or not blockers
             or worker_status.get("quiesce_checkpoint") is not None
         ):
             raise CoordinationConflict(
-                "Only a signed ready-worker quiescence refusal can abort retirement"
+                "Only a signed quiescence refusal from a worker that has not "
+                "begun quiescing can abort retirement"
             )
         async with self.coordination._write() as session:
             owner = await session.get(

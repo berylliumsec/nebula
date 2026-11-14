@@ -64,6 +64,7 @@ from .sandbox import (
     SandboxUnavailable,
     SandboxWorkspaceAccess,
 )
+from .project_reads import filter_executions, project_executions
 from .storage import NebulaStore, NotFoundError
 from .runtime_platform import (
     OperatorRuntimeResolution,
@@ -700,30 +701,17 @@ class ExecutionService:
                 "execution date filters must include a timezone",
                 status_code=422,
             )
-        rows = await self._all_executions(engagement_id)
-        folded = query.casefold() if query else None
-        operator_folded = operator_id.casefold() if operator_id else None
-        filtered = [
-            row
-            for row in rows
-            if (status is None or row.status == status)
-            and (
-                language is None
-                or row.language == LANGUAGE_ALIASES.get(language, language)
-            )
-            and (
-                operator_folded is None or operator_folded in row.operator_id.casefold()
-            )
-            and (date_from is None or row.queued_at >= date_from)
-            and (date_to is None or row.queued_at < date_to)
-            and (
-                folded is None
-                or folded in row.source_preview.casefold()
-                or folded in row.operator_id.casefold()
-            )
-        ]
-        filtered.sort(key=lambda row: (row.queued_at, row.id), reverse=True)
-        return filtered[offset : offset + limit]
+        return filter_executions(
+            await self._all_executions(engagement_id),
+            offset=offset,
+            limit=limit,
+            status=status,
+            language=language,
+            operator_id=operator_id,
+            date_from=date_from,
+            date_to=date_to,
+            query=query,
+        )
 
     async def output_bytes(
         self, execution_id: str, stream: str, *, raw: bool
@@ -1579,19 +1567,7 @@ class ExecutionService:
     async def _all_executions(
         self, engagement_id: str | None = None
     ) -> list[OperatorExecution]:
-        rows: list[OperatorExecution] = []
-        offset = 0
-        while True:
-            page = await self.store.list_entities(
-                OperatorExecution,
-                engagement_id=engagement_id,
-                offset=offset,
-                limit=1_000,
-            )
-            rows.extend(page)
-            if len(page) < 1_000:
-                return rows
-            offset += len(page)
+        return await project_executions(self.store, engagement_id)
 
     async def _cleanup_container(self, execution: OperatorExecution) -> None:
         try:

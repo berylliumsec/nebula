@@ -14,6 +14,9 @@ IPC_PROTOCOL: Final = "nebula.runtime/v1"
 MAX_EXECUTION_VERSIONS = 2
 GLOBAL_EXECUTION_PROJECT = "__nebula_host_work__"
 SHARED_MEMORY_BOOTSTRAP_KEY = "shared_butler_memory_v1"
+# The worker quiesces under its own project's retirement hold, outside a host
+# shutdown. Older releases declare only project.quiesce/v1 and refuse that.
+IDLE_RETIREMENT_FEATURE: Final = "project.idle-retirement/v1"
 SHA256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 RuntimeVersion = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$")]
 

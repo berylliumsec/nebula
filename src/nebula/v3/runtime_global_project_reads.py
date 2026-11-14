@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+from datetime import datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import aliased
 
@@ -15,14 +17,26 @@ from .conditional_reads import conditional, content_etag
 from .database import EntityRow
 from .domain import (
     ChatBookmark,
+    ChatGoal,
     ChatMessage,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    NotebookRun,
+    OperatorExecution,
+    OperatorExecutionStatus,
     WorkItem,
     WorkUpdate,
     message_is_replaced,
+)
+from .project_reads import (
+    active_control_assistant_session,
+    active_notebook_runs,
+    filter_executions,
+    presented_chat_goal,
+    project_executions,
+    stored_chat_goal,
 )
 from .storage import NebulaStore, NotFoundError
 
@@ -196,6 +210,83 @@ def mount_global_project_reads(
         ):
             return unchanged
         return activity
+
+    # Deployment inventory reads (the deploy gate, and Butler's pause and
+    # resume checks) cover every project, including those without a worker.
+    @app.get(
+        "/api/v1/chat/control-assistant/session",
+        response_model=ChatSession | None,
+        dependencies=dependencies,
+    )
+    async def get_project_control_assistant_session(
+        engagement_id: str, response: Response
+    ) -> ChatSession | None:
+        response.headers["Cache-Control"] = "no-store"
+        return await active_control_assistant_session(store, engagement_id)
+
+    @app.get(
+        "/api/v1/chat/sessions/{session_id}/goal",
+        response_model=ChatGoal,
+        dependencies=dependencies,
+    )
+    async def get_project_chat_goal(session_id: str, response: Response) -> ChatGoal:
+        response.headers["Cache-Control"] = "no-store"
+        return presented_chat_goal(await stored_chat_goal(store, session_id))
+
+    @app.get(
+        "/api/v1/engagements/{engagement_id}/notebooks/runs/active",
+        response_model=list[NotebookRun],
+        dependencies=dependencies,
+    )
+    async def list_project_active_notebook_runs(
+        engagement_id: str, response: Response
+    ) -> list[NotebookRun]:
+        response.headers["Cache-Control"] = "no-store"
+        return await active_notebook_runs(store, engagement_id)
+
+    @app.get(
+        "/api/v1/engagements/{engagement_id}/executions",
+        response_model=list[OperatorExecution],
+        dependencies=dependencies,
+    )
+    async def list_project_executions(
+        engagement_id: str,
+        response: Response,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1000),
+        execution_status: OperatorExecutionStatus | None = Query(
+            default=None, alias="status"
+        ),
+        language: str | None = Query(default=None, max_length=32),
+        operator_id: str | None = Query(default=None, max_length=200),
+        date_from: datetime | None = Query(default=None),
+        date_to: datetime | None = Query(default=None),
+        query: str | None = Query(default=None, max_length=500),
+    ) -> Any:
+        if any(
+            value is not None and (value.tzinfo is None or value.utcoffset() is None)
+            for value in (date_from, date_to)
+        ):
+            return JSONResponse(
+                {
+                    "detail": "execution date filters must include a timezone",
+                    "code": "invalid_date_filter",
+                },
+                status_code=422,
+            )
+        response.headers["Cache-Control"] = "no-store"
+        await store.get(Engagement, engagement_id)
+        return filter_executions(
+            await project_executions(store, engagement_id),
+            offset=offset,
+            limit=limit,
+            status=execution_status,
+            language=language,
+            operator_id=operator_id,
+            date_from=date_from,
+            date_to=date_to,
+            query=query,
+        )
 
     @app.get("/api/v1/chat/projects/{project_id}/search", dependencies=dependencies)
     async def search_project_chats(

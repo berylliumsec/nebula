@@ -80,6 +80,12 @@ Three cases still need an operator decision:
 - **Legacy mode** stops the whole Core and takes a snapshot. Its gate
   (`nebula_deploy_gate.py`) refuses while any chat is pending. That refusal is
   the reason for the AGENTS.md Butler ritual.
+- **Inventory reads.** On a supervisor Core, reads never admit a worker. The
+  gate's and the Butler ritual's per-project reads (chat activity, runs,
+  executions, active notebook runs, goals and the Butler session) are served
+  by the API worker from SQL, so they also cover projects without a worker.
+  Only live terminal counts come from the project's worker; a project without
+  an execution owner has none.
 
 ### Execution workers and handoff
 
@@ -90,7 +96,13 @@ Three cases still need an operator decision:
   - Every SQL transaction is fenced by the project's monotonic token
     (`execution_scope.py`).
 - **Retirement.**
-  - Auto-admission retires workers whose project has no open chat.
+  - Auto-admission retires workers whose project has no open chat, once the
+    worker reports `ready`. Only releases that declare
+    `project.idle-retirement/v1` can quiesce under a project's own retirement
+    hold; workers of an older release keep their project until the deployer
+    hands it off, instead of refusing a retirement every pass.
+  - A quiescence refusal from a worker that has not begun quiescing (ready,
+    starting, prepared or failed) releases the hold at once.
   - `retire` waits for the worker to exit and never kills it.
   - Crashed owners are recovered after their lease expires, at most 3 times per
     10 minutes.

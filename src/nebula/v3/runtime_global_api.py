@@ -10,6 +10,7 @@ from starlette.routing import Match
 from .api_crud import _register_crud_routes, StructuredConflictError
 from .api_validation import ApiEntityValidator
 from .domain import (
+    AgentRun,
     Engagement,
     HarnessProfile,
     LibraryItem,
@@ -92,6 +93,20 @@ class RuntimeGlobalApi:
                 listing_capacity=capacity,
                 actor_id=authenticated,
             )
+        # Mission runs are read-only here; every run action stays with the
+        # project's execution owner.
+        _register_crud_routes(
+            self.app,
+            self.store,
+            relations,
+            authenticated,
+            validator,
+            "runs",
+            AgentRun,
+            listing_capacity=capacity,
+            read_only=True,
+            actor_id=authenticated,
+        )
 
         @self.app.exception_handler(NotFoundError)
         async def missing(_request, error):

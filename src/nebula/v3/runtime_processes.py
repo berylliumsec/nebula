@@ -898,6 +898,26 @@ class RuntimeProcessHost:
             await self.retire(runtime_id)
             return True
 
+        # Hold admission only while this worker can quiesce. A handoff or
+        # recovery target stays prepared until the supervisor activates it, and
+        # a starting or failed worker would only refuse. Each refused hold
+        # fails the project's reads and chat admission until it is released.
+        client = await self.rpc(runtime_id)
+        try:
+            current = await client.call("execution.status/v1", {}, timeout=5)
+        except (httpx.HTTPError, OSError, RuntimeIpcError):
+            # diagnostic-expected: an unreachable worker keeps its project; idle retirement asks again on a later pass.
+            return False
+        finally:
+            await client.close()
+        if current.get("lease") != asdict(lease) or current.get("state") not in {
+            "ready",
+            # A quiescence already under way finishes under the same hold.
+            "quiescing",
+            "closed",
+        }:
+            return False
+
         if not await self.coordinator.request_project_retirement(lease):
             return False
         client = await self.rpc(runtime_id)
