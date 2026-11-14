@@ -121,8 +121,9 @@ async def cancel_and_join(task: asyncio.Task, *, interval: float = 0.5) -> None:
     while not task.done():
         task.cancel()
         await asyncio.wait({task}, timeout=interval)
-    if not task.cancelled() and task.exception() is not None:
-        raise task.exception()
+    error = None if task.cancelled() else task.exception()
+    if error is not None:
+        raise error
 
 
 async def finish_cleanup(operation: Coroutine[Any, Any, _T]) -> _T:
