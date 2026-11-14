@@ -19,6 +19,8 @@ import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
 import { RuntimeContinuityNotice } from "./RuntimeContinuityNotice";
 import { ProjectRuntimeNotice } from "./ProjectRuntimeNotice";
+import { useProjectViewLease } from "../hooks/useProjectViewLease";
+import { projectIdFromPath } from "../resourceRoutes";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
 import { useNavigationChords } from "../state/useNavigationChords";
@@ -49,6 +51,8 @@ export function AppShell() {
     setupStatus,
     workspaceState,
   } = useWorkspace();
+  // An open project view is demand: Core keeps (or brings up) its worker.
+  useProjectViewLease(api, projectIdFromPath(location.pathname));
   const zero = resolvedTheme.startsWith("zero-");
   const quietLens = resolvedTheme === "quiet-lens";
   // Phones hide the shell top bar on the Workbench, which draws its own header.
