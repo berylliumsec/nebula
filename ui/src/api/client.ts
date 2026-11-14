@@ -1,7 +1,7 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
-  receiptId, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
+  receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
   type RuntimeRequestStatus } from "./durableRequests";
 import { mapTerminalSessionList, type TerminalSessionList, type WireTerminalSessionList } from "./terminalTypes";
 import type { StorageAction, StorageDashboard, StorageSource } from "./types";
@@ -5150,9 +5150,9 @@ export class ApiClient {
   private async resolveReceipt(response: Response, record: PendingRequest, signal?: AbortSignal | null): Promise<Response> {
     const deadline = Date.now() + 120_000;
     while (true) {
-      const body: unknown = response.status === 202 || response.status === 409 ? await response.clone().json() : undefined;
+      const body = response.status === 202 || response.status === 409 ? await receiptBody(response) : undefined;
       await this.saveReceipt(record, response, body);
-      if (response.status !== 202) return response;
+      if (!receiptPending(response, body)) return response;
       if (!record.commandId || Date.now() >= deadline) {
         throw new PendingRequestError("Your request is saved. Check saved requests to follow its outcome; it has not been submitted again.", record);
       }
@@ -11440,6 +11440,12 @@ export class ApiClient {
       { method: "POST", body: JSON.stringify({ expected_revision: handoff.revision, desktop_device_id: desktopDeviceId, state, error }) },
     ).then(mapBrowserHandoff);
   }
+}
+
+/** A receipt is JSON; any other body is the request's own answer, read by its caller. */
+async function receiptBody(response: Response): Promise<unknown> {
+  try { return await response.clone().json(); }
+  catch { return undefined; /* diagnostic-expected: a non-JSON 202 or 409 is not a receipt; the caller reads and reports the response itself. */ }
 }
 
 function requestWasCancelled(error: unknown, signal?: AbortSignal | null): boolean {

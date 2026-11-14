@@ -25,7 +25,16 @@ from .deployments import DeploymentCoordinator
 from .domain import ChatTurn
 from .runtime_chat_stream import RuntimeChatJournal
 from .runtime_coordination import CoordinationConflict, ProjectRetiring
-from .runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, RuntimeDelivery
+from .runtime_delivery import (
+    HttpIntent,
+    MAX_REQUEST_BYTES,
+    REQUEST_COMPLETE,
+    REQUEST_NEEDS_RECONCILIATION,
+    REQUEST_PENDING,
+    REQUEST_STATE_HEADER,
+    RuntimeDelivery,
+    replayed_headers,
+)
 from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import RuntimeIpcError
 from .runtime_routes import command_lane
@@ -193,7 +202,11 @@ def create_api_worker(
                 "detail": "Saved; waiting for its execution owner",
             },
             status_code=202,
-            headers={"X-Nebula-Command-Id": receipt.command_id, "Retry-After": "1"},
+            headers={
+                "X-Nebula-Command-Id": receipt.command_id,
+                "Retry-After": "1",
+                REQUEST_STATE_HEADER: REQUEST_PENDING,
+            },
         )
 
     async def response_view(
@@ -229,6 +242,7 @@ def create_api_worker(
                             "Cache-Control": "no-store",
                             "X-Accel-Buffering": "no",
                             "X-Nebula-Command-Id": command_id,
+                            REQUEST_STATE_HEADER: REQUEST_COMPLETE,
                         },
                     )
                     handed_off = True
@@ -247,7 +261,10 @@ def create_api_worker(
                             "state": page.state,
                         },
                         status_code=409,
-                        headers={"X-Nebula-Command-Id": command_id},
+                        headers={
+                            "X-Nebula-Command-Id": command_id,
+                            REQUEST_STATE_HEADER: REQUEST_NEEDS_RECONCILIATION,
+                        },
                     )
                 if asyncio.get_running_loop().time() >= deadline:
                     if receipt is not None:
@@ -255,7 +272,10 @@ def create_api_worker(
                     return JSONResponse(
                         {"state": page.state, "command_id": command_id},
                         status_code=202,
-                        headers={"Retry-After": "1"},
+                        headers={
+                            "Retry-After": "1",
+                            REQUEST_STATE_HEADER: REQUEST_PENDING,
+                        },
                     )
                 await asyncio.sleep(poll_interval)
             content_type = next(
@@ -294,13 +314,15 @@ def create_api_worker(
             response = _ViewerResponse(
                 body(), status_code=metadata["status"], slots=slots
             )
-            response.raw_headers = [
-                (name.lower().encode("latin-1"), value.encode("latin-1"))
-                for name, value in metadata["headers"]
-                if name.lower()
-                not in {"content-length", "transfer-encoding", "connection"}
-                and not name.lower().startswith("x-nebula-internal-")
-            ] + [(b"x-nebula-command-id", command_id.encode())]
+            # A chat command's answer is its turn stream. Its saved 202
+            # acceptance only says the turn exists, so the client follows on.
+            response.raw_headers = replayed_headers(
+                metadata["headers"],
+                command_id,
+                state=REQUEST_PENDING
+                if binding is not None and metadata["status"] == 202
+                else REQUEST_COMPLETE,
+            )
             handed_off = True
             return response
         finally:

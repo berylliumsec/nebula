@@ -17,7 +17,14 @@ from .database import DeploymentHostRow, RuntimeCommandRow, RuntimeDeliveryRow
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .runtime_coordination import CommandReceipt, CoordinationConflict
-from .runtime_delivery import MAX_FRAME_BYTES, _json
+from .runtime_delivery import (
+    MAX_FRAME_BYTES,
+    REQUEST_NEEDS_RECONCILIATION,
+    REQUEST_PENDING,
+    REQUEST_STATE_HEADER,
+    _json,
+    replayed_headers,
+)
 from .runtime_global_delivery import GlobalSqlDelivery
 
 HOST_EFFECT = "global.host/v1"
@@ -250,7 +257,11 @@ class HostEffectDelivery(GlobalSqlDelivery):
                 if receipt
                 else {"state": page.state, "command_id": command_id},
                 status_code=202,
-                headers={"X-Nebula-Command-Id": command_id, "Retry-After": "1"},
+                headers={
+                    "X-Nebula-Command-Id": command_id,
+                    "Retry-After": "1",
+                    REQUEST_STATE_HEADER: REQUEST_PENDING,
+                },
             )
         if page.state == "uncertain" or not page.frames:
             return JSONResponse(
@@ -260,7 +271,10 @@ class HostEffectDelivery(GlobalSqlDelivery):
                     "detail": "The saved host request needs reconciliation. It has not been retried.",
                 },
                 status_code=409,
-                headers={"X-Nebula-Command-Id": command_id},
+                headers={
+                    "X-Nebula-Command-Id": command_id,
+                    REQUEST_STATE_HEADER: REQUEST_NEEDS_RECONCILIATION,
+                },
             )
         head = json.loads(page.frames[0].content)
         response = Response(
@@ -271,12 +285,7 @@ class HostEffectDelivery(GlobalSqlDelivery):
             ),
             status_code=head["status"],
         )
-        response.raw_headers = [
-            (name.lower().encode("latin-1"), value.encode("latin-1"))
-            for name, value in head["headers"]
-            if name.lower() not in {"content-length", "transfer-encoding", "connection"}
-            and not name.lower().startswith("x-nebula-internal-")
-        ] + [(b"x-nebula-command-id", command_id.encode())]
+        response.raw_headers = replayed_headers(head["headers"], command_id)
         return response
 
     async def close(self):

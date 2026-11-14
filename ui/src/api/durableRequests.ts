@@ -192,6 +192,28 @@ export function receiptId(response: Response, body?: unknown): string | undefine
   return typeof id === "string" && /^[!-~]{1,200}$/.test(id) ? id : undefined;
 }
 
+/**
+ * Core marks every answer on a receipt-following path, because some routes
+ * answer 202 as their final response: "pending" is a receipt or status to
+ * follow again; any other value is the answer itself or needs reconciliation.
+ */
+export const REQUEST_STATE_HEADER = "X-Nebula-Request-State";
+
+/** Whether a response is Core's receipt or status for a request it has not answered yet. */
+export function receiptPending(response: Response, body?: unknown): boolean {
+  if (response.status !== 202) return false;
+  const marker = response.headers.get(REQUEST_STATE_HEADER)?.trim().toLowerCase();
+  if (marker) return marker === "pending";
+  // Cores without the marker: only their receipt, status and chat acceptance
+  // envelopes are pending. A final 202 resource is none of these.
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const value = body as {state?: unknown; receipt?: unknown; turn_id?: unknown};
+  const keys = Object.keys(value).sort().join(",");
+  return (value.state === "accepted" && typeof value.receipt === "object" && value.receipt !== null)
+    || keys === "command_id,state"
+    || (value.state === "accepted" && typeof value.turn_id === "string");
+}
+
 export async function waitForReceipt(response: Response, signal?: AbortSignal): Promise<void> {
   const seconds = Number(response.headers.get("Retry-After"));
   const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(10_000, seconds * 1000) : 1000;

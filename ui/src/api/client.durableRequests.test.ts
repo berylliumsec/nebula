@@ -28,6 +28,48 @@ describe("durable client transport", () => {
     expect(await client.getPendingRequests()).toEqual([]);
   });
 
+  it.each([
+    ["a resource", {id: "run-1", status: "queued", revision: 1}],
+    ["an envelope-shaped resource", {state: "running", command_id: "command"}],
+  ])("returns a final 202 replay marked complete as %s instead of waiting for its deadline", async (_label, final) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(identity))
+      .mockResolvedValueOnce(json({state: "accepted", receipt: {command_id: "command"}}, 202, {"Retry-After": "0.001", "X-Nebula-Command-Id": "command", "X-Nebula-Request-State": "pending"}))
+      .mockResolvedValueOnce(json({state: "running", command_id: "command"}, 202, {"Retry-After": "0.001", "X-Nebula-Request-State": "pending"}))
+      .mockResolvedValueOnce(json(final, 202, {"X-Nebula-Command-Id": "command", "X-Nebula-Request-State": "complete"}));
+    const client = new ApiClient({fetch}); await client.initializeContinuity();
+    expect(await client.request("missions", {method: "POST", body: '{"objective":"Review"}'})).toEqual(final);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch.mock.calls.slice(2).map(([url, init]) => [new URL(String(url)).pathname, init?.method])).toEqual([
+      ["/api/v1/runtime/requests/command/response", "GET"], ["/api/v1/runtime/requests/command/response", "GET"],
+    ]);
+    expect(await client.getPendingRequests()).toEqual([]);
+  });
+
+  it("treats an unmarked 202 resource from an older or direct Core as the final answer", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(identity))
+      .mockResolvedValueOnce(json({id: "render", status: "queued", revision: 1}, 202, {"X-Nebula-Command-Id": "command"}))
+      .mockResolvedValueOnce(json({id: "run-1", status: "queued", revision: 1}, 202));
+    const client = new ApiClient({fetch}); await client.initializeContinuity();
+    expect(await client.request("reports/report/renders", {method: "POST", body: "{}"})).toEqual({id: "render", status: "queued", revision: 1});
+    expect(await client.request("runs/run-0/retry", {method: "POST", body: "{}"})).toEqual({id: "run-1", status: "queued", revision: 1});
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.every(([url]) => !String(url).includes("/runtime/requests/"))).toBe(true);
+    expect(await client.getPendingRequests()).toEqual([]);
+  });
+
+  it.each([
+    ["marked pending", {"X-Nebula-Request-State": "pending"}],
+    ["unmarked from an older Core", {}],
+  ])("follows a chat turn's saved acceptance (%s) to its stream", async (_label, marker) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(identity))
+      .mockResolvedValueOnce(json({state: "accepted", turn_id: "turn", session_id: "session"}, 202, {"X-Nebula-Command-Id": "command", ...marker}))
+      .mockResolvedValueOnce(stream(done));
+    const client = new ApiClient({fetch}); await client.initializeContinuity();
+    expect((await client.streamChat(request, () => {}))?.message.content).toBe("Finished");
+    expect(String(fetch.mock.calls[2][0])).toContain("/runtime/requests/command/response");
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
   it("uses the same immutable key for an explicit retry after an unknown outcome", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(identity))
       .mockRejectedValueOnce(new TypeError("connection lost"))

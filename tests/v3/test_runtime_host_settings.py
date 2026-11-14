@@ -198,6 +198,11 @@ async def test_host_health_and_capability_results_replay_without_network_or_proj
     )
     replay = await settings.client.get(f"/api/v1/runtime/requests/{command}/response")
     assert replay.json() == first.json()
+    assert (
+        first.headers["x-nebula-request-state"]
+        == replay.headers["x-nebula-request-state"]
+        == "complete"
+    )
     async with settings.managed.database.session() as session:
         assert (
             await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
@@ -327,10 +332,17 @@ async def test_disconnected_viewer_can_lookup_and_replay_without_reexecuting(set
         "/api/v1/runtime/requests/lookup", params={"idempotency_key": "lost-response"}
     )
     assert lookup.json()["state"] == "running"
-    settings.release.set()
     identity = lookup.json()["command_id"]
+    waiting = await settings.host.effect.response(
+        "operator", identity, wait_seconds=0.01
+    )
+    assert waiting.status_code == 202
+    assert waiting.headers["x-nebula-command-id"] == identity
+    assert waiting.headers["x-nebula-request-state"] == "pending"
+    settings.release.set()
     replay = await settings.client.get(f"/api/v1/runtime/requests/{identity}/response")
     assert replay.status_code == 200 and replay.json()["healthy"]
+    assert replay.headers["x-nebula-request-state"] == "complete"
     assert settings.calls == [("health", "provider")]
 
 
@@ -350,7 +362,9 @@ async def test_restart_marks_unfinished_host_effect_uncertain_without_replay(set
         intent, actor_id="operator", idempotency_key="unknown"
     )
     assert first == retry and settings.calls == [("health", "provider")]
-    assert (await replacement.response("operator", first.command_id)).status_code == 409
+    unresolved = await replacement.response("operator", first.command_id)
+    assert unresolved.status_code == 409
+    assert unresolved.headers["x-nebula-request-state"] == "needs-reconciliation"
     settings.release.set()
     await settings.host.effect.close()
     await replacement.close()
