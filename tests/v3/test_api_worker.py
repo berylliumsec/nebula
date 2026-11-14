@@ -473,14 +473,14 @@ async def test_decisions_and_revocation_bypass_running_work(boundary, path):
     assert await boundary.coordination.claim_next(boundary.lease, lane="work") is None
 
 
-@pytest.mark.parametrize("reason", ["no live execution owner", "worker is closing"])
+@pytest.mark.parametrize("reason", ["starting", "closing", "idle"])
 async def test_project_read_without_a_ready_worker_is_a_retryable_503(
     boundary, location, tmp_path, reason
 ):
     # An idle project's worker has retired, or its readmitted worker is still
     # starting. Reads never admit one, so the viewer is told to read again.
     async def upstream_for(_scope):
-        raise ProjectRuntimeUnavailable(f"The project has {reason}")
+        raise ProjectRuntimeUnavailable("The project has no live owner", reason=reason)
 
     store = NebulaStore(Database(location, bootstrap=False, pool_settings=_POOL))
     delivery = RuntimeDelivery(
@@ -509,6 +509,7 @@ async def test_project_read_without_a_ready_worker_is_a_retryable_503(
     assert response.headers["retry-after"] == "1"
     body = response.json()
     assert body["code"] == "project_runtime_unavailable"
+    assert body["reason"] == reason
     assert body["retryable"] is True
     assert "saved request" not in body["detail"]
 

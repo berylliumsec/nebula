@@ -619,7 +619,7 @@ async def test_closing_a_viewer_does_not_cancel_an_upstream_owned_task():
         assert await producer == "finished independently"
 
 
-def _endpoint_fleet(app, key, transports=None):
+def _endpoint_fleet(app, key, transports=None, project_reads=False):
     """A proxy routing /p/<n>/... to synthetic runtime endpoint n."""
 
     async def select(scope):
@@ -630,7 +630,9 @@ def _endpoint_fleet(app, key, transports=None):
             return transports[endpoint]
         return httpx.ASGITransport(app=PrivateRuntimeHttp(app, key))
 
-    return RuntimeHttpProxy(select, transport_factory=transport)
+    return RuntimeHttpProxy(
+        select, transport_factory=transport, project_reads=project_reads
+    )
 
 
 async def test_reads_reach_more_runtime_endpoints_than_the_channel_budget():
@@ -791,7 +793,10 @@ async def test_viewer_websockets_do_not_consume_the_pooled_client_budget():
         await proxy.close()
 
 
-async def test_retirement_during_eviction_returns_a_reconnect_response(monkeypatch):
+@pytest.mark.parametrize("project_reads", [True, False])
+async def test_retirement_during_eviction_returns_a_reconnect_response(
+    monkeypatch, project_reads
+):
     key = secrets.token_bytes(32)
     app = FastAPI()
 
@@ -799,7 +804,7 @@ async def test_retirement_during_eviction_returns_a_reconnect_response(monkeypat
     async def read(project: str):
         return {"project": project}
 
-    proxy = _endpoint_fleet(app, key)
+    proxy = _endpoint_fleet(app, key, project_reads=project_reads)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=proxy), base_url="http://public"
     ) as viewer:
@@ -825,10 +830,16 @@ async def test_retirement_during_eviction_returns_a_reconnect_response(monkeypat
         response = await asyncio.wait_for(pending, timeout=5)
         assert response.status_code == 503
         assert response.json()["detail"].startswith("The runtime connection")
-        # A lost channel is transient: the viewer may repeat the read.
-        assert response.json()["code"] == "project_runtime_unavailable"
-        assert response.json()["retryable"] is True
-        assert response.headers["retry-after"] == "1"
+        if project_reads:
+            # A project worker's channel closed: the viewer may repeat the read.
+            assert response.json()["code"] == "project_runtime_unavailable"
+            assert response.json()["reason"] == "closing"
+            assert response.json()["retryable"] is True
+            assert response.headers["retry-after"] == "1"
+        else:
+            # The host's channel to the API worker makes no such promise.
+            assert set(response.json()) == {"detail"}
+            assert "retry-after" not in response.headers
     assert proxy.active == {}
     await proxy.close()
 
