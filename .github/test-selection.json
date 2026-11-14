@@ -1,15 +1,19 @@
 {
-  "change_digest": "a3a6189c6c5b28125d8e42804ed9dea3d881bc6f062afda0ac1ba33de10220eb",
-  "reviewed_by": "Codex; focused selection reviewed against manual-release process identity reconciliation",
-  "reason": "The deployer resume tests cover manual release reconciliation, exact current executable path and live process image matching, process ancestry, and refusal cases without managed acceptance metadata.",
-  "exclusions": "No user-facing Core workflow, UI, frontend, native, or browser behavior changed. The isolated reconciliation command is tested against a modelled host and temporary proc image links. No production host or live Core was used.",
+  "reviewed_by": "Claude",
+  "reason": "Documentation only: adds docs/design/linked-memory.md, a proposed (unimplemented) design contract for a background linked-memory service in Core (memory cards, typed links, MCP vector databases as read-only candidate sources, Butler memory absorption, harness memory.propose, tool-usage lessons learned from recovered tool failures, CLI/Butler enablement, zero-UI-impact contract). No source, test, UI, build or packaging file changes.",
+  "exclusions": "No Python, frontend, native or Playwright tests apply: the diff adds one Markdown file under docs/design/, which no test, build step or runtime reads. scripts/build_product_knowledge.py indexes only top-level docs/*.md and docs/design/nebula-settings-assistant.md, so the bundled product knowledge index is unaffected. LAN Core validation does not apply to a documentation-only change; the design's own acceptance evidence is listed in the document for the implementation PRs.",
   "python_browser": false,
   "python_node": false,
-  "python_versions": ["3.12"],
-  "expected_tests": {"python": 56, "frontend": 0, "native": 0, "playwright": 0},
-  "python": ["tests/test_simulation_deploy_resume.py"],
+  "expected_tests": {
+    "python": 0,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": []
+  "checks": [],
+  "change_digest": "2eae0dee23fec839533830784ec0a079342aae8a70942584c0e9dbe135b14717"
 }
