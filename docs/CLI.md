@@ -276,7 +276,11 @@ endpoints and `env:NAME` credential references refer to the Core host. Existing
 provider and project REST APIs remain available for headless administration.
 
 Messages stream in the terminal and remain in Core's transcript. Recent history
-appears when reconnecting. Use these commands inside chat:
+appears when reconnecting. When a project's Core worker is still starting, Core
+may save a message before running it; the CLI then prints **Saved in Core;
+waiting for its execution owner** and streams the answer when it starts. If it
+has not started within two minutes, nothing is resent: `/status` and `/follow`
+show it when it runs. Use these commands inside chat:
 
 | Command | Effect |
 | --- | --- |

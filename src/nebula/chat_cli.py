@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Iterator
 from urllib.parse import quote
@@ -14,6 +16,11 @@ from urllib.parse import quote
 import httpx
 import typer
 
+from .terminal.transport import (
+    RECEIPT_WAIT_SECONDS,
+    _retry_after,
+    accepted_receipt,
+)
 from .terminal.transport import (
     ClientError as ClientError,
     Settings as Settings,
@@ -365,6 +372,54 @@ def stop(client: httpx.Client, turn_id: str) -> None:
     typer.echo(f"Turn {terminal_text(result['status'])}.")
 
 
+@contextmanager
+def saved_stream(
+    client: httpx.Client, method: str, path: str, body: dict[str, Any] | None
+) -> Iterator[httpx.Response]:
+    """Open a turn stream, following Core's saved-request receipt like the TUI.
+
+    A supervisor Core answers 202 with a receipt when the project's execution
+    owner has not replied yet; the message is saved, so it is read back from
+    runtime/requests/{id}/response and never sent again.
+    """
+    with client.stream(method, path, json=body) as response:
+        command = None
+        if response.status_code == 202:
+            response.read()
+            command = accepted_receipt(response)
+        if command is None:
+            if not response.is_success:
+                response.read()
+                check_response(response)
+            yield response
+            return
+        delay = _retry_after(response)
+    typer.echo("Saved in Core; waiting for its execution owner… ", nl=False)
+    deadline = time.monotonic() + RECEIPT_WAIT_SECONDS
+    while True:
+        if time.monotonic() >= deadline:
+            raise ClientError(
+                "Core saved this message but has not started it yet. Nothing was "
+                "resent; /status and /follow show it when it starts."
+            )
+        time.sleep(delay)
+        with client.stream(
+            "GET",
+            f"runtime/requests/{quote(command, safe='')}/response",
+            params={"after": 0},
+        ) as response:
+            if response.status_code == 202:
+                response.read()
+                if accepted_receipt(response) is not None:
+                    delay = _retry_after(response)
+                    continue
+            if not response.is_success:
+                response.read()
+                check_response(response)
+            yield response
+            return
+
+
 def stream(
     client: httpx.Client,
     *,
@@ -377,10 +432,7 @@ def stream(
     finished = False
     typer.echo("Butler: ", nl=False)
     try:
-        with client.stream(method, path, json=body) as response:
-            if not response.is_success:
-                response.read()
-                check_response(response)
+        with saved_stream(client, method, path, body) as response:
             for event, payload in server_events(response):
                 turn_id = payload.get("turn_id") or turn_id
                 if event in {"delta", "message_delta"}:
