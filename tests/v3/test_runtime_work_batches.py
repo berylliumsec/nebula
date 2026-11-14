@@ -1258,15 +1258,32 @@ async def test_legacy_queued_unarchive_is_promoted_only_for_its_chat_project(bat
             key: (await session.get(RuntimeCommandRow, receipt.command_id)).chat_start
             for key, receipt in receipts.items()
         }
+    # Only the restore whose chat belongs to the command's project becomes a
+    # chat start; a row naming another project's chat, or an archive, never does.
     assert promoted == {
         "legacy-restore": True,
         "legacy-restore-wrong-project": False,
         "legacy-archive": False,
     }
-    assert prepared == ["restored-chat-worker-0"] and set(leases) == {"one"}
-    claimed = await batch.coordination.claim_next(leases["one"])
-    assert claimed is not None
-    assert claimed.receipt.command_id == receipts["legacy-restore"].command_id
+    # Every queued project command admits its own project's worker (#1028), so
+    # each project's owner claims its own head and nothing crosses projects.
+    assert len(prepared) == 2 and set(leases) == {"one", "two"}
+    claimed = {
+        project_id: await batch.coordination.claim_next(lease)
+        for project_id, lease in leases.items()
+    }
+    assert {
+        project_id: command.receipt.command_id
+        for project_id, command in claimed.items()
+    } == {
+        "one": receipts["legacy-restore"].command_id,
+        "two": receipts["legacy-restore-wrong-project"].command_id,
+    }
+    async with batch.database.session() as session:
+        wrong = await session.get(
+            RuntimeCommandRow, receipts["legacy-restore-wrong-project"].command_id
+        )
+        assert (wrong.project_id, wrong.chat_start) == ("two", False)
 
 
 async def test_revoked_actor_cannot_apply_and_receipt_lookup_stays_actor_scoped(batch):

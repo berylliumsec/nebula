@@ -572,7 +572,7 @@ async def test_execution_scope_cannot_read_or_write_another_project_batch(
     "demand",
     ["read-routing", "legacy-normal-command", "chat-start", "legacy-typed-chat"],
 )
-async def test_project_admission_requires_an_exact_chat_start(
+async def test_project_admission_requires_a_chat_start_or_queued_project_command(
     admission, tmp_path, demand
 ):
     value = admission
@@ -658,7 +658,13 @@ async def test_project_admission_requires_an_exact_chat_start(
                 await session.get(ProjectOwnershipRow, "one")
             ).admission_requested is False
     await value.automatic.reconcile()
-    should_admit = demand in {"chat-start", "legacy-typed-chat"}
+    # Reads and host-committed barriers never admit a worker. A queued project
+    # command does (#1028), like a chat start: only that worker can run it.
+    should_admit = demand in {
+        "legacy-normal-command",
+        "chat-start",
+        "legacy-typed-chat",
+    }
     assert len(value.calls) == int(should_admit)
     assert set(value.leases) == ({"one"} if should_admit else set())
     if should_admit:
