@@ -45,6 +45,7 @@ def test_wheel_has_only_allowlisted_client_modules_and_small_dependencies(built_
         names = archive.namelist()
         assert "nebula/terminal/notes.py" in names
         assert "nebula/terminal/board.py" in names
+        assert "nebula/terminal/conversations.py" in names
         assert not any(name.startswith("nebula/v3/") for name in names)
         assert all(
             name.startswith(("nebula/terminal/", "nebula_client-"))

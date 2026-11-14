@@ -72,8 +72,12 @@ COMMANDS = {
     "chats": "Browse saved conversations",
     "new": "Start a new conversation",
     "butler": "Open this project's Butler",
-    "chat": "Manage this conversation",
+    "chat": "Manage this conversation: rename, pin, flag, archive, edit, retry, export, delete, bulk",
+    "search": "Search saved messages in this conversation or project; bookmarked only",
+    "bookmark": "Bookmark a saved message, or remove its bookmark",
+    "side": "Open, create or close a side chat of this conversation",
     "history": "Read saved messages; /history more reads earlier messages",
+    "thinking": "Show or hide the model's thinking in the transcript",
     "context": "Inspect context usage",
     "activity": "Inspect activity and plans",
     "results": "Read saved results",
@@ -210,6 +214,31 @@ class TerminalUI:
     def markdown(self, text: str) -> None:
         clean = terminal_text(text)
         self.console.print(clean if self.plain else Markdown(clean))
+
+    show_thinking = False
+
+    def set_show_thinking(self, value: bool) -> None:
+        self.show_thinking = value
+
+    def reasoning(self, text: str) -> None:
+        """Scrolling output keeps thinking out of the answer; /thinking reads it."""
+
+    def turn_meta(self, detail: str, *, stopped: bool = False) -> None:
+        label = " · ".join(
+            part for part in ("Stopped" if stopped else "", detail) if part
+        )
+        if label:
+            self.say(f"({terminal_text(label)})")
+
+    def set_editing(self, label: str) -> None:
+        if label:
+            self.say(
+                "Editing a saved message. Sending rewinds the conversation to it "
+                "and sends the edited text; /cancel at a prompt or an empty send keeps it."
+            )
+
+    def reveal(self, text: str) -> bool:
+        return False
 
     async def ask(
         self,
