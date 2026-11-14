@@ -103,6 +103,8 @@ test("dead project runtime recovers automatically without restarting Core or dup
 });
 
 test("worker-backed panes wait calmly while an idle project's worker is away and recover without a reload", async ({page, request}, info) => {
+  // Retirement and readmission each take real worker start-up and shutdown.
+  test.setTimeout(420_000);
   const control = await controller(request);
   const fixture = await control.reset(false, false, undefined, true);
   await pair(page, request, fixture);
@@ -126,21 +128,32 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
   const answer = page.locator(".chat-message.assistant").filter({hasText: "Synthetic saved answer before the project went idle."});
   const bookmark = page.locator(".chat-message").filter({hasText: "Synthetic saved question"}).getByRole("button", {name: "Bookmark"});
   const reconnecting = page.getByRole("status").filter({hasText: "Reconnecting to this project"});
-  const hardErrors = page.getByText(/Runtime delivery is unavailable|could not be loaded|could not sync|Could not restore this conversation/);
-  const alerts = page.locator(".workspace-notices [role=alert], .chat-panel [role=alert]");
+  const idle = page.getByRole("status").filter({hasText: "This project is idle"});
+  const hardErrors = page.getByText(/Runtime delivery is unavailable|could not be loaded|could not sync|Could not restore this conversation/).filter({visible: true});
+  const alerts = page.locator(".workspace-notices [role=alert], .chat-panel [role=alert]").filter({visible: true});
+  // The last answer to each project read, once the operator resumes work.
+  const reads = new Map<string, number>();
+  let recording = false;
+  page.on("response", response => {
+    const url = new URL(response.url());
+    if (recording && response.request().method() === "GET" && url.pathname.startsWith("/api/v1/")) reads.set(url.pathname.replace(fixture.session_id, ":chat"), response.status());
+  });
   await page.goto(chat);
   await expect(answer).toBeVisible({timeout: 60_000});
   await expect(bookmark).toHaveAttribute("aria-pressed", "true");
+  await expect(hardErrors).toHaveCount(0);
 
   // The operator leaves; the project goes idle (its only chat is archived) and its worker retires.
   await page.goto("/projects");
   await archive();
   await expect.poll(projectRuntime, {timeout: 90_000}).toBeNull();
 
-  // Coming back: every worker-backed read is refused until the operator acts. The page waits calmly.
+  // Coming back: every worker-backed read is refused until the operator acts. Reads never
+  // wake an idle project, so the page says so calmly instead of promising a refresh.
   await page.goto(chat);
   await expect(page.locator(".chat-archived-notice")).toBeVisible({timeout: 60_000});
-  await expect(reconnecting).toBeVisible({timeout: 30_000});
+  await expect(idle).toBeVisible({timeout: 30_000});
+  await expect(reconnecting).toHaveCount(0);
   await expect(hardErrors).toHaveCount(0);
   await expect(alerts).toHaveCount(0);
   expect((await new AxeBuilder({page}).include(".project-runtime-notice").analyze()).violations).toEqual([]);
@@ -156,11 +169,18 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
 
   // Unarchiving is a project command, so Core readmits a worker. Every pane recovers in this same document.
   await page.evaluate(() => { (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument = true; });
+  recording = true;
   await unarchive.click();
   await expect.poll(projectRuntime, {timeout: 120_000}).not.toBeNull();
   await expect(answer).toBeVisible({timeout: 30_000});
   await expect(bookmark).toHaveAttribute("aria-pressed", "true");
   await expect(reconnecting).toBeHidden();
+  await expect(idle).toBeHidden();
+  // Every worker-backed pane read again and was answered, not left waiting.
+  for (const route of ["/chat/sessions/:chat/messages", "/chat/sessions/:chat/bookmarks", "/chat/sessions/:chat/queue", "/chat/sessions/:chat/state",
+    "/chat/sessions/:chat/catch-up", "/chat/sessions/:chat/goal", "/chat/sessions/:chat/side-chats", "/api/v1/runs", "/api/v1/assets"]) {
+    await expect.poll(() => [...reads].find(([path]) => path.endsWith(route))?.[1], {message: route, timeout: 30_000}).toBeLessThan(500);
+  }
   await expect(page.locator(".chat-archived-notice")).toHaveCount(0);
   await expect(hardErrors).toHaveCount(0);
   await expect(alerts).toHaveCount(0);

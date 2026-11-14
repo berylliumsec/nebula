@@ -1735,8 +1735,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   // once it answers, instead of showing a discovery error.
   const [projectReadsRuntimeWait, setProjectReadsRuntimeWait] = useState(0);
   const [projectReadsEpoch, setProjectReadsEpoch] = useState(0);
-  const awaitProjectReads = useCallback(() => setProjectReadsRuntimeWait(value => value + 1), []);
+  const awaitProjectReads = useCallback(() => setProjectReadsRuntimeWait(value => value || 1), []);
   useProjectRuntimeRecovery(api, projectReadsRuntimeWait, () => { setProjectReadsRuntimeWait(0); setProjectReadsEpoch(value => value + 1); });
+  // Another project never inherits this one's wait for its worker.
+  useEffect(() => { setProjectReadsRuntimeWait(0); }, [engagement?.id]);
   const olderHistoryReadRef = useRef(false);
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
@@ -1859,7 +1861,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         return undefined;
       }
       // diagnostic-expected: the client recorded this read; the goal reads again when the project runtime answers.
-      if (isProjectRuntimeUnavailable(caught)) { setGoalRuntimeWait(value => value + 1); return undefined; }
+      if (isProjectRuntimeUnavailable(caught)) { setGoalRuntimeWait(value => value || 1); return undefined; }
       void logCaughtDiagnostic("interface.sessions.goal_load_failed", "The conversation goal could not be loaded.", caught, "goal");
       setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
       return undefined;
@@ -2940,6 +2942,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [api, coreState, engagement?.id, embeddedSideChat, searchingAllConversations, conversationPanelOpen, mobileListOpen, bulkLoadRetryKey]);
 
   useEffect(() => {
+    setSideChatRuntimeWait(0);
     if (embeddedSideChat || !api || !engagement || !sessionId
       || requestedSessionId !== sessionId || view !== "chat") return;
     const parentId = sessionId;
@@ -2963,7 +2966,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }).catch((error) => {
       if (controller.signal.aborted) return;
       // diagnostic-expected: the client recorded this read; side chats restore when the project runtime answers.
-      if (isProjectRuntimeUnavailable(error)) { setSideChatRuntimeWait(value => value + 1); return; }
+      if (isProjectRuntimeUnavailable(error)) { setSideChatRuntimeWait(value => value || 1); return; }
       void logCaughtDiagnostic("interface.sessions_page.side_chat_restore", "The side chat for this conversation could not be loaded.", error, "sessions_page");
       setChatError("Could not restore this conversation's side chat. Retry from the side chat button.");
     });
@@ -4652,7 +4655,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         // diagnostic-expected: the client recorded this read. The project's worker is idle or starting;
         // nothing failed. Keep any cached messages and read again when it answers.
         transcriptRuntimeSessionRef.current = id;
-        setTranscriptRuntimeWait(value => value + 1);
+        setTranscriptRuntimeWait(value => value || 1);
         return;
       }
       if (!authoritativeHistoryLoaded || (error instanceof ApiError && [401, 403, 404].includes(error.status))) {
