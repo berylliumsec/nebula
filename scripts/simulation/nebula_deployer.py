@@ -9,13 +9,14 @@ handles later main updates. It never changes the development checkout.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import datetime, timezone
 import fcntl
 import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import socket
@@ -490,7 +491,7 @@ def github_bytes(url: str, *, limit: int) -> bytes:
     return content
 
 
-def github_json(path: str) -> dict[str, Any]:
+def github_json_value(path: str) -> Any:
     if path.startswith("/") or ".." in Path(path).parts:
         raise RuntimeError("GitHub API path is invalid")
     raw = github_bytes(
@@ -500,6 +501,13 @@ def github_json(path: str) -> dict[str, Any]:
         value = json.loads(raw)
     except (UnicodeError, json.JSONDecodeError) as error:
         raise RuntimeError("GitHub API returned invalid JSON") from error
+    if not isinstance(value, (dict, list)):
+        raise RuntimeError("GitHub API returned an unexpected response")
+    return value
+
+
+def github_json(path: str) -> dict[str, Any]:
+    value = github_json_value(path)
     if not isinstance(value, dict):
         raise RuntimeError("GitHub API returned an unexpected response")
     return value
@@ -508,34 +516,7 @@ def github_json(path: str) -> dict[str, Any]:
 def ci_selection_artifact(
     run_id: int, artifact: dict[str, Any]
 ) -> tuple[dict[str, Any], str]:
-    workflow_run = artifact.get("workflow_run")
-    if isinstance(workflow_run, dict) and workflow_run.get("id") != run_id:
-        raise RuntimeError("GitHub selection artifact belongs to another run")
-    digest = artifact.get("digest")
-    if not isinstance(digest, str) or not digest.startswith("sha256:"):
-        raise RuntimeError("GitHub selection artifact has no SHA-256 digest")
-    expected_digest = digest.removeprefix("sha256:")
-    if not SHA256.fullmatch(expected_digest):
-        raise RuntimeError("GitHub selection artifact digest is malformed")
-    size = artifact.get("size_in_bytes")
-    if (
-        artifact.get("expired") is not False
-        or type(size) is not int
-        or size < 1
-        or size > CI_ARTIFACT_LIMIT
-    ):
-        raise RuntimeError("GitHub selection artifact is expired or exceeds its bound")
-    artifact_id = artifact.get("id")
-    if type(artifact_id) is not int or artifact_id < 1:
-        raise RuntimeError("GitHub selection artifact identity is invalid")
-    archive = github_bytes(
-        f"{GITHUB_API}/repos/{GITHUB_REPOSITORY}/actions/artifacts/{artifact_id}/zip",
-        limit=CI_ARTIFACT_LIMIT,
-    )
-    if len(archive) != size:
-        raise RuntimeError("GitHub selection artifact size does not match its metadata")
-    if hashlib.sha256(archive).hexdigest() != expected_digest:
-        raise RuntimeError("GitHub selection artifact SHA-256 does not match")
+    archive, expected_digest = ci_artifact_archive(run_id, artifact)
     try:
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             entries = [item for item in bundle.infolist() if not item.is_dir()]
@@ -580,8 +561,66 @@ def complete_ci_artifact_listing(response: dict[str, Any]) -> list[dict[str, Any
     return artifacts
 
 
-def selected_ci_jobs(plan: dict[str, Any]) -> set[str]:
-    if plan.get("playwright"):
+def ci_artifact_archive(run_id: int, artifact: dict[str, Any]) -> tuple[bytes, str]:
+    workflow_run = artifact.get("workflow_run")
+    if isinstance(workflow_run, dict) and workflow_run.get("id") != run_id:
+        raise RuntimeError("GitHub CI artifact belongs to another run")
+    digest = artifact.get("digest")
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise RuntimeError("GitHub CI artifact has no SHA-256 digest")
+    expected_digest = digest.removeprefix("sha256:")
+    if not SHA256.fullmatch(expected_digest):
+        raise RuntimeError("GitHub CI artifact digest is malformed")
+    size = artifact.get("size_in_bytes")
+    if (
+        artifact.get("expired") is not False
+        or type(size) is not int
+        or size < 1
+        or size > CI_ARTIFACT_LIMIT
+    ):
+        raise RuntimeError("GitHub CI artifact is expired or exceeds its bound")
+    artifact_id = artifact.get("id")
+    if type(artifact_id) is not int or artifact_id < 1:
+        raise RuntimeError("GitHub CI artifact identity is invalid")
+    archive = github_bytes(
+        f"{GITHUB_API}/repos/{GITHUB_REPOSITORY}/actions/artifacts/{artifact_id}/zip",
+        limit=CI_ARTIFACT_LIMIT,
+    )
+    if len(archive) != size:
+        raise RuntimeError("GitHub CI artifact size does not match its metadata")
+    if hashlib.sha256(archive).hexdigest() != expected_digest:
+        raise RuntimeError("GitHub CI artifact SHA-256 does not match")
+    return archive, expected_digest
+
+
+def named_ci_artifact(run_id: int, name: str) -> tuple[bytes, dict[str, Any], str]:
+    artifacts = complete_ci_artifact_listing(
+        github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
+    )
+    matches = [item for item in artifacts if item.get("name") == name]
+    if len(matches) != 1:
+        raise RuntimeError(f"CI run must contain exactly one {name} artifact")
+    archive, digest = ci_artifact_archive(run_id, matches[0])
+    return archive, matches[0], digest
+
+
+def require_unexpired_artifact(artifact: dict[str, Any]) -> str:
+    expires_at = artifact.get("expires_at")
+    if not isinstance(expires_at, str):
+        raise RuntimeError("Supplemental CI artifact has no expiry timestamp")
+    try:
+        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeError("Supplemental CI artifact expiry is malformed") from error
+    if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
+        raise RuntimeError("Supplemental CI artifact is expired")
+    return expires_at
+
+
+def selected_ci_jobs(
+    plan: dict[str, Any], *, supplemental_playwright_verified: bool = False
+) -> set[str]:
+    if plan.get("playwright") and not supplemental_playwright_verified:
         raise RuntimeError(
             "The push CI workflow does not execute selected Playwright entries"
         )
@@ -691,12 +730,487 @@ def verify_ci_trust_inputs(
             ".github/workflows",
             ".github/actions",
             "scripts/test_selection.py",
+            "scripts/playwright_impact.py",
         )
     except RuntimeError as error:
         raise RuntimeError(
             "CI acceptance refuses changes to trusted workflows, local actions, "
-            "or the test-selection validator"
+            "or the test-selection and Playwright validators"
         ) from error
+
+
+def validate_ci_selection(
+    selection: dict[str, Any],
+    *,
+    previous: str,
+    sha: str,
+    directory: Path,
+    trusted_baseline: str,
+) -> tuple[str, str]:
+    committed = json.loads(
+        run(
+            "git",
+            "-C",
+            str(directory),
+            "show",
+            f"{sha}:.github/test-selection.json",
+            capture=True,
+        )
+    )
+    if selection != committed:
+        raise RuntimeError(
+            "CI selection receipt differs from the candidate's committed plan"
+        )
+    with tempfile.TemporaryDirectory(prefix="nebula-ci-selection-") as temporary:
+        plan_path = Path(temporary) / "test-selection.json"
+        plan_path.write_text(json.dumps(committed, sort_keys=True) + "\n")
+        validator_path = Path(temporary) / "test_selection.py"
+        validator_path.write_text(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{trusted_baseline}:scripts/test_selection.py",
+                capture=True,
+            )
+        )
+        validated = json.loads(
+            run(
+                "/usr/bin/python3",
+                str(validator_path),
+                "--baseline",
+                previous,
+                "--candidate",
+                sha,
+                "--plan",
+                str(plan_path),
+                cwd=directory,
+                capture=True,
+            )
+        )
+    if validated.get("coverage_review_required"):
+        raise RuntimeError("Candidate selection plan fails independent validation")
+    digest = validated.get("change_digest")
+    if not isinstance(digest, str) or selection.get("change_digest") != digest:
+        raise RuntimeError(
+            "CI selection digest does not bind the live-baseline source diff"
+        )
+    selection_hash = hashlib.sha256(
+        json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return digest, selection_hash
+
+
+def commit_parents(directory: Path, sha: str) -> list[str]:
+    values = run(
+        "git",
+        "-C",
+        str(directory),
+        "rev-list",
+        "--parents",
+        "-n",
+        "1",
+        sha,
+        capture=True,
+    ).split()
+    if not values or values[0] != sha:
+        raise RuntimeError("Git returned an invalid commit identity")
+    return values[1:]
+
+
+def git_tree(directory: Path, sha: str) -> str:
+    tree = run(
+        "git", "-C", str(directory), "rev-parse", f"{sha}^{{tree}}", capture=True
+    )
+    if not SHA.fullmatch(tree):
+        raise RuntimeError("Git returned an invalid tree identity")
+    return tree
+
+
+def require_merged_pr_for_commit(
+    *, head_sha: str, base_sha: str, merge_sha: str, directory: Path
+) -> dict[str, Any]:
+    pulls = github_json_value(f"commits/{head_sha}/pulls")
+    if not isinstance(pulls, list):
+        raise RuntimeError("GitHub associated pull request listing is malformed")
+    matches = [
+        item
+        for item in pulls
+        if isinstance(item, dict)
+        and item.get("state") == "closed"
+        and item.get("merged_at")
+        and item.get("merge_commit_sha") == merge_sha
+        and isinstance(item.get("base"), dict)
+        and item["base"].get("sha") == base_sha
+        and isinstance(item.get("head"), dict)
+        and item["head"].get("sha") == head_sha
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "PR CI evidence is not bound to one exact merged pull request"
+        )
+    if not isinstance(matches[0].get("number"), int) or matches[0]["number"] < 1:
+        raise RuntimeError("Merged pull request identity is invalid")
+    parent_list = commit_parents(directory, merge_sha)
+    if len(parent_list) != 2 or parent_list != [base_sha, head_sha]:
+        raise RuntimeError("PR CI evidence does not match the merge commit parents")
+    merge_tree = git_tree(directory, merge_sha)
+    if git_tree(directory, head_sha) != merge_tree:
+        raise RuntimeError("PR head tree differs from the exact main merge tree")
+    return matches[0]
+
+
+def bind_pr_run(
+    run_id: str,
+    *,
+    head_sha: str,
+    base_sha: str,
+    merge_sha: str,
+    workflow_path: str,
+    directory: Path,
+) -> dict[str, Any]:
+    if not CI_RUN_ID.fullmatch(run_id):
+        raise RuntimeError(
+            "Supplemental PR run id must be a positive decimal identifier"
+        )
+    run_info = github_json(f"actions/runs/{run_id}")
+    repository = run_info.get("repository")
+    if not isinstance(repository, dict):
+        repository = {}
+    if (
+        run_info.get("head_sha") != head_sha
+        or run_info.get("event") != "pull_request"
+        or run_info.get("status") != "completed"
+        or run_info.get("conclusion") != "success"
+        or str(repository.get("full_name", "")).lower() != GITHUB_REPOSITORY
+        or type(run_info.get("run_attempt")) is not int
+        or run_info.get("run_attempt") < 1
+        or run_info.get("html_url")
+        != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+    ):
+        raise RuntimeError("Supplemental PR run is not successful on the exact PR head")
+    workflow_id = run_info.get("workflow_id")
+    if type(workflow_id) is not int or workflow_id < 1:
+        raise RuntimeError("Supplemental PR run has no valid workflow identity")
+    workflow = github_json(f"actions/workflows/{workflow_id}")
+    if workflow.get("path") != workflow_path or workflow.get("state") != "active":
+        raise RuntimeError("Supplemental PR run did not use the pinned active workflow")
+    pull = require_merged_pr_for_commit(
+        head_sha=head_sha,
+        base_sha=base_sha,
+        merge_sha=merge_sha,
+        directory=directory,
+    )
+    if run_info.get("head_branch") != pull.get("head", {}).get("ref"):
+        raise RuntimeError(
+            "Supplemental PR run branch differs from its merged pull request"
+        )
+    return {
+        "run_id": int(run_id),
+        "run_url": run_info["html_url"],
+        "run_attempt": run_info["run_attempt"],
+        "workflow_path": workflow_path,
+        "head_commit": head_sha,
+        "base_commit": base_sha,
+        "merge_commit": merge_sha,
+        "tree_sha": git_tree(directory, merge_sha),
+        "pull_request": pull["number"],
+    }
+
+
+def supplemental_artifact_files(
+    run_id: int, artifact_name: str, expected_names: set[str]
+) -> tuple[dict[str, bytes], dict[str, Any], str]:
+    archive, metadata, digest = named_ci_artifact(run_id, artifact_name)
+    require_unexpired_artifact(metadata)
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            files: dict[str, bytes] = {}
+            entries = [entry for entry in bundle.infolist() if not entry.is_dir()]
+            if len(entries) != len(expected_names):
+                raise RuntimeError("Supplemental artifact file set is incomplete")
+            for entry in entries:
+                path = PurePosixPath(entry.filename)
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or stat.S_ISLNK(entry.external_attr >> 16)
+                    or entry.file_size > CI_ARTIFACT_LIMIT
+                ):
+                    raise RuntimeError("Supplemental artifact contains an unsafe file")
+                name = path.name
+                if name not in expected_names or name in files:
+                    raise RuntimeError("Supplemental artifact file set is invalid")
+                files[name] = bundle.read(entry)
+            if set(files) != expected_names:
+                raise RuntimeError("Supplemental artifact file set is incomplete")
+    except (
+        OSError,
+        RuntimeError,
+        NotImplementedError,
+        zipfile.BadZipFile,
+    ) as error:
+        raise RuntimeError("Supplemental CI artifact is not a valid archive") from error
+    return files, metadata, digest
+
+
+def validate_playwright_matrix_jobs(
+    jobs: list[dict[str, Any]], include: list[dict[str, Any]]
+) -> dict[str, str]:
+    def signature(entry: dict[str, Any]) -> tuple[str, ...]:
+        fields = ("area", "grep", "project", "runtime", "shard")
+        if any(
+            not isinstance(entry.get(field), str) or not entry[field]
+            for field in fields
+        ):
+            raise RuntimeError("Playwright matrix entry is malformed")
+        return tuple(entry[field] for field in fields)
+
+    expected = Counter(signature(entry) for entry in include)
+    actual: Counter[tuple[str, ...]] = Counter()
+    allowed_prefixes = {"playwright", "playwright-2", "playwright-3", "playwright-4"}
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get("name"), str):
+            continue
+        name = job["name"]
+        lane = name.partition(" (")[0]
+        if lane not in allowed_prefixes or " (" not in name:
+            continue
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            raise RuntimeError("A selected Playwright matrix job did not succeed")
+        fields = name.partition(" (")[2].split(", ")
+        if len(fields) < 5:
+            raise RuntimeError("GitHub Playwright job name lacks its matrix identity")
+        actual[tuple(fields[:5])] += 1
+    if actual != expected:
+        raise RuntimeError(
+            "Successful Playwright jobs do not cover every selected entry"
+        )
+    required = {"plan", "gate"}
+    accepted = require_ci_jobs(jobs, required)
+    for identity, count in sorted(expected.items()):
+        label = json.dumps(identity, separators=(",", ":"))
+        for index in range(count):
+            accepted[f"playwright:{label}:{index + 1}"] = "success"
+    return accepted
+
+
+def github_run_jobs(run_id: int) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        result = github_json(f"actions/runs/{run_id}/jobs?per_page=100&page={page}")
+        current = result.get("jobs")
+        if not isinstance(current, list) or any(
+            not isinstance(job, dict) for job in current
+        ):
+            raise RuntimeError("GitHub CI jobs response is malformed")
+        jobs.extend(current)
+        if len(current) < 100:
+            break
+        page += 1
+        if page > 20:
+            raise RuntimeError("GitHub CI job list exceeds its bound")
+    return jobs
+
+
+def verify_pr_ci_supplement(
+    run_id: str,
+    *,
+    head_sha: str,
+    base_sha: str,
+    merge_sha: str,
+    directory: Path,
+    trusted_baseline: str,
+) -> dict[str, Any]:
+    binding = bind_pr_run(
+        run_id,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        merge_sha=merge_sha,
+        workflow_path=".github/workflows/ci.yml",
+        directory=directory,
+    )
+    verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=head_sha)
+    artifacts = complete_ci_artifact_listing(
+        github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
+    )
+    matches = [
+        artifact
+        for artifact in artifacts
+        if artifact.get("name") == "test-selection-receipt"
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("PR CI run must contain exactly one selection receipt")
+    artifact_expires_at = require_unexpired_artifact(matches[0])
+    selection, artifact_digest = ci_selection_artifact(int(run_id), matches[0])
+    if not isinstance(selection.get("playwright"), list) or not selection["playwright"]:
+        raise RuntimeError("PR CI companion does not validate the browser selection")
+    selection_digest, selection_hash = validate_ci_selection(
+        selection,
+        previous=base_sha,
+        sha=head_sha,
+        directory=directory,
+        trusted_baseline=trusted_baseline,
+    )
+    jobs = github_run_jobs(int(run_id))
+    required = selected_ci_jobs(selection, supplemental_playwright_verified=True)
+    selected_jobs = require_ci_jobs(jobs, required)
+    return {
+        "source": "github-actions-pull-request-ci",
+        **binding,
+        "selection_change_digest": selection_digest,
+        "selection_plan_sha256": selection_hash,
+        "artifact_sha256": artifact_digest,
+        "artifact_expires_at": artifact_expires_at,
+        "selected_jobs": selected_jobs,
+    }
+
+
+def expected_pr_playwright_plan(
+    selection: dict[str, Any],
+    *,
+    head_sha: str,
+    base_sha: str,
+    directory: Path,
+    trusted_baseline: str,
+) -> tuple[dict[str, Any], str]:
+    with tempfile.TemporaryDirectory(prefix="nebula-pr-playwright-") as temporary:
+        temporary_path = Path(temporary)
+        script = temporary_path / "playwright_impact.py"
+        script.write_text(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{trusted_baseline}:scripts/playwright_impact.py",
+                capture=True,
+            )
+        )
+        manifest = temporary_path / "playwright-impact.json"
+        manifest.write_text(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{head_sha}:ui/playwright-impact.json",
+                capture=True,
+            )
+        )
+        output = temporary_path / "expected-plan.json"
+        receipt = temporary_path / "expected-receipt.md"
+        reviewed_reason = f"{selection.get('reason', '')} Exclusions: {selection.get('exclusions', '')}"
+        selectors = [
+            item
+            if item.startswith(("area:", "entry:", "project:"))
+            else f"entry:{item}"
+            for item in selection["playwright"]
+        ]
+        args = [
+            "/usr/bin/python3",
+            str(script),
+            "select",
+            "--manifest",
+            str(manifest),
+            "--baseline",
+            base_sha,
+            "--candidate",
+            head_sha,
+            "--scope",
+            "impacted",
+            "--review-reason",
+            reviewed_reason,
+            "--output",
+            str(output),
+            "--receipt",
+            str(receipt),
+        ]
+        for selector in selectors or ["none"]:
+            args.extend(("--selection", selector))
+        run(*args, cwd=directory)
+        plan = json.loads(output.read_text())
+        return plan, receipt.read_text()
+
+
+def verify_pr_playwright_supplement(
+    run_id: str,
+    *,
+    head_sha: str,
+    base_sha: str,
+    merge_sha: str,
+    directory: Path,
+    trusted_baseline: str,
+) -> dict[str, Any]:
+    binding = bind_pr_run(
+        run_id,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        merge_sha=merge_sha,
+        workflow_path=".github/workflows/playwright-impact.yml",
+        directory=directory,
+    )
+    verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=head_sha)
+    files, artifact, artifact_digest = supplemental_artifact_files(
+        int(run_id),
+        "playwright-impact-receipt",
+        {
+            "playwright-impact-plan.json",
+            "playwright-impact-receipt.md",
+            "reviewed-tests.json",
+        },
+    )
+    try:
+        selection = json.loads(files["reviewed-tests.json"])
+        received_plan = json.loads(files["playwright-impact-plan.json"])
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("PR Playwright artifact contains invalid JSON") from error
+    if not isinstance(selection, dict) or not isinstance(received_plan, dict):
+        raise RuntimeError("PR Playwright artifact has an invalid object shape")
+    if not isinstance(selection.get("playwright"), list) or not selection["playwright"]:
+        raise RuntimeError("PR Playwright run has no reviewed browser selection")
+    selection_digest, selection_hash = validate_ci_selection(
+        selection,
+        previous=base_sha,
+        sha=head_sha,
+        directory=directory,
+        trusted_baseline=trusted_baseline,
+    )
+    expected_plan, expected_receipt = expected_pr_playwright_plan(
+        selection,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        directory=directory,
+        trusted_baseline=trusted_baseline,
+    )
+    if (
+        expected_plan.get("coverage_review_required")
+        or not expected_plan.get("include")
+        or received_plan != expected_plan
+        or files["playwright-impact-receipt.md"].decode("utf-8") != expected_receipt
+    ):
+        raise RuntimeError(
+            "PR Playwright artifact differs from the pinned selector result"
+        )
+    jobs = github_run_jobs(int(run_id))
+    selected_jobs = validate_playwright_matrix_jobs(jobs, expected_plan["include"])
+    if artifact.get("expired") is not False:
+        raise RuntimeError("PR Playwright artifact is expired")
+    return {
+        "source": "github-actions-pull-request-playwright",
+        **binding,
+        "selection_change_digest": selection_digest,
+        "selection_plan_sha256": selection_hash,
+        "playwright_plan_sha256": hashlib.sha256(
+            json.dumps(expected_plan, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "artifact_sha256": artifact_digest,
+        "artifact_expires_at": artifact["expires_at"],
+        "selected_entries": expected_plan["include"],
+        "selected_jobs": selected_jobs,
+    }
 
 
 def verify_ci_acceptance(
@@ -706,13 +1220,12 @@ def verify_ci_acceptance(
     sha: str,
     directory: Path,
     trusted_baseline: str | None = None,
+    supplemental_playwright: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not CI_RUN_ID.fullmatch(run_id):
         raise RuntimeError("CI run id must be a positive decimal identifier")
     trusted_baseline = trusted_baseline or previous
-    verify_ci_trust_inputs(
-        directory, trusted_baseline=trusted_baseline, sha=sha
-    )
+    verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=sha)
     first_parent = run(
         "git", "-C", str(directory), "rev-parse", f"{sha}^1", capture=True
     )
@@ -749,83 +1262,33 @@ def verify_ci_acceptance(
     ):
         raise RuntimeError("CI run did not use the active pinned CI workflow")
 
-    artifacts = github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
-    artifact_rows = complete_ci_artifact_listing(artifacts)
+    artifact_rows = complete_ci_artifact_listing(
+        github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
+    )
     artifact_matches = [
-        item
-        for item in artifact_rows
-        if isinstance(item, dict)
-        if item.get("name") == "test-selection-receipt"
+        item for item in artifact_rows if item.get("name") == "test-selection-receipt"
     ]
     if len(artifact_matches) != 1:
         raise RuntimeError("CI run must contain exactly one selection receipt artifact")
     selection, artifact_digest = ci_selection_artifact(int(run_id), artifact_matches[0])
-    committed = json.loads(
-        run(
-            "git",
-            "-C",
-            str(directory),
-            "show",
-            f"{sha}:.github/test-selection.json",
-            capture=True,
-        )
+    digest, selection_hash = validate_ci_selection(
+        selection,
+        previous=previous,
+        sha=sha,
+        directory=directory,
+        trusted_baseline=trusted_baseline,
     )
-    if selection != committed:
+    if bool(selection.get("playwright")) != (supplemental_playwright is not None):
         raise RuntimeError(
-            "CI selection receipt differs from the candidate's committed plan"
+            "Selected Playwright checks require exact merged-PR supplemental evidence"
         )
-    with tempfile.TemporaryDirectory(prefix="nebula-ci-acceptance-") as temporary:
-        plan_path = Path(temporary) / "test-selection.json"
-        plan_path.write_text(json.dumps(committed, sort_keys=True) + "\n")
-        validator_path = Path(temporary) / "test_selection.py"
-        validator_path.write_text(
-            run(
-                "git",
-                "-C",
-                str(directory),
-                "show",
-                f"{trusted_baseline}:scripts/test_selection.py",
-                capture=True,
-            )
-        )
-        validated = json.loads(
-            run(
-                "/usr/bin/python3",
-                str(validator_path),
-                "--baseline",
-                previous,
-                "--candidate",
-                sha,
-                "--plan",
-                str(plan_path),
-                cwd=directory,
-                capture=True,
-            )
-        )
-    if validated.get("coverage_review_required"):
-        raise RuntimeError("Candidate selection plan fails independent validation")
-    digest = validated.get("change_digest")
-    if not isinstance(digest, str) or selection.get("change_digest") != digest:
-        raise RuntimeError(
-            "CI selection digest does not bind the live-baseline source diff"
-        )
-
-    jobs: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        result = github_json(f"actions/runs/{run_id}/jobs?per_page=100&page={page}")
-        current = result.get("jobs")
-        if not isinstance(current, list):
-            raise RuntimeError("GitHub CI jobs response is malformed")
-        jobs.extend(current)
-        if len(current) < 100:
-            break
-        page += 1
-        if page > 20:
-            raise RuntimeError("GitHub CI job list exceeds its bound")
-    required_jobs = selected_ci_jobs(selection)
+    jobs = github_run_jobs(int(run_id))
+    required_jobs = selected_ci_jobs(
+        selection,
+        supplemental_playwright_verified=supplemental_playwright is not None,
+    )
     selected_conclusions = require_ci_jobs(jobs, required_jobs)
-    return {
+    receipt = {
         "source": "github-actions-ci",
         "run_id": int(run_id),
         "run_url": run_info.get("html_url"),
@@ -834,16 +1297,23 @@ def verify_ci_acceptance(
         "commit": sha,
         "baseline": previous,
         "selection_change_digest": digest,
-        "selection_plan_sha256": hashlib.sha256(
-            json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
+        "selection_plan_sha256": selection_hash,
         "artifact_sha256": artifact_digest,
         "selected_jobs": selected_conclusions,
     }
+    if supplemental_playwright is not None:
+        receipt["supplemental_pr_evidence"] = supplemental_playwright
+    return receipt
 
 
 def verify_ci_acceptance_chain(
-    run_ids: list[str], *, previous: str, sha: str, directory: Path
+    run_ids: list[str],
+    *,
+    previous: str,
+    sha: str,
+    directory: Path,
+    pr_ci_run_ids: list[str] | None = None,
+    pr_playwright_run_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     commits = first_parent_commits(directory, previous=previous, sha=sha)
     if len(run_ids) != len(commits):
@@ -853,18 +1323,109 @@ def verify_ci_acceptance_chain(
     if len(set(run_ids)) != len(run_ids):
         raise RuntimeError("CI acceptance run IDs must be unique")
 
+    pr_ci_run_ids = pr_ci_run_ids or []
+    pr_playwright_run_ids = pr_playwright_run_ids or []
+    if (
+        len(set(pr_ci_run_ids)) != len(pr_ci_run_ids)
+        or len(set(pr_playwright_run_ids)) != len(pr_playwright_run_ids)
+        or len(set((*run_ids, *pr_ci_run_ids, *pr_playwright_run_ids)))
+        != len(run_ids) + len(pr_ci_run_ids) + len(pr_playwright_run_ids)
+    ):
+        raise RuntimeError("CI acceptance run IDs must be unique")
+    playwright_commits = []
+    for commit in commits:
+        committed = json.loads(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{commit}:.github/test-selection.json",
+                capture=True,
+            )
+        )
+        selected = committed.get("playwright")
+        if not isinstance(selected, list):
+            raise RuntimeError("Committed Playwright selection is malformed")
+        if selected:
+            playwright_commits.append(commit)
+    if len(pr_ci_run_ids) != len(playwright_commits) or len(
+        pr_playwright_run_ids
+    ) != len(playwright_commits):
+        raise RuntimeError(
+            "Each Playwright-selected merge requires one exact PR CI and Playwright run"
+        )
+
     receipts: list[dict[str, Any]] = []
     baseline = previous
+    supplemental_index = 0
     for run_id, commit in zip(run_ids, commits, strict=True):
+        supplemental: dict[str, Any] | None = None
+        if commit in playwright_commits:
+            parents = commit_parents(directory, commit)
+            if len(parents) != 2:
+                raise RuntimeError(
+                    "Supplemental Playwright evidence requires a two-parent merge commit"
+                )
+            base_sha, head_sha = parents
+            pr_ci = verify_pr_ci_supplement(
+                pr_ci_run_ids[supplemental_index],
+                head_sha=head_sha,
+                base_sha=base_sha,
+                merge_sha=commit,
+                directory=directory,
+                trusted_baseline=previous,
+            )
+            pr_playwright = verify_pr_playwright_supplement(
+                pr_playwright_run_ids[supplemental_index],
+                head_sha=head_sha,
+                base_sha=base_sha,
+                merge_sha=commit,
+                directory=directory,
+                trusted_baseline=previous,
+            )
+            for item in (pr_ci, pr_playwright):
+                if any(
+                    item.get(field) != expected
+                    for field, expected in (
+                        ("head_commit", head_sha),
+                        ("base_commit", base_sha),
+                        ("merge_commit", commit),
+                        ("tree_sha", git_tree(directory, commit)),
+                    )
+                ):
+                    raise RuntimeError(
+                        "Supplemental PR runs do not share the exact merge tree"
+                    )
+            if any(
+                pr_ci.get(field) != pr_playwright.get(field)
+                for field in ("selection_change_digest", "selection_plan_sha256")
+            ):
+                raise RuntimeError(
+                    "Supplemental PR runs do not share one reviewed selection"
+                )
+            supplemental = {"pull_request_ci": pr_ci, "playwright": pr_playwright}
+            supplemental_index += 1
         receipt = verify_ci_acceptance(
             run_id,
             previous=baseline,
             sha=commit,
             directory=directory,
             trusted_baseline=previous,
+            supplemental_playwright=supplemental,
         )
         if receipt.get("baseline") != baseline or receipt.get("commit") != commit:
-            raise RuntimeError("CI acceptance receipt does not match its chain position")
+            raise RuntimeError(
+                "CI acceptance receipt does not match its chain position"
+            )
+        if supplemental is not None and any(
+            evidence.get(field) != receipt.get(field)
+            for evidence in supplemental.values()
+            for field in ("selection_change_digest", "selection_plan_sha256")
+        ):
+            raise RuntimeError(
+                "Main and supplemental CI runs do not share one selection"
+            )
         receipts.append(receipt)
         baseline = commit
     if baseline != sha:
@@ -880,9 +1441,128 @@ def verify_ci_acceptance_chain(
 
 
 def validate_ci_acceptance_record(
-    ci: dict[str, Any], *, previous: str, sha: str,
+    ci: dict[str, Any],
+    *,
+    previous: str,
+    sha: str,
     expected_commits: list[str] | None = None,
+    directory: Path | None = None,
 ) -> None:
+    accepted_run_ids: set[int] = set()
+
+    def validate_supplemental(
+        evidence: dict[str, Any], *, baseline: str, commit: str
+    ) -> None:
+        pr_ci = evidence.get("pull_request_ci")
+        playwright = evidence.get("playwright")
+        if not isinstance(pr_ci, dict) or not isinstance(playwright, dict):
+            raise RuntimeError("release CI supplemental PR evidence is invalid")
+        common: tuple[str, ...] | None = None
+        for item, source, workflow_path in (
+            (
+                pr_ci,
+                "github-actions-pull-request-ci",
+                ".github/workflows/ci.yml",
+            ),
+            (
+                playwright,
+                "github-actions-pull-request-playwright",
+                ".github/workflows/playwright-impact.yml",
+            ),
+        ):
+            head = item.get("head_commit")
+            tree = item.get("tree_sha")
+            run_id = item.get("run_id")
+            pull_number = item.get("pull_request")
+            if (
+                item.get("source") != source
+                or item.get("workflow_path") != workflow_path
+                or item.get("base_commit") != baseline
+                or item.get("merge_commit") != commit
+                or not isinstance(head, str)
+                or not SHA.fullmatch(head)
+                or not isinstance(tree, str)
+                or not SHA.fullmatch(tree)
+                or type(run_id) is not int
+                or run_id < 1
+                or type(item.get("run_attempt")) is not int
+                or item["run_attempt"] < 1
+                or item.get("run_url")
+                != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+                or type(pull_number) is not int
+                or pull_number < 1
+                or not SHA256.fullmatch(str(item.get("artifact_sha256", "")))
+                or not SHA256.fullmatch(str(item.get("selection_change_digest", "")))
+                or not SHA256.fullmatch(str(item.get("selection_plan_sha256", "")))
+                or not isinstance(item.get("selected_jobs"), dict)
+                or not item["selected_jobs"]
+                or any(value != "success" for value in item["selected_jobs"].values())
+            ):
+                raise RuntimeError("release CI supplemental PR evidence is invalid")
+            expires_at = item.get("artifact_expires_at")
+            try:
+                expiry = datetime.fromisoformat(
+                    expires_at.replace("Z", "+00:00")
+                    if isinstance(expires_at, str)
+                    else ""
+                )
+            except ValueError as error:
+                raise RuntimeError(
+                    "release CI supplemental artifact expiry is invalid"
+                ) from error
+            if expiry.tzinfo is None:
+                raise RuntimeError("release CI supplemental artifact expiry is invalid")
+            identity = (head, tree, str(pull_number))
+            if common is not None and identity != common:
+                raise RuntimeError("release supplemental PR runs do not share identity")
+            common = identity
+        if (
+            not SHA256.fullmatch(str(playwright.get("playwright_plan_sha256", "")))
+            or not isinstance(playwright.get("selected_entries"), list)
+            or not playwright["selected_entries"]
+            or pr_ci["run_id"] == playwright["run_id"]
+            or pr_ci["selection_change_digest"]
+            != playwright["selection_change_digest"]
+            or pr_ci["selection_plan_sha256"]
+            != playwright["selection_plan_sha256"]
+        ):
+            raise RuntimeError("release CI supplemental Playwright record is invalid")
+        expected_jobs = {"plan": "success", "gate": "success"}
+        for entry in playwright["selected_entries"]:
+            if not isinstance(entry, dict):
+                raise RuntimeError(
+                    "release CI supplemental Playwright record is invalid"
+                )
+            signature = tuple(
+                entry.get(field)
+                for field in ("area", "grep", "project", "runtime", "shard")
+            )
+            if any(not isinstance(value, str) or not value for value in signature):
+                raise RuntimeError(
+                    "release CI supplemental Playwright record is invalid"
+                )
+            label = json.dumps(signature, separators=(",", ":"))
+            index = 1
+            while f"playwright:{label}:{index}" in expected_jobs:
+                index += 1
+            expected_jobs[f"playwright:{label}:{index}"] = "success"
+        if playwright.get("selected_jobs") != expected_jobs:
+            raise RuntimeError(
+                "release CI supplemental Playwright shard record is invalid"
+            )
+        if directory is not None:
+            head = playwright["head_commit"]
+            parents = commit_parents(directory, commit)
+            if len(parents) != 2 or parents != [baseline, head]:
+                raise RuntimeError("release CI supplemental merge parents are invalid")
+            expected_tree = git_tree(directory, commit)
+            if (
+                playwright["tree_sha"] != expected_tree
+                or pr_ci["tree_sha"] != expected_tree
+                or git_tree(directory, head) != expected_tree
+            ):
+                raise RuntimeError("release CI supplemental merge tree is invalid")
+
     def validate_run(item: dict[str, Any], *, baseline: str, commit: str) -> None:
         run_id = item.get("run_id")
         if (
@@ -906,6 +1586,75 @@ def validate_ci_acceptance_record(
             or any(value != "success" for value in item["selected_jobs"].values())
         ):
             raise RuntimeError("release CI acceptance record is invalid")
+        if run_id in accepted_run_ids:
+            raise RuntimeError("release CI acceptance run IDs are duplicated")
+        accepted_run_ids.add(run_id)
+        supplemental = item.get("supplemental_pr_evidence")
+        if supplemental is not None:
+            if not isinstance(supplemental, dict):
+                raise RuntimeError("release CI supplemental PR evidence is invalid")
+            validate_supplemental(supplemental, baseline=baseline, commit=commit)
+            for evidence in supplemental.values():
+                evidence_run_id = evidence["run_id"]
+                if evidence_run_id in accepted_run_ids:
+                    raise RuntimeError("release CI acceptance run IDs are duplicated")
+                accepted_run_ids.add(evidence_run_id)
+                if any(
+                    evidence.get(field) != item.get(field)
+                    for field in ("selection_change_digest", "selection_plan_sha256")
+                ):
+                    raise RuntimeError(
+                        "release supplemental and main CI selections differ"
+                    )
+        if directory is not None:
+            selection = json.loads(
+                run(
+                    "git",
+                    "-C",
+                    str(directory),
+                    "show",
+                    f"{commit}:.github/test-selection.json",
+                    capture=True,
+                )
+            )
+            if bool(selection.get("playwright")) != (supplemental is not None):
+                raise RuntimeError(
+                    "release CI record does not cover its Playwright selection"
+                )
+            expected_main_jobs = {
+                name: "success"
+                for name in selected_ci_jobs(
+                    selection,
+                    supplemental_playwright_verified=supplemental is not None,
+                )
+            }
+            if item["selected_jobs"] != expected_main_jobs:
+                raise RuntimeError("release CI selected-job record is incomplete")
+            verify_ci_trust_inputs(directory, trusted_baseline=previous, sha=commit)
+            if supplemental is not None:
+                pr_ci = supplemental["pull_request_ci"]
+                playwright = supplemental["playwright"]
+                head = playwright["head_commit"]
+                verify_ci_trust_inputs(directory, trusted_baseline=previous, sha=head)
+                expected_pr_jobs = {
+                    name: "success"
+                    for name in selected_ci_jobs(
+                        selection, supplemental_playwright_verified=True
+                    )
+                }
+                if pr_ci["selected_jobs"] != expected_pr_jobs:
+                    raise RuntimeError("release PR CI job record is incomplete")
+                expected_plan, _ = expected_pr_playwright_plan(
+                    selection,
+                    head_sha=head,
+                    base_sha=baseline,
+                    directory=directory,
+                    trusted_baseline=previous,
+                )
+                if playwright["selected_entries"] != expected_plan.get("include"):
+                    raise RuntimeError(
+                        "release PR Playwright entries differ from the trusted selector"
+                    )
 
     if ci.get("source") == "github-actions-ci":
         validate_run(ci, baseline=previous, commit=sha)
@@ -1035,13 +1784,28 @@ def copy_canonical_runtime_bundle(directory: Path, staging: Path) -> None:
     shutil.copytree(source, destination)
 
 
-def prepare(*, ci_run_ids: list[str] | None = None) -> dict[str, Any]:
+def prepare(
+    *,
+    ci_run_ids: list[str] | None = None,
+    pr_ci_run_ids: list[str] | None = None,
+    pr_playwright_run_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    if ci_run_ids is None and (
+        pr_ci_run_ids is not None or pr_playwright_run_ids is not None
+    ):
+        raise RuntimeError(
+            "Supplemental PR CI runs require the main CI acceptance chain"
+        )
     git_source()
     previous = baseline()
     run("git", "-C", str(REPO), "fetch", "--no-tags", "origin", "main")
     sha = run("git", "-C", str(REPO), "rev-parse", "origin/main", capture=True)
     if sha == previous:
-        if ci_run_ids is not None:
+        if (
+            ci_run_ids is not None
+            or pr_ci_run_ids is not None
+            or pr_playwright_run_ids is not None
+        ):
             raise RuntimeError("CI-backed preparation requires a new main candidate")
         return {"status": "current", "commit": sha}
     if not SHA.fullmatch(sha):
@@ -1056,7 +1820,12 @@ def prepare(*, ci_run_ids: list[str] | None = None) -> dict[str, Any]:
             )
         if ci_run_ids is not None:
             accepted_ci = verify_ci_acceptance_chain(
-                ci_run_ids, previous=previous, sha=sha, directory=candidate(sha)
+                ci_run_ids,
+                previous=previous,
+                sha=sha,
+                directory=candidate(sha),
+                pr_ci_run_ids=pr_ci_run_ids,
+                pr_playwright_run_ids=pr_playwright_run_ids,
             )
             if receipt.get("ci_acceptance") != accepted_ci:
                 raise RuntimeError(
@@ -1069,7 +1838,12 @@ def prepare(*, ci_run_ids: list[str] | None = None) -> dict[str, Any]:
     directory = candidate(sha)
     ci_acceptance = (
         verify_ci_acceptance_chain(
-            ci_run_ids, previous=previous, sha=sha, directory=directory
+            ci_run_ids,
+            previous=previous,
+            sha=sha,
+            directory=directory,
+            pr_ci_run_ids=pr_ci_run_ids,
+            pr_playwright_run_ids=pr_playwright_run_ids,
         )
         if ci_run_ids is not None
         else None
@@ -1355,6 +2129,7 @@ def verified_release(sha: str) -> Path:
             expected_commits=first_parent_commits(
                 REPO, previous=previous, sha=sha
             ),
+            directory=REPO,
         )
     return release
 
@@ -3235,6 +4010,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--ci-pr-run-id",
+        action="append",
+        help=(
+            "supplement a Playwright-selected main merge with its successful exact-tree "
+            "pull_request CI run; repeat in first-parent order for selected merges"
+        ),
+    )
+    parser.add_argument(
+        "--ci-playwright-run-id",
+        action="append",
+        help=(
+            "supplement a Playwright-selected main merge with its successful exact-tree "
+            "pull_request Playwright matrix run; repeat in first-parent order"
+        ),
+    )
+    parser.add_argument(
         "--allow-degraded-workers",
         action="store_true",
         help=(
@@ -3246,6 +4037,10 @@ def main() -> int:
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
         raise RuntimeError("--ci-run-id is supported only with prepare")
+    if (
+        args.ci_pr_run_id is not None or args.ci_playwright_run_id is not None
+    ) and args.action != "prepare":
+        raise RuntimeError("Supplemental PR CI run IDs are supported only with prepare")
     if args.allow_degraded_workers and args.action != "activate-host":
         raise RuntimeError(
             "--allow-degraded-workers is supported only with activate-host"
@@ -3255,7 +4050,11 @@ def main() -> int:
         result = (
             {"status": "state", **state()}
             if args.action == "status"
-            else prepare(ci_run_ids=args.ci_run_id)
+            else prepare(
+                ci_run_ids=args.ci_run_id,
+                pr_ci_run_ids=args.ci_pr_run_id,
+                pr_playwright_run_ids=args.ci_playwright_run_id,
+            )
             if args.action == "prepare"
             else activate_host(allow_degraded_workers=args.allow_degraded_workers)
             if args.action == "activate-host"

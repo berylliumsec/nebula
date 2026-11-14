@@ -51,15 +51,6 @@ def current_execution_lease() -> ProjectLease | None:
     return _current_lease.get()
 
 
-def execution_scoped(connection) -> bool:
-    """Whether ExecutionSQLScope began this connection's transaction.
-
-    Such a transaction already holds every ownership row of its runtime:
-    ``SELECT ... FOR UPDATE`` on PostgreSQL and ``BEGIN IMMEDIATE`` on SQLite.
-    """
-    return "execution_owned" in connection.info
-
-
 class ExecutionSQLScope:
     def __init__(self, runtime_id: str):
         self.runtime_id = runtime_id

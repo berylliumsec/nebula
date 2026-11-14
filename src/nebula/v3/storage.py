@@ -6,7 +6,6 @@ from typing import AsyncIterator
 
 from .diagnostics import record_caught_exception
 from .async_utils import call_async, finish_cleanup
-from .execution_scope import execution_scoped
 from .query_predicates import visible_harness_chat_title
 
 import asyncio
@@ -391,23 +390,32 @@ class StoreTransaction:
     async def _guard_project_chat_start(self, engagement_id: str | None) -> None:
         """Serialize a new open chat against project worker retirement.
 
-        The ownership row is locked in the same transaction as the chat write.
-        A concurrent retirement either observes the committed session, or
-        commits its hold first and causes this chat start to be rejected.
-        Projects without an ownership row remain unaffected.
+        Host writes use an ownership-row UPDATE in the same transaction as the
+        chat write. Execution-scoped stores cannot mutate that host-owned row;
+        their transaction already locks and validates owned rows, so they read
+        the retirement hold under that lock instead. Projects without an
+        ownership row remain unaffected for host writes.
         """
         if not engagement_id:
             return
-        if execution_scoped(await self.session.connection()):
-            # Execution workers cannot write host coordination state. Their
-            # transaction began holding this owned row, so reading the hold is
-            # serialized with retirement exactly as the host's UPDATE is.
-            retiring = await self.session.scalar(
-                select(ProjectOwnershipRow.retirement_requested)
-                .where(ProjectOwnershipRow.project_id == engagement_id)
-                .with_for_update()
+        connection = await self.session.connection()
+        sync_connection = connection.sync_connection
+        if sync_connection is None:
+            raise ConflictError(
+                "The project chat transaction has no database connection."
             )
-            if retiring:
+        execution_owned = sync_connection.info.get("execution_owned")
+        if execution_owned is not None:
+            retirement_requested = await self.session.scalar(
+                select(ProjectOwnershipRow.retirement_requested).where(
+                    ProjectOwnershipRow.project_id == engagement_id
+                )
+            )
+            if retirement_requested is None:
+                raise ConflictError(
+                    "The execution worker no longer owns this project; retry chat creation after admission."
+                )
+            if retirement_requested:
                 raise ConflictError(
                     "The project worker is closing; retry chat creation after retirement."
                 )
