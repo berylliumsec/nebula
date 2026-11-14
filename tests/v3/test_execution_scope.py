@@ -1,5 +1,6 @@
 """Real connection isolation of existing ORM and raw ledger write paths."""
 
+import asyncio
 import time
 
 import pytest
@@ -30,6 +31,7 @@ from nebula.v3.domain import (
     ProviderProfile,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
+from nebula.v3.chat_queue import ChatQueueService
 from nebula.v3.execution_scope import ExecutionSQLScope, execution_context
 from nebula.v3.provider_scheduler import ProviderScheduler
 from nebula.v3.runtime_coordination import (
@@ -565,6 +567,71 @@ async def test_worker_settles_only_its_projects_ended_admissions(
     }
     assert "Provider turn turn-mine is admitted or queued" not in blockers
     assert "Provider turn turn-mine-waiting is admitted or queued" in blockers
+
+
+async def test_interrupted_worker_statements_keep_their_own_exception(execution):
+    """Cancelling or timing out a worker query mid-statement stays what it was.
+
+    SQLAlchemy invalidates a connection whose statement a cancellation
+    interrupts. The scope's rollback listener read its info anyway and raised
+    PendingRollbackError in place of the cancellation or timeout.
+    """
+
+    _, runtime, _, lease = execution
+    if runtime.database.engine.dialect.name != "postgresql":
+        pytest.skip("SQLite cannot hold a statement open to interrupt it")
+    started = asyncio.Event()
+
+    async def wait_in_sql():
+        with execution_context(lease):
+            async with runtime.database.session() as session:
+                started.set()
+                await session.execute(text("SELECT pg_sleep(30)"))
+
+    task = asyncio.create_task(wait_in_sql())
+    await started.wait()
+    await asyncio.sleep(0.5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.5):
+            async with runtime.database.session() as session:
+                await session.execute(text("SELECT pg_sleep(30)"))
+    # The pool reconnects and the next transaction is scoped again.
+    assert [item.id for item in await runtime.list_entities(Engagement)] == ["mine"]
+
+
+async def test_chat_follow_ups_stop_cleanly_while_their_poll_waits(execution):
+    """Core shutdown cancels the follow-up poll even while it waits on SQL.
+
+    The cancellation surfaced as PendingRollbackError, so the worker recorded
+    its cleanup as failed, kept the project and refused every later shutdown.
+    """
+
+    control, runtime, _, _ = execution
+    if runtime.database.engine.dialect.name != "postgresql":
+        pytest.skip("SQLite cannot hold a statement open to interrupt it")
+    service = ChatQueueService(runtime, None, None)
+    async with control.database.engine.connect() as blocker:
+        await blocker.execute(text("LOCK TABLE entities IN ACCESS EXCLUSIVE MODE"))
+        service.task = asyncio.create_task(service.run())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            waiting = await blocker.scalar(
+                text(
+                    "SELECT count(*) FROM pg_locks WHERE NOT granted "
+                    "AND relation = 'entities'::regclass"
+                )
+            )
+            if waiting:
+                break
+            await asyncio.sleep(0.1)
+        assert waiting, "the follow-up poll never reached its read"
+        await service.shutdown()
+        assert service.task.cancelled()
+        await blocker.rollback()
+    assert [item.id for item in await runtime.list_entities(Engagement)] == ["mine"]
 
 
 async def test_insert_cannot_escape_to_another_project(execution):

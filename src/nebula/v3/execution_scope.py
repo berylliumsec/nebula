@@ -563,5 +563,12 @@ class ExecutionSQLScope:
 
     @staticmethod
     def _rollback(connection) -> None:
+        # A statement interrupted by cancellation, a timeout or a lost backend
+        # leaves the connection invalidated. Its driver connection is discarded,
+        # the pool clears .info when it reconnects and _begin rebuilds ownership
+        # for the next transaction. Reading .info now would raise
+        # PendingRollbackError in place of the original exception.
+        if connection.invalidated:
+            return
         connection.info.pop("execution_owned", None)
         connection.info.pop("execution_dirty", None)
