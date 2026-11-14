@@ -9,13 +9,15 @@ import ipaddress
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, TypeVar
+from typing import Any, AsyncIterator, Literal, TypeVar
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import Field, field_validator, model_validator
+from sqlalchemy import literal, select, tuple_
+from sqlalchemy.orm import aliased
 
 from .async_utils import cancel_and_join
 from .chat import ChatCompletionRequest, ChatRequestMessage
@@ -41,11 +43,17 @@ from .domain import (
     NebulaModel,
     utc_now,
 )
+from .execution_scope import current_execution_lease
+from .query_predicates import open_storage_row, storage_payload_text
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 MAX_EVENT_BYTES = 64 * 1024
 MAX_CALLBACK_BYTES = 64 * 1024
 SEVERITY = {"healthy": 0, "warning": 1, "critical": 2, "unavailable": 3}
+# Pending dispatches are read in pages of this size.
+DISPATCH_PAGE = 100
+# The Storage page lists at most this many incidents, actions and dispatches.
+DASHBOARD_ROWS = 2000
 EntityT = TypeVar("EntityT", bound=Entity)
 
 
@@ -141,6 +149,86 @@ async def _rows(
         if len(page) < 1000:
             break
     return result
+
+
+async def _open_rows(
+    store: NebulaStore,
+    model: type[EntityT],
+    *,
+    limit: int,
+    after: tuple[datetime, str] | None = None,
+    newest_first: bool = False,
+    project_id: str | None = None,
+) -> list[EntityT]:
+    """One page of a storage kind's rows that still need work, by its index.
+
+    ``after`` is the ``(created_at, id)`` of the previous page's last row, so a
+    row that stays open does not hold back the rows behind it. With
+    ``project_id``, only rows of that project's sources are read.
+    """
+    dialect = store.database.engine.dialect.name
+    statement = select(EntityRow).where(
+        open_storage_row(EntityRow, model.entity_kind, dialect)
+    )
+    if project_id is not None:
+        source = aliased(EntityRow)
+        statement = statement.where(
+            storage_payload_text(EntityRow, "source_id", dialect).in_(
+                select(source.id).where(
+                    source.kind == StorageSource.entity_kind,
+                    source.engagement_id == project_id,
+                )
+            )
+        )
+    key = tuple_(EntityRow.created_at, EntityRow.id)
+    if after is not None:
+        cursor = tuple_(
+            literal(after[0], EntityRow.created_at.type),
+            literal(after[1], EntityRow.id.type),
+        )
+        statement = statement.where(key < cursor if newest_first else key > cursor)
+    order = (
+        (EntityRow.created_at.desc(), EntityRow.id.desc())
+        if newest_first
+        else (EntityRow.created_at, EntityRow.id)
+    )
+    statement = statement.order_by(*order).limit(limit)
+    async with store.database.session(bulk=True) as session:
+        return [
+            model.model_validate(row.payload)
+            for row in await session.scalars(statement)
+        ]
+
+
+async def _dashboard_rows(store: NebulaStore, model: type[EntityT]) -> list[EntityT]:
+    """Every open row, then the newest history, up to the page's bound.
+
+    Rows come back oldest first, as before; the bound keeps the newest.
+    """
+    rows: dict[str, EntityT] = {}
+    after = None
+    while len(rows) < DASHBOARD_ROWS:
+        limit = min(1000, DASHBOARD_ROWS - len(rows))
+        page = await _open_rows(
+            store, model, limit=limit, after=after, newest_first=True
+        )
+        rows.update((item.id, item) for item in page)
+        if len(page) < limit:
+            break
+        after = (page[-1].created_at, page[-1].id)
+    offset = 0
+    while len(rows) < DASHBOARD_ROWS:
+        history = await store.list_entities(
+            model, offset=offset, limit=1000, newest_first=True
+        )
+        for item in history:
+            if len(rows) == DASHBOARD_ROWS:
+                break
+            rows.setdefault(item.id, item)
+        if len(history) < 1000:
+            break
+        offset += len(history)
+    return sorted(rows.values(), key=lambda item: (item.created_at, item.id))
 
 
 def _source_public(source: StorageSource) -> dict[str, Any]:
@@ -569,9 +657,9 @@ class StorageIntegrationService:
             )
             volumes.append(row)
         dispatches = []
-        incidents = await _rows(self.store, StorageIncident, limit=2000)
+        incidents = await _dashboard_rows(self.store, StorageIncident)
         incident_by_id = {incident.id: incident for incident in incidents}
-        for dispatch in await _rows(self.store, StorageDispatch, limit=2000):
+        for dispatch in await _dashboard_rows(self.store, StorageDispatch):
             row = dispatch.model_dump(mode="json", exclude={"prompt"})
             row["queue_status"] = None
             row["queue_detail"] = None
@@ -617,7 +705,7 @@ class StorageIntegrationService:
             "incidents": [item.model_dump(mode="json") for item in incidents],
             "actions": [
                 item.model_dump(mode="json")
-                for item in (await _rows(self.store, StorageAction, limit=2000))
+                for item in (await _dashboard_rows(self.store, StorageAction))
             ],
             "dispatches": dispatches,
         }
@@ -663,8 +751,31 @@ class StorageIntegrationService:
         async with self._dispatch_lock:
             await self._dispatch_pending_unlocked()
 
+    async def _pending_dispatches(self) -> AsyncIterator[StorageDispatch]:
+        """Every pending dispatch this process serves, oldest first, in pages.
+
+        Each scan starts again at the oldest, and its cursor moves past a row
+        that stays pending, so no amount of history or backlog starves one.
+        A project worker reads only its own project's sources' dispatches.
+        """
+        lease = current_execution_lease()
+        after = None
+        while True:
+            page = await _open_rows(
+                self.store,
+                StorageDispatch,
+                limit=DISPATCH_PAGE,
+                after=after,
+                project_id=lease.project_id if lease is not None else None,
+            )
+            for dispatch in page:
+                yield dispatch
+            if len(page) < DISPATCH_PAGE:
+                return
+            after = (page[-1].created_at, page[-1].id)
+
     async def _dispatch_pending_unlocked(self) -> None:
-        for dispatch in await _rows(self.store, StorageDispatch, limit=2000):
+        async for dispatch in self._pending_dispatches():
             if dispatch.status != "pending":
                 continue
             try:

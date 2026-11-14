@@ -46,7 +46,11 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from .database_pool import ConnectionBudget, PoolSettings, connection_budget
 from .async_utils import finish_cleanup
-from .query_predicates import visible_harness_chat_title
+from .query_predicates import (
+    STORAGE_OPEN_ROWS,
+    open_storage_row,
+    visible_harness_chat_title,
+)
 
 from .domain import utc_now
 from .performance import PerformanceTelemetry, install_sql_timing
@@ -671,6 +675,16 @@ Index(
     EntityRow.created_at,
     EntityRow.id,
 )
+# Only storage rows that still need work: these stay small as history grows.
+for _kind in STORAGE_OPEN_ROWS:
+    Index(
+        "ix_entities_" + _kind + "_open",
+        EntityRow.kind,
+        EntityRow.created_at,
+        EntityRow.id,
+        sqlite_where=open_storage_row(EntityRow, _kind, "sqlite"),
+        postgresql_where=open_storage_row(EntityRow, _kind, "postgresql"),
+    )
 
 
 class WorkspaceProvenanceBlobRow(Base):

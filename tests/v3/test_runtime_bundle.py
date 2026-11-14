@@ -167,10 +167,10 @@ def test_compatibility_requires_review_of_exact_migration_tree(tmp_path, monkeyp
         runtime_bundle.load_compatibility()
 
 
-def test_compatibility_reviews_chat_scoped_admission_schema():
+def test_compatibility_reviews_the_storage_open_row_indexes():
     compatibility = runtime_bundle.load_compatibility()
 
-    assert compatibility["migration_head"] == "0048_chat_scoped_admission"
+    assert compatibility["migration_head"] == "0049_storage_open_rows"
     assert compatibility["schema_family"] == 5
     assert compatibility["schema_min"] == 5
     assert compatibility["schema_max"] == 5

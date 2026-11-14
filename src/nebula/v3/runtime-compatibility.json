@@ -1,12 +1,12 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "b4ed3db1fd5b2f81a76e480e8305dee05f067d00b7bd3317c070f589df927bfa",
+  "migration_tree_sha256": "f9d9521c43eecc06e90956d6130a39fd0803584b9eb7ff2c8a39c3808a8c67c3",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,
     "schema_max": 5,
     "additive_migrations": true,
-    "migration_head": "0048_chat_scoped_admission",
+    "migration_head": "0049_storage_open_rows",
     "api_protocol_min": 1,
     "api_protocol_max": 1,
     "execution_protocol_min": 1,
