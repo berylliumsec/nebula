@@ -1,4 +1,4 @@
-import {createHash} from "node:crypto";
+import {createHash, randomUUID} from "node:crypto";
 import {readFile, writeFile} from "node:fs/promises";
 import {expect, test, type APIRequestContext, type Page} from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -18,8 +18,8 @@ async function controller(request: APIRequestContext) {
   const {token, control_origin: origin} = JSON.parse(await readFile(authFile, "utf8"));
   const headers = {Authorization: `Bearer ${token}`};
   return {
-    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native" | "work-settings") => {
-      const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario}});
+    reset: async (cold = false, memory = false, scenario?: "provider-tools-context" | "standing-instructions-native" | "work-settings", savedHistory = false) => {
+      const response = await request.post(`${origin}/reset`, {headers, data: {cold, memory, scenario, saved_history: savedHistory}});
       expect(response.ok(), await response.text()).toBe(true);
       return response.json();
     },
@@ -100,6 +100,72 @@ test("dead project runtime recovers automatically without restarting Core or dup
   expect(after.supervisor_pid).toBe(before.supervisor_pid);
   const api = before.processes.find((item: {role: string; state: string}) => item.role === "api" && item.state === "ready");
   expect(after.processes.find((item: {id: string}) => item.id === api.id)?.alive).toBe(true);
+});
+
+test("worker-backed panes wait calmly while an idle project's worker is away and recover without a reload", async ({page, request}, info) => {
+  const control = await controller(request);
+  const fixture = await control.reset(false, false, undefined, true);
+  await pair(page, request, fixture);
+  // As on a real Core: idle project workers retire, and the next project command readmits one.
+  await control.control("automatic-recovery");
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  const core = (path: string) => `${fixture.origin}/api/v1/${path}`;
+  const projectRuntime = async () => {
+    const response = await request.get(core("deployment/status"), {headers});
+    expect(response.ok()).toBe(true);
+    return (await response.json()).projects.find((item: {project_id: string}) => item.project_id === "continuity-project")?.runtime_id ?? null;
+  };
+  const archive = async () => {
+    const current = await (await request.get(core(`chat-sessions/${fixture.session_id}`), {headers})).json();
+    const response = await request.patch(core(`chat-sessions/${fixture.session_id}`), {
+      headers: {...headers, "Idempotency-Key": randomUUID()}, data: {archived: true, expected_revision: current.revision},
+    });
+    expect([200, 202], await response.text()).toContain(response.status());
+  };
+  const chat = `/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`;
+  const answer = page.locator(".chat-message.assistant").filter({hasText: "Synthetic saved answer before the project went idle."});
+  const bookmark = page.locator(".chat-message").filter({hasText: "Synthetic saved question"}).getByRole("button", {name: "Bookmark"});
+  const reconnecting = page.getByRole("status").filter({hasText: "Reconnecting to this project"});
+  const hardErrors = page.getByText(/Runtime delivery is unavailable|could not be loaded|could not sync|Could not restore this conversation/);
+  const alerts = page.locator(".workspace-notices [role=alert], .chat-panel [role=alert]");
+  await page.goto(chat);
+  await expect(answer).toBeVisible({timeout: 60_000});
+  await expect(bookmark).toHaveAttribute("aria-pressed", "true");
+
+  // The operator leaves; the project goes idle (its only chat is archived) and its worker retires.
+  await page.goto("/projects");
+  await archive();
+  await expect.poll(projectRuntime, {timeout: 90_000}).toBeNull();
+
+  // Coming back: every worker-backed read is refused until the operator acts. The page waits calmly.
+  await page.goto(chat);
+  await expect(page.locator(".chat-archived-notice")).toBeVisible({timeout: 60_000});
+  await expect(reconnecting).toBeVisible({timeout: 30_000});
+  await expect(hardErrors).toHaveCount(0);
+  await expect(alerts).toHaveCount(0);
+  expect((await new AxeBuilder({page}).include(".project-runtime-notice").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  const unarchive = page.getByRole("button", {name: "Unarchive", exact: true});
+  // The wait never covers or crowds out the operator's next action.
+  expect(await unarchive.evaluate(node => {
+    const box = node.getBoundingClientRect();
+    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return Boolean(top && node.contains(top)) && box.bottom <= innerHeight;
+  })).toBe(true);
+  await page.screenshot({path: info.outputPath("reconnecting.png"), fullPage: true});
+
+  // Unarchiving is a project command, so Core readmits a worker. Every pane recovers in this same document.
+  await page.evaluate(() => { (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument = true; });
+  await unarchive.click();
+  await expect.poll(projectRuntime, {timeout: 120_000}).not.toBeNull();
+  await expect(answer).toBeVisible({timeout: 30_000});
+  await expect(bookmark).toHaveAttribute("aria-pressed", "true");
+  await expect(reconnecting).toBeHidden();
+  await expect(page.locator(".chat-archived-notice")).toHaveCount(0);
+  await expect(hardErrors).toHaveCount(0);
+  await expect(alerts).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as {paneRecoveryDocument?: boolean}).paneRecoveryDocument)).toBe(true);
+  await page.screenshot({path: info.outputPath("recovered.png"), fullPage: true});
 });
 
 test("accepted provider work survives a lost response, API replacement and reload without another submission", async ({page, request}, info) => {
