@@ -16,7 +16,12 @@ from ..storage import NotFoundError
 from .catalog import builtin_registry, legacy_registry
 from .graph import GraphTransaction, Claim
 from .registry import TypeDefinition, RelationshipDefinition
-from .persistence import graphs, edits
+from .persistence import (
+    ApplicationGraphEditRow,
+    ApplicationGraphRow,
+    graphs,
+    edits,
+)
 from .ingestion import envelope, SOURCE_KINDS
 
 
@@ -69,7 +74,9 @@ class ApplicationModelService:
 
     def _read(self, connection, project):
         payload = connection.execute(
-            select(graphs.c.payload).where(graphs.c.project_id == project)
+            select(ApplicationGraphRow.payload).where(
+                ApplicationGraphRow.project_id == project
+            )
         ).scalar()
         return deepcopy(payload) if payload else empty(project)
 
@@ -471,9 +478,12 @@ class ApplicationModelService:
             rows = (
                 (
                     await connection.execute(
-                        select(edits.c.payload)
-                        .where(edits.c.project_id == project, edits.c.revision > after)
-                        .order_by(edits.c.revision)
+                        select(ApplicationGraphEditRow.payload)
+                        .where(
+                            ApplicationGraphEditRow.project_id == project,
+                            ApplicationGraphEditRow.revision > after,
+                        )
+                        .order_by(ApplicationGraphEditRow.revision)
                         .limit(limit + 1)
                     )
                 )
@@ -528,9 +538,13 @@ class ApplicationModelService:
                     raise HTTPException(404, "Project unavailable")
                 receipt = (
                     await connection.execute(
-                        select(edits.c.digest, edits.c.payload).where(
-                            edits.c.project_id == project,
-                            edits.c.idempotency_key == request.idempotency_key,
+                        select(
+                            ApplicationGraphEditRow.digest,
+                            ApplicationGraphEditRow.payload,
+                        ).where(
+                            ApplicationGraphEditRow.project_id == project,
+                            ApplicationGraphEditRow.idempotency_key
+                            == request.idempotency_key,
                         )
                     )
                 ).first()

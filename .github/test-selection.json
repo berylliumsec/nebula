@@ -1,29 +1,30 @@
 {
   "reviewed_by": "Claude",
-  "reason": "The generic CRUD routes called after_write without awaiting it. Since #939 made HarnessQuotaObserver.schedule_read async, every harness profile create/put/patch through the execution kernel's routes dropped a never-awaited coroutine and no Butler quota read ran. The routes now await a maybe-async after_write via call_async. Selected: the harness and OpenRouter Butler resource suites (including the new regression test and the provider-setup credit check through the same route), the generic CRUD exposure guard, harness quota reads, and the SQL-only global API that serves production profile writes.",
-  "exclusions": "test_butler_resources.py::test_ordinary_openrouter_completion_checks_credits_after_exchange_commit and ::test_native_mission_attempt_usage_signals_account_check_after_commit fail identically on pristine origin/main (fixture leftovers from #939, repaired separately in #1011) and are excluded. No UI, native or Playwright cases: no frontend code changed. In production, profile writes go api_worker -> GlobalSqlDelivery -> RuntimeGlobalApi, whose CRUD routes register no after_write, so this change does not alter production behaviour; see the PR's limitations.",
+  "reason": "The Application Model service became async in #939, but its callers did not change. ModelBroker's to_thread calls returned coroutines (7 model.* tools failed), the sync route handlers returned coroutines (422), and reset never awaited service.project and read with an async connection (500). Execution workers also refused its Core-table graph and edit reads. The fix maps the existing tables (no schema change), reads through the mapped columns, awaits the service in tools and routes, and awaits/run_syncs in reset. Selected: the six Application Model suites (nine of their tests fail on main because of this defect and pass here), the new worker round trip in test_execution_scope_application_model.py (API, tools, reset and project isolation on sqlite and PostgreSQL), test_execution_scope.py (the guard still refuses a Core select over the now-mapped graphs table), and the browser companion and assistant viewer suites that build the same service and tools.",
+  "exclusions": "test_archived_project_deletion.py (11 cases) and test_migrations.py (4 cases) fail identically on pristine origin/main (un-awaited test client calls / unrelated migration failures), so they are not selected even though archived deletion touches these tables. Playwright areas working-knowledge and assistant-browser-viewer match application_model/** but are excluded: their fixture tests/v3/application_model_fixture.py crashes at startup on main (un-awaited store.create), and the GUI is retired. The supervisor-mode API and model-tool chat round trip was checked on a scratch PostgreSQL Core instead (422/500 and tool failures on main, 200 and successful tools on this branch). No UI, native or frontend code changed. PostgreSQL variants run only where NEBULA_TEST_POSTGRES_URL is set.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 73,
+    "python": 198,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_harness_resources.py",
-    "tests/v3/test_butler_resources.py::test_low_credit_is_guaranteed_at_boundary_and_deduped_across_projects",
-    "tests/v3/test_butler_resources.py::test_credit_reader_is_coalesced_by_management_ref_and_saved_after_read",
-    "tests/v3/test_butler_resources.py::test_provider_setup_schedules_credit_check_and_overview_shows_saved_state",
-    "tests/v3/test_butler_resources.py::test_durable_provider_usage_calls_credit_observer_without_failing_turn",
-    "tests/v3/test_butler_resources.py::test_use_of_a_provider_without_account_credits_schedules_no_failed_check",
-    "tests/v3/test_generic_crud_exposure.py",
-    "tests/v3/test_harness_quota.py",
-    "tests/v3/test_runtime_global_api.py"
+    "tests/v3/test_application_model_admission.py",
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_application_model.py",
+    "tests/v3/test_application_model_registry.py",
+    "tests/v3/test_application_model_reset.py",
+    "tests/v3/test_application_model_views.py",
+    "tests/v3/test_execution_scope_application_model.py",
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_assistant_browser_viewer.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4ad70238c526d780b4017f32b9c6d648e2215514ae39888faa35514a8c27562e"
+  "change_digest": "b04796dbebea75a14f3fed5f458de28e811d91713faa271c49679ec6bab3fde6"
 }

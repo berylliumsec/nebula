@@ -1,6 +1,5 @@
 """Shared project graph capabilities for browser assistants and harnesses."""
 
-import asyncio
 from pydantic import Field
 from fastapi import HTTPException
 from ..domain import RiskClass, ToolCallStatus
@@ -132,10 +131,8 @@ class ModelBroker:
                     "model.get_updates": "history",
                     "model.relationship_options": "relationship_options",
                 }[invocation.tool_name]
-                output = await asyncio.to_thread(
-                    getattr(self.service, method),
-                    self.engagement_id,
-                    **body.model_dump(),
+                output = await getattr(self.service, method)(
+                    self.engagement_id, **body.model_dump()
                 )
             await self.ledger.transition(
                 running, ToolCallStatus.COMPLETE, result=output
