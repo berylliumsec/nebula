@@ -3,8 +3,20 @@
 API and host databases never install these hooks. An execution database opens
 only after the host migrates and registers its process incarnation. All of its
 transactions take the same lock order, including the raw-connection ledger
-writers. This deliberately serializes execution SQL transactions initially;
-public read traffic uses independent API pools.
+writers.
+
+On PostgreSQL every transaction first holds ``EXECUTION_SQL_KEY`` shared, then
+its own runtime's key exclusively, then row-locks the runtime's ownership rows.
+A runtime's transactions therefore still run one at a time, while different
+projects' runtimes run side by side: they write disjoint project rows, and the
+ownership row locks order each runtime's work against claims, transfers and
+retirement. A host Work batch takes ``EXECUTION_SQL_KEY`` exclusively and so
+still excludes every execution transaction; an older release that takes it
+exclusively still runs alone. Rows shared by all projects (global entities and
+their search documents) are the exception: the first statement that may write
+one takes the shared-row writer key until commit, so execution transactions
+write those rows one at a time and cannot deadlock on them with each other.
+Host and API connections never take these keys.
 """
 
 from __future__ import annotations
@@ -17,6 +29,7 @@ from typing import Any, Iterator
 
 from sqlalchemy import and_, event, exists, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import CompileError, DBAPIError, StatementError
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import with_loader_criteria
 from sqlalchemy.sql import Delete, Insert, Select, Update
@@ -24,6 +37,7 @@ from sqlalchemy.sql.elements import BindParameter, TextClause
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.schema import Column, Table
 
+from .advisory_keys import EXECUTION_SQL_KEY
 from .database import (
     Base,
     EntityRow,
@@ -35,6 +49,18 @@ from .runtime_coordination import CoordinationConflict, LeaseLost, ProjectLease
 _current_lease: ContextVar[ProjectLease | None] = ContextVar(
     "execution_lease", default=None
 )
+
+# Shared before exclusive, in one statement whose order PostgreSQL guarantees.
+_BEGIN_LOCKS = (
+    "WITH execution AS MATERIALIZED ("
+    f"SELECT pg_advisory_xact_lock_shared({EXECUTION_SQL_KEY})) "
+    "SELECT pg_advisory_xact_lock(hashtext(current_schema()), "
+    "hashtext('nebula:execution-runtime:v1:' || CAST(%s AS text))) FROM execution"
+)
+GLOBAL_WRITES_KEY = (
+    "hashtext(current_schema()), hashtext('nebula:execution-global-writes:v1')"
+)
+_GLOBAL_TABLES = {"entities", "search_documents"}
 
 
 @contextmanager
@@ -49,6 +75,23 @@ def execution_context(lease: ProjectLease) -> Iterator[None]:
 
 def current_execution_lease() -> ProjectLease | None:
     return _current_lease.get()
+
+
+def lock_global_writes(connection) -> None:
+    """Hold the shared-row writer key on this execution transaction until commit.
+
+    Writes take it on their own. A transaction that reads a shared row and
+    then decides what to write takes it before that read, so another
+    project's worker cannot change the row in between.
+    """
+    if connection.info.get("execution_global_writes", True):
+        return
+    cursor = connection.connection.cursor()
+    try:
+        cursor.execute(f"SELECT pg_advisory_xact_lock({GLOBAL_WRITES_KEY})")
+    finally:
+        cursor.close()
+    connection.info["execution_global_writes"] = True
 
 
 class ExecutionSQLScope:
@@ -76,9 +119,7 @@ class ExecutionSQLScope:
             if dialect == "sqlite":
                 cursor.execute("BEGIN IMMEDIATE")
             else:
-                cursor.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext('nebula:execution-sql:v1'))"
-                )
+                cursor.execute(_BEGIN_LOCKS, (self.runtime_id,))
             cursor.execute(
                 "SELECT project_id, fencing_token, lease_expires_at_ms "
                 "FROM project_ownership WHERE runtime_id = "
@@ -111,8 +152,46 @@ class ExecutionSQLScope:
                 owned = {context.project_id: context.fencing_token}
             connection.info["execution_owned"] = owned
             connection.info["execution_dirty"] = False
+            # SQLite's BEGIN IMMEDIATE already admits one writer at a time.
+            connection.info["execution_global_writes"] = dialect != "postgresql"
         finally:
             cursor.close()
+
+    @staticmethod
+    def _global_rows(table):
+        if table.name == "entities":
+            return and_(table.c.kind != "engagements", table.c.engagement_id.is_(None))
+        return table.c.project_id.is_(None)
+
+    def _may_write_global_rows(self, connection, statement, options, batches):
+        marked = options.get("nebula_global_entity")
+        if marked is not None:
+            return bool(marked)
+        criteria = tuple(getattr(statement, "_where_criteria", ()))
+        if not criteria or not all(isinstance(batch, Mapping) for batch in batches):
+            return True
+        table = statement.table
+        connection.info["execution_checking"] = True
+        try:
+            return any(
+                connection.scalar(
+                    select(literal(1))
+                    .select_from(table)
+                    .where(*criteria, self._global_rows(table))
+                    .limit(1),
+                    dict(batch),
+                )
+                is not None
+                for batch in batches
+            )
+        except (CompileError, StatementError) as error:
+            if isinstance(error, DBAPIError):
+                raise
+            # diagnostic-expected: a statement whose criteria cannot be checked
+            # alone is treated as a shared-row write and takes the writer key.
+            return True
+        finally:
+            connection.info["execution_checking"] = False
 
     @staticmethod
     def _entity_predicate(projects):
@@ -280,12 +359,16 @@ class ExecutionSQLScope:
                     statement = self._projection_statement(
                         projection, projects, connection.dialect.name
                     )
-                    self._validate_insert(
-                        connection,
-                        statement.table,
-                        {"id": projection.document_id, **dict(projection.fields)},
-                        projects,
-                    )
+                    if (
+                        self._validate_insert(
+                            connection,
+                            statement.table,
+                            {"id": projection.document_id, **dict(projection.fields)},
+                            projects,
+                        )
+                        is None
+                    ):
+                        lock_global_writes(connection)
                 elif (
                     getattr(statement, "_multi_values", None)
                     or getattr(statement, "select", None) is not None
@@ -309,9 +392,14 @@ class ExecutionSQLScope:
                             raise CoordinationConflict(
                                 "execution insert values must be named"
                             )
-                        self._validate_insert(
-                            connection, table, {**values, **batch}, projects
-                        )
+                        if (
+                            self._validate_insert(
+                                connection, table, {**values, **batch}, projects
+                            )
+                            is None
+                            and table.name in _GLOBAL_TABLES
+                        ):
+                            lock_global_writes(connection)
             else:
                 if isinstance(statement, Update):
                     if getattr(statement, "_ordered_values", None):
@@ -334,6 +422,14 @@ class ExecutionSQLScope:
                             {**values, **batch},
                             projects,
                         )
+                if (
+                    table.name in _GLOBAL_TABLES
+                    and not connection.info.get("execution_global_writes")
+                    and self._may_write_global_rows(
+                        connection, statement, options, multiparams or [params or {}]
+                    )
+                ):
+                    lock_global_writes(connection)
                 statement = statement.where(predicate)
             connection.info["execution_dirty"] = True
         elif isinstance(statement, TextClause):
@@ -480,7 +576,8 @@ class ExecutionSQLScope:
 
     def _validate_insert(
         self, connection, table, values: dict[str, Any], projects
-    ) -> None:
+    ) -> str | None:
+        """Return the inserted row's project, or None for a row shared by all."""
         if table.name == "entities":
             if not values.get("kind") or not values.get("id"):
                 raise CoordinationConflict(
@@ -500,13 +597,13 @@ class ExecutionSQLScope:
             # Global configuration retains optimistic revisions. Shared host
             # services, not each execution generation, own their lifecycle.
             if project is None:
-                return
+                return None
         elif "engagement_id" in table.c:
             project = values.get("engagement_id")
         elif "project_id" in table.c:
             project = values.get("project_id")
             if project is None:
-                return
+                return None
         else:
             key = next(
                 (
@@ -527,6 +624,7 @@ class ExecutionSQLScope:
                 connection.info["execution_checking"] = False
         if project not in projects:
             raise LeaseLost("execution insert belongs to an unowned project")
+        return project
 
     def _commit(self, connection) -> None:
         if not connection.info.get("execution_dirty"):

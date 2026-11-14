@@ -24,6 +24,7 @@ from .database import (
     ProjectOwnershipRow,
     RuntimeCommandRow,
     RuntimeDeliveryRow,
+    RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
     RuntimeWorkBatchProjectRow,
@@ -264,8 +265,9 @@ class RuntimeWorkBatches:
 
     async def _locks(self, session):
         if session.bind.dialect.name == "postgresql":
-            # Scoped execution connections acquire this lock at BEGIN. Use the
-            # same order before the global sequence allocator to avoid a cycle.
+            # Execution transactions hold this key shared from BEGIN. Taking it
+            # exclusively waits for them and admits none until this commits.
+            # Take it before the global sequence allocator, in the same order.
             await session.execute(
                 text(
                     "SELECT pg_advisory_xact_lock(hashtext('nebula:execution-sql:v1'))"
@@ -599,20 +601,7 @@ class RuntimeWorkBatches:
                     _Fence(identity, None, owner.fencing_token if owner else 0)
                 )
                 continue
-            process = await session.get(RuntimeProcessRow, owner.runtime_id)
-            release = (
-                await session.get(RuntimeReleaseRow, process.version)
-                if process is not None
-                else None
-            )
-            if (
-                release is None
-                or WORK_BATCH_FEATURE
-                not in ReleaseManifest.model_validate(release.manifest).features
-            ):
-                raise _Waiting(
-                    "A participating project needs a runtime supporting coordinated Work batches; existing work can continue"
-                )
+            await self._supports_batches(session, owner.runtime_id)
             fence = _Fence(identity, owner.runtime_id, owner.fencing_token)
             await self.coordination._check(
                 session,
@@ -621,6 +610,22 @@ class RuntimeWorkBatches:
             )
             fences.append(fence)
         return fences
+
+    async def _supports_batches(self, session, runtime_id):
+        process = await session.get(RuntimeProcessRow, runtime_id)
+        release = (
+            await session.get(RuntimeReleaseRow, process.version)
+            if process is not None
+            else None
+        )
+        if (
+            release is None
+            or WORK_BATCH_FEATURE
+            not in ReleaseManifest.model_validate(release.manifest).features
+        ):
+            raise _Waiting(
+                "A participating project needs a runtime supporting coordinated Work batches; existing work can continue"
+            )
 
     async def _counter(self, session, identity):
         """A metadata-only NULL counter is not a request to prepare execution."""
@@ -677,6 +682,77 @@ class RuntimeWorkBatches:
             )
         )
 
+    async def _earlier(self, session, project_ids, sequence):
+        # An earlier accepted batch may still be waiting for an older
+        # owner. Later batches cannot silently pass it on a shared lane.
+        earlier = await session.scalar(
+            select(RuntimeWorkBatchProjectRow.batch_id)
+            .join(
+                RuntimeCommandRow,
+                RuntimeCommandRow.id == RuntimeWorkBatchProjectRow.batch_id,
+            )
+            .where(
+                RuntimeWorkBatchProjectRow.project_id.in_(project_ids),
+                RuntimeWorkBatchProjectRow.state.in_(("waiting", "barrier")),
+                RuntimeCommandRow.sequence < sequence,
+            )
+            .limit(1)
+        )
+        if earlier is not None:
+            raise _Waiting("An earlier Work batch is waiting on a shared project")
+
+    async def _ready_to_lock(self, batch_id):
+        """Raise ``_Waiting`` before taking the execution key when progress must wait.
+
+        Taking the key exclusively waits for every project's execution
+        transactions and holds new ones back until commit. A batch waiting on
+        its participants' earlier work checks without it first; the locked
+        stage and finish check everything again.
+        """
+        async with self.coordination.database.session() as session:
+            parent = await session.get(RuntimeCommandRow, batch_id)
+            if parent is None or parent.state != "queued":
+                return
+            participants = list(
+                await session.scalars(
+                    select(RuntimeWorkBatchProjectRow)
+                    .where(RuntimeWorkBatchProjectRow.batch_id == batch_id)
+                    .order_by(RuntimeWorkBatchProjectRow.project_id)
+                )
+            )
+            project_ids = [participant.project_id for participant in participants]
+            await self._held(session, project_ids)
+            if participants and all(
+                participant.state == "barrier" for participant in participants
+            ):
+                for participant in participants:
+                    await self._head(session, participant)
+            else:
+                await self._earlier(session, project_ids, parent.sequence)
+            # The same owner preconditions the locked fences enforce.
+            for identity in project_ids:
+                owner = await session.get(ProjectOwnershipRow, identity)
+                if owner is None or owner.runtime_id is None:
+                    continue
+                await self._supports_batches(session, owner.runtime_id)
+                process = await session.get(RuntimeProcessRow, owner.runtime_id)
+                if process is not None and process.state != "ready":
+                    raise LeaseLost(
+                        "execution process is not admitting authoritative work"
+                    )
+                now = await self.coordination._clock_ms(session)
+                live = await session.scalar(
+                    select(RuntimeInstanceRow.id).where(
+                        RuntimeInstanceRow.id == owner.runtime_id,
+                        RuntimeInstanceRow.role == "execution",
+                        RuntimeInstanceRow.lease_expires_at_ms > now,
+                    )
+                )
+                if live is None:
+                    raise LeaseLost("a live execution runtime is required")
+                if owner.lease_expires_at_ms <= now:
+                    raise LeaseLost("project ownership changed or expired")
+
     async def _stage(self, batch_id, body):
         async with self.coordination._write() as session:
             await self._locks(session)
@@ -690,23 +766,7 @@ class RuntimeWorkBatches:
                 return True
             project_ids = [participant.project_id for participant in participants]
             await self._held(session, project_ids)
-            # An earlier accepted batch may still be waiting for an older
-            # owner. Later batches cannot silently pass it on a shared lane.
-            earlier = await session.scalar(
-                select(RuntimeWorkBatchProjectRow.batch_id)
-                .join(
-                    RuntimeCommandRow,
-                    RuntimeCommandRow.id == RuntimeWorkBatchProjectRow.batch_id,
-                )
-                .where(
-                    RuntimeWorkBatchProjectRow.project_id.in_(project_ids),
-                    RuntimeWorkBatchProjectRow.state.in_(("waiting", "barrier")),
-                    RuntimeCommandRow.sequence < parent.sequence,
-                )
-                .limit(1)
-            )
-            if earlier is not None:
-                raise _Waiting("An earlier Work batch is waiting on a shared project")
+            await self._earlier(session, project_ids, parent.sequence)
             await self._validate(body)
             fences = await self._fences(session, project_ids)
             now = await self.coordination._clock_ms(session)
@@ -999,6 +1059,7 @@ class RuntimeWorkBatches:
 
     async def _advance(self, batch_id, actor, body):
         try:
+            await self._ready_to_lock(batch_id)
             if await self._stage(batch_id, body):
                 await self._finish(batch_id, actor, body)
         except (_Waiting, LeaseLost) as error:

@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .advisory_keys import per_id_key
 from .database import (
     Database,
     DeploymentHostRow,
@@ -862,7 +863,7 @@ class RuntimeCoordination:
             raise CoordinationConflict("stream turn does not belong to this project")
         if self.database.engine.dialect.name == "postgresql":
             await session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
+                text(f"SELECT pg_advisory_xact_lock({per_id_key('run_id')})"),
                 {"run_id": turn_id},
             )
         existing = list(
