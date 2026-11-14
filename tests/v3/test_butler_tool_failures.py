@@ -112,7 +112,7 @@ async def test_three_exact_failures_create_one_concern_and_steer_only_the_parent
     store, app, project, main, _, child, worker = await _setup(tmp_path, child=True)
     delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
-    authority.write(
+    await authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
@@ -155,8 +155,10 @@ async def test_three_exact_failures_create_one_concern_and_steer_only_the_parent
     message = delivered[0][1]["text"]
     assert "three separate completed turns" in message
     assert "wider goal failed" in message
-    assert app.state.control_assistant_work.queue.get(main.id).items == []
-    assert app.state.control_assistant_work.queue.get(child.session_id).items == []
+    assert (await app.state.control_assistant_work.queue.get(main.id)).items == []
+    assert (
+        await app.state.control_assistant_work.queue.get(child.session_id)
+    ).items == []
 
     reopened = NebulaStore(tmp_path / "core.db")
     restarted = ButlerOversightService(reopened)
@@ -208,7 +210,7 @@ async def test_changed_or_ambiguous_read_only_outcomes_do_not_create_concern(tmp
 async def test_success_after_review_cancels_redundant_parent_steer(tmp_path):
     store, app, project, main, goal, _, worker = await _setup(tmp_path)
     authority = app.state.butler_authority
-    authority.write(
+    await authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
@@ -225,7 +227,7 @@ async def test_success_after_review_cancels_redundant_parent_steer(tmp_path):
     (await _record_call(store, goal, index=3, status=ToolCallStatus.COMPLETE))
     (await authority.process_project(project.id, worker.worker_id))
     assert (await store.count_entities(ButlerAction, engagement_id=project.id)) == 0
-    assert app.state.control_assistant_work.queue.get(main.id).items == []
+    assert (await app.state.control_assistant_work.queue.get(main.id)).items == []
     assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 1
 
 
