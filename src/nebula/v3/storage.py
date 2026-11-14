@@ -390,12 +390,30 @@ class StoreTransaction:
     async def _guard_project_chat_start(self, engagement_id: str | None) -> None:
         """Serialize a new open chat against project worker retirement.
 
-        The ownership-row UPDATE is in the same transaction as the chat write.
-        It makes a concurrent retirement either observe the committed session,
-        or commit its hold first and cause this chat start to be rejected.
-        Projects without an ownership row remain unaffected.
+        Host writes use an ownership-row UPDATE in the same transaction as the
+        chat write. Execution-scoped stores cannot mutate that host-owned row;
+        their transaction already locks and validates owned rows, so they read
+        the retirement hold under that lock instead. Projects without an
+        ownership row remain unaffected for host writes.
         """
         if not engagement_id:
+            return
+        connection = await self.session.connection()
+        execution_owned = connection.sync_connection.info.get("execution_owned")
+        if execution_owned is not None:
+            retirement_requested = await self.session.scalar(
+                select(ProjectOwnershipRow.retirement_requested).where(
+                    ProjectOwnershipRow.project_id == engagement_id
+                )
+            )
+            if retirement_requested is None:
+                raise ConflictError(
+                    "The execution worker no longer owns this project; retry chat creation after admission."
+                )
+            if retirement_requested:
+                raise ConflictError(
+                    "The project worker is closing; retry chat creation after retirement."
+                )
             return
         result = await self.session.execute(
             update(ProjectOwnershipRow)

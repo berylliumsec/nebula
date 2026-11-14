@@ -16,6 +16,7 @@ from nebula.v3.database import (
 )
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import (
+    ChatGoal,
     ChatMessage,
     ChatSession,
     ChatTurn,
@@ -26,6 +27,7 @@ from nebula.v3.domain import (
     HarnessTurnStatus,
     ProviderProfile,
 )
+from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
 from nebula.v3.execution_scope import ExecutionSQLScope, execution_context
 from nebula.v3.runtime_coordination import (
     CoordinationConflict,
@@ -95,6 +97,44 @@ async def test_existing_read_helpers_only_see_owned_projects(execution):
     with pytest.raises(NotFoundError):
         await runtime.get(ChatTurn, "turn-other")
     assert (await runtime.get(ProviderProfile, "provider")).name == "Inert provider"
+
+
+async def test_execution_worker_can_start_chat_under_lease_and_retirement_hold(execution):
+    control, runtime, coordinator, lease = execution
+    service = ChatGoalService(runtime)
+    body = GoalConversationCreate(
+        engagement_id="mine",
+        provider_id="provider",
+        model="inert",
+        objective="Create a project goal chat",
+        completion_criteria=["The chat and draft goal are saved."],
+    )
+    with execution_context(lease):
+        created = await service.create_conversation(body)
+
+    assert (await control.get(ChatSession, created.session.id)).engagement_id == "mine"
+    assert (await control.get(ChatGoal, created.goal.id)).session_id == created.session.id
+    assert await coordinator.request_project_retirement(lease) is False
+
+    await control.create(Engagement(id="retiring", name="Retiring"))
+    retiring_lease = await coordinator.claim_project("retiring", "execution")
+    assert await coordinator.request_project_retirement(retiring_lease) is True
+    retiring_body = body.model_copy(update={"engagement_id": "retiring"})
+    with execution_context(retiring_lease):
+        with pytest.raises(ConflictError, match="worker is closing"):
+            await service.create_conversation(retiring_body)
+
+    with pytest.raises(ConflictError, match="worker is closing"):
+        await control.create(
+            ChatSession(
+                id="host-chat-during-retirement",
+                engagement_id="retiring",
+                title="Rejected during retirement",
+                model="inert",
+                provider_profile_id="provider",
+            )
+        )
+    assert await control.find_entities(ChatSession, {}, engagement_id="retiring") == []
 
 
 async def test_column_only_reads_and_raw_connections_are_scoped(execution):
