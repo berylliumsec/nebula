@@ -11,6 +11,7 @@ from uuid import uuid4
 import httpx
 from prompt_toolkit.patch_stdout import patch_stdout
 
+from .conversations import chat_markers, chat_order, side_chat_body
 from .state import Cursor, Draft, View, main_chat, visible_message
 from .transport import (
     AcceptedRequest,
@@ -22,8 +23,11 @@ from .transport import (
     key,
     terminal_text,
 )
-from .tui import TuiUI, activity_label
+from .tui import TuiUI, activity_label, turn_details
 from .ui import COMMANDS, CancelledInput, InterruptedPrompt, TerminalUI
+
+
+REASONING_READ_LIMIT = 20
 
 
 def named(items: list[dict[str, Any]], field: str = "name") -> list[dict[str, Any]]:
@@ -75,6 +79,10 @@ class Shell:
     def _clear_current_draft_text(self) -> None:
         if self.view is not None:
             self.view.draft.text = ""
+            if self.view.editing is not None:
+                self.view.editing = None
+                if hasattr(self.ui, "set_editing"):
+                    self.ui.set_editing("")
 
     @property
     def api(self) -> AsyncApi:
@@ -107,6 +115,9 @@ class Shell:
             available -= {
                 *(() if view.receipt else ("follow",)),
                 "chat",
+                "bookmark",
+                "side",
+                "thinking",
                 "history",
                 "context",
                 "activity",
@@ -120,8 +131,11 @@ class Shell:
                 "stop",
             }
         else:
-            if (view.session.get("metadata") or {}).get("control_assistant"):
-                available.discard("chat")
+            meta = view.session.get("metadata") or {}
+            if meta.get("control_assistant"):
+                available -= {"chat", "side"}
+            if meta.get("side_chat"):
+                available -= {"chat", "goal", "mcp", "attach", "schedule"}
             if view.config.get("backend") != "provider":
                 available.discard("schedule")
             if "approval" not in self._pending_kinds:
@@ -158,6 +172,8 @@ class Shell:
                 "butler",
                 "history",
                 "status",
+                "search",
+                "side",
                 "model",
                 "settings",
                 "goal",
@@ -249,6 +265,7 @@ class Shell:
         label: Any = None,
         complete_catalog: bool = False,
         page_size: int = 100,
+        order: Any = None,
     ) -> dict[str, Any]:
         offset = 0
         complete = False
@@ -276,6 +293,8 @@ class Shell:
         if complete_catalog and not selected:
             while not complete:
                 items.extend(await more())
+        if order is not None and complete:
+            items = order(items)
         if selected:
             candidates = [
                 item
@@ -357,13 +376,18 @@ class Shell:
             selected=selected,
             field="title",
             predicate=main_chat,
-            label=(
-                lambda row: (
-                    f"{activity_label((states or {}).get(row['id'])):>4}  {row['name']}"
+            label=lambda row: (
+                (
+                    f"{activity_label((states or {}).get(row['id'])):>4}  "
+                    if isinstance(self.ui, TuiUI)
+                    else ""
                 )
-            )
-            if isinstance(self.ui, TuiUI)
-            else None,
+                + row["name"]
+                + (f" · {chat_markers(row)}" if chat_markers(row) else "")
+            ),
+            order=chat_order,
+            complete_catalog=True,
+            page_size=500,
             extras=[
                 {"id": "__new", "name": "New conversation"},
                 {"id": "__butler", "name": "Butler"},
@@ -377,7 +401,11 @@ class Shell:
             await self.open_view(project, item)
 
     async def open_view(
-        self, project: dict[str, Any], session: dict[str, Any] | None
+        self,
+        project: dict[str, Any],
+        session: dict[str, Any] | None,
+        *,
+        parent: dict[str, Any] | None = None,
     ) -> None:
         if session is not None:
             session = await self.api.request(
@@ -387,8 +415,17 @@ class Shell:
                 raise ClientError(
                     "This conversation belongs to another project. Choose it again."
                 )
-            if not main_chat(session) and not (session.get("metadata") or {}).get(
-                "control_assistant"
+            meta = session.get("metadata") or {}
+            if meta.get("side_chat") and parent is None:
+                parent_id = session.get("parent_session_id")
+                if parent_id:
+                    parent = await self.api.request(
+                        "GET", f"chat-sessions/{key(parent_id)}"
+                    )
+            if (
+                not main_chat(session)
+                and not meta.get("control_assistant")
+                and not (meta.get("side_chat") and parent is not None)
             ):
                 raise ClientError(
                     "Delegated conversations are inspected through /agents; message their parent main agent."
@@ -403,6 +440,8 @@ class Shell:
             project=project, session=session
         )
         view.session = session
+        if session is not None and (session.get("metadata") or {}).get("side_chat"):
+            view.parent = parent
         self.views[identity] = view
         self.view = view
         self._last_progress = ""
@@ -631,6 +670,8 @@ class Shell:
         )
         if rows:
             view.history_before = rows[0]["id"]
+        if getattr(self.ui, "show_thinking", False):
+            await self.load_reasoning(view, rows)
         if isinstance(self.ui, TuiUI):
             self.ui.show_history(rows, older=more)
         else:
@@ -646,6 +687,44 @@ class Shell:
         if len(rows) == 50:
             self.ui.say("/history more reads earlier messages.")
         return rows
+
+    async def load_reasoning(self, view: View, rows: list[dict[str, Any]]) -> None:
+        """Read saved thinking on demand for the latest answers only."""
+        wanted = [
+            row
+            for row in rows
+            if row.get("role") == "assistant"
+            and not row.get("reasoning")
+            and (row.get("metadata") or {}).get("reasoning_available")
+        ][-REASONING_READ_LIMIT:]
+        for row in wanted:
+            cached = view.reasoning.get(row["id"])
+            if cached is None:
+                value = await self.api.request(
+                    "GET",
+                    f"chat/sessions/{key(view.session_id)}/messages/"
+                    f"{key(row['id'])}/reasoning",
+                )
+                cached = terminal_text((value or {}).get("reasoning") or "")
+                view.reasoning[row["id"]] = cached
+            row["reasoning"] = cached
+        if not isinstance(self.ui, TuiUI):
+            for row in wanted:
+                if row.get("reasoning"):
+                    self.ui.say("Thinking:")
+                    self.ui.say(row["reasoning"])
+
+    async def toggle_thinking(self) -> None:
+        shown = not getattr(self.ui, "show_thinking", False)
+        self.ui.set_show_thinking(shown)
+        view = self.current()
+        if shown and view.session is not None:
+            await self.history()
+        self.ui.say(
+            "Thinking is shown in the transcript."
+            if shown
+            else "Thinking is collapsed; /thinking shows it again."
+        )
 
     async def state(self, view: View | None = None) -> dict[str, Any]:
         view = view or self.current()
@@ -819,6 +898,8 @@ class Shell:
             result["skill_selections"] = view.draft.skills
         if view.draft.contexts:
             result["context_attachments"] = view.draft.contexts
+        if view.session and (view.session.get("metadata") or {}).get("side_chat"):
+            side_chat_body(result)
         if consent:
             if not self.profiles:
                 await self.runtimes()
@@ -880,6 +961,9 @@ class Shell:
                 "The previous submission is uncertain. Review /status and /history; use /chats to select its saved conversation. Nothing was resent."
             )
         view.draft.text = text
+        if view.editing is not None:
+            await self.resend_edited(view, text)
+            return
         if text.startswith("$"):
             token = text.split(maxsplit=1)[0][1:]
             await select_skill(self, token)
@@ -939,6 +1023,41 @@ class Shell:
             self.stream(view, "POST", "chat/completions", body)
         )
         self.update_toolbar("Submitting")
+
+    async def resend_edited(self, view: View, text: str) -> None:
+        """Rewind to the edited saved message, then send the new text there."""
+        editing = view.editing
+        assert editing is not None and view.session is not None
+        if not text.strip():
+            raise ClientError("Write the edited message, or press Ctrl-C to cancel.")
+        state = await self.state(view)
+        if state.get("busy"):
+            raise ClientError(
+                "Stop or finish the running turn before resending an edited message."
+            )
+        session = await self.api.request("GET", f"chat-sessions/{key(view.session_id)}")
+        result = await self.api.request(
+            "POST",
+            f"chat/sessions/{key(view.session_id)}/rewind",
+            json={
+                "before_message_id": editing["id"],
+                "expected_revision": session["revision"],
+            },
+        )
+        view.editing = None
+        if hasattr(self.ui, "set_editing"):
+            self.ui.set_editing("")
+        view.session = result["session"]
+        view.history_before = None
+        # Images on the original message travel with the edit, as in the GUI.
+        if not view.draft.images:
+            view.draft.images = [
+                block
+                for block in editing.get("content_blocks") or []
+                if block.get("type") == "image"
+            ]
+        await self.history()
+        await self.send(text)
 
     async def stream(
         self, view: View, method: str, path: str, body: dict[str, Any] | None = None
@@ -1035,6 +1154,12 @@ class Shell:
                         delta = terminal_text(payload.get("delta") or "")
                         view.cursor.text = (view.cursor.text + delta)[-1_000_000:]
                         self.ui.delta(delta)
+                    elif event == "reasoning_delta":
+                        if not view.cursor.thinking:
+                            view.cursor.thinking = True
+                            self.update_toolbar("Thinking")
+                        if hasattr(self.ui, "reasoning"):
+                            self.ui.reasoning(terminal_text(payload.get("delta") or ""))
                     elif event == "done":
                         finished = True
                         self._known_busy = False
@@ -1049,6 +1174,12 @@ class Shell:
                             self.ui.markdown(final)
                         else:
                             self.ui.say()
+                        if hasattr(self.ui, "turn_meta"):
+                            self.ui.turn_meta(
+                                turn_details(
+                                    payload.get("elapsed_ms"), payload.get("usage")
+                                )
+                            )
                         self.ui.say("Response complete.")
                         break
                     elif event == "cancelled":
@@ -1057,6 +1188,10 @@ class Shell:
                         self._pending_kinds.clear()
                         if isinstance(self.ui, TuiUI):
                             self.ui.finish_turn()
+                        if hasattr(self.ui, "turn_meta"):
+                            self.ui.turn_meta(
+                                turn_details(payload.get("elapsed_ms")), stopped=True
+                            )
                         self.ui.say("\nResponse stopped.")
                         break
                     elif event == "error":
@@ -1385,6 +1520,20 @@ class Shell:
             await self.open_butler()
         elif name == "history":
             await self.history(bool(args and args[0] == "more"))
+        elif name == "thinking":
+            await self.toggle_thinking()
+        elif name == "search":
+            from .conversations import search
+
+            await search(self, args)
+        elif name == "bookmark":
+            from .conversations import bookmark
+
+            await bookmark(self, args)
+        elif name == "side":
+            from .conversations import side
+
+            await side(self, args)
         elif name == "status":
             await self.status()
         elif name == "follow":
