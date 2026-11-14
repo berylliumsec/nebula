@@ -27,6 +27,7 @@ from .database import (
     RuntimeCommandRow,
     RuntimeDeliveryRow,
 )
+from .diagnostics import record_caught_exception
 from .domain import NebulaModel, PairedDeviceSession, utc_now
 from .execution_scope import execution_context
 from .memory_actor import memory_actor
@@ -34,6 +35,7 @@ from .runtime_coordination import (
     ClaimedCommand,
     CommandReceipt,
     CoordinationConflict,
+    LeaseLost,
     ProjectLease,
     RuntimeCoordination,
 )
@@ -448,10 +450,14 @@ class RuntimeDelivery:
     async def chat_binding(self, actor_id: str, command_id: str) -> ChatBinding | None:
         self._intent_purpose(actor_id)
         async with self.coordination.database.session() as session:
+            # The binding first: an owner can type a claimed chat start just
+            # before binding it, and both commit in that order. Reading the
+            # command after the binding cannot see the binding without the
+            # typed name, whatever commits between the two reads.
+            binding = await session.get(RuntimeChatBindingRow, command_id)
             command = await session.get(RuntimeCommandRow, command_id)
             if command is None or command.actor_id != actor_id:
                 raise NotFoundError("accepted request is unavailable")
-            binding = await session.get(RuntimeChatBindingRow, command_id)
             if binding is None:
                 return None
             if command.name not in CHAT_COMMANDS:
@@ -598,17 +604,30 @@ class DurableHttpRunner:
             await self.delivery.complete(lease, command_id, status_code=401)
             return
         name = command.name
-        if (
-            name == HTTP_INVOKE_COMMAND
-            and (typed := typed_chat_command(intent)) in self.typed_chat_commands
-            and await self.delivery.coordination.retype_chat_start(
-                lease, command_id, name=typed
-            )
-        ):
+        typed = typed_chat_command(intent) if name == HTTP_INVOKE_COMMAND else None
+        if typed in self.typed_chat_commands:
             # A chat start accepted while the project had no owner. This owner
             # serves the typed transport, so the command ends at acceptance
             # and the turn's journal feeds the viewer; the work lane is free.
-            name = typed
+            try:
+                if await self.delivery.coordination.retype_chat_start(
+                    lease, command_id, name=typed
+                ):
+                    name = typed
+            except LeaseLost:
+                raise
+            except Exception as error:
+                # Nothing has run yet, so the request keeps the HTTP transport
+                # rather than becoming uncertain. Without a binding the viewer
+                # reads its HTTP response even if the rename did commit.
+                record_caught_exception(
+                    "runtime",
+                    "runtime.chat_start.retype_failed",
+                    "A chat start kept the streamed HTTP transport; the owner could not mark it accepted.",
+                    error,
+                    stage="delivery",
+                    metadata={"entity_id": command_id, "kind": "runtime-command"},
+                )
         body = intent.body()
         headers = [
             (key.encode(), value.encode("latin-1")) for key, value in intent.headers

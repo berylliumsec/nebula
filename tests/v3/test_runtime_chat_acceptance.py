@@ -5,6 +5,7 @@ import json
 
 import pytest
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.database import (
@@ -505,3 +506,111 @@ def test_typed_chat_transport_matches_what_the_api_would_choose(
         method, path, b"", [(b"content-type", b"application/json")], raw
     )
     assert typed_chat_command(request) == expected
+
+
+async def test_a_viewer_never_sees_a_typed_binding_on_an_untyped_receipt(
+    runtime, monkeypatch
+):
+    """An owner types a claimed chat start, then binds it, between two reads."""
+    (
+        await runtime.store.create(
+            ChatSession(
+                id="chat",
+                engagement_id="project",
+                title="Synthetic",
+                model="model-a",
+                provider_profile_id="provider",
+            )
+        )
+    )
+    (
+        await runtime.store.create(
+            ChatTurn(
+                id="turn",
+                engagement_id="project",
+                session_id="chat",
+                model="model-a",
+                provider_profile_id="provider",
+            )
+        )
+    )
+    receipt = await cold_start(runtime)
+    coordination = runtime.coordination.coordination
+    assert (await coordination.claim_next(runtime.lease, lane="work")) is not None
+
+    async def owner_types_and_binds():
+        assert await coordination.retype_chat_start(
+            runtime.lease, receipt.command_id, name=CHAT_ACCEPT_COMMAND
+        )
+        async with runtime.coordination.database.session() as session:
+            session.add(
+                RuntimeChatBindingRow(
+                    command_id=receipt.command_id,
+                    project_id="project",
+                    turn_id="turn",
+                    session_id="chat",
+                    runtime_id=runtime.lease.runtime_id,
+                    fencing_token=runtime.lease.fencing_token,
+                )
+            )
+
+    read = AsyncSession.get
+    reads = []
+
+    async def first_read_then_owner_commits(self, entity, ident, **kwargs):
+        value = await read(self, entity, ident, **kwargs)
+        if not reads:
+            reads.append(entity)
+            # Another connection commits both, as the owner does.
+            await asyncio.create_task(owner_types_and_binds())
+        return value
+
+    monkeypatch.setattr(AsyncSession, "get", first_read_then_owner_commits)
+    # Before, the receipt read as http.invoke and the binding as present,
+    # which the API reported as a final-looking 409 for an accepted chat.
+    assert await runtime.delivery.chat_binding("operator", receipt.command_id) is None
+    monkeypatch.setattr(AsyncSession, "get", read)
+    binding = await runtime.delivery.chat_binding("operator", receipt.command_id)
+    assert binding is not None and binding.ready and binding.turn_id == "turn"
+
+
+async def test_a_failed_rename_keeps_the_streamed_transport_instead_of_uncertain(
+    runtime, monkeypatch
+):
+    started = await cold_start(runtime)
+    renamed = await rename(runtime)
+
+    async def unavailable(*_args, **_kwargs):
+        raise RuntimeError("synthetic transient database error")
+
+    monkeypatch.setattr(runtime.delivery.coordination, "retype_chat_start", unavailable)
+    app = KernelLikeApp()
+    app.finish_stream.set()
+    runner = DurableHttpRunner(
+        runtime.delivery, app, operator_token="synthetic", typed_chat_commands=TYPED
+    )
+    assert await asyncio.wait_for(runner.run_one(runtime.lease, lane="work"), 5)
+    assert app.states[0]["runtime_chat_acceptance"] is False
+    row = await command_row(runtime, started.command_id)
+    assert (row.name, row.state) == (HTTP_INVOKE_COMMAND, "succeeded")
+    assert await asyncio.wait_for(runner.run_one(runtime.lease, lane="work"), 5)
+    assert (await command_row(runtime, renamed.command_id)).state == "succeeded"
+
+
+async def test_losing_the_project_while_renaming_never_runs_the_chat(
+    runtime, monkeypatch
+):
+    started = await cold_start(runtime)
+
+    async def lost(*_args, **_kwargs):
+        raise LeaseLost("synthetic ownership change")
+
+    monkeypatch.setattr(runtime.delivery.coordination, "retype_chat_start", lost)
+    app = KernelLikeApp()
+    runner = DurableHttpRunner(
+        runtime.delivery, app, operator_token="synthetic", typed_chat_commands=TYPED
+    )
+    with pytest.raises(LeaseLost):
+        await runner.run_one(runtime.lease, lane="work")
+    assert app.states == []
+    assert (await command_row(runtime, started.command_id)).state == "uncertain"
