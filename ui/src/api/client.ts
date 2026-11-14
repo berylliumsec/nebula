@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
   receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
   type RuntimeRequestStatus } from "./durableRequests";
@@ -2012,12 +2013,15 @@ export class ApiError extends Error {
   readonly remediationId?: string;
   readonly recoveryAction?: string;
   readonly recoveryDestination?: string;
+  /** How long Core asked the client to wait before repeating the request. */
+  readonly retryAfterMs?: number;
 
   constructor(
     message: string,
     status: number,
     requestId?: string,
     details?: unknown,
+    retryAfterMs?: number,
   ) {
     const envelope =
       details && typeof details === "object"
@@ -2044,6 +2048,7 @@ export class ApiError extends Error {
     this.remediationId = stringField(envelope?.remediation_id);
     this.recoveryAction = stringField(envelope?.recovery_action);
     this.recoveryDestination = stringField(envelope?.recovery_destination);
+    this.retryAfterMs = retryAfterMs;
     rememberDiagnosticErrorPresentation(reference, {
       retryable: this.retryable,
       code: this.code,
@@ -4978,6 +4983,7 @@ async function responseError(response: Response): Promise<ApiError> {
     response.status,
     response.headers.get("x-request-id") ?? undefined,
     details,
+    parseRetryAfter(response.headers.get("Retry-After")),
   );
 }
 
@@ -5061,11 +5067,31 @@ export class ApiClient {
   private continuityInitialization?: Promise<ContinuityScope>;
   private readonly continuityListeners = new Set<() => void>();
   private readonly responseAttempts = new WeakMap<Response, PendingRequest>();
+  /** Project reads waiting for a retired or starting project worker. */
+  readonly projectRuntime = new ProjectRuntimeRecovery((path, signal) => this.probeProjectRuntime(path, signal));
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.tokenSource = options.token;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  /** Repeat one project read without reporting it; only whether its runtime answered matters. */
+  private async probeProjectRuntime(path: string, signal: AbortSignal): Promise<ProjectRuntimeProbeResult> {
+    const response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
+      headers: this.authorizeHeaders(new Headers({ Accept: "application/json" })),
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    });
+    if (response.status !== 503) {
+      await response.body?.cancel().catch(() => { /* diagnostic-expected: the probe needs only the status. */ });
+      return { answered: true };
+    }
+    const error = await responseError(response);
+    return isProjectRuntimeUnavailable(error)
+      ? { answered: false, retryAfterMs: error.retryAfterMs, reason: projectRuntimeReason(error) }
+      : { answered: true };
   }
 
   getContinuityScope(): ContinuityScope { return this.pendingStore.scope; }
@@ -5375,14 +5401,22 @@ export class ApiClient {
       throw error;
     }
 
+    const read = method === "GET" || method === "HEAD";
+    // A write may be what readmits an idle project's worker.
+    if (!read) this.projectRuntime.nudge();
     if (!response.ok && !(acceptNotModified && response.status === 304)) {
       const rejected = await this.definitiveRejection(response);
       const error = await responseError(response);
       if (pending && rejected) {
         await this.completeRequest(pending);
       }
+      // An idle project's worker has retired, or a readmitted one is starting.
+      // The read is repeated when it is back; it is not an operation failure.
+      const runtimeAway = read && isProjectRuntimeUnavailable(error);
+      if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error));
+      else if (read) this.projectRuntime.answered(path);
       void logDiagnostic({
-        level: response.status >= 500 ? "error" : "warning",
+        level: runtimeAway ? "warning" : response.status >= 500 ? "error" : "warning",
         eventCode: "interface.api.request_failed",
         message: "A user interface API action could not complete.",
         outcome: response.status >= 500 ? "failure" : "denied",
@@ -5403,6 +5437,7 @@ export class ApiClient {
       });
       throw error;
     }
+    if (read) this.projectRuntime.answered(path);
     if (pending) this.responseAttempts.set(response, pending);
     return response;
   }
