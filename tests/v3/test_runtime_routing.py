@@ -10,7 +10,7 @@ from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import ChatSession
 from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS
 from nebula.v3.runtime_delivery import HttpIntent
-from nebula.v3.runtime_ipc import RuntimeIpcError
+from nebula.v3.runtime_ipc import ProjectRuntimeUnavailable, RuntimeIpcError
 from nebula.v3.runtime_http import PrivateRuntimeHttp, RuntimeHttpProxy
 from nebula.v3.runtime_routing import RuntimeRouting
 from tests.v3.test_runtime_coordination import cluster as cluster
@@ -128,7 +128,8 @@ async def test_viewer_routes_only_to_live_execution_owner_and_credential(
     assert target.endpoint == "unix:///tmp/synthetic-old.sock"
     assert target.credential == key and target.lane == "read"
     clock[0] += LEASE_MS + 1
-    with pytest.raises(RuntimeIpcError, match="no live"):
+    # An expired or retired owner is transient for a viewer: it may read again.
+    with pytest.raises(ProjectRuntimeUnavailable, match="no live"):
         await routing.upstream_for({"path": "/api/v1/chat/sessions/chat"})
 
 

@@ -37,6 +37,25 @@ class RuntimeIpcUndispatched(RuntimeIpcError):
     """The peer proved it did not run the operation; sending it again is safe."""
 
 
+# A project read answers 503 with this code while the project's worker is
+# idle (retired), starting or closing. Nothing failed: the same read succeeds
+# once a worker owns the project again, so clients retry it after Retry-After.
+PROJECT_RUNTIME_UNAVAILABLE = "project_runtime_unavailable"
+PROJECT_RUNTIME_RETRY_AFTER_SECONDS = 1
+
+
+def project_runtime_unavailable_body(detail: str) -> dict[str, Any]:
+    return {"detail": detail, "code": PROJECT_RUNTIME_UNAVAILABLE, "retryable": True}
+
+
+def project_runtime_unavailable_headers() -> dict[str, str]:
+    return {"Retry-After": str(PROJECT_RUNTIME_RETRY_AFTER_SECONDS)}
+
+
+class ProjectRuntimeUnavailable(RuntimeIpcError):
+    """No ready worker owns the project now; a later read can succeed."""
+
+
 # A handler that refuses with RuntimeIpcError or CoordinationConflict wrote its
 # text for operators. The server signs that reason instead of failing with a
 # bare 500, so the caller can say why. Older clients still see an error status.

@@ -26,7 +26,11 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from .async_utils import finish_cleanup
 from .deployment_protocol import IPC_PROTOCOL
 from .diagnostics import record_caught_exception, record_diagnostic
-from .runtime_ipc import RuntimeIpcError
+from .runtime_ipc import (
+    RuntimeIpcError,
+    project_runtime_unavailable_body,
+    project_runtime_unavailable_headers,
+)
 
 _PREFIX = b"x-nebula-internal-"
 # Runtime endpoints that may hold forwarding channels at once. Idle endpoints
@@ -73,10 +77,11 @@ def _signature(
 
 async def _runtime_unavailable(scope, receive, send) -> None:
     await JSONResponse(
-        {
-            "detail": "The runtime connection is unavailable. Reconnect to read durable progress."
-        },
+        project_runtime_unavailable_body(
+            "The runtime connection is unavailable. Reconnect to read durable progress."
+        ),
         status_code=503,
+        headers=project_runtime_unavailable_headers(),
     )(scope, receive, send)
 
 
