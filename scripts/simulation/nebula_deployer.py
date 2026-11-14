@@ -2242,27 +2242,46 @@ def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
 
     deployment_host = journal.get("host_activation")
     host = record.get("host_activation")
-    if (
+    legacy_top_level_activation = deployment_host is None
+    if not isinstance(host, dict):
+        raise RuntimeError("Deployment host activation is not durably complete")
+    if legacy_top_level_activation:
+        if (
+            host.get("version") != version
+            or host.get("previous_version") != previous
+            or host.get("state") != "complete"
+            or not isinstance(host.get("operation_id"), str)
+            or not host.get("operation_id")
+        ):
+            raise RuntimeError("Legacy top-level host activation does not match deployment")
+    elif (
         not isinstance(deployment_host, dict)
         or deployment_host.get("version") != version
         or deployment_host.get("state") != "complete"
         or not isinstance(deployment_host.get("operation_id"), str)
-        or not isinstance(host, dict)
         or host.get("version") != version
         or host.get("previous_version") != previous
         or host.get("state") != "complete"
         or host.get("operation_id") != deployment_host.get("operation_id")
-        or record.get("host_active") != version
     ):
         raise RuntimeError("Deployment host activation is not durably complete")
-    host_result = deployment_host.get("result")
+    host_result = (
+        deployment_host.get("result") if isinstance(deployment_host, dict) else None
+    )
     host_readback = host.get("readback")
     if (
-        not isinstance(host_result, dict)
-        or host_result.get("status") != "host_activated"
-        or host_result.get("version") != version
-        or host_result.get("health_commit") != version
-        or host_result.get("operation_id") != deployment_host.get("operation_id")
+        (
+            not legacy_top_level_activation
+            and (
+                not isinstance(host_result, dict)
+                or host_result.get("status") != "host_activated"
+                or host_result.get("version") != version
+                or host_result.get("health_commit") != version
+                or host_result.get("operation_id")
+                != deployment_host.get("operation_id")
+            )
+        )
+        or record.get("host_active") != version
         or not isinstance(host_readback, dict)
         or host_readback.get("health_commit") != version
         or host_readback.get("api_version") != previous

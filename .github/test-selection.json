@@ -1,7 +1,7 @@
 {
   "reviewed_by": "Codex",
-  "reason": "Verify exact reconciliation of a pre-spawn MemoryBudgetError operation while preserving the accepted pending candidate, plus prevent preparation from replacing a candidate under a nonterminal deployment journal.",
-  "exclusions": "CI runs three focused simulation deployer cases across Python 3.11, 3.12, and 3.13. No local tests, database backup, live Core mutation, broad suites, or new workflow.",
+  "reason": "Verify exact reconciliation of a pre-spawn MemoryBudgetError operation with current and legacy top-level host activation receipts, while preserving the pending candidate and preventing replacement under a nonterminal deployment journal.",
+  "exclusions": "CI runs four focused simulation deployer cases across Python 3.11, 3.12, and 3.13. No local tests, database backup, live Core mutation, broad suites, or new workflow.",
   "python_versions": [
     "3.11",
     "3.12",
@@ -10,13 +10,14 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 3,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
     "tests/test_simulation_host_activation.py::test_reconcile_pre_spawn_memory_error_archives_journal_and_preserves_pending",
+    "tests/test_simulation_host_activation.py::test_reconcile_accepts_legacy_top_level_host_activation_receipt",
     "tests/test_simulation_host_activation.py::test_reconcile_rejects_unknown_error_and_changed_api_or_resident_state",
     "tests/test_simulation_host_activation.py::test_prepare_rejects_replacing_candidate_under_nonterminal_journal"
   ],
@@ -24,5 +25,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "5d14c01cb0a29f018b0f9849135c69a8e7c0c5abe7698139e5f3bb62f8bd972a"
+  "change_digest": "875392d873b5cc2e79d36ba3d6d3cc4819b706b871aaa474fb64331b942e753a"
 }
