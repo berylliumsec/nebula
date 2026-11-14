@@ -228,6 +228,14 @@ of the GUI's transcript; while a catch-up summary waits, they join it instead.
 progress notes). `/evidence` shows an answer's supporting evidence: retrieved
 sources, observed tool results, artifacts and stated limitations. `/turn` shows a
 response's status, model, timing and error, and opens its source message.
+`/results` lists the conversation's retained results. Choosing a tool result
+opens its output, as the GUI's artifact inspector does: read it in pages (continuing
+inside very long lines), search every output of that tool call with more matches on
+request, or save the raw output to a file on this client after confirming it may be
+sensitive. For a harness conversation, `/activity` also offers **Stop subagent** for
+the harness's own running subagent tasks when the harness advertises subagent
+control, and **Rewind files** to a checkpoint while idle when it advertises
+checkpoint rewind.
 
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates

@@ -33,6 +33,7 @@ CLIENT_FILES = (
     "terminal/followups.py",
     "terminal/projects.py",
     "terminal/reading.py",
+    "terminal/inspect.py",
 )
 
 
