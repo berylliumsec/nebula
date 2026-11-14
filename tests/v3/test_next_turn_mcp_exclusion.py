@@ -12,7 +12,7 @@ from nebula.v3.chat_assistant_config import (
 from nebula.v3.chat_schedules import ChatScheduleService
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
 from nebula.v3.domain import ChatSession, ChatTurn, McpServerProfile
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
@@ -51,13 +51,20 @@ async def test_goal_conversation_draft_preserves_context_mode_and_exclusions(
 
 
 async def _save(service, session_id, **settings):
-    session = await service.store.get(ChatSession, session_id)
-    return await update_chat_assistant_config(
-        service.store,
-        session,
-        ChatAssistantConfigPatch(**settings),
-        expected_revision=session.revision,
-    )
+    # Core's background precompaction after a turn can save the conversation
+    # between this read and the update; like the composer, re-read and retry.
+    for attempt in range(3):
+        session = await service.store.get(ChatSession, session_id)
+        try:
+            return await update_chat_assistant_config(
+                service.store,
+                session,
+                ChatAssistantConfigPatch(**settings),
+                expected_revision=session.revision,
+            )
+        except ConflictError:
+            if attempt == 2:
+                raise
 
 
 def _wire(prepared):

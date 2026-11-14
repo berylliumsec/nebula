@@ -153,7 +153,7 @@ def _search(index: int):
 
 
 async def _entries(service, turn_id):
-    return service._turn_history((await service.store.get(ChatTurn, turn_id)))
+    return await service._turn_history((await service.store.get(ChatTurn, turn_id)))
 
 
 async def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answers(

@@ -456,15 +456,17 @@ def _counting_client(counter, probabilities=None, sources=None):
     return _client(handler)
 
 
-def _ask(cache, counter, *, deferred=None, message="find the login bug"):
-    return asyncio.run(
-        suggest_tools(
-            _counting_client(counter),
-            deferred=deferred or {MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
-            operator_messages=[message],
-            cache=cache,
-        )
+async def _ask_async(cache, counter, *, deferred=None, message="find the login bug"):
+    return await suggest_tools(
+        _counting_client(counter),
+        deferred=deferred or {MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+        operator_messages=[message],
+        cache=cache,
     )
+
+
+def _ask(cache, counter, *, deferred=None, message="find the login bug"):
+    return asyncio.run(_ask_async(cache, counter, deferred=deferred, message=message))
 
 
 def test_an_identical_request_is_answered_from_the_cache():
@@ -482,12 +484,12 @@ def test_an_identical_request_is_answered_from_the_cache():
 
 async def test_a_changed_catalog_or_message_asks_again():
     cache, counter = SuggestionCache(), []
-    _ask(cache, counter)
+    await _ask_async(cache, counter)
 
-    _ask(cache, counter, message="rotate the database password")
+    await _ask_async(cache, counter, message="rotate the database password")
     assert len(counter) == 2
 
-    _ask(
+    await _ask_async(
         cache,
         counter,
         deferred={
@@ -525,7 +527,7 @@ async def test_a_failed_call_is_never_cached():
     )
 
     assert failing.status == "unavailable" and len(cache) == 0
-    assert not _ask(cache, counter).cached and len(counter) == 1
+    assert not (await _ask_async(cache, counter)).cached and len(counter) == 1
 
 
 def test_the_cache_keeps_the_newest_entries_only():

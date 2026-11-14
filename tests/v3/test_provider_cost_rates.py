@@ -29,7 +29,12 @@ from nebula.v3.context import (
     ContextCompactionError,
     ContextCompactor,
 )
-from nebula.v3.domain import ChatRole, ChatTokenUsage, ProviderProfile
+from nebula.v3.domain import (
+    ChatRole,
+    ChatTokenUsage,
+    ContextOwnerType,
+    ProviderProfile,
+)
 from nebula.v3.model_catalog import openrouter_model_routes
 from nebula.v3.model_pricing import (
     TokenRates,
@@ -64,7 +69,6 @@ from nebula.v3.storage import NebulaStore
 from tests.v3.test_context import (
     MemoryProvider,
     _chat_history,
-    _compact,
     _owner,
     _profile,
 )
@@ -518,7 +522,16 @@ async def test_compaction_snapshots_price_cache_reads(tmp_path):
         update={"model_prices": {"model-a": HAIKU_PRICES}}
     )
 
-    result = _compact(store, session, profile, provider, sources)
+    result = await ContextCompactor(store).compact(
+        owner_type=ContextOwnerType.CHAT_SESSION,
+        owner_id=session.id,
+        engagement_id=session.engagement_id,
+        provider_profile=profile,
+        provider=provider,
+        model="model-a",
+        sources=sources,
+        compacted_through=max(source.reference.sequence or 0 for source in sources),
+    )
 
     assert result.snapshot.cost_usd == pytest.approx(CACHED_HAIKU_COST)
 

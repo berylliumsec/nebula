@@ -243,7 +243,7 @@ async def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = 
     return store, service, prepared, broker
 
 
-def _measure(monkeypatch, store, service, prepared):
+async def _measure(monkeypatch, store, service, prepared):
     writes: list[tuple[str, int, tuple[str, ...]]] = []
     original_update = StoreTransaction.update
 
@@ -272,7 +272,7 @@ def _measure(monkeypatch, store, service, prepared):
 
     monkeypatch.setattr(StoreTransaction, "update", recording_update)
     monkeypatch.setattr(ChatTurnLedger, "_rows_after", recording_rows)
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
     return completion, writes, fetched
 
 
@@ -285,7 +285,7 @@ async def test_routing_steps_rewrite_only_the_turn_and_goal_fields_that_change(
         tmp_path, steps=steps, prose=prose
     )
 
-    completion, writes, fetched = _measure(monkeypatch, store, service, prepared)
+    completion, writes, fetched = await _measure(monkeypatch, store, service, prepared)
 
     # The answer and the tool history are what they always were.
     assert completion.message.content.endswith("Done.")
@@ -344,7 +344,7 @@ async def test_long_thinking_is_sealed_out_of_the_turn_row_and_read_back_whole(
         tmp_path, steps=steps, prose=False, thought=thought
     )
 
-    completion, writes, _ = _measure(monkeypatch, store, service, prepared)
+    completion, writes, _ = await _measure(monkeypatch, store, service, prepared)
 
     expected = ""
     for index in range(steps):
@@ -364,13 +364,15 @@ async def test_long_thinking_is_sealed_out_of_the_turn_row_and_read_back_whole(
     assert max(turn_writes) < 40 * 1024
 
 
-async def test_prose_does_not_add_a_turn_write(tmp_path, monkeypatch):
+async def test_prose_does_not_add_a_turn_write(tmp_path):
     counts = {}
     for prose in (False, True):
         store, service, prepared, _ = await _tool_turn(tmp_path, steps=6, prose=prose)
-        _, writes, _ = _measure(monkeypatch, store, service, prepared)
+        # Undo only the recording patches: the shared monkeypatch also tracks
+        # the stores and services close_database_handles closes.
+        with pytest.MonkeyPatch.context() as recording:
+            _, writes, _ = await _measure(recording, store, service, prepared)
         counts[prose] = sum(1 for item in writes if item[0] == "ChatTurn")
-        monkeypatch.undo()
     assert counts[True] == counts[False]
 
 
@@ -588,7 +590,7 @@ async def _resumable_turn(store, service, *, split: bool) -> ChatTurn:
                 )
             )
         )
-    return service._interrupt_orphaned_turn(
+    return await service._interrupt_orphaned_turn(
         (await store.get(ChatTurn, f"turn-{split}")), [], [], cause="Core restarted"
     )
 
@@ -718,9 +720,13 @@ async def _answering_service(tmp_path, monkeypatch, name: str):
 _CRASH_EXIT = 17
 
 
-async def _answer_then_die(database: str, crash_point: str) -> None:
+def _answer_then_die(database: str, crash_point: str) -> None:
     """Child process: answer one turn and exit at ``crash_point`` like a killed Core."""
 
+    asyncio.run(_answer_then_die_async(database, crash_point))
+
+
+async def _answer_then_die_async(database: str, crash_point: str) -> None:
     store = NebulaStore(database)
     engagement = await store.create(Engagement(id="eng-answer", name="Answer"))
     profile = await store.create(_profile(local=True))

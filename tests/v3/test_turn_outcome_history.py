@@ -124,17 +124,17 @@ def _request(engagement, profile, content, *, session_id=None, stream=True, **ex
 
 
 async def _run_streamed(service, prepared) -> str:
-    turn_id = service.start_provider_turn(prepared)
+    turn_id = await service.start_provider_turn(prepared)
     with pytest.raises(Exception):
         async for _ in service.follow_provider_turn(turn_id):
             pass
     return turn_id
 
 
-def _outcome_notes(service, session_id, *, include_replaced=False):
+async def _outcome_notes(service, session_id, *, include_replaced=False):
     return [
         message
-        for message in service.session_messages(
+        for message in await service.session_messages(
             session_id, include_replaced=include_replaced
         )
         if message.metadata.get("kind") == "turn_outcome"
@@ -210,7 +210,7 @@ async def test_failed_tool_turn_note_names_the_steps_that_already_ran(tmp_path):
     assert len(broker.calls) == 1
     turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.FAILED
-    notes = _outcome_notes(service, "session")
+    notes = await _outcome_notes(service, "session")
     assert len(notes) == 1
     note = notes[0]
     assert note.content.startswith("Response failed: upstream 502 while routing")
@@ -244,7 +244,7 @@ async def test_stopped_turn_saves_an_outcome_note(tmp_path):
     session_id, turn_id = await scenario()
 
     assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.CANCELLED
-    notes = _outcome_notes(service, session_id)
+    notes = await _outcome_notes(service, session_id)
     assert len(notes) == 1
     assert notes[0].content.startswith("Response stopped")
     assert notes[0].metadata["turn_status"] == "cancelled"
@@ -304,7 +304,7 @@ async def test_stopping_a_turn_parked_on_approval_says_the_call_never_ran(tmp_pa
     # A second stop of the same turn must not add a second note.
     (await service.cancel_turn(turn.id))
 
-    notes = _outcome_notes(service, session.id)
+    notes = await _outcome_notes(service, session.id)
     assert len(notes) == 1
     assert notes[0].content.startswith("Response stopped")
     assert "Completed tool steps:" not in notes[0].content
@@ -388,7 +388,7 @@ async def test_final_answer_retry_takes_the_place_of_the_outcome_note(tmp_path):
     turn_id = await _run_streamed(service, prepared)
     session_id = prepared.turn.session_id
     assert (await service.recoverable_final_answer_turn(session_id)).id == turn_id
-    assert len(_outcome_notes(service, session_id)) == 1
+    assert len(await _outcome_notes(service, session_id)) == 1
 
     provider.answer = True
 
@@ -413,7 +413,7 @@ async def test_edit_in_place_retracts_the_outcome_note_with_its_message(tmp_path
     (await _run_streamed(service, first))
     session_id = first.turn.session_id
     user_message = (await service.session_messages(session_id))[0]
-    assert len(_outcome_notes(service, session_id)) == 1
+    assert len(await _outcome_notes(service, session_id)) == 1
 
     (await service.rewind_session(session_id, before_message_id=user_message.id))
     edited = await service.prepare(
@@ -422,8 +422,8 @@ async def test_edit_in_place_retracts_the_outcome_note_with_its_message(tmp_path
 
     assert _roles(edited.model_request) == ["user"]
     assert edited.model_request.messages[0].content == "Scan the right host."
-    assert _outcome_notes(service, session_id) == []
-    retracted = _outcome_notes(service, session_id, include_replaced=True)
+    assert (await _outcome_notes(service, session_id)) == []
+    retracted = await _outcome_notes(service, session_id, include_replaced=True)
     assert len(retracted) == 1
     assert retracted[0].metadata["retracted_reason"] == "operator_edit"
 
