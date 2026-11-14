@@ -17,10 +17,15 @@ from typing import Any
 
 import pytest
 
+from nebula.v3.chat import HarnessKnowledgeMatch
 from nebula.v3.chat_goals import ChatGoalService, GoalWrite
 from nebula.v3.domain import (
+    Approval,
+    ApprovalStatus,
+    ChatCitation,
     ChatGoalStatus,
     ChatTurn,
+    ChatTurnStatus,
     ChatWorkingNotes,
     HarnessSession,
     HarnessTurn,
@@ -31,7 +36,7 @@ from nebula.v3.domain import (
     ToolCallStatus,
 )
 from nebula.v3.harness_core_tools import call_core_tool
-from nebula.v3.harnesses import HarnessEvent
+from nebula.v3.harnesses import HarnessEvent, HarnessPermissionRequest
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import ToolExecutionResult, ToolSpec
@@ -375,4 +380,147 @@ async def test_native_command_bookkeeping_that_never_saves_reconciles_from_ledge
     chat_turn = await store.get(ChatTurn, turn.chat_turn_id)
     assert chat_turn.tool_call_ids == [calls[0].id]
     assert chat_turn.execution_tool_calls == 1
+    await runtime.shutdown()
+
+
+async def _running_chat_turn(tmp_path, *, mcp_server_ids=None):
+    store, engagement, profile, mcp, _adapter, runtime = await _runtime(tmp_path)
+    chat, chat_turn, turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Inspect the workspace",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[mcp.id] if mcp_server_ids is None else mcp_server_ids,
+    )
+    turn = await store.update(
+        HarnessTurn,
+        turn.id,
+        {"status": HarnessTurnStatus.RUNNING},
+        expected_revision=turn.revision,
+    )
+    return store, engagement, runtime, chat, chat_turn, turn
+
+
+def _native_attacher(store, runtime, engagement, chat, chat_turn, turn):
+    """A native command recorded by the event stream, as a competing writer."""
+
+    attached: list[ToolCall] = []
+
+    async def attach(_record) -> None:
+        call = await store.create(
+            ToolCall(
+                engagement_id=engagement.id,
+                run_id=chat_turn.id,
+                chat_session_id=chat.id,
+                chat_turn_id=chat_turn.id,
+                tool_name="vendor:codex:commandExecution",
+                vendor_tool_name="codex:commandExecution",
+                status=ToolCallStatus.RUNNING,
+                risk_class=RiskClass.LOCAL_READ,
+                metadata={"harness_turn_id": turn.id, "budget_class": "execution"},
+            )
+        )
+        attached.append(await runtime._attach_gateway_tool_call(turn, call.id))
+
+    return attach, attached
+
+
+async def test_native_permission_request_waits_while_a_core_tool_records(tmp_path):
+    """A native command's approval wait keeps a Core tool recorded meanwhile."""
+
+    store, engagement, runtime, chat, chat_turn, turn = await _running_chat_turn(
+        tmp_path
+    )
+    attach, attached = _native_attacher(
+        store, runtime, engagement, chat, chat_turn, turn
+    )
+    _land_after_read(
+        store, HarnessTurn, attach, armed=lambda: bool(runtime._approval_futures)
+    )
+    ticket = await runtime._request_permission(
+        turn.id,
+        HarnessPermissionRequest(
+            vendor_request_id="delete-1",
+            category="mcp",
+            vendor_name="mcp__workspace__delete_file",
+            server_name="workspace",
+            tool_name="delete_file",
+            arguments={"path": "evidence.txt"},
+        ),
+    )
+    approval = await store.get(Approval, ticket.approval_id or "")
+    assert approval.status == ApprovalStatus.PENDING
+    saved = await store.get(HarnessTurn, turn.id)
+    owner = await store.get(ChatTurn, chat_turn.id)
+    assert saved.status == HarnessTurnStatus.WAITING_APPROVAL
+    assert (owner.status, owner.approval_id) == (
+        ChatTurnStatus.WAITING_APPROVAL,
+        approval.id,
+    )
+    assert attached and attached[0].id in saved.tool_call_ids
+    assert set(saved.tool_call_ids) == {ticket.tool_call_id, attached[0].id}
+    assert set(owner.tool_call_ids) == set(saved.tool_call_ids)
+    assert owner.execution_tool_calls == 2
+    ticket.decision.cancel()
+    await runtime.shutdown()
+
+
+async def test_gateway_citations_and_a_native_command_are_both_kept(tmp_path):
+    store, engagement, runtime, chat, chat_turn, turn = await _running_chat_turn(
+        tmp_path, mcp_server_ids=[]
+    )
+    attach, attached = _native_attacher(
+        store, runtime, engagement, chat, chat_turn, turn
+    )
+    _land_after_read(store, HarnessTurn, attach, armed=lambda: True)
+    citation = ChatCitation(
+        source_id="knowledge-a",
+        name="runbook.md",
+        chunk_id="chunk-a",
+        excerpt="Page above 2%.",
+    )
+    (
+        await runtime._record_searched_citations(
+            turn.id,
+            [
+                HarnessKnowledgeMatch(
+                    text="Page above 2%.",
+                    citation=citation,
+                    local_only=False,
+                    relevance="strong",
+                )
+            ],
+        )
+    )
+    saved = await store.get(HarnessTurn, turn.id)
+    assert [item["chunk_id"] for item in saved.metadata["citations"]] == ["chunk-a"]
+    assert saved.tool_call_ids == [attached[0].id]
+    await runtime.shutdown()
+
+
+async def test_a_failing_turn_ends_even_when_a_tool_records_meanwhile(tmp_path):
+    """The failure is saved on the newest turn instead of leaving it running."""
+
+    store, engagement, runtime, chat, chat_turn, turn = await _running_chat_turn(
+        tmp_path, mcp_server_ids=[]
+    )
+    attach, attached = _native_attacher(
+        store, runtime, engagement, chat, chat_turn, turn
+    )
+    _land_after_read(store, HarnessTurn, attach, armed=lambda: True)
+    (
+        await runtime._fail_turn(
+            turn.id, HarnessTurnStatus.INTERRUPTED, "The harness transport closed."
+        )
+    )
+    saved = await store.get(HarnessTurn, turn.id)
+    owner = await store.get(ChatTurn, chat_turn.id)
+    assert (saved.status, saved.error) == (
+        HarnessTurnStatus.INTERRUPTED,
+        "The harness transport closed.",
+    )
+    assert saved.tool_call_ids == [attached[0].id]
+    assert owner.status == ChatTurnStatus.INTERRUPTED
     await runtime.shutdown()
