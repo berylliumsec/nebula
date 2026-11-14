@@ -194,16 +194,18 @@ async def main():
         # Python cleanup for this owned fixture's database and temporary root.
         signal.signal(signal.SIGTERM, exit_signal)
         try:
-            uvicorn.run(
-                app,
-                host="0.0.0.0",
-                port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19484")),
-                access_log=False,
-                log_level="warning",
-            )
+            await uvicorn.Server(
+                uvicorn.Config(
+                    app,
+                    host="0.0.0.0",
+                    port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19484")),
+                    access_log=False,
+                    log_level="warning",
+                )
+            ).serve()
         finally:
             (await store.database.dispose())
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

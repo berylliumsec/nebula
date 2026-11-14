@@ -1,5 +1,6 @@
 """Disposable authenticated Core and production UI, with inert agent transports."""
 
+import asyncio
 import hashlib
 import os
 import sys
@@ -298,12 +299,14 @@ async def main():
         app.router.routes[:] = controls + [
             route for route in app.router.routes if route not in controls
         ]
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19486")),
-        )
+        await uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host="0.0.0.0",
+                port=int(os.environ.get("NEBULA_MODEL_TEST_PORT", "19486")),
+            )
+        ).serve()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
