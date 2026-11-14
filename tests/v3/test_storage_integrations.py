@@ -21,6 +21,9 @@ from nebula.v3.domain import (
     ChatQueue,
     ChatSession,
     Engagement,
+    HarnessKind,
+    HarnessProfile,
+    HarnessSession,
     ProviderProfile,
     StorageAction,
     StorageDispatch,
@@ -101,8 +104,8 @@ def event(event_id="observation-1", *, state="warning", observed_at=None, free=2
     }
 
 
-def enroll(client):
-    result = client.post(
+async def enroll(client):
+    result = await client.post(
         "/api/v1/storage/sources",
         headers=AUTH,
         json={
@@ -120,7 +123,7 @@ def enroll(client):
 
 async def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
     client, store = await setup(tmp_path)
-    created = enroll(client)
+    created = await enroll(client)
     token = created["token"]
     source_id = created["source"]["id"]
     assert token not in str(
@@ -192,7 +195,7 @@ async def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
 
 async def test_source_token_changes_reject_stale_browser_revisions(tmp_path):
     client, _ = await setup(tmp_path)
-    created = enroll(client)
+    created = await enroll(client)
     source_id = created["source"]["id"]
     initial_revision = created["source"]["revision"]
     endpoint = f"/api/v1/storage/sources/{source_id}"
@@ -251,7 +254,7 @@ async def test_callback_auth_is_required_and_source_can_be_disabled_after_runtim
         },
     )
     assert invalid.status_code == 422
-    created = enroll(client)["source"]
+    created = (await enroll(client))["source"]
     enabled = await client.patch(
         f"/api/v1/storage/sources/{created['id']}",
         headers=AUTH,
@@ -278,7 +281,7 @@ async def test_callback_auth_is_required_and_source_can_be_disabled_after_runtim
 
 async def test_duplicate_late_worsening_resolution_and_restart(tmp_path):
     client, store = await setup(tmp_path)
-    created = enroll(client)
+    created = await enroll(client)
     source = created["source"]
     (
         await client.patch(
@@ -344,7 +347,7 @@ async def test_duplicate_late_worsening_resolution_and_restart(tmp_path):
 async def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
     client, store = await setup(tmp_path)
     service = client.app.state.storage_integrations
-    created = enroll(client)
+    created = await enroll(client)
     source = created["source"]
     source_entity = await store.get_by_kind("storage_sources", source["id"])
     source_entity = await store.update(
@@ -471,7 +474,7 @@ async def test_source_preview_refusal_is_actionable_conflict(tmp_path, monkeypat
     try:
         monkeypatch.setenv("NEBULA_TEST_STORAGE_CALLBACK_TOKEN", "callback-token")
         client, store = await setup(tmp_path)
-        created = enroll(client)
+        created = await enroll(client)
         source = await store.get_by_kind("storage_sources", created["source"]["id"])
         (
             await store.update(
@@ -510,7 +513,7 @@ async def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp
     from nebula.v3.storage_integrations import _digest
 
     client, store = await setup(tmp_path)
-    created = enroll(client)
+    created = await enroll(client)
     source = await store.get_by_kind("storage_sources", created["source"]["id"])
     (
         await store.update(
@@ -576,7 +579,7 @@ async def test_inventory_staleness_and_callback_failure_keep_alert_visible(tmp_p
     import httpx
 
     client, store = await setup(tmp_path)
-    created = enroll(client)
+    created = await enroll(client)
     source = created["source"]
     source_entity = await store.get_by_kind("storage_sources", source["id"])
     (
@@ -630,7 +633,7 @@ async def test_inventory_staleness_and_callback_failure_keep_alert_visible(tmp_p
 
 async def test_configured_runtime_failure_stays_retryable(tmp_path):
     client, store = await setup(tmp_path)
-    created = enroll(client)
+    created = await enroll(client)
     source = created["source"]
     (
         await client.patch(
@@ -686,6 +689,60 @@ async def test_configured_runtime_failure_stays_retryable(tmp_path):
     ]
     assert surfaced["queue_status"] == "needs_review"
     assert surfaced["queue_detail"] == "configured runtime failed"
+
+
+async def test_harness_source_dispatch_opens_its_session_and_queues_the_alert(
+    tmp_path,
+):
+    client, store = await setup(tmp_path)
+    (
+        await store.create(
+            HarnessProfile(
+                id="storage-harness",
+                name="Codex fixture",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                default_model="test-model",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
+        )
+    )
+    created = await client.post(
+        "/api/v1/storage/sources",
+        headers=AUTH,
+        json={
+            "name": "NAS",
+            "engagement_id": "storage-project",
+            "backend": "harness",
+            "profile_id": "storage-harness",
+            "model": "test-model",
+            "reporting_interval_seconds": 60,
+        },
+    )
+    assert created.status_code == 201, created.text
+    source = created.json()["source"]
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
+    )
+    sender = {"Authorization": "Bearer " + created.json()["token"]}
+    assert (
+        await client.post("/api/v1/storage/events", headers=sender, json=event())
+    ).status_code == 202
+    dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
+    assert dashboard["dispatches"][0]["status"] == "queued", dashboard["dispatches"]
+    assert dashboard["dispatches"][0]["queue_status"] == "queued"
+    # The first alert opens the harness session its chat and follow-up run in.
+    chat = await store.get(ChatSession, dashboard["incidents"][0]["chat_session_id"])
+    assert chat.backend == "harness"
+    assert (
+        await store.get(HarnessSession, chat.harness_session_id)
+    ).harness_profile_id == "storage-harness"
+    queue = await store.get(ChatQueue, "chat-queue-" + chat.id)
+    assert queue.items[0]["request"]["harness_session_id"] == chat.harness_session_id
 
 
 pytestmark = pytest.mark.anyio

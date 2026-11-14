@@ -192,7 +192,7 @@ async def test_follow_up_runs_on_the_model_and_effort_picked_after_it_was_queued
         )
         # The operator switches while the follow-up waits; it is the next turn.
         session = await store.get(ChatSession, "s")
-        service.chat.apply_runtime_switch(
+        await service.chat.apply_runtime_switch(
             "s",
             ChatRuntimeSwitchRequest(
                 provider_id=profile.id,
@@ -474,22 +474,29 @@ async def test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_runnin
         )
 
         await service.chat.startup()
-        assert service.chat.resume_turns_stopped_by_core() == [turn.id]
+        assert await service.chat.resume_turns_stopped_by_core() == [turn.id]
         await service.startup()
         linked = await service.get("s")
         assert linked.items[0]["status"] == "sending"
         assert not linked.paused
         assert service.chat.has_active_provider_turn(turn.id)
 
-        current = await store.get(ChatTurn, turn.id)
-        (
-            await store.update(
-                ChatTurn,
-                turn.id,
-                {"status": "complete"},
-                expected_revision=current.revision,
-            )
-        )
+        # The reclaimed turn runs in the background and may still be recording
+        # its admission and claim, so end it at whatever revision it reached.
+        for _ in range(100):
+            current = await store.get(ChatTurn, turn.id)
+            try:
+                await store.update(
+                    ChatTurn,
+                    turn.id,
+                    {"status": "complete"},
+                    expected_revision=current.revision,
+                )
+                break
+            except ConflictError:
+                await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("the reclaimed turn never settled")
         await service.step((await service.get("s")))
         settled = await service.get("s")
         assert settled.items[0]["status"] == "complete"
@@ -517,7 +524,7 @@ async def test_harness_queue_uses_durable_turn_and_selected_context(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        await runtime.start_chat_turn(first.id)
+        await (await runtime.start_chat_turn(first.id))
         service = ChatQueueService(store, None, runtime)
         selected = "Exact selected queue context"
         request = ChatCompletionRequest(
@@ -582,7 +589,7 @@ async def test_queued_butler_follow_up_dispatches_after_worker_reconnect(tmp_pat
             mcp_server_ids=[],
             control_assistant=True,
         )
-        await runtime.start_chat_turn(first.id)
+        await (await runtime.start_chat_turn(first.id))
         service = ChatQueueService(store, None, runtime)
         queued = await service.write(
             chat.id,
@@ -614,7 +621,10 @@ async def test_queued_butler_follow_up_dispatches_after_worker_reconnect(tmp_pat
         assert item["status"] == "complete", item
         assert not (await reconnected.get(chat.id)).paused
         turn = await store.get(HarnessTurn, item["harness_turn_id"])
-        assert "You are Butler, the second-in-command" in turn.prompt
+        assert (
+            "You are Butler, the second-in-command"
+            in turn.metadata["standing_instructions"]["text"]
+        )
         assert (await store.get(HarnessSession, turn.harness_session_id)).metadata[
             "control_assistant"
         ] is True
@@ -676,7 +686,7 @@ async def test_harness_follow_up_can_carry_a_newly_picked_model(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        await runtime.start_chat_turn(first.id)
+        await (await runtime.start_chat_turn(first.id))
         service = ChatQueueService(store, None, runtime)
         # Picked while the first turn ran; the harness moves to a new session.
         queue = await service.write(

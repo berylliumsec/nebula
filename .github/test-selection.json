@@ -1,37 +1,23 @@
 {
   "reviewed_by": "Claude",
-  "reason": "After a host reboot a supervisor Core crash-looped: process-origin.json pointed at a /tmp socket directory emptied at boot, and every origin gate (rediscover, spawn, retire, reconcile_dead_project) compared the previous boot id with the current one, so nothing recorded under the old boot could be retired or recovered. RuntimeProcessHost.start now replaces the marker atomically with a fresh mkdtemp socket directory when the recorded origin names another kernel boot, after every recorded heartbeat lease has lapsed; a missing directory on the same origin gets a fresh directory without any death verdict; a same-boot PID-namespace change stays refused. Rows born on another boot need an expired lease before rediscovery reports them gone or retire() treats them as exited, and the HTTP proxy forwards viewer credentials only into a private socket directory. Selected suites cover host start/rediscovery/retirement with real detached workers (reconciliation, processes, worker features), origin parsing (process identity), orphan recovery and automatic recovery that consume rediscovery, and the proxy (runtime_http, diagnostic boundaries). The test supervisor in test_runtime_processes.py now publishes its ready file atomically; CI read it between creation and write.",
-  "exclusions": "test_runtime_processes.py::test_two_failed_real_starts_do_not_prevent_a_later_version is left out: it times out on worker startup on pristine main as well as with this change (both SQLite and PostgreSQL, run sequentially on this host), so the rest of that file is selected by name. Under a shared host at load average ~30-40, two other spawn-heavy cases there each timed out once in one run (test_real_api_role_requires_both_private_channel_and_public_auth with this change, test_actual_supervisor_process_exit_leaves_worker_reachable on main); each passed when rerun, and no selected test fails only with this change. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set; every new regression passed locally on both SQLite and PostgreSQL 16. No UI, native or Playwright cases: no frontend code or API contract changed; the operator journey (Core returns after a reboot and chats resume) was exercised on a disposable LAN Core and is recorded in the PR. Memory-runner reconciliation of jobs owned by the previous boot is out of scope.",
+  "reason": "Core follow-up dispatch: ChatQueueService.step now awaits start_provider_turn, harness prepare_chat and start_chat_turn, which #939 made async; the storage alert path awaits ChatQueueService.get/exists/write and harness create_session. test_chat_queue.py covers provider and harness dispatch, sequential draining, model/effort picked after queueing, the reclaimed provider turn, the direct-send race and stuck claims (8 of its 24 tests failed on main from these defects and stale test calls). test_storage_integrations.py covers storage dispatch into the queue and the dashboard's queue status (9 of 11 failed on main because its enroll helper never awaited the request, which also hid the product defect); its new harness-source test covers create_session. The selected harness goal test steps the queue through a reviewed harness follow-up.",
+  "exclusions": "No UI, native or frontend code changed. Playwright area storage-integrations matches storage_integrations.py but is excluded: its real-Core fixture spawns a Core whose provider admission is held by this shared host's CPU pressure gate (load ~40 on 8 CPUs from parallel agents), so it cannot complete here, and real-core.spec.ts is not run on main. assistant-queue-core keeps its queue paused and never dispatches; assistant-queue-reconciliation and chat-provider-queue are mocked. The real-Core dispatch journey was checked instead on scratch Postgres Cores through the same queue API the UI uses (main: follow-up stuck at sending with a never-started turn; this branch: two follow-ups queued during a running response sent in order afterwards and the queue drained). Other suites that import the queue helpers (test_chat_decisions, test_chat_catchup, test_chat_polling_cost, the rest of test_harness_chat_goals) fail identically or only on main at 5ae5b88 for unrelated reasons (un-awaited fork_session in a test, un-awaited AsyncSession.scalar in chat_catchup.py, harness goal runtime switch preconditions).",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 178,
+    "python": 37,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_reconciliation.py",
-    "tests/v3/test_process_identity.py",
-    "tests/v3/test_runtime_processes.py::test_invalid_private_bootstrap_is_bounded_and_does_not_report_credentials",
-    "tests/v3/test_runtime_processes.py::test_only_one_supervisor_holds_a_data_directory",
-    "tests/v3/test_runtime_processes.py::test_worker_survives_host_close_and_is_rediscovered_with_retained_assets",
-    "tests/v3/test_runtime_processes.py::test_graceful_retirement_reaps_only_an_empty_worker",
-    "tests/v3/test_runtime_processes.py::test_real_api_role_requires_both_private_channel_and_public_auth",
-    "tests/v3/test_runtime_processes.py::test_real_api_promotion_keeps_old_worker_until_replacement_is_ready",
-    "tests/v3/test_runtime_processes.py::test_published_worker_survives_cancellation_after_committed_readiness",
-    "tests/v3/test_runtime_processes.py::test_refused_third_version_does_not_create_an_orphan_credential",
-    "tests/v3/test_runtime_processes.py::test_nonreading_bootstrap_child_cannot_block_supervisor_timeouts",
-    "tests/v3/test_runtime_processes.py::test_actual_supervisor_process_exit_leaves_worker_reachable",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_runtime_worker_features.py",
-    "tests/v3/test_runtime_http.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_runtime_auto_recovery.py"
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_harness_chat_goals.py::test_reviewed_follow_up_releases_completed_harness_goal_handoff"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "6a223db539732c6d77ab09a5635d6fa33f9475a2e5f450f47d6ccffdac611be7"
+  "change_digest": "7e1a00a1edadb5fe6c3344d6c6abe11841681aed5b25f5550ed9207d3798ea25"
 }

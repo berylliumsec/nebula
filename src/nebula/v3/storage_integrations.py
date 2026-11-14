@@ -576,7 +576,7 @@ class StorageIntegrationService:
             incident = incident_by_id.get(dispatch.incident_id)
             if incident and dispatch.status == "queued":
                 try:
-                    queue = self.chat_queue.get(incident.chat_session_id)
+                    queue = await self.chat_queue.get(incident.chat_session_id)
                     item = next(
                         (
                             item
@@ -780,7 +780,7 @@ class StorageIntegrationService:
             # diagnostic-expected: the first dispatch creates its linked chat.
             harness_session_id = None
             if source.backend == ChatBackend.HARNESS:
-                harness_session = self.harness_runtime.create_session(
+                harness_session = await self.harness_runtime.create_session(
                     engagement_id=source.engagement_id,
                     profile_id=source.profile_id,
                     model=source.model,
@@ -825,13 +825,13 @@ class StorageIntegrationService:
             tools_enabled=False,
             allow_subagents=False,
         )
-        queue = self.chat_queue.get(chat.id)
-        self.chat_queue.write(
+        queue = await self.chat_queue.get(chat.id)
+        await self.chat_queue.write(
             chat.id,
             QueueWrite(
                 action="enqueue",
                 expected_revision=queue.revision
-                if self.chat_queue.exists(chat.id)
+                if await self.chat_queue.exists(chat.id)
                 else 0,
                 idempotency_key=dispatch.id,
                 request=request,
