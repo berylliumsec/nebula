@@ -191,12 +191,45 @@ async def test_project_retirement_uses_its_own_hold_and_releases_exact_owner(hos
         lane="control",
     )
 
+    # Releasing the only worker would strand saved project work, so the
+    # project is not idle until its commands have run.
+    assert await coordinator.request_project_retirement(lease) is False
+    async with coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert (owner.runtime_id, owner.retirement_requested) == (runtime_id, False)
+    for lane in ("work", "control"):
+        claimed = await coordinator.coordination.claim_next(lease, lane=lane)
+        assert claimed is not None
+        await coordinator.coordination.finish_command(
+            lease, claimed.receipt.command_id, result={"ok": True}
+        )
     assert await coordinator.request_project_retirement(lease) is True
+    # The hold blocks every lane, including a control row an older API saved
+    # before this check existed.
+    async with coordinator.database.session() as session:
+        session.add(
+            RuntimeCommandRow(
+                id="legacy-control-row",
+                project_id="one",
+                actor_id="operator",
+                idempotency_key="legacy-control-row",
+                sequence=99,
+                name="approval.decision",
+                lane="control",
+                payload={},
+                payload_hash="0" * 64,
+                accepted_at_ms=0,
+                state="queued",
+            )
+        )
     for lane in (None, "work", "control"):
         assert await coordinator.coordination.claim_next(lease, lane=lane) is None
     async with coordinator.database.session() as session:
-        queued_control = await session.get(RuntimeCommandRow, control.command_id)
+        queued_control = await session.get(RuntimeCommandRow, "legacy-control-row")
         assert queued_control is not None and queued_control.state == "queued"
+        assert (await session.get(RuntimeCommandRow, control.command_id)).state == (
+            "succeeded"
+        )
     checkpoint = await coordinator.quiesce_checkpoint(lease, local_blockers=[])
     assert checkpoint["project_id"] == "one"
     await coordinator.release_quiesced_project(lease, checkpoint=checkpoint)

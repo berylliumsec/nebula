@@ -89,7 +89,8 @@ class RuntimeRouting:
     async def _demand(self, project_id: str):
         if self.request_admission and project_id != GLOBAL_EXECUTION_PROJECT:
             # Keep a stable fencing counter for project references, but leave
-            # worker demand to chat-start/open-chat reconciliation.
+            # worker demand to auto-admission: open chats, chat starts and
+            # queued project commands. Reads never admit a worker.
             async with self.coordination._write() as session:
                 await self.coordination._ensure_project(session, project_id)
 

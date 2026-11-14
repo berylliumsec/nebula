@@ -35,6 +35,7 @@ from .database import (
     ProjectHandoffRow,
     RuntimeProcessRow,
 )
+from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from .domain import utc_now
 
 HEARTBEAT_SECONDS = 5
@@ -71,6 +72,31 @@ class DeploymentChanged(OperationRejected):
     A caller whose request depends only on the current state, not on what it
     reviewed, may read the new revision and ask again.
     """
+
+
+class ProjectRetiring(CoordinationConflict):
+    """The project's worker is releasing it; the same request can be retried."""
+
+
+def project_worker_commands(project_id, states: Sequence[str] = ("queued",)) -> Any:
+    """SQL EXISTS for commands in ``states`` that only the project's worker runs.
+
+    Project edits, deletion and every other project-routed write are delivered
+    to the execution worker, so a queued one needs a worker even when the
+    project has no open chat. Work-batch barriers are committed by the host.
+    A running row without an owner belongs to an earlier worker; recovery or
+    operator review resolves it, not a new worker.
+    """
+    return (
+        select(RuntimeCommandRow.id)
+        .where(
+            RuntimeCommandRow.project_id == project_id,
+            RuntimeCommandRow.project_id != GLOBAL_EXECUTION_PROJECT,
+            RuntimeCommandRow.state.in_(tuple(states)),
+            RuntimeCommandRow.name != _BATCH_BARRIER,
+        )
+        .exists()
+    )
 
 
 @dataclass(frozen=True)
@@ -518,7 +544,7 @@ class RuntimeCoordination:
             await self._ensure_project(session, project_id)
             owner = await session.get(ProjectOwnershipRow, project_id)
             if owner is not None and owner.retirement_requested:
-                raise CoordinationConflict(
+                raise ProjectRetiring(
                     "the project worker is closing; retry the request after retirement"
                 )
             sequence = await session.scalar(
@@ -531,7 +557,7 @@ class RuntimeCoordination:
                 .returning(ProjectOwnershipRow.command_sequence)
             )
             if sequence is None:
-                raise CoordinationConflict(
+                raise ProjectRetiring(
                     "the project worker is closing; retry the request after retirement"
                 )
             await self._insert_absent(
