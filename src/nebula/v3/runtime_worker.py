@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, NoReturn
 
 import uvicorn
 from sqlalchemy import select, text
@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .database import (
     Database,
+    transient_database_error,
     ProjectHandoffRow,
     ProviderToolManifestRow,
     RuntimeChatBindingRow,
@@ -27,8 +28,9 @@ from .database import (
 from .database_pool import PoolSettings
 from .deployment_protocol import ReleaseManifest
 from .deployments import DeploymentCoordinator
+from .diagnostics import record_caught_exception, record_diagnostic
 from .release_store import ReleaseStore
-from .runtime_coordination import HEARTBEAT_SECONDS
+from .runtime_coordination import HEARTBEAT_SECONDS, LeaseLost, LeaseRenewal
 from .runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
@@ -54,9 +56,74 @@ class WorkerContext:
     manifest: ReleaseManifest
     secret: bytes = field(repr=False)
     rpc: RuntimeRpcServer = field(repr=False)
+    # The heartbeat's proof that this incarnation's leases are still live.
+    renewal: LeaseRenewal = field(default_factory=LeaseRenewal, repr=False)
 
 
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
+
+
+async def keep_lease(
+    renew: Callable[[], Awaitable[None]],
+    renewal: LeaseRenewal,
+    *,
+    interval: float,
+) -> NoReturn:
+    """Renew this incarnation's leases until ownership can no longer be proven.
+
+    The first renewal runs at once. Afterwards a refused, reset or timed-out
+    SQL connection is retried with backoff for as long as the last renewal
+    SQL acknowledged still proves the leases live (``LeaseRenewal``); an
+    attempt still unanswered when that bound is spent is abandoned. LeaseLost
+    or any other answer from SQL ends at once. This returns only by raising,
+    and the caller then stops the worker as before.
+    """
+    failures = 0
+    cause: BaseException | None = None
+    while True:
+        if renewal.spent:
+            raise LeaseLost(
+                "SQL stayed unreachable until this runtime could no longer prove "
+                "its lease; it stops before the lease can expire"
+            ) from cause
+        started = renewal.clock()
+        try:
+            if renewal.renewed_at is None:
+                await renew()
+            else:
+                async with asyncio.timeout(renewal.remaining()):
+                    await renew()
+        except Exception as error:
+            if renewal.renewed_at is None or not transient_database_error(error):
+                raise
+            cause = error
+            failures += 1
+            if failures == 1:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.lease.renewal_waiting",
+                    "A lease renewal failed while SQL was unreachable; it is retried only while the leases are provably live.",
+                    error,
+                    stage="lease",
+                    metadata={"seconds_left": round(renewal.remaining(), 1)},
+                )
+            await asyncio.sleep(
+                min(interval, 0.25 * 2 ** min(failures - 1, 5), renewal.remaining())
+            )
+            continue
+        renewal.renewed(started)
+        if failures:
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.lease.renewed_after_outage",
+                "SQL returned before this worker's leases could expire; it kept running.",
+                outcome="recovered",
+                stage="lease",
+                metadata={"failed_attempts": failures},
+            )
+        failures, cause = 0, None
+        await asyncio.sleep(interval)
 
 
 async def run_migration(bootstrap: MigrationBootstrap) -> dict:
@@ -183,6 +250,9 @@ async def run_worker(
         PoolSettings(**bootstrap.pool_settings) if bootstrap.pool_settings else None
     )
     database = Database(bootstrap.database, bootstrap=False, pool_settings=settings)
+    renewal = LeaseRenewal()
+    # Sessions wait out a short SQL outage only while the leases are provable.
+    database.ride_out_outages(renewal.remaining)
     coordinator = DeploymentCoordinator(database)
     heartbeat = None
     server = None
@@ -287,7 +357,9 @@ async def run_worker(
 
             factory = execution_factory or execution_application
         rpc = RuntimeRpcServer(secret)
-        context = WorkerContext(bootstrap, database, coordinator, manifest, secret, rpc)
+        context = WorkerContext(
+            bootstrap, database, coordinator, manifest, secret, rpc, renewal
+        )
 
         async def identity(payload):
             if payload:
@@ -318,18 +390,20 @@ async def run_worker(
         rpc.register("worker.shutdown", shutdown)
 
         async def pulse():
-            while True:
-                await asyncio.sleep(HEARTBEAT_SECONDS)
-                try:
-                    await coordinator.coordination.heartbeat(
+            try:
+                await keep_lease(
+                    lambda: coordinator.coordination.heartbeat(
                         bootstrap.identity.runtime_id
-                    )
-                except BaseException:
-                    if server is not None:
-                        server.should_exit = True
-                    raise
+                    ),
+                    renewal,
+                    interval=HEARTBEAT_SECONDS,
+                )
+            except BaseException:
+                if server is not None:
+                    server.should_exit = True
+                raise
 
-        # diagnostic-expected: heartbeat failure requests server exit and is awaited before the worker returns.
+        # diagnostic-expected: lost or unprovable leases request server exit and are awaited before the worker returns.
         heartbeat = asyncio.create_task(pulse(), name="nebula-worker-heartbeat")
         async with factory(context) as application:
             private = PrivateRuntimeHttp(application, secret)

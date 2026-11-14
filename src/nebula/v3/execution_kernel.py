@@ -2450,7 +2450,18 @@ def create_execution_kernel(
                             exc,
                             stage="schedule",
                         )
-                    await provider_chat.runtime_switcher.reconcile()
+                    try:
+                        await provider_chat.runtime_switcher.reconcile()
+                    except Exception as exc:
+                        # The worker rides out a short SQL outage; one failed
+                        # read must not stop schedules and recovery for good.
+                        record_caught_exception(
+                            "chat",
+                            "chat.runtime_switch_reconcile_failed",
+                            "Waiting model switches could not be read; the next pass retries.",
+                            exc,
+                            stage="runtime-switch",
+                        )
                     # Its scans run asynchronously and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
