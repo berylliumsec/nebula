@@ -124,6 +124,20 @@ class CoreAuthentication:
             and self.secrets_equal(origin, f"{scheme}://{host}")
         )
 
+    async def presents_credential(self, scope: dict) -> bool:
+        """Whether a request carries the operator token or a live paired-device
+        session. It authorizes nothing: the stable listener uses it only to
+        choose forwarding capacity, and the receiving worker still runs
+        `require_auth` in full (CSRF, Origin and expiry included)."""
+        if self.allow_unauthenticated:
+            return True
+        request = Request(scope)
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() == "bearer" and self.secrets_equal(token, self.token):
+            return True
+        cookie = request.cookies.get("nebula_device")
+        return bool(cookie) and await self.device_for_token(cookie) is not None
+
     async def require_bearer_auth(
         self,
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),

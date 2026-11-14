@@ -15,10 +15,14 @@ import uvicorn
 from websockets.asyncio.client import unix_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from nebula.v3.deployment_protocol import IPC_PROTOCOL
 from nebula.v3.runtime_http import (
+    _REPLAY_WINDOW,
+    _SEQUENCE_TAG,
     HttpUpstream,
     PrivateRuntimeHttp,
     RuntimeHttpProxy,
+    _signature,
     internal_headers,
 )
 from nebula.v3.runtime_ipc import RuntimeIpcError
@@ -113,7 +117,30 @@ async def test_private_nonce_replay_does_not_dispatch_twice():
     assert calls == [True]
 
 
+def signed(key, nonce, *, lane="read", stamp=1000, scheme="http"):
+    """Private headers with an explicit nonce, as any sender version may sign."""
+    stamp = str(stamp)
+    return [
+        (b"x-nebula-internal-protocol", IPC_PROTOCOL.encode()),
+        (b"x-nebula-internal-time", stamp.encode()),
+        (b"x-nebula-internal-nonce", nonce.encode()),
+        (b"x-nebula-internal-scheme", scheme.encode()),
+        (b"x-nebula-internal-lane", lane.encode()),
+        (b"x-nebula-internal-client", b""),
+        (
+            b"x-nebula-internal-mac",
+            _signature(key, stamp, nonce, scheme, lane, "").encode(),
+        ),
+    ]
+
+
+def numbered(epoch, number):
+    return f"{_SEQUENCE_TAG}{epoch}{number:016x}"
+
+
 async def test_viewer_nonce_saturation_leaves_control_capacity_available():
+    # Unnumbered nonces come from senders older than numbered replay
+    # protection; they keep the bounded per-lane sets.
     key = secrets.token_bytes(32)
     app = FastAPI()
 
@@ -121,21 +148,146 @@ async def test_viewer_nonce_saturation_leaves_control_capacity_available():
     async def call():
         return {"accepted": True}
 
+    gate = PrivateRuntimeHttp(
+        app, key, clock=lambda: 1000, nonce_capacity=1, control_nonce_capacity=1
+    )
+    first = signed(key, "0" * 48)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gate), base_url="http://local"
+    ) as client:
+        assert (await client.get("/call", headers=first)).status_code == 200
+        assert (
+            await client.get("/call", headers=signed(key, "1" * 48))
+        ).status_code == 429
+        assert (
+            await client.post("/call", headers=signed(key, "2" * 48, lane="control"))
+        ).status_code == 200
+        assert (await client.get("/call", headers=first)).status_code == 409
+        # A numbered sender never draws on that bounded capacity.
+        assert (
+            await client.get("/call", headers=signed(key, numbered("a" * 24, 1)))
+        ).status_code == 200
+
+
+async def test_relayed_requests_are_never_refused_for_volume():
+    """The listener signs every public request before its caller is
+    authenticated, so no volume of relayed requests may spend the capacity an
+    operator's Stop or decision needs."""
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+    calls = []
+
+    @app.api_route("/call", methods=["GET", "POST"])
+    async def call(request: Request):
+        calls.append(request.method)
+        return {"accepted": True}
+
     gate = PrivateRuntimeHttp(app, key, nonce_capacity=1, control_nonce_capacity=1)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=gate), base_url="http://local"
     ) as client:
+        for lane, method in (("control", "POST"), ("work", "POST"), ("read", "GET")):
+            for _ in range(300):
+                response = await client.request(
+                    method, "/call", headers=internal_headers(key, "http", lane=lane)
+                )
+                assert response.status_code == 200, (lane, response.text)
+    assert len(calls) == 900
+    assert not any(gate.seen.values())
+    # Replay memory follows the senders holding the key, not the requests.
+    assert len(gate.windows) == 3
+
+
+async def test_numbered_replays_are_refused_in_and_behind_the_window():
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+    calls = []
+
+    @app.post("/change")
+    async def change():
+        calls.append(True)
+        return {"saved": True}
+
+    gate = PrivateRuntimeHttp(app, key, clock=lambda: 1000)
+    epoch = secrets.token_hex(12)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gate), base_url="http://local"
+    ) as client:
+
+        async def send(number, lane="work"):
+            response = await client.post(
+                "/change", headers=signed(key, numbered(epoch, number), lane=lane)
+            )
+            return response.status_code
+
+        # Concurrent relays may arrive out of order; each is accepted once.
+        assert [await send(number) for number in (5, 3, 4)] == [200] * 3
+        assert [await send(number) for number in (3, 4, 5)] == [409] * 3
+        # A number is one request whatever lane it claims.
+        assert await send(4, lane="control") == 409
+        newest = 5 + _REPLAY_WINDOW
+        assert await send(newest) == 200
+        assert await send(newest) == 409
+        # Unseen and inside the window: accepted. Behind it: refused, since
+        # whether it was accepted is no longer known.
+        assert await send(6) == 200
+        assert await send(2) == 409
+    assert len(calls) == 5
+
+
+async def test_numbered_senders_are_forgotten_once_their_stamps_expire():
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+
+    @app.post("/change")
+    async def change():
+        return {"saved": True}
+
+    now = [1000]
+    gate = PrivateRuntimeHttp(app, key, clock=lambda: now[0], sender_capacity=2)
+    first, second, third = (secrets.token_hex(12) for _ in range(3))
+    replayed = signed(key, numbered(first, 1))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gate), base_url="http://local"
+    ) as client:
+        assert (await client.post("/change", headers=replayed)).status_code == 200
         assert (
-            await client.get("/call", headers=internal_headers(key, "http"))
+            await client.post("/change", headers=signed(key, numbered(second, 1)))
         ).status_code == 200
+        # Only key holders add senders; past the bound they are refused.
         assert (
-            await client.get("/call", headers=internal_headers(key, "http"))
+            await client.post("/change", headers=signed(key, numbered(third, 1)))
         ).status_code == 429
+        now[0] = 1031
+        assert (await client.post("/change", headers=replayed)).status_code == 401
         assert (
             await client.post(
-                "/call", headers=internal_headers(key, "http", lane="control")
+                "/change", headers=signed(key, numbered(third, 1), stamp=1031)
             )
         ).status_code == 200
+    assert list(gate.windows) == [third]
+
+
+def test_internal_headers_number_requests_per_receiver_lane_and_transport():
+    key, other = secrets.token_bytes(32), secrets.token_bytes(32)
+
+    def nonce(secret, scheme="http", lane="control"):
+        headers = dict(internal_headers(secret, scheme, lane=lane))
+        value = headers[b"x-nebula-internal-nonce"].decode()
+        # The 48-hex form receivers before numbering accept unchanged.
+        assert len(value) == 48 and set(value) <= set("0123456789abcdef")
+        assert value.startswith(_SEQUENCE_TAG)
+        return value[8:32], int(value[32:], 16)
+
+    epochs, numbers = zip(*(nonce(key) for _ in range(3)))
+    assert len(set(epochs)) == 1
+    assert [numbers[1] - numbers[0], numbers[2] - numbers[1]] == [1, 1]
+    others = {
+        nonce(key, lane="work")[0],
+        nonce(key, scheme="wss")[0],
+        nonce(other)[0],
+    }
+    assert epochs[0] not in others and len(others) == 3
 
 
 @pytest.mark.parametrize(

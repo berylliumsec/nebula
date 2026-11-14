@@ -252,7 +252,8 @@ async def test_promoted_api_controls_cross_first_hop_when_all_view_connections_a
                 assert response.status_code == 200 and response.json() == {
                     "control": "accepted"
                 }
-                assert len(gate.seen["control"]) == 1
+                # Held reads and the Stop are numbered on separate lanes.
+                assert len(gate.windows) == 2 and not any(gate.seen.values())
                 release.set()
                 assert all(
                     response.status_code == 200

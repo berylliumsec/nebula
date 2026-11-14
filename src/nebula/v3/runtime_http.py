@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 from http.cookiejar import CookieJar
+import itertools
 import json
 import os
 import secrets
@@ -71,6 +72,56 @@ def _signature(
     ).hexdigest()
 
 
+# Replay protection that no request volume can fill. A sender numbers its
+# requests per receiver key, lane and transport inside a random epoch, and the
+# authenticated nonce carries that number in the 48-hex form every receiver
+# accepts: tag (8) + epoch (24) + sequence number (16). A receiver remembers a
+# fixed window of numbers below the highest it accepted from each epoch, so its
+# memory grows with the senders holding its key, never with the requests they
+# relay. Nonces without the tag come from older senders and keep the bounded
+# nonce set.
+_SEQUENCE_TAG = "6e656275"
+_REPLAY_WINDOW = 1 << 16
+_WINDOW_MASK = (1 << _REPLAY_WINDOW) - 1
+_SEQUENCE_LIMIT = 1 << 64
+# Numberings one process keeps; an evicted one restarts in a new epoch.
+_SENDER_NUMBERINGS = 256
+# Fresh stamps are within 30 s of the receiver's clock; see PrivateRuntimeHttp.
+_FRESHNESS_SECONDS = 30
+
+
+class _Numbering:
+    __slots__ = ("epoch", "counter")
+
+    def __init__(self) -> None:
+        self.epoch = secrets.token_hex(12)
+        self.counter = itertools.count(1)
+
+
+_numberings: OrderedDict[tuple[bytes, str, str], _Numbering] = OrderedDict()
+# A forked child must never reuse its parent's epochs and numbers.
+os.register_at_fork(after_in_child=_numberings.clear)
+
+
+def _sequenced_nonce(secret: bytes, lane: str, transport: str) -> str:
+    key = (hashlib.sha256(secret).digest(), lane, transport)
+    numbering = _numberings.get(key)
+    number = next(numbering.counter) if numbering is not None else _SEQUENCE_LIMIT
+    if number >= _SEQUENCE_LIMIT:
+        numbering = _numberings[key] = _Numbering()
+        number = next(numbering.counter)
+    _numberings.move_to_end(key)
+    while len(_numberings) > _SENDER_NUMBERINGS:
+        _numberings.popitem(last=False)
+    return f"{_SEQUENCE_TAG}{numbering.epoch}{number:016x}"
+
+
+def _sequence(nonce: str) -> tuple[str, int] | None:
+    if not nonce.startswith(_SEQUENCE_TAG):
+        return None
+    return nonce[8:32], int(nonce[32:], 16)
+
+
 async def _runtime_unavailable(scope, receive, send) -> None:
     await JSONResponse(
         {
@@ -124,7 +175,8 @@ def internal_headers(
         )
     address = json.dumps(client, separators=(",", ":")) if client is not None else ""
     _client_address(address)
-    stamp, nonce = str(int(clock())), secrets.token_hex(24)
+    stamp = str(int(clock()))
+    nonce = _sequenced_nonce(secret, lane, "ws" if scheme in {"ws", "wss"} else "http")
     return [
         (b"x-nebula-internal-protocol", IPC_PROTOCOL.encode()),
         (b"x-nebula-internal-time", stamp.encode()),
@@ -143,7 +195,12 @@ class PrivateRuntimeHttp:
     """Authenticate an owner-only local channel, preserving public authority.
 
     Client metadata and lane are authenticated, never taken from public forwarded
-    headers. Control replay capacity is separate from work and viewer traffic.
+    headers. The stable listener signs every public request before the API worker
+    authenticates its caller, so replay state must not be a request budget:
+    numbered requests are checked against a per-sender window and are never
+    refused for volume. Only nonces from older, unnumbered senders use the
+    bounded per-lane sets, where control capacity is separate from work and
+    viewer traffic.
     """
 
     def __init__(
@@ -154,11 +211,13 @@ class PrivateRuntimeHttp:
         clock: Callable[[], float] = time.time,
         nonce_capacity: int = 4096,
         control_nonce_capacity: int = 256,
+        sender_capacity: int = 1024,
     ):
         if (
             len(secret) != 32
             or not 1 <= nonce_capacity <= 4096
             or not 1 <= control_nonce_capacity <= 4096
+            or not 1 <= sender_capacity <= 4096
         ):
             raise ValueError(
                 "private forwarding requires bounded capacity and a 256-bit key"
@@ -172,6 +231,47 @@ class PrivateRuntimeHttp:
             "work": nonce_capacity,
             "control": control_nonce_capacity,
         }
+        # Numbered senders by epoch: [highest number, bitmap of accepted
+        # numbers ending at it, newest accepted stamp]. Only holders of the
+        # key can add an epoch; a process adds a few per receiver.
+        self.windows: dict[str, list[int]] = {}
+        self.sender_capacity = sender_capacity
+        self._swept = 0
+
+    def _forget_stale_senders(self, now: int) -> None:
+        # Every request of an epoch whose newest stamp is no longer fresh is
+        # refused by the stamp check, so its window can no longer matter.
+        self._swept = now
+        for epoch, window in list(self.windows.items()):
+            if window[2] < now - _FRESHNESS_SECONDS:
+                del self.windows[epoch]
+
+    def _admit_numbered(self, epoch: str, number: int, stamp: int, now: int) -> int:
+        """Record one numbered request: 0, or 409 for a replay or a number too
+        far behind its sender's newest, or 429 when key holders exceed the
+        sender bound."""
+        window = self.windows.get(epoch)
+        if window is None:
+            if len(self.windows) >= self.sender_capacity:
+                self._forget_stale_senders(now)
+                if len(self.windows) >= self.sender_capacity:
+                    return 429
+            self.windows[epoch] = [number, 1, stamp]
+            return 0
+        highest, accepted, newest = window
+        if number > highest:
+            shift = number - highest
+            accepted = (
+                (accepted << shift | 1) & _WINDOW_MASK if shift < _REPLAY_WINDOW else 1
+            )
+            highest = number
+        else:
+            offset = highest - number
+            if offset >= _REPLAY_WINDOW or accepted >> offset & 1:
+                return 409
+            accepted |= 1 << offset
+        window[:] = [highest, accepted, max(newest, stamp)]
+        return 0
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
@@ -202,7 +302,7 @@ class PrivateRuntimeHttp:
             protocol == IPC_PROTOCOL
             and stamp.isdecimal()
             and len(stamp) <= 20
-            and abs(now - int(stamp)) <= 30
+            and abs(now - int(stamp)) <= _FRESHNESS_SECONDS
             and len(nonce) == 48
             and all(char in "0123456789abcdef" for char in nonce)
             and len(supplied) == 64
@@ -222,11 +322,16 @@ class PrivateRuntimeHttp:
             valid = False
         for seen in self.seen.values():
             for old, timestamp in list(seen.items()):
-                if timestamp < now - 30:
+                if timestamp < now - _FRESHNESS_SECONDS:
                     seen.pop(old)
+        if now != self._swept:
+            self._forget_stale_senders(now)
+        numbered = _sequence(nonce) if valid else None
         status = (
             401
             if not valid
+            else self._admit_numbered(*numbered, int(stamp), now)
+            if numbered is not None
             else 409
             if any(nonce in seen for seen in self.seen.values())
             else 429
@@ -248,7 +353,8 @@ class PrivateRuntimeHttp:
                     status_code=status,
                 )(scope, receive, send)
             return
-        self.seen[lane][nonce] = int(stamp)
+        if numbered is None:
+            self.seen[lane][nonce] = int(stamp)
         selected = {
             **scope,
             "scheme": scheme,

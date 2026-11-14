@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from builtins import BaseExceptionGroup
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket
@@ -33,7 +33,7 @@ from .release_store import ReleaseStore
 from .memory_policy import MemoryBudgetError
 from .runtime_coordination import CoordinationConflict, OperationRejected, ProjectLease
 from .runtime_bootstrap import RuntimeBootstrap
-from .runtime_http import RuntimeHttpProxy
+from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_identity import mount_runtime_identity
 from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
@@ -165,7 +165,7 @@ class RuntimeSupervisor:
         self.routing = RuntimeRouting(
             self.coordinator.coordination, host.credentials.directory
         )
-        self.proxy = RuntimeHttpProxy(self.routing.api_upstream)
+        self.proxy = RuntimeHttpProxy(self._api_upstream)
         self.bootstrap = RuntimeBootstrap(self.coordinator, self.routing)
         self._recovery_version = recovery_version
         self._shutdown_requested = shutdown_requested
@@ -285,6 +285,23 @@ class RuntimeSupervisor:
             await self.proxy(websocket.scope, websocket.receive, websocket.send)
 
         self.app = _Availability(api, self)
+
+    async def _api_upstream(self, scope: dict) -> HttpUpstream:
+        """Forward to the promoted API worker on the request's lane.
+
+        The control lane is reserved capacity (its own connections and replay
+        numbering) so an operator can Stop or decide while viewers are busy.
+        Its paths alone would let any caller occupy it, for example with
+        uploads that never finish. A request without a credential therefore
+        travels as ordinary work, and the API worker authenticates and answers
+        it exactly as before.
+        """
+        upstream = await self.routing.api_upstream(scope)
+        if upstream.lane == "control" and not (
+            await self.authentication.presents_credential(scope)
+        ):
+            return replace(upstream, lane="work")
+        return upstream
 
     async def start(self):
         async with self._operations:
