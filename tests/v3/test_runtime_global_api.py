@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from nebula.v3.api_worker import create_api_worker
 from nebula.v3.database import (
+    EntityRow,
     Database,
     DeploymentHostRow,
     ProjectOwnershipRow,
@@ -278,3 +279,68 @@ async def test_goal_conversation_creation_marks_exact_project_chat_start(global_
         assert command.name == "http.invoke/v1"
         assert command.chat_start is True
         assert owner.runtime_id is None and owner.admission_requested is False
+
+
+async def test_a_committed_global_write_answers_with_its_receipt_when_viewers_are_busy(
+    global_api, monkeypatch
+):
+    """A busy viewer must not turn a saved project into a resubmittable 429."""
+    from nebula.v3 import api_worker as api_worker_module
+
+    unlocked = asyncio.Semaphore
+    slots: list[tuple[int, asyncio.Semaphore]] = []
+
+    def recorded(value=1):
+        slot = unlocked(value)
+        slots.append((value, slot))
+        return slot
+
+    monkeypatch.setattr(api_worker_module.asyncio, "Semaphore", recorded)
+    busy_app = create_api_worker(
+        global_api.store,
+        global_api.app.state.runtime_delivery,
+        operator_token=TOKEN,
+        project_for=global_api.routing.project_for,
+        upstream_for=None,
+        command_start_timeout=0.03,
+        poll_interval=0.01,
+        maximum_waiting_views=2,
+        maximum_control_views=1,
+    )
+    monkeypatch.setattr(api_worker_module.asyncio, "Semaphore", unlocked)
+    control = next(slot for value, slot in slots if value == 1)
+    await control.acquire()  # every control viewer is busy
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=busy_app), base_url="https://synthetic.test"
+    ) as busy:
+        created = await busy.post(
+            "/api/v1/engagements",
+            headers={**AUTH, "Idempotency-Key": "busy-create"},
+            json={"name": "Created while viewers are busy"},
+        )
+        # Before, this was 429 "reconnect using the saved request ID" with no
+        # ID, although the project was already saved.
+        assert created.status_code == 202, created.text
+        command_id = created.headers["X-Nebula-Command-Id"]
+        saved = await busy.get(
+            f"/api/v1/runtime/requests/{command_id}/response", headers=AUTH
+        )
+        assert saved.status_code == 201, saved.text
+        project = saved.json()
+
+    retried = await global_api.client.post(
+        "/api/v1/engagements",
+        headers={**AUTH, "Idempotency-Key": "busy-create"},
+        json={"name": "Created while viewers are busy"},
+    )
+    assert retried.status_code == 201
+    assert retried.json()["id"] == project["id"]
+    async with global_api.database.session() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(EntityRow)
+                .where(EntityRow.kind == "engagements")
+            )
+            == 1
+        )
