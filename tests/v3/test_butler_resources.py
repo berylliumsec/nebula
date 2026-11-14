@@ -486,4 +486,59 @@ async def test_native_mission_attempt_usage_signals_account_check_after_commit(
     assert observed == [("provider", 4)]
 
 
+async def test_use_of_a_provider_without_account_credits_schedules_no_failed_check(
+    tmp_path, monkeypatch
+):
+    """Every provider's use signals the observer; only OpenRouter is read."""
+
+    monkeypatch.setenv("NEBULA_MANAGEMENT_TEST_KEY", "management-only")
+    store = NebulaStore(tmp_path / "credits.db")
+    (
+        await store.create(
+            ProviderProfile(
+                id="local", name="Local model", provider_type="openai_compatible"
+            )
+        )
+    )
+    (
+        await store.create(
+            ProviderProfile(
+                id="openrouter",
+                name="OpenRouter",
+                provider_type="openrouter",
+                openrouter_management_secret_ref=MANAGEMENT_REF,
+            )
+        )
+    )
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, json={"data": {"total_credits": 40, "total_usage": 20}}
+        )
+
+    observer = OpenRouterCreditObserver(
+        store, CredentialStore(), transport=httpx.MockTransport(handler)
+    )
+    (await observer.startup())
+    try:
+        # A local model's use, a profile deleted after its use was signaled,
+        # and an OpenRouter profile's use.
+        for provider_id in ("local", "deleted", "openrouter"):
+            observer.schedule(provider_id)
+        await asyncio.sleep(0)
+        scheduled = list(observer._scheduled)
+        assert len(scheduled) == 3
+        outcomes = await asyncio.gather(*scheduled, return_exceptions=True)
+    finally:
+        (await observer.shutdown())
+
+    # Before the fix, the local and deleted profiles' checks failed and were
+    # logged as Butler errors after every chat turn.
+    assert [o for o in outcomes if isinstance(o, BaseException)] == []
+    assert [o.provider_id for o in outcomes if o is not None] == ["openrouter"]
+    assert len(requests) == 1
+
+
 pytestmark = pytest.mark.anyio
