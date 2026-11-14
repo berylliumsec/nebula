@@ -50,6 +50,7 @@ from .runtime_coordination import (
     DeploymentChanged,
     LEASE_MS,
     LeaseLost,
+    OperationRejected,
     ProjectLease,
     RuntimeCoordination,
     ShutdownBlocked,
@@ -502,17 +503,45 @@ class DeploymentCoordinator:
                 },
             )
 
+    async def _require_startable_target(self, session, host, release) -> None:
+        """Refuse an execution target that no new worker could start as.
+
+        Automatic admission and expired-owner recovery start workers at the
+        target, and ``reserve_worker`` refuses a third resident execution
+        version. Recording such a target would leave new and recovering
+        projects waiting for a worker that never starts.
+        """
+        if await self._compatible(
+            session,
+            ReleaseManifest.model_validate(release.manifest),
+            role="execution",
+        ):
+            return
+        resident = sorted(
+            set(
+                await session.scalars(
+                    select(RuntimeProcessRow.version).where(
+                        RuntimeProcessRow.role == "execution",
+                        RuntimeProcessRow.state.in_(_RESIDENT),
+                    )
+                )
+            )
+        )
+        raise OperationRejected(
+            f"Release {release.version} cannot become the execution target: "
+            f"execution versions {', '.join(resident)} are resident and at most "
+            f"{MAX_EXECUTION_VERSIONS} can run at once, so its workers could not "
+            "start. Move projects off one of those versions and retire it first. "
+            f"The execution target stays {host.target_version or 'unset'}."
+        )
+
     async def target_execution(self, version: str) -> None:
         async with self.coordination._write() as session:
             host = await self._host(session)
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("candidate is not installed")
-            await self._compatible(
-                session,
-                ReleaseManifest.model_validate(release.manifest),
-                role="execution",
-            )
+            await self._require_startable_target(session, host, release)
             if host.target_version != version:
                 host.rollback_version, host.target_version = (
                     host.target_version,
@@ -568,11 +597,7 @@ class DeploymentCoordinator:
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("rollback code is not retained")
-            await self._compatible(
-                session,
-                ReleaseManifest.model_validate(release.manifest),
-                role="execution",
-            )
+            await self._require_startable_target(session, host, release)
             host.rollback_version, host.target_version = host.target_version, version
             host.revision += 1
             await self._receipt(
