@@ -112,3 +112,17 @@ async def test_revision_change_before_shutdown_is_rejected_without_effect(host):
         saved = await session.get(DeploymentHostRow, "host")
         assert not saved.shutdown_requested
         assert saved.revision == stale + 1
+
+
+async def test_project_label_is_one_bounded_line(host):
+    from nebula.v3.domain import Engagement
+
+    coordinator, store = host
+    await store.create(
+        Engagement(id="shaped", name='Red "Team"\n\tShutdown blocked: ' + "x" * 200)
+    )
+    label = await coordinator.project_label("shaped")
+    assert label == (
+        "Project \"Red 'Team' Shutdown blocked: " + "x" * 51 + '" (shaped)'
+    )
+    assert await coordinator.project_label("missing") == "Project missing"

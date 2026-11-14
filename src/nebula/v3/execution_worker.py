@@ -267,9 +267,10 @@ class ProjectExecution:
             try:
                 self.quiesce_proof = await self._prepare_quiescence()
             except (CoordinationConflict, RuntimeIpcError) as error:
-                # diagnostic-expected: a refused quiescence returns its blockers before any controller cleanup begins.
-                # A signed refusal proves no controller cleanup began. This
-                # lets the host reopen admission so the blocker can be resolved.
+                # diagnostic-expected: a refused quiescence returns its blockers before this call stops any controller.
+                # This call stopped nothing (a failed worker stopped earlier
+                # and keeps its grant). The host may reopen admission so the
+                # blocker can be resolved.
                 return {
                     **await self.status({}),
                     "quiesce_blockers": [str(error)[:4000]],

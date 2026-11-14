@@ -584,9 +584,13 @@ class DeploymentCoordinator:
                     EntityRow.id == project_id, EntityRow.kind == "engagements"
                 )
             )
-        if isinstance(name, str) and name.strip():
-            return f'Project "{name.strip()[:120]}" ({project_id})'
-        return f"Project {project_id}"
+        # The name is the operator's own label; keep it one bounded line so a
+        # receipt or host detail cannot be reshaped by its characters.
+        if not isinstance(name, str):
+            return f"Project {project_id}"
+        printable = "".join(c if c.isprintable() else " " for c in name)
+        name = " ".join(printable.split()).replace('"', "'")[:80]
+        return f'Project "{name}" ({project_id})' if name else f"Project {project_id}"
 
     async def record_execution_failure(
         self, lease: ProjectLease, *, detail: str, cleanup_complete: bool

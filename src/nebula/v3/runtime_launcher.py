@@ -325,7 +325,7 @@ def connection_frame(value: dict, token: str) -> dict:
 # Workers that start or retire move the deployment revision while a shutdown
 # waits for the host. Such a refusal proves nothing changed, so runtime-stop
 # reads the new revision and asks again until the deployment settles.
-SHUTDOWN_SETTLE_SECONDS = 120
+SHUTDOWN_SETTLE_SECONDS = 60
 
 
 def _changed_before_shutdown(receipt: dict) -> bool:

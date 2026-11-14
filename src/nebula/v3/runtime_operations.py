@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from .database import DeploymentOperationRow
 from .deployments import DeploymentCoordinator, _checkpoint
+from .diagnostics import record_caught_exception
 from .runtime_coordination import CoordinationConflict, OperationRejected
 from .runtime_ipc import RuntimeIpcError
 
@@ -92,6 +93,24 @@ class DeploymentOperations:
         except BaseException as error:
             error_type = type(error).__name__
             rejected = isinstance(error, OperationRejected)
+            # The receipt below is what the operator reads; this keeps the
+            # failure's type and chain, never its text, in Core diagnostics.
+            record_caught_exception(
+                "runtime",
+                "runtime.deployment_operation.rejected"
+                if rejected
+                else "runtime.deployment_operation.unconfirmed",
+                "A deployment operation was refused before any effect."
+                if rejected
+                else "A deployment operation did not confirm its result.",
+                error,
+                stage="deployment",
+                metadata={
+                    "action": action,
+                    "entity_id": operation_id,
+                    "kind": "deployment-operation",
+                },
+            )
             detail = (
                 str(error)[:4000]
                 if rejected

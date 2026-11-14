@@ -156,3 +156,36 @@ async def test_get_after_host_replacement_classifies_abandoned_operation_without
     first = await new.status("abandoned", actor_id="operator")
     assert first["state"] == "uncertain"
     assert await new.status("abandoned", actor_id="operator") == first
+
+
+async def test_unconfirmed_operation_is_diagnosed_without_its_text(
+    host, tmp_path, monkeypatch
+):
+    import json
+
+    from nebula.v3 import diagnostics
+    from nebula.v3.diagnostics import DiagnosticManager
+
+    manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+    try:
+
+        async def dispatch(_action, _parameters):
+            raise OSError("synthetic-private-path")
+
+        await DeploymentOperations(host[0]).execute(
+            operation_id="lost",
+            actor_id="operator",
+            action="shutdown",
+            parameters={"expected_revision": 1},
+            dispatch=dispatch,
+        )
+        assert manager.flush()
+        encoded = (manager.log_dir / "errors.log").read_text()
+    finally:
+        manager.close()
+    assert "synthetic-private-path" not in encoded
+    events = [json.loads(line) for line in encoded.splitlines()]
+    assert [event["event_code"] for event in events] == [
+        "runtime.deployment_operation.unconfirmed"
+    ]
