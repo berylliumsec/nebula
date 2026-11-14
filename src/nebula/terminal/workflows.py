@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,7 +34,12 @@ def record(shell: Shell, value: Any, prefix: str = "") -> None:
         shell.ui.say(prefix + str(value))
 
 
-async def message_picker(shell: Shell, *, users_only: bool = False) -> dict[str, Any]:
+async def message_picker(
+    shell: Shell,
+    *,
+    users_only: bool = False,
+    label: Callable[[dict[str, Any]], str] | None = None,
+) -> dict[str, Any]:
     view = shell.current()
     before: str | None = None
 
@@ -50,7 +56,9 @@ async def message_picker(shell: Shell, *, users_only: bool = False) -> dict[str,
         return [
             {
                 **item,
-                "name": f"{item['role']}: {terminal_text(item.get('content', ''))[:100]}",
+                "name": label(item)
+                if label
+                else f"{item['role']}: {terminal_text(item.get('content', ''))[:100]}",
             }
             for item in batch
             if visible_message(item) and (not users_only or item["role"] == "user")
@@ -63,6 +71,11 @@ async def message_picker(shell: Shell, *, users_only: bool = False) -> dict[str,
 
 
 async def chat(shell: Shell, args: list[str]) -> None:
+    from .conversations import bulk
+
+    if args and args[0] == "bulk":
+        await bulk(shell)
+        return
     view = shell.current()
     session = await shell.api.request("GET", f"chat-sessions/{key(view.session_id)}")
     if (session.get("metadata") or {}).get("control_assistant"):
@@ -80,8 +93,10 @@ async def chat(shell: Shell, args: list[str]) -> None:
         "rewind",
         "edit",
         "retry",
+        "finish",
         "export",
         "delete",
+        "bulk",
     ]
     action = (
         args[0]
@@ -89,10 +104,16 @@ async def chat(shell: Shell, args: list[str]) -> None:
         else (
             await shell.ui.choose(
                 "Conversation action",
-                [{"id": name, "name": name.title()} for name in operations],
+                [
+                    {"id": name, "name": CHAT_ACTION_LABELS.get(name, name.title())}
+                    for name in operations
+                ],
             )
         )["id"]
     )
+    if action == "bulk":
+        await bulk(shell)
+        return
     patch: dict[str, Any] = {"expected_revision": session["revision"]}
     if action == "rename":
         patch["title"] = await shell.ui.ask("Title", default=session["title"])
@@ -156,7 +177,31 @@ async def chat(shell: Shell, args: list[str]) -> None:
         )
         await shell.open_view(view.project, created)
         return
-    elif action in {"rewind", "edit", "retry"}:
+    elif action == "finish":
+        await finish_answer(shell)
+        return
+    elif action == "retry" and session.get("backend") == "harness":
+        await retry_harness_turn(shell)
+        return
+    elif action == "edit":
+        if (await shell.state()).get("busy"):
+            raise ClientError(
+                "Stop or finish the running turn before editing a saved message."
+            )
+        message = await message_picker(shell, users_only=True)
+        view.editing = {
+            "id": message["id"],
+            "content": message.get("content") or "",
+            "content_blocks": message.get("content_blocks") or [],
+        }
+        view.draft.text = message.get("content") or ""
+        shell.ui.set_editing(message["id"])
+        shell.ui.say(
+            "Edit the message in the composer. Enter rewinds the conversation to it "
+            "and sends the edited text; Ctrl-C cancels without changing anything."
+        )
+        return
+    elif action in {"rewind", "retry"}:
         message = await message_picker(shell, users_only=True)
         if action == "retry":
             # A retry creates a visible branch before its exact user message;
@@ -189,11 +234,6 @@ async def chat(shell: Shell, args: list[str]) -> None:
                 },
             )
             await shell.open_view(view.project, result["session"])
-            if action == "edit":
-                shell.current().draft.text = message["content"]
-                shell.ui.say(
-                    "Saved conversation rewound. Edit the restored draft before sending."
-                )
         return
     elif action == "export":
         destination = Path(
@@ -236,6 +276,74 @@ async def chat(shell: Shell, args: list[str]) -> None:
     observed = await shell.api.request("GET", f"chat-sessions/{key(view.session_id)}")
     view.session = observed
     shell.ui.say(f"Saved {observed['title']} in Core.")
+
+
+CHAT_ACTION_LABELS = {
+    "edit": "Edit a sent message and resend",
+    "retry": "Retry",
+    "finish": "Finish an unfinished answer",
+    "bulk": "Select several conversations",
+}
+
+
+async def finish_answer(shell: Shell) -> None:
+    """Ask Core to write the missing final answer of a failed provider turn."""
+    view = shell.current()
+    turn = await shell.api.request(
+        "GET", f"chat/sessions/{key(view.session_id)}/pending-turn"
+    )
+    if (
+        not turn
+        or turn.get("status") != "failed"
+        or turn.get("harness_turn_id")
+        or view.config.get("backend") == "harness"
+    ):
+        raise ClientError(
+            "No unfinished provider answer is waiting. Read /status for this conversation."
+        )
+    shell.ui.say(
+        "The model stopped without finishing this reply. Everything it did is saved; "
+        "only the written answer is missing."
+    )
+    if not await shell.ui.confirm("Ask the model to finish the answer now?"):
+        return
+    await shell.detach()
+    view.cursor = Cursor(turn_id=turn["id"])
+    view.submitting = False
+    shell.stream_task = asyncio.create_task(
+        shell.stream(view, "POST", f"chat/turns/{key(turn['id'])}/resume")
+    )
+
+
+async def retry_harness_turn(shell: Shell) -> None:
+    """Start a linked retry of a failed or stopped harness turn."""
+    view = shell.current()
+    rows = await shell.api.request(
+        "GET",
+        f"chat/sessions/{key(view.session_id)}/messages",
+        params={"limit": 50, "include_replaced": "true"},
+    )
+    options = [
+        {
+            **row,
+            "id": (row.get("metadata") or {})["harness_turn_id"],
+            "name": f"{terminal_text(row.get('content') or 'Harness turn')[:100]}",
+        }
+        for row in reversed(rows)
+        if row.get("role") == "assistant"
+        and visible_message(row)
+        and isinstance((row.get("metadata") or {}).get("harness_turn_id"), str)
+    ]
+    if not options:
+        raise ClientError("No saved harness turns to retry in the latest messages.")
+    chosen = await shell.ui.choose("Harness turn to retry", options)
+    if not await shell.ui.confirm(
+        "Start a linked new turn? The failed execution stays unchanged."
+    ):
+        return
+    await shell.api.request("POST", f"harness-turns/{key(chosen['id'])}/retry")
+    shell.ui.say("Linked retry queued in Core. /follow shows its progress.")
+    await shell.status(quiet=True)
 
 
 async def context(shell: Shell, args: list[str]) -> None:
