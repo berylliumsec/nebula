@@ -126,3 +126,31 @@ async def test_project_label_is_one_bounded_line(host):
         "Project \"Red 'Team' Shutdown blocked: " + "x" * 51 + '" (shaped)'
     )
     assert await coordinator.project_label("missing") == "Project missing"
+
+
+async def test_shutdown_names_a_project_whose_owner_is_no_longer_live(host):
+    from sqlalchemy import update
+
+    from nebula.v3.database import RuntimeInstanceRow
+    from nebula.v3.runtime_coordination import LeaseLost
+
+    coordinator = host[0]
+    await coordinator.coordination.register_runtime("lost", "v1")
+    await coordinator.coordination.claim_project("one", "lost")
+    async with coordinator.database.session() as session:
+        await session.execute(
+            update(RuntimeInstanceRow)
+            .where(RuntimeInstanceRow.id == "lost")
+            .values(lease_expires_at_ms=0)
+        )
+    with pytest.raises(LeaseLost) as refused:
+        await coordinator.prepare_shutdown(
+            expected_revision=(await coordinator.status()).revision
+        )
+    assert str(refused.value) == (
+        "Project one is owned by execution worker lost, which is no longer live "
+        "(a live execution runtime is required); its recovery must finish before "
+        "shutdown"
+    )
+    async with coordinator.database.session() as session:
+        assert not (await session.get(DeploymentHostRow, "host")).shutdown_requested

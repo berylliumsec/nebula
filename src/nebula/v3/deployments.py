@@ -49,6 +49,7 @@ from .runtime_coordination import (
     CoordinationConflict,
     DeploymentChanged,
     LEASE_MS,
+    LeaseLost,
     ProjectLease,
     RuntimeCoordination,
 )
@@ -808,7 +809,14 @@ class DeploymentCoordinator:
                 if row.runtime_id is not None
             ]
             for lease in leases:
-                await self.coordination._check(session, lease, lock=False)
+                try:
+                    await self.coordination._check(session, lease, lock=False)
+                except LeaseLost as error:
+                    raise LeaseLost(
+                        f"Project {lease.project_id} is owned by execution worker "
+                        f"{lease.runtime_id}, which is no longer live ({error}); "
+                        "its recovery must finish before shutdown"
+                    ) from error
                 process = await session.get(RuntimeProcessRow, lease.runtime_id)
                 if process is not None:
                     release = await session.get(RuntimeReleaseRow, process.version)
