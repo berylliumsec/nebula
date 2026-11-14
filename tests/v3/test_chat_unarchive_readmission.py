@@ -1,6 +1,8 @@
 """Restoring a project's only chat readmits its retired worker by itself."""
 
 import asyncio
+import ipaddress
+import socket
 
 import pytest
 from sqlalchemy import select
@@ -11,11 +13,36 @@ from nebula.v3.database import (
     RuntimeCommandRow,
 )
 from nebula.v3.domain import ChatSession, ChatTurn
+from nebula.v3.knowledge_index import _default_model_ready
 from tests.v3.runtime_continuity_fixture import completed_response
 from tests.v3.test_runtime_coordination import location as location
 from tests.v3.test_shutdown_readmission import core as core
 
-pytestmark = pytest.mark.anyio
+
+def _host_name_resolves_to_lan() -> bool:
+    # The shared Core fixture binds to this host name's first non-loopback
+    # IPv4 address and asserts that one exists.
+    try:
+        addresses = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        # diagnostic-expected: an unresolvable host name means no LAN address for the fixture.
+        return False
+    return any(not ipaddress.ip_address(item[4][0]).is_loopback for item in addresses)
+
+
+pytestmark = [
+    pytest.mark.anyio,
+    # The shared Core fixture prepares the product knowledge bundle with the
+    # local embedding model and never downloads it.
+    pytest.mark.skipif(
+        not _default_model_ready(),
+        reason="requires the already-cached local embedding model (all-MiniLM-L6-v2)",
+    ),
+    pytest.mark.skipif(
+        not _host_name_resolves_to_lan(),
+        reason="A non-loopback LAN interface is required: the host name must resolve to it",
+    ),
+]
 
 
 @pytest.fixture
