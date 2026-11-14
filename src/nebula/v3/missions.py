@@ -652,7 +652,7 @@ class MissionService:
                         "browser automation runtime is not configured"
                     )
                 try:
-                    self.browser_automation_service.create_lease(
+                    await self.browser_automation_service.create_lease(
                         run.id,
                         engagement_id,
                         browser_autonomy,
@@ -775,7 +775,7 @@ class MissionService:
             raise MissionStateError(
                 f"run {run.id} is already terminal ({run.status.value})"
             )
-        self._revoke_browser_control(run.id, clean_reason, actor_id)
+        await self._revoke_browser_control(run.id, clean_reason, actor_id)
         async with self._lock:
             task = self._tasks.get(run.id) or self._scheduled_tasks.get(run.id)
         if (task is None or task.done()) and run.metadata.get("origin") != "api":
@@ -1106,7 +1106,7 @@ class MissionService:
         finally:
             recurrence_source = await self.store.get(AgentRun, queued.id)
             if recurrence_source.status in _TERMINAL_RUN_STATUSES:
-                self._revoke_browser_control(
+                await self._revoke_browser_control(
                     recurrence_source.id,
                     f"Mission reached terminal state: {recurrence_source.status.value}",
                     "system",
@@ -1409,7 +1409,7 @@ class MissionService:
             return run
         if run.status in {RunStatus.COMPLETE, RunStatus.FAILED}:
             return run
-        self._revoke_browser_control(run.id, reason, actor_id)
+        await self._revoke_browser_control(run.id, reason, actor_id)
         (await self._cancel_open_work(run, reason))
         run = await self.store.get(AgentRun, run_id)
         cancelled, _ = await self.store.update_with_event(
@@ -1429,7 +1429,7 @@ class MissionService:
         run = await self.store.get(AgentRun, run_id)
         if run.status in _TERMINAL_RUN_STATUSES:
             return run
-        self._revoke_browser_control(run.id, error, "system")
+        await self._revoke_browser_control(run.id, error, "system")
         (await self._fail_open_work(run, error))
         run = await self.store.get(AgentRun, run_id)
         failed, _ = await self.store.update_with_event(
@@ -1449,13 +1449,15 @@ class MissionService:
         )
         return failed
 
-    def _revoke_browser_control(self, run_id: str, reason: str, actor_id: str) -> None:
+    async def _revoke_browser_control(
+        self, run_id: str, reason: str, actor_id: str
+    ) -> None:
         """Fail closed when a run leaves the state in which native control is valid."""
 
         if self.browser_automation_service is None:
             return
         try:
-            self.browser_automation_service.revoke_run(run_id, reason, actor_id)
+            await self.browser_automation_service.revoke_run(run_id, reason, actor_id)
         except Exception as exc:
             # The run transition remains authoritative, but retain a diagnostic so
             # an operator can investigate a native worker that did not acknowledge
