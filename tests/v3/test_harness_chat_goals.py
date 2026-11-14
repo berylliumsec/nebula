@@ -1623,6 +1623,10 @@ async def test_goal_resume_uses_saved_next_harness_in_same_chat(
                 privacy=profile.privacy,
             )
         )
+        # Core's chat service owns runtime switches; production binds it to
+        # the harness runtime the same way.
+        chat_service = ChatService(store)
+        chat_service.runtime_switcher.harness_runtime = runtime
         goals = ChatGoalService(store, runtime)
         created = await _new_goal(goals, step_budget=1)
         session_id = created.session.id
@@ -1650,8 +1654,12 @@ async def test_goal_resume_uses_saved_next_harness_in_same_chat(
             ),
             expected_revision=chat.revision,
         )
-        assert saved.harness_session_id == old_harness_id
-        assert saved.harness_profile_id == profile.id
+        # Core applies an idle selection to the same chat at once (#939); a
+        # blocked goal without in-flight work keeps its state until resumed.
+        assert saved.id == session_id
+        assert saved.harness_profile_id == next_profile.id
+        assert saved.harness_session_id != old_harness_id
+        assert (await goals.get(session_id)).status == ChatGoalStatus.BLOCKED
 
         (
             await goals.write(
@@ -1674,6 +1682,7 @@ async def test_goal_resume_uses_saved_next_harness_in_same_chat(
         assert turn.harness_turn_id
         assert adapter.connections[0].request.profile.id == next_profile.id
         await runtime.shutdown()
+        await chat_service.shutdown()
 
     (await scenario())
 

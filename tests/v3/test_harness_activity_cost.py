@@ -90,8 +90,8 @@ async def _scripted_runtime(tmp_path: Path, script, *, release=None):
     return store, engagement, profile, adapter, runtime
 
 
-def _prepare(runtime, engagement, profile, prompt="Report"):
-    return runtime.prepare_chat(
+async def _prepare(runtime, engagement, profile, prompt="Report"):
+    return await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -126,7 +126,7 @@ async def test_streamed_answer_shares_durable_rows_and_replays_identically(tmp_p
         store, engagement, profile, _adapter, runtime = await _scripted_runtime(
             tmp_path, script
         )
-        chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
+        chat, _chat_turn, turn = await _prepare(runtime, engagement, profile)
         started = time.monotonic()
         live = [event async for event in runtime.stream_turn(turn.id)]
         elapsed = time.monotonic() - started
@@ -218,7 +218,7 @@ async def test_stop_inside_the_coalescing_window_keeps_the_last_text(
             return connection
 
         adapter.open = open_with_signal
-        chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
+        chat, _chat_turn, turn = await _prepare(runtime, engagement, profile)
         (await runtime.start_chat_turn(turn.id))
         await asyncio.wait_for(produced.wait(), timeout=5)
         assert (await _ledger(store, turn.id, "harness.message_delta")) == []
@@ -266,7 +266,7 @@ async def test_session_activity_reports_state_after_long_streams_and_old_turns(
                     )
                 )
             )
-    _chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
+    _chat, _chat_turn, turn = await _prepare(runtime, engagement, profile)
     session = await store.get(HarnessSession, turn.harness_session_id)
     # Past the first 1,000 ledger rows the old status read ever looked at.
     for _ in range(1_000):
@@ -361,7 +361,7 @@ async def test_session_activity_reports_state_after_long_streams_and_old_turns(
 
 async def test_harness_turn_reads_only_its_own_conversation(tmp_path, monkeypatch):
     store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
-    chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
+    chat, _chat_turn, turn = await _prepare(runtime, engagement, profile)
     async with store.transaction() as transaction:
         for index in range(50):
             (
@@ -434,7 +434,7 @@ async def test_idle_follower_is_woken_instead_of_polling(
         store, engagement, profile, _adapter, runtime = await _scripted_runtime(
             tmp_path, script, release=gate
         )
-        _chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
+        _chat, _chat_turn, turn = await _prepare(runtime, engagement, profile)
         reads: list[float] = []
         original = runtime.activity_events
 

@@ -13,8 +13,9 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import inspect
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -196,14 +197,12 @@ class ScriptedCli(claude_agent_sdk.Transport):
     idle stops nothing.
     """
 
-    @classmethod
-    async def create(
-        cls,
+    def __init__(
+        self,
         turns: list[list[Any]],
         *,
         on_interrupt: list[dict[str, Any]] | None = None,
-    ):
-        self = cls.__new__(cls)
+    ) -> None:
         self.turns = list(turns)
         self.on_interrupt = list(
             INTERRUPTED_TAIL if on_interrupt is None else on_interrupt
@@ -216,7 +215,6 @@ class ScriptedCli(claude_agent_sdk.Transport):
         self._interrupted = asyncio.Event()
         self._ready = False
         self._runner: asyncio.Future[None] | None = None
-        return self
 
     async def connect(self) -> None:
         self._ready = True
@@ -328,12 +326,9 @@ async def _turn(
 class ScriptedAdapter(HarnessAdapter):
     kind = HarnessKind.CLAUDE_AGENT_SDK
 
-    @classmethod
-    async def create(cls, clis: Callable[[], ScriptedCli]):
-        self = cls.__new__(cls)
+    def __init__(self, clis: Callable[[], ScriptedCli]) -> None:
         self.clis = clis
         self.opened: list[ScriptedCli] = []
-        return self
 
     async def probe(self, profile: Any, credential_store: Any) -> HarnessHealth:
         raise NotImplementedError
@@ -401,7 +396,7 @@ class Chat:
     async def send(self, prompt: str) -> tuple[HarnessTurn, str | None]:
         owner, turn = await self.prepare(prompt)
         await asyncio.wait_for(
-            self.service.start_chat_turn(turn.id), timeout=TURN_DEADLINE_SECONDS
+            await self.service.start_chat_turn(turn.id), timeout=TURN_DEADLINE_SECONDS
         )
         return (await self.store.get(HarnessTurn, turn.id)), (
             await self.answer(owner.id)
@@ -414,9 +409,12 @@ class Chat:
         return (await self.store.get(ChatMessage, owner.final_message_id)).content
 
 
-async def _until(predicate: Callable[[], bool]) -> None:
+async def _until(predicate: Callable[[], bool | Awaitable[bool]]) -> None:
     for _ in range(500):
-        if predicate():
+        reached = predicate()
+        if inspect.isawaitable(reached):
+            reached = await reached
+        if reached:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("condition was not reached")
@@ -446,12 +444,12 @@ async def test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt(
         chat = await Chat.create(tmp_path, lambda: cli)
         _owner, first = await chat.prepare("first")
         task = await chat.service.start_chat_turn(first.id)
-        await _until(
-            lambda: any(
-                event.type == "message_delta"
-                for event in chat.service.activity_events(first.id).events
-            )
-        )
+
+        async def streamed() -> bool:
+            activity = await chat.service.activity_events(first.id)
+            return any(event.type == "message_delta" for event in activity.events)
+
+        await _until(streamed)
         await chat.service.cancel_turn(first.id, reason="Operator stop")
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -873,13 +871,10 @@ class RefusingInterruptConnection(HarnessConnection):
 
     adapter_version = "test"
 
-    @classmethod
-    async def create(cls, *, fail: bool):
-        self = cls.__new__(cls)
+    def __init__(self, *, fail: bool) -> None:
         self.external_session_id = "vendor-session"
         self.fail = fail
         self.closed = False
-        return self
 
     async def run_turn(
         self,
@@ -910,11 +905,8 @@ class RefusingInterruptConnection(HarnessConnection):
 class OpeningAdapter(HarnessAdapter):
     kind = HarnessKind.CLAUDE_AGENT_SDK
 
-    @classmethod
-    async def create(cls):
-        self = cls.__new__(cls)
+    def __init__(self) -> None:
         self.opened: list[RefusingInterruptConnection] = []
-        return self
 
     async def probe(self, profile: Any, credential_store: Any) -> HarnessHealth:
         raise NotImplementedError

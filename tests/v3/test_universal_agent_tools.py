@@ -32,7 +32,12 @@ from nebula.v3.domain import (
 )
 from nebula.v3.tools import ToolInvocation
 from nebula.v3.working_notes import read_working_notes
-from tests.v3.test_harness_provider_subagents import _setup, _prepare, _payload, _until
+from tests.v3.test_harness_provider_subagents import (
+    _payload,
+    _prepare,
+    _setup,
+    _until_saved,
+)
 
 
 def hook(
@@ -87,7 +92,7 @@ async def test_all_parent_child_combinations_preserve_guard_receipts(
         )
         child_provider.answers = ["Guarded work complete."]
         if parent_backend == "harness":
-            parent, parent_turn, _ = _prepare(
+            parent, parent_turn, _ = await _prepare(
                 runtime, project, harness, "Delegate", setting=setting
             )
         else:
@@ -130,10 +135,11 @@ async def test_all_parent_child_combinations_preserve_guard_receipts(
             context=None,
             capabilities={"hook_ids": ["guard"]},
         )
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, child.id).status != ChatSubagentStatus.RUNNING
-            )
+        await _until_saved(
+            store,
+            ChatSubagent,
+            child.id,
+            lambda saved: saved.status != ChatSubagentStatus.RUNNING,
         )
         saved = await store.get(ChatSubagent, child.id)
         assert saved.status == ChatSubagentStatus.COMPLETED, saved.error
@@ -240,8 +246,8 @@ async def test_harness_core_tools_execute_and_notes_survive_next_turn(
             return "Done"
 
         adapter.script = script
-        parent, _, turn = _prepare(runtime, project, harness, "Inspect")
-        await runtime.start_chat_turn(turn.id)
+        parent, _, turn = await _prepare(runtime, project, harness, "Inspect")
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -298,14 +304,14 @@ async def test_harness_child_capabilities_are_paginated_and_launch_is_unambiguou
             return "Catalog read"
 
         adapter.script = script
-        _, _, turn = _prepare(
+        _, _, turn = await _prepare(
             runtime,
             project,
             harness,
             "Read catalog",
             setting={"harness_profile_id": harness.id, "model": "gpt-test"},
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -332,7 +338,7 @@ async def test_harness_assistant_config_saves_hooks_and_provider_parent_runtime(
         },
         expected_revision=harness.revision,
     )
-    parent, _, _ = _prepare(runtime, project, harness, "Saved settings")
+    parent, _, _ = await _prepare(runtime, project, harness, "Saved settings")
     # This boundary used to reject a valid hook simply because of the backend.
     updated = await update_chat_assistant_config(
         store,
@@ -451,7 +457,7 @@ async def test_harness_discovers_and_calls_unselected_mcp_with_shared_policy(
             if narrowed
             else None,
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -543,8 +549,10 @@ async def test_harness_goal_reports_and_completion_share_ownership_and_commit(tm
         from nebula.v3.domain import ButlerAgentReport
 
         store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
-        parent, _, initial = _prepare(runtime, project, harness, "Create conversation")
-        await runtime.start_chat_turn(initial.id)
+        parent, _, initial = await _prepare(
+            runtime, project, harness, "Create conversation"
+        )
+        await (await runtime.start_chat_turn(initial.id))
         goals = ChatGoalService(store)
         goal = await goals.create(
             parent.id,
@@ -586,7 +594,7 @@ async def test_harness_goal_reports_and_completion_share_ownership_and_commit(tm
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -696,7 +704,7 @@ async def test_retry_keeps_original_child_selections_even_if_saved_defaults_wide
             )
         )
         replacement = await runtime.retry_turn(turn.id)
-        await runtime.start_chat_turn(replacement.id)
+        await (await runtime.start_chat_turn(replacement.id))
         snapshot = (
             await store.get(ChatTurn, replacement.chat_turn_id)
         ).request_snapshot
@@ -704,7 +712,11 @@ async def test_retry_keeps_original_child_selections_even_if_saved_defaults_wide
         assert snapshot["allow_mcp_catalog"] is False
         assert snapshot["ssh_environment_snapshot"] == []
         assert [item["path"] for item in snapshot["skill_snapshots"]] == [str(skill)]
-        assert "Retain this exact selected review instruction." in replacement.prompt
+        # Selected skills travel in the frozen standing instructions (cea8b38).
+        assert (
+            "Retain this exact selected review instruction."
+            in replacement.metadata["standing_instructions"]["text"]
+        )
         await runtime.shutdown()
         await chat.shutdown()
 
@@ -723,7 +735,12 @@ async def test_harness_selected_skill_instructions_and_resources_are_frozen(tmp_
         detail.write_text("Immutable review detail")
 
         async def script(connection, prompt):
-            assert "Follow the selected review procedure." in prompt
+            # The harness receives selected skills as standing instructions
+            # on its native instruction channel (cea8b38), not in the prompt.
+            assert (
+                "Follow the selected review procedure."
+                in connection.request.session.metadata["standing_instructions"]["text"]
+            )
             result = await connection.call(
                 "skill.read_resource", skill_path=str(skill), resource_path="detail.txt"
             )
@@ -748,7 +765,7 @@ async def test_harness_selected_skill_instructions_and_resources_are_frozen(tmp_
             allowed_tool_names=[],
             skill_selections=[{"name": "review", "path": str(skill)}],
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -834,12 +851,14 @@ async def test_harness_early_exit_runs_terminal_hooks_and_finishes_observation(
 
         task = asyncio.create_task(consume())
         if exit_path == "start_cancelled":
-            await _until(
-                lambda: any(
-                    item.status == "running"
-                    for item in store.list_entities(NativeHookExecution)
-                )
-            )
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while not any(
+                item.status == "running"
+                for item in await store.list_entities(NativeHookExecution)
+            ):
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("condition was not reached in time")
+                await asyncio.sleep(0.01)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -895,14 +914,14 @@ async def test_harness_child_question_can_wait_for_its_harness_parent(tmp_path):
             return "Answered the child"
 
         adapter.script = script
-        _, _, turn = _prepare(
+        _, _, turn = await _prepare(
             runtime,
             project,
             harness,
             "Ask a child",
             setting={"harness_profile_id": harness.id, "model": "gpt-test"},
         )
-        await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=10)
+        await asyncio.wait_for(await runtime.start_chat_turn(turn.id), timeout=10)
         assert (
             await store.get(HarnessTurn, turn.id)
         ).status == HarnessTurnStatus.COMPLETE, (
@@ -935,8 +954,10 @@ async def test_completion_guard_failure_debits_known_usage_and_pauses_goal(
             },
             expected_revision=harness.revision,
         )
-        parent, _, initial = _prepare(runtime, project, harness, "Create conversation")
-        await runtime.start_chat_turn(initial.id)
+        parent, _, initial = await _prepare(
+            runtime, project, harness, "Create conversation"
+        )
+        await (await runtime.start_chat_turn(initial.id))
         goals = ChatGoalService(store)
         goal = await goals.create(
             parent.id,
@@ -981,7 +1002,7 @@ async def test_completion_guard_failure_debits_known_usage_and_pauses_goal(
             mcp_server_ids=[],
             hook_ids=["guard"],
         )
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
         saved = await goals.get(parent.id)
         assert saved.status.value == "paused"
         assert saved.usage.total_tokens == (30 if usage_reported else 0)
@@ -1184,7 +1205,11 @@ async def test_remote_harness_does_not_receive_core_notes_or_skills_without_cons
     )
     if confirmed:
         _, _, selected = await runtime.prepare_chat(**parameters)
-        assert "Private selected Core skill" in selected.prompt
+        # Selected skills travel in the standing instructions (cea8b38).
+        assert (
+            "Private selected Core skill"
+            in selected.metadata["standing_instructions"]["text"]
+        )
     else:
         with pytest.raises(
             HarnessConfigurationError, match="explicit operator confirmation"

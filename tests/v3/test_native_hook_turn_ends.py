@@ -167,7 +167,7 @@ async def _attach_running_goal(store, prepared):
 
 async def _poll(read, *, timeout: float = 5.0):
     deadline = time.monotonic() + timeout
-    while not (value := read()) and time.monotonic() < deadline:
+    while not (value := await read()) and time.monotonic() < deadline:
         await asyncio.sleep(0.02)
     return value
 
@@ -893,13 +893,15 @@ async def test_a_hook_running_when_the_turn_ends_never_stays_running(
         else:
             await service.shutdown()
         (hook_dir / "release").touch()
-        await _poll(
-            lambda: [
+
+        async def finished_hook():
+            return [
                 item
-                for item in started_hook()
+                for item in await started_hook()
                 if item.exit_code == 0 or item.late_outcome is not None
             ]
-        )
+
+        await _poll(finished_hook)
         await asyncio.sleep(0.2)
         await service.shutdown()
         turn = await store.get(ChatTurn, turn_id)

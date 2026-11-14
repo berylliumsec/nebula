@@ -3,6 +3,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 import json
+from contextlib import asynccontextmanager
 import subprocess
 from pathlib import Path
 
@@ -96,6 +97,7 @@ async def test_native_hook_refuses_relink_before_running_row_is_saved(
     original_transaction = store.transaction
     relinked = False
 
+    @asynccontextmanager
     async def relink_before_admission(*args, **kwargs):
         nonlocal relinked
         if not relinked:
@@ -105,7 +107,8 @@ async def test_native_hook_refuses_relink_before_running_row_is_saved(
                     project.id, str(new_folder), expected_revision=project.revision
                 )
             )
-        return original_transaction(*args, **kwargs)
+        async with original_transaction(*args, **kwargs) as transaction:
+            yield transaction
 
     monkeypatch.setattr(store, "transaction", relink_before_admission)
     with pytest.raises(ConflictError, match="Project workspace changed"):
