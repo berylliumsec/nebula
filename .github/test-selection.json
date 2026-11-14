@@ -1,27 +1,37 @@
 {
   "reviewed_by": "Claude",
-  "reason": "The terminal client treated a supervisor Core's 202 saved-request receipt as the final answer: a first message on a cold project worker was reported as 'Connection lost. Nothing was resent' and restored to the draft while Core ran it, and mutations returned the receipt as the resource (a rename reported the old title as saved). AsyncApi now follows runtime/requests/{id}/response like the GUI, never resending; streamed submissions report the saved state, attach to the saved turn, block a duplicate new-conversation send, and /follow or /status resolve the receipt. Selected: the transport and shell unit contracts (including new receipt cases), the TUI presentation suite for the submission label, and real paired TLS LAN Core cases that send, stream, mutate with idempotency keys and recover remembered chats.",
-  "exclusions": "No full suites. No frontend, native or Playwright changes; only the separate Python terminal client changed, so browser viewport projects do not exercise it. Other tests/v3/test_terminal_core.py cases and tests/test_terminal_pty.py are not selected: 6 of them fail identically on pristine origin/main locally (scroll [52-18], wide layout, direct chats/reconnect, loading while opening, polling, queue/detach/approval), so they cannot prove this change; the selected four pass on main and on this branch. Supervisor 202 receipts cannot occur on the create_app fixture Core; that path is covered by MockTransport unit cases plus real supervisor scratch-Core evidence in the PR body, not executed by CI. No live provider calls or Core deployment.",
+  "reason": "Stacked on the shutdown diagnosability change. Automatic-recovery operation IDs are deterministic, so one recorded refusal blocked that recovery for good: the ledger stored it and every retry returned the stored receipt. Refusals raised before any effect in recover_project (target status check, begin_recovery's transaction) and prepare_execution (release, reserve configuration, memory admission, and a start whose abort was confirmed: StartAborted) are now OperationRejected, so their receipt is 'failed' with the reason. Automatic recovery opts in to asking a failed operation again under the same ID with fresh parameters, after a backoff from 30 s doubling to 10 minutes, recording the earlier refusal as an operation.retried receipt; ordinary replays still return the saved receipt and uncertain receipts are never dispatched again. runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
+  "exclusions": "Process-level suites (test_runtime_processes, test_execution_worker_process, test_runtime_host_services, test_runtime_memory_control, test_runtime_browser_bridge, test_runtime_worker_features, test_runtime_management, test_recovery_reconciliation, test_shutdown_readmission) need a pidfd-capable interpreter or a non-loopback LAN Core fixture; locally the same 76 cases fail identically on pristine main and on this branch (no new failures), so they are not selected. No UI, native or Playwright cases: no frontend code changed (the desktop Stop control only prints runtime-stop stderr). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core scratch evidence (injected service stop failures, six-project startup races, LAN-bound status reads) is recorded in the PR body, not executed by CI.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 89,
+    "python": 350,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_transport.py",
-    "tests/test_terminal_shell.py",
-    "tests/test_terminal_tui.py",
-    "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
-    "tests/v3/test_terminal_core.py::test_paired_full_screen_slash_menu_tracks_chat_context",
-    "tests/v3/test_terminal_core.py::test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback",
-    "tests/v3/test_terminal_core.py::test_paired_tui_recovers_missing_remembered_chat"
+    "tests/v3/test_runtime_quiescence.py",
+    "tests/v3/test_runtime_ipc.py",
+    "tests/v3/test_runtime_operations.py",
+    "tests/v3/test_runtime_launcher.py",
+    "tests/v3/test_async_core.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_shutdown_admission.py",
+    "tests/v3/test_runtime_host_search.py",
+    "tests/v3/test_shared_butler_memory.py",
+    "tests/v3/test_shared_knowledge.py",
+    "tests/v3/test_handoff_participants.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_recovery_reconciliation.py::test_recovery_refused_before_its_commit_is_a_rejection",
+    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "77e6b326e9af658d1153f769523a4111ed65b1aa010bf325213dec59f4337c54"
+  "change_digest": "382139fbd73bc3c7dc5a3e5ac24a07d4a0cf36b10bfa57b6e258fff59be31719"
 }

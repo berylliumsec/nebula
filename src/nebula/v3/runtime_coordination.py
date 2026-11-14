@@ -66,6 +66,10 @@ class ShutdownBlocked(OperationRejected):
     """Durable work refused shutdown before anything changed; the text names it."""
 
 
+class StartAborted(OperationRejected):
+    """A worker start failed and its abort was confirmed: nothing was started."""
+
+
 class DeploymentChanged(OperationRejected):
     """The deployment revision moved after the caller read it; nothing changed.
 

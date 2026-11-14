@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket
+import httpx
 from sqlalchemy import select
 from starlette.responses import JSONResponse
 
@@ -29,7 +30,8 @@ from .deployment_protocol import ReleaseManifest, WorkerIdentity
 from .diagnostics import record_caught_exception
 from .deployments import _RESIDENT, checkpoint_digest
 from .release_store import ReleaseStore
-from .runtime_coordination import CoordinationConflict, ProjectLease
+from .memory_policy import MemoryBudgetError
+from .runtime_coordination import CoordinationConflict, OperationRejected, ProjectLease
 from .runtime_bootstrap import RuntimeBootstrap
 from .runtime_http import RuntimeHttpProxy
 from .runtime_identity import mount_runtime_identity
@@ -639,19 +641,26 @@ class RuntimeSupervisor:
     async def prepare_execution(self, version: str) -> WorkerIdentity:
         """Prepare an unassigned process; controllers wait for a project grant."""
         async with self._operations:
-            self._active()
-            async with self.coordinator.database.session() as session:
-                release = await session.get(RuntimeReleaseRow, version)
-                if release is None:
+            # Nothing is reserved or spawned before host.spawn, so a refusal
+            # here is a rejection the caller may safely ask again.
+            try:
+                self._active()
+                async with self.coordinator.database.session() as session:
+                    release = await session.get(RuntimeReleaseRow, version)
+                    if release is None:
+                        raise CoordinationConflict(
+                            "Stage and verify this release before preparing it"
+                        )
+                    manifest = ReleaseManifest.model_validate(release.manifest)
+                if self.worker_admission is None:
                     raise CoordinationConflict(
-                        "Stage and verify this release before preparing it"
+                        "Host worker memory reserve must be configured before candidate startup"
                     )
-                manifest = ReleaseManifest.model_validate(release.manifest)
-            if self.worker_admission is None:
-                raise CoordinationConflict(
-                    "Host worker memory reserve must be configured before candidate startup"
-                )
-            await self.worker_admission(manifest, "execution")
+                await self.worker_admission(manifest, "execution")
+            except (CoordinationConflict, MemoryBudgetError) as error:
+                if isinstance(error, OperationRejected):
+                    raise
+                raise OperationRejected(str(error)) from error
             spawned = await self.host.spawn(version, "execution")
             if spawned is None:
                 raise CoordinationConflict("The execution candidate remains staged")
@@ -765,24 +774,43 @@ class RuntimeSupervisor:
     ):
         async with self._operations:
             self._active()
-            client = await self.host.rpc(target_runtime_id)
+            # Everything up to begin_recovery's commit changes nothing, so a
+            # refusal here is a rejection the caller may safely ask again.
             try:
-                status = await client.call("execution.status/v1", {}, timeout=5)
-                binding = status.get("lease")
-                if status.get("state") != "unassigned" and (
-                    not binding or binding.get("project_id") != project_id
-                ):
-                    raise CoordinationConflict("Prepare an unassigned recovery target")
-            finally:
-                await client.close()
-            lease = await self.coordinator.begin_recovery(
-                project_id,
-                target_runtime_id,
-                expected_owner=expected_owner,
-                expected_handoff_revision=expected_handoff_revision,
-                operation_id=operation_id,
-                actor_id=actor_id,
-            )
+                client = await self.host.rpc(target_runtime_id)
+                try:
+                    status = await client.call("execution.status/v1", {}, timeout=5)
+                    binding = status.get("lease")
+                    if status.get("state") != "unassigned" and (
+                        not binding or binding.get("project_id") != project_id
+                    ):
+                        raise CoordinationConflict(
+                            "Prepare an unassigned recovery target"
+                        )
+                finally:
+                    await client.close()
+                lease = await self.coordinator.begin_recovery(
+                    project_id,
+                    target_runtime_id,
+                    expected_owner=expected_owner,
+                    expected_handoff_revision=expected_handoff_revision,
+                    operation_id=operation_id,
+                    actor_id=actor_id,
+                )
+            except (
+                CoordinationConflict,
+                RuntimeIpcError,
+                httpx.HTTPError,
+                OSError,
+            ) as error:
+                # Never a database error: a failed COMMIT has an unknown outcome.
+                if isinstance(error, OperationRejected):
+                    raise
+                raise OperationRejected(
+                    str(error)
+                    if isinstance(error, (CoordinationConflict, RuntimeIpcError))
+                    else f"The recovery target did not answer ({type(error).__name__})"
+                ) from error
         async with self._handoff_serial:
             async with self.coordinator.database.session() as session:
                 row = await session.get(ProjectHandoffRow, project_id)
