@@ -461,6 +461,10 @@ class ChatConfigurationError(ChatError):
     """The selected provider/model cannot serve the requested chat."""
 
 
+class GoalBudgetConfigurationError(ChatConfigurationError):
+    """A goal reached a step, token or active-time budget; Core paused it with the reason."""
+
+
 class ChatCompactionError(ChatError):
     """Required context compaction failed and the request may be retried."""
 
@@ -5597,6 +5601,10 @@ class ChatService:
             # diagnostic-expected: an operator message or another valid
             # continuation won the race; losing it is the intended outcome.
             return None
+        except GoalBudgetConfigurationError:
+            # diagnostic-expected: prepare paused the goal with its budget
+            # reason; using up a budget ends the run, it is not a failure.
+            return None
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -6000,7 +6008,7 @@ class ChatService:
                             paused, GOAL_BUDGET_STOP_NOTE
                         )
                     )
-                raise ChatConfigurationError(exhausted_reason.lower())
+                raise GoalBudgetConfigurationError(exhausted_reason.lower())
 
         from .native_hooks import (
             discover_native_hooks,
@@ -7073,7 +7081,7 @@ class ChatService:
                     exhausted_reason="Token budget exhausted during context compaction.",
                 )
                 if goal.status != ChatGoalStatus.RUNNING:
-                    raise ChatConfigurationError(
+                    raise GoalBudgetConfigurationError(
                         "goal token budget was exhausted during context compaction"
                     )
 
@@ -11012,7 +11020,7 @@ class ChatService:
                     paused, GOAL_BUDGET_STOP_NOTE
                 )
             )
-            raise ChatConfigurationError(
+            raise GoalBudgetConfigurationError(
                 "goal token budget cannot fit the next provider request"
             )
         requested_output = request.max_output_tokens or available_output
