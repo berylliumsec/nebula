@@ -426,3 +426,15 @@ async def test_unreadable_origin_only_replaces_a_missing_socket_directory(
     current = json.loads(marker.read_text())
     assert replacement.launch_origin is None and current["process_origin"] is None
     assert current["replaced"]["reason"] == "socket_root_missing"
+
+
+async def test_boot_ended_only_after_every_runtime_from_that_boot_lapses(managed):
+    await managed.stage("v1")
+    execution = await managed.host.spawn("v1", "execution")
+    await _kill(managed, execution)
+    await _born_in_earlier_boot(managed, execution)
+    await _renewing(managed, execution)
+    assert not await managed.host.boot_ended(EARLIER_BOOT)
+    assert await managed.host.boot_ended("another-boot")
+    await _expire(managed, execution.runtime_id)
+    assert await managed.host.boot_ended(EARLIER_BOOT)

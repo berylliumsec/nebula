@@ -644,7 +644,7 @@ class MemoryBudgetService:
         owner_dead: bool = False,
     ) -> MemoryJob:
         """Release a never-launched reservation without inventing group cleanup."""
-        from .process_identity import process_origin, same_process
+        from .process_identity import launch_owner_ended, process_origin, same_process
 
         async with self._write() as session:
             await self._policy(session)
@@ -659,24 +659,17 @@ class MemoryBudgetService:
                 raise MemoryBudgetConflict(
                     "reservation crossed launch or changed owner"
                 )
-            origin = process_origin()
-            if (
-                owner.process_origin != origin
-                or (
-                    owner_dead
-                    and (
-                        origin is None
-                        or same_process(owner.process_id, owner.process_birth)
-                    )
+            if owner_dead:
+                unverified = not launch_owner_ended(
+                    owner.process_origin, owner.process_id, owner.process_birth
                 )
-                or (
-                    not owner_dead
-                    and (
-                        owner.process_id != os.getpid()
-                        or not same_process(owner.process_id, owner.process_birth)
-                    )
+            else:
+                unverified = (
+                    owner.process_origin != process_origin()
+                    or owner.process_id != os.getpid()
+                    or not same_process(owner.process_id, owner.process_birth)
                 )
-            ):
+            if unverified:
                 raise MemoryBudgetConflict(
                     "prelaunch owner death or cancellation authority is unverified"
                 )

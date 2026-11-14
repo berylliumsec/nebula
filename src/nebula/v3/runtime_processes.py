@@ -1095,6 +1095,21 @@ class RuntimeProcessHost:
                 query = query.where(RuntimeInstanceRow.id.in_(runtime_ids))
             return set(await session.scalars(query))
 
+    async def boot_ended(self, boot: str) -> bool:
+        """No unretired runtime born on that kernel boot still renews a lease."""
+        live = await self._live_leases()
+        if not live:
+            return True
+        async with self.coordinator.database.session() as session:
+            births = list(
+                await session.scalars(
+                    select(RuntimeProcessRow.process_birth).where(
+                        RuntimeProcessRow.runtime_id.in_(live)
+                    )
+                )
+            )
+        return all(birth_boot(birth) != boot for birth in births)
+
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:
             raise RuntimeError("rediscovery requires the active supervisor host lock")

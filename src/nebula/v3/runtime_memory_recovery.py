@@ -25,7 +25,11 @@ class HostMemoryRecovery:
             raise ValueError("Host memory recovery must use the supervisor database")
         self.store = NebulaStore(host.coordinator.database)
         self.runner_factory, self.interval = runner_factory, interval
-        self.reconciler = MemoryReconciler(self.budgets, self.resolve)
+        self.reconciler = MemoryReconciler(
+            self.budgets,
+            self.resolve,
+            previous_boot_ended=getattr(host, "boot_ended", None),
+        )
         self._stop = asyncio.Event()
         self.task = None
         self._close_task = None

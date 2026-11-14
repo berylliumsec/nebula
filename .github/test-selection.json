@@ -1,36 +1,25 @@
 {
-  "reviewed_by": "Claude Code",
-  "reason": "Since #987 auto-admission started a project worker only for an open chat or a chat-start command, so every other project-routed write (rename, archive, delete and anything else the API delivers to the project's worker) on a project without an open chat stayed queued with 202 forever; archived projects were skipped outright, so deleting one could never run, and the stranded rows blocked runtime-stop. Queued non-barrier project commands now admit exactly their project (archived included, retirement-held excluded); idle retirement waits for queued or running project commands and request_project_retirement declines while one is queued; a request arriving during a retirement hold waits (bounded) and is then admitted instead of a 409. Selection covers chatless edit and archived delete through real API ingress, routing and auto-admission; retirement declining with queued work and ignoring host-committed barriers; the bounded ingress wait and its 409 bound; the existing chat-scoped admission, child/parent, legacy goal-create, metadata-batch and read no-admission cases; retirement hold and release contracts (the #987 hold test now records that retirement declines while project commands are queued); readmission fence and held-project cases; and the API worker suite for the changed ingress.",
-  "exclusions": "No UI, native or frontend code changed, so no frontend, native or Playwright tests; the operator journey (empty project rename, archive and delete through the API and the desktop project switcher, delete right after the last chat, runtime-stop afterwards) was checked on scratch supervisor Cores (see the PR). test_runtime_reconciliation.py, test_runtime_chat_resume.py, test_runtime_chat_stream.py and the real-Core test in test_shutdown_readmission.py fail identically on main in this environment (pidfd, fixture and LAN prerequisites); across the 13 related files no test fails only with this change. PostgreSQL parametrizations are collected but skip in CI; they pass locally on PostgreSQL 16. No live or staging Core mutation, database backup, or deployment.",
+  "reviewed_by": "Claude",
+  "reason": "After a host reboot every memory-runner job whose launch owner was a process of the old boot stayed charged forever, and a held job also blocked every coordinated shutdown (runtime-stop): MemoryReconciler._reconcile and MemoryBudgetService.release_prelaunch(owner_dead=True) both required the owner's recorded process origin to equal the current one. A parseable earlier kernel boot now proves the owner ended with its kernel on this host (process_identity.launch_owner_ended, shared by both checks); because a host sharing the database would look the same, the supervisor's reconciler also requires RuntimeProcessHost.boot_ended (no unretired runtime born on that boot still renews a lease), and project-worker reconcilers leave such jobs to it. Only never-launched reservations are released on that proof; starting and launched jobs keep the uncertain / verified-removal paths. The selection covers the reconciler, prelaunch release and its guards, host memory recovery, rediscovery/lease helpers and origin parsing, including 14 new regressions.",
+  "exclusions": "Memory enforcement suites that need a container runtime are not selected (they are unchanged; this change only alters which owners count as ended). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set; the selection passed locally on SQLite and PostgreSQL 16. No UI, native or Playwright cases: no frontend code changed. The real-Core release of a previous-boot reservation and the unblocked runtime-stop are recorded in the PR.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 57,
+    "python": 98,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_work_batches.py::test_project_edit_and_archived_delete_without_a_chat_admit_their_workers",
-    "tests/v3/test_runtime_work_batches.py::test_retirement_does_not_strand_queued_project_work",
-    "tests/v3/test_runtime_work_batches.py::test_request_waits_out_a_retiring_project_worker",
-    "tests/v3/test_runtime_work_batches.py::test_metadata_batch_and_project_reads_never_admit_workers",
-    "tests/v3/test_runtime_work_batches.py::test_open_chat_created_without_routing_gets_its_exact_project_worker",
-    "tests/v3/test_runtime_work_batches.py::test_legacy_queued_goal_creates_admit_their_exact_five_projects",
-    "tests/v3/test_runtime_work_batches.py::test_parent_chat_does_not_admit_children_and_chat_start_admits_exact_child",
-    "tests/v3/test_runtime_work_batches.py::test_auto_admission_retires_worker_after_exact_project_chat_archives",
-    "tests/v3/test_deployment_lifecycle.py::test_open_parent_chat_does_not_keep_child_project_worker",
-    "tests/v3/test_deployment_lifecycle.py::test_open_child_chat_keeps_its_exact_project_worker",
-    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_uses_its_own_hold_and_releases_exact_owner",
-    "tests/v3/test_deployment_lifecycle.py::test_project_retirement_serializes_direct_chat_creation",
-    "tests/v3/test_shutdown_readmission.py::test_quiesced_and_fresh_projects_readmit_without_resetting_fences",
-    "tests/v3/test_shutdown_readmission.py::test_non_null_or_archived_projects_remain_held",
-    "tests/v3/test_shutdown_readmission.py::test_partial_shutdown_abort_keeps_unknown_worker_until_positive_retirement",
-    "tests/v3/test_api_worker.py"
+    "tests/v3/test_memory_recovery.py",
+    "tests/v3/test_memory_prelaunch.py",
+    "tests/v3/test_runtime_memory_recovery.py",
+    "tests/v3/test_runtime_reconciliation.py",
+    "tests/v3/test_process_identity.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "4ec481fd9cc3167a4c0af4774a6c2178fdb35f4ff3bc18d841d916e40e64812c"
+  "change_digest": "b7f1fff383def9f61bb3b360ff4bb3303d77dd0ec2298acaea76b7f6a5bf8e46"
 }
