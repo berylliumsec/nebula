@@ -35,6 +35,7 @@ _RECOVERY_RETRY_MS = 30_000
 # A refused automatic recovery step proved no effect; it is asked again after
 # this long, so a transient refusal never blocks recovery for good.
 REFUSED_RECOVERY_RETRY_MS = 30_000
+REFUSED_RECOVERY_MAX_RETRY_MS = 600_000
 
 
 class RuntimeAutoAdmission:
@@ -392,7 +393,21 @@ class RuntimeAutoAdmission:
                 now_ms = await self.supervisor.coordinator.coordination._clock_ms(
                     session
                 )
-            if now_ms - prior.updated_at_ms < REFUSED_RECOVERY_RETRY_MS:
+                retries = await session.scalar(
+                    select(func.count())
+                    .select_from(DeploymentReceiptRow)
+                    .where(
+                        DeploymentReceiptRow.action == "operation.retried",
+                        DeploymentReceiptRow.result["operation_id"].as_string()
+                        == operation_id,
+                    )
+                )
+            # A spawn that keeps timing out under load backs off to 10 minutes.
+            delay = min(
+                REFUSED_RECOVERY_MAX_RETRY_MS,
+                REFUSED_RECOVERY_RETRY_MS * 2 ** min(int(retries or 0), 10),
+            )
+            if now_ms - prior.updated_at_ms < delay:
                 detail = (prior.result or {}).get("detail", "refused")
                 raise CoordinationConflict(
                     f"Automatic recovery operation {operation_id} was refused "
