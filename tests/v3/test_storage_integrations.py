@@ -745,4 +745,72 @@ async def test_harness_source_dispatch_opens_its_session_and_queues_the_alert(
     assert queue.items[0]["request"]["harness_session_id"] == chat.harness_session_id
 
 
+async def test_supervisor_replay_runs_a_saved_report_as_its_storage_source(tmp_path):
+    from nebula.v3.authentication import runtime_principal
+    from nebula.v3.storage_sender import storage_source_actor
+
+    client, store = await setup(tmp_path)
+    created = await enroll(client)
+    source = created["source"]
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
+    )
+    entity = await store.get_by_kind("storage_sources", source["id"])
+    actor = storage_source_actor(entity)
+    # An execution worker replays the saved report with the operator bearer
+    # and the durable storage-source principal; the sender token is never saved.
+    with runtime_principal(actor):
+        accepted = await client.post(
+            "/api/v1/storage/events", headers=AUTH, json=event()
+        )
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["accepted"] is True
+        # That principal cannot reach an operator route.
+        assert (await client.get("/api/v1/storage", headers=AUTH)).status_code == 403
+    dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
+    assert dashboard["dispatches"][0]["status"] == "queued", dashboard["dispatches"]
+    chat_id = dashboard["incidents"][0]["chat_session_id"]
+    assert (await store.get(ChatQueue, "chat-queue-" + chat_id)).items
+    rotated = await client.post(
+        f"/api/v1/storage/sources/{source['id']}/rotate",
+        headers=AUTH,
+        json={
+            "expected_revision": (
+                await store.get_by_kind("storage_sources", source["id"])
+            ).revision
+        },
+    )
+    assert rotated.status_code == 200, rotated.text
+    with runtime_principal(actor):
+        stale = await client.post(
+            "/api/v1/storage/events", headers=AUTH, json=event("observation-2")
+        )
+    assert stale.status_code == 401
+
+
+async def test_project_worker_leaves_another_projects_dispatch_pending(tmp_path):
+    from nebula.v3.execution_scope import execution_context
+    from nebula.v3.runtime_coordination import ProjectLease
+
+    client, store = await setup(tmp_path)
+    service = client.app.state.storage_integrations
+    elsewhere = await store.create(
+        StorageDispatch(
+            incident_id="incident-elsewhere",
+            source_id="source-owned-by-another-project",
+            event_id="observation-1",
+            prompt="Another project's storage alert",
+        )
+    )
+    # A project worker cannot see another project's source: it is not this
+    # worker's dispatch to fail.
+    with execution_context(ProjectLease("storage-project", "worker", 1)):
+        await service.dispatch_pending()
+    assert (await store.get(StorageDispatch, elsewhere.id)).status == "pending"
+
+
 pytestmark = pytest.mark.anyio

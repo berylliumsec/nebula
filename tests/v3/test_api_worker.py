@@ -364,6 +364,135 @@ async def test_decisions_and_revocation_bypass_running_work(boundary, path):
     assert await boundary.coordination.claim_next(boundary.lease, lane="work") is None
 
 
+def _storage_report(event_id="observation-1"):
+    return {
+        "schema_version": 1,
+        "event_id": event_id,
+        "observed_at": utc_now().isoformat(),
+        "kind": "snapshot",
+        "device": {"id": "nas-1", "label": "NAS One"},
+        "volume": {"id": "data", "label": "Data", "path": "/data"},
+        "state": "warning",
+        "free_bytes": 20,
+        "total_bytes": 100,
+    }
+
+
+async def test_storage_sender_reports_reach_their_project_without_operator_credentials(
+    boundary,
+):
+    from nebula.v3.authentication import current_runtime_principal
+    from nebula.v3.domain import StorageSource
+    from nebula.v3.runtime_delivery import HttpIntent
+
+    source = await boundary.host.create(
+        StorageSource(
+            name="Synthetic NAS",
+            engagement_id="project",
+            profile_id="provider",
+            model="model",
+            enabled=True,
+            token_sha256=hashlib.sha256(b"sender-secret").hexdigest(),
+        )
+    )
+    sender = {"Authorization": f"Bearer {source.id}.sender-secret"}
+    _, client = boundary.api()
+    tested = await client.post(
+        "/api/v1/storage/test", headers=sender, json=_storage_report()
+    )
+    assert tested.status_code == 200, tested.text
+    assert tested.json() == {"valid": True, "source_id": source.id}
+    invalid = await client.post(
+        "/api/v1/storage/test", headers=sender, json={"schema_version": 1}
+    )
+    assert invalid.status_code == 422
+    # The operator token is not a source token, and neither is a guess.
+    for headers in (_AUTH, {"Authorization": f"Bearer {source.id}.guess"}, {}):
+        refused = await client.post(
+            "/api/v1/storage/events", headers=headers, json=_storage_report()
+        )
+        assert refused.status_code == 401, refused.text
+    remote = httpx.AsyncClient(
+        transport=httpx.ASGITransport(
+            app=boundary.api()[0], client=("192.0.2.10", 40000)
+        ),
+        base_url="http://synthetic.test",
+    )
+    async with remote:
+        plain = await remote.post(
+            "/api/v1/storage/events", headers=sender, json=_storage_report()
+        )
+    assert plain.status_code == 403
+    async with boundary.host.database.session() as session:
+        assert await session.scalar(select(func.count(RuntimeCommandRow.id))) == 0
+
+    # The sender's contract has no Idempotency-Key; its retry is the same report.
+    report = _storage_report()
+    saved = await client.post("/api/v1/storage/events", headers=sender, json=report)
+    assert saved.status_code == 202, saved.text
+    assert saved.json()["accepted"] is True and saved.json()["queued"] is True
+    retried = await client.post("/api/v1/storage/events", headers=sender, json=report)
+    assert retried.json()["command_id"] == saved.json()["command_id"]
+    async with boundary.host.database.session() as session:
+        command = await session.get(RuntimeCommandRow, saved.json()["command_id"])
+    assert command.project_id == "project"
+    assert command.chat_start is True
+    assert command.actor_id == f"storage-source:{source.id}:{source.token_sha256}"
+    intent, _ = await boundary.delivery.request(
+        SimpleNamespace(
+            receipt=SimpleNamespace(command_id=command.id),
+            name=command.name,
+            payload=command.payload,
+        )
+    )
+    assert isinstance(intent, HttpIntent)
+    assert "sender-secret" not in intent.model_dump_json()
+
+    seen = []
+
+    async def execution(scope, receive, send):
+        headers = dict(scope["headers"])
+        seen.append((current_runtime_principal(), headers[b"authorization"]))
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 202,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'{"accepted":true,"duplicate":false,"current":true}',
+            }
+        )
+
+    runner = DurableHttpRunner(boundary.delivery, execution, operator_token=_TOKEN)
+    assert await runner.run_one(boundary.lease, lane="work")
+    assert seen == [(command.actor_id, b"Bearer " + _TOKEN.encode())]
+    replay = await client.post("/api/v1/storage/events", headers=sender, json=report)
+    assert replay.status_code == 202
+    assert replay.json() == {"accepted": True, "duplicate": False, "current": True}
+
+    # Revoking the source before a saved report runs stops that report.
+    later = await client.post(
+        "/api/v1/storage/events", headers=sender, json=_storage_report("observation-2")
+    )
+    assert later.status_code == 202
+    current = await boundary.host.get(StorageSource, source.id)
+    await boundary.host.update(
+        StorageSource,
+        source.id,
+        {"enabled": False},
+        expected_revision=current.revision,
+    )
+    assert await runner.run_one(boundary.lease, lane="work")
+    assert len(seen) == 1
+    async with boundary.host.database.session() as session:
+        stopped = await session.get(RuntimeCommandRow, later.json()["command_id"])
+    assert stopped.result == {"http_status": 401}
+
+
 def test_api_role_import_does_not_import_the_execution_factory_or_chat_runtime():
     result = subprocess.run(
         [

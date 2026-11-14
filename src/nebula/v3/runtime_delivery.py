@@ -47,6 +47,12 @@ from .runtime_chat_acceptance import (
     ChatBinding,
 )
 from .storage import NebulaStore, NotFoundError
+from .storage_sender import (
+    STORAGE_EVENTS_PATH,
+    STORAGE_REPORT_PATHS,
+    parse_storage_source_actor,
+    revalidate_storage_source,
+)
 
 MAX_REQUEST_BYTES = 8 * 1024**2
 # Only global Library ingestion carries a base64-encoded 20 MiB document in
@@ -169,8 +175,10 @@ class RuntimeDelivery:
 
     @staticmethod
     def _intent_purpose(actor: str) -> str:
-        if actor != "operator" and not (
-            actor.startswith("device:") and len(actor) <= 200
+        if (
+            actor != "operator"
+            and not (actor.startswith("device:") and len(actor) <= 200)
+            and parse_storage_source_actor(actor) is None
         ):
             raise ValueError("durable commands require an authenticated Core principal")
         return "intent:" + actor
@@ -231,6 +239,10 @@ class RuntimeDelivery:
             return True
         if re.fullmatch(r"/api/v1/chat/turns/[^/]{1,200}/resume", intent.path):
             return intent.body() in (b"", b"{}")
+        if intent.path == STORAGE_EVENTS_PATH:
+            # A storage alert opens or continues its incident chat in the
+            # source's project, so its owner must be admitted to run it.
+            return True
         return False
 
     async def accept(
@@ -273,6 +285,10 @@ class RuntimeDelivery:
             ):
                 raise ValueError("Chat acceptance requires a streaming chat intent")
         purpose = self._intent_purpose(actor_id)
+        if parse_storage_source_actor(actor_id) is not None and (
+            intent.method != "POST" or intent.path not in STORAGE_REPORT_PATHS
+        ):
+            raise ValueError("A storage source can only submit storage reports")
         # Project and revision also participate in the immutable identity.
         raw = _json(intent.model_dump(mode="json"))
         reference = await asyncio.to_thread(self.vault.put, raw, purpose=purpose)
@@ -475,6 +491,8 @@ class RuntimeDelivery:
         if actor == "operator":
             return True
         store = NebulaStore(self.coordination.database)
+        if parse_storage_source_actor(actor) is not None:
+            return await revalidate_storage_source(store, actor) is not None
         try:
             device = await store.get(PairedDeviceSession, actor.removeprefix("device:"))
         except NotFoundError:
@@ -541,7 +559,9 @@ class DurableHttpRunner:
                 "body",
                 _json(
                     {
-                        "detail": "The accepting device session expired or was revoked",
+                        "detail": "The storage source was disabled, revoked or rotated before this report ran"
+                        if parse_storage_source_actor(actor) is not None
+                        else "The accepting device session expired or was revoked",
                     }
                 ),
             )

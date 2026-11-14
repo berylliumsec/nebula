@@ -1,35 +1,28 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Stacked on the shutdown diagnosability change. A quiesced project whose only failed stop came from a service that runs inside the worker (chat follow-ups, chat schedules, event-loop monitor, event-history pruning) now closes and releases after the worker's own teardown finishes, with the failure reported as a cleanup warning; any other failure still keeps ownership. runtime-stop failures were opaque: worker refusals became bare IPC 500s, the operation ledger replaced every reason with fixed text, host shutdown never named the project, deployment status reported a failed project worker as ready, and a post-startup revision race or durable blockers left 'uncertain' receipts. The change signs IPC refusals, keeps refusal text as the receipt reason, names projects and failed services, records failed workers for deployment status, classifies stale-revision and blocked shutdowns as no-effect rejections, retries runtime-stop while workers settle, and waits for a project that is still opening. Selected suites cover IPC, the operation ledger, quiescence through the real host shutdown operation, shutdown admission, the launcher CLI, the kernel lifespan, the execution worker, deployment status, handoff and auto-recovery users of OperationRejected, and the host-service RPC users of the IPC server.",
-  "exclusions": "Process-level suites (test_runtime_processes, test_execution_worker_process, test_runtime_host_services, test_runtime_memory_control, test_runtime_browser_bridge, test_runtime_worker_features, test_runtime_management, test_recovery_reconciliation, test_shutdown_readmission) need a pidfd-capable interpreter or a non-loopback LAN Core fixture; locally the same 76 cases fail identically on pristine main and on this branch (no new failures), so they are not selected. No UI, native or Playwright cases: no frontend code changed (the desktop Stop control only prints runtime-stop stderr). PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set. Real-Core scratch evidence (injected service stop failures, six-project startup races, LAN-bound status reads) is recorded in the PR body, not executed by CI.",
+  "reason": "Storage senders on a supervisor Core: the API worker now authenticates POST /api/v1/storage/events, /inventory and /test with the source token (transport rule on the real client), answers /test itself, and saves reports for the source's project under a storage-source principal bound to the token digest, with a body-digest idempotency key. runtime_delivery accepts that principal only for the report routes, counts a storage event as chat-starting work, and revalidates the source before replay; authentication refuses the principal on operator routes; the storage router accepts it on replay; project workers leave other projects' dispatches pending. test_api_worker.py covers the ingress (token, operator token, guesses, remote HTTP, /test, idempotent retry, routing to the source's project, chat_start, no secret in the durable intent, replay principal and operator bearer, revocation before replay) next to the existing API worker contracts. test_storage_integrations.py covers the worker-side replay (ingest and dispatch into the chat queue, refusal on an operator route, rotated token) and dispatch ownership, plus the single-process sender suite. test_runtime_principal, test_runtime_delivery, test_work_batch_contracts, test_runtime_work_batches, test_runtime_global_reads and test_runtime_global_api cover the principal, delivery, batch and global read paths these changes touch.",
+  "exclusions": "No UI or native code changed. test_product_knowledge.py is excluded because two of its search tests (headless core, Butler browser mission) fail identically on origin/main; the bundled index was built and verified locally with the edited docs/storage-integrations.md (427 passages), and CI builds and verifies it anyway. Playwright area storage-integrations is excluded: its real-Core fixture cannot complete provider turns on this host's saturated pressure gate and real-core.spec.ts is not run on main; the supervisor journey was checked instead on a scratch Postgres supervisor Core (sender report 202 accepted and dispatched into its incident chat, which drained; /test 200; inventory 202; operator token and revoked source 401; sources list 200). PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL; the new ingress test also passed on PostgreSQL locally.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 339,
+    "python": 195,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_runtime_ipc.py",
-    "tests/v3/test_runtime_operations.py",
-    "tests/v3/test_runtime_launcher.py",
-    "tests/v3/test_async_core.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_shutdown_admission.py",
-    "tests/v3/test_runtime_host_search.py",
-    "tests/v3/test_shared_butler_memory.py",
-    "tests/v3/test_shared_knowledge.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_runtime_auto_recovery.py"
+    "tests/v3/test_api_worker.py",
+    "tests/v3/test_runtime_principal.py",
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_work_batch_contracts.py",
+    "tests/v3/test_runtime_global_reads.py",
+    "tests/v3/test_runtime_global_api.py",
+    "tests/v3/test_runtime_work_batches.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "bf9fc60c5ebae9c92944f342807e8d6311ae55dc22099eafeed04a06536ed8b3"
+  "change_digest": "0a49ae9dbaac04f1592ab50f92430c2472ef088f94e6c3bca360b4726316c485"
 }
