@@ -45,6 +45,11 @@ from .runtime_ipc import (
 from .runtime_routes import command_lane
 from .runtime_identity import mount_runtime_identity
 from .runtime_static import RuntimeStatic
+from .runtime_view_leases import (
+    VIEW_LEASE_TTL_SECONDS,
+    ProjectViewLeases,
+    ViewLeaseRefused,
+)
 from .storage import NebulaStore, NotFoundError
 
 
@@ -189,7 +194,9 @@ def create_api_worker(
             # or a readmitted one is still starting: the read can be repeated.
             return JSONResponse(
                 project_runtime_unavailable_body(
-                    "The project runtime is not ready. Saved work is unchanged; read again shortly."
+                    str(error)
+                    if error.reason == "held"
+                    else "The project runtime is not ready. Saved work is unchanged; read again shortly."
                     if error.reason != "idle"
                     else "The project is idle. Saved work is unchanged; it loads when work resumes in the project.",
                     error.reason,
@@ -413,6 +420,47 @@ def create_api_worker(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    view_leases = ProjectViewLeases(store.database, delivery.coordination)
+
+    def view_lease_refused(error: ViewLeaseRefused) -> JSONResponse:
+        return JSONResponse({"detail": error.detail}, status_code=error.status)
+
+    # An open project view holds a lease that the host counts as worker
+    # demand. These are the only lease writes, on this SQL-global path. A PUT
+    # keyed by the client's lease ID is idempotent (a replay renews, or after
+    # expiry recreates, the same lease), so it needs no Idempotency-Key.
+    @app.put("/api/v1/engagements/{project_id}/view-leases/{lease_id}")
+    async def hold_view_lease(
+        project_id: str, lease_id: str, request: Request, actor=Depends(principal)
+    ):
+        body = await request.body()
+        try:
+            values = json.loads(body) if body else {}
+        except (ValueError, UnicodeError, RecursionError):
+            # diagnostic-expected: a malformed lease body is a client validation error.
+            raise HTTPException(422, "The view lease body must be JSON") from None
+        if not isinstance(values, dict) or set(values) - {"ttl_seconds"}:
+            raise HTTPException(422, "A view lease accepts only ttl_seconds")
+        try:
+            return await view_leases.hold(
+                actor,
+                project_id,
+                lease_id,
+                values.get("ttl_seconds", VIEW_LEASE_TTL_SECONDS),
+            )
+        except ViewLeaseRefused as error:
+            # diagnostic-expected: refusals are explained to the client.
+            return view_lease_refused(error)
+
+    @app.delete(
+        "/api/v1/engagements/{project_id}/view-leases/{lease_id}", status_code=204
+    )
+    async def release_view_lease(
+        project_id: str, lease_id: str, actor=Depends(principal)
+    ):
+        await view_leases.release(actor, project_id, lease_id)
+        return Response(status_code=204)
 
     @app.api_route(
         "/api/v1/{path:path}",

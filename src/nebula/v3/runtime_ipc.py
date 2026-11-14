@@ -45,9 +45,10 @@ PROJECT_RUNTIME_RETRY_AFTER_SECONDS = 1
 
 
 # Why no ready worker owns the project: "starting" (Core is admitting or
-# recovering one), "closing" (the worker is retiring or was replaced) or "idle"
-# (nothing will admit one until the operator resumes work in the project).
-PROJECT_RUNTIME_REASONS = ("starting", "closing", "idle")
+# recovering one), "closing" (the worker is retiring or was replaced), "held"
+# (wanted, but a host gate such as the memory budget refuses it for now) or
+# "idle" (nothing will admit one until the operator resumes work in it).
+PROJECT_RUNTIME_REASONS = ("starting", "closing", "held", "idle")
 
 
 def project_runtime_unavailable_body(
