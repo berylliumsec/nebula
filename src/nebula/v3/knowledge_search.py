@@ -17,10 +17,9 @@ redacts secrets, exactly as automatic attachment does for that provider.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import ValidationError
@@ -69,9 +68,10 @@ KNOWLEDGE_SEARCH_INPUT: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# (engagement_id, query, allow_local_only, token_budget) -> search result, as
-# ``ChatService.harness_knowledge_search`` answers it.
-KnowledgeSearcher = Callable[[str, str, bool, int], Any]
+# (engagement_id, query, allow_local_only, token_budget) -> awaitable search
+# result, as the async ``ChatService.harness_knowledge_search`` answers it. It
+# moves the vector search and relevance scoring off the event loop itself.
+KnowledgeSearcher = Callable[[str, str, bool, int], Awaitable[Any]]
 
 
 def knowledge_search_spec() -> ToolSpec:
@@ -125,9 +125,7 @@ class KnowledgeSearchTool(InvocationAnalysisTool):
         query = " ".join(str(invocation.arguments.get("query") or "").split())
         if not query:
             raise InvalidToolArguments("query must contain text to search for")
-        # Vector search and relevance scoring are CPU work: off the event loop.
-        result = await asyncio.to_thread(
-            self.searcher,
+        result = await self.searcher(
             self.engagement_id,
             query,
             self.allow_local_only,
