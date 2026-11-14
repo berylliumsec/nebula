@@ -3,12 +3,12 @@
 from __future__ import annotations
 import asyncio
 import json
-from contextlib import suppress
 from hashlib import sha256
 from uuid import uuid4
 from fastapi import APIRouter, Request, Response, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from .async_utils import cancel_and_join
 from .chat import ChatCompletionRequest, ChatHistoryConflict, unarchive_chat_session
 from .harnesses import HarnessSkillInvocation
 from .chat_turn_headers import latest_turn_header, turn_header
@@ -214,6 +214,10 @@ class ChatQueueService:
         # Conversations with chat activity during the current pass.
         self._pass_activity = None
         self._wake = asyncio.Event()
+        # Set by shutdown: ends the loop even if its cancellation is swallowed
+        # in SQL (Python 3.11 wait_for in the pool checkout) and keeps a
+        # stopping Core from dispatching another follow-up.
+        self._stopping = False
         store.on_follow_up_change(self._signal)
 
     def _signal(self, queue_written, sessions):
@@ -889,6 +893,7 @@ class ChatQueueService:
         return False
 
     async def startup(self):
+        self._stopping = False
         for queue in await self.queues():
             try:
                 await self.step(queue, recovering=True)
@@ -918,6 +923,8 @@ class ChatQueueService:
         """Step every queue that can act; return conversations waiting on a turn."""
         watched = set()
         for queue in await self.queues(skip_dormant=True):
+            if self._stopping:
+                break
             try:
                 self._latest_seen.pop(queue.session_id, None)
                 await self.step(queue)
@@ -945,7 +952,7 @@ class ChatQueueService:
         loop = asyncio.get_running_loop()
         safety_at = loop.time() + SAFETY_POLL_SECONDS
         failures = 0
-        while True:
+        while not self._stopping:
             if loop.time() >= safety_at:
                 self._parked.clear()
                 safety_at = loop.time() + SAFETY_POLL_SECONDS
@@ -975,6 +982,8 @@ class ChatQueueService:
                 continue
             finally:
                 activity, self._pass_activity = self._pass_activity, None
+            if self._stopping:
+                return
             # A turn that changed while this pass read it is read again.
             if self._reopen(activity) or activity & self._watched:
                 self._wake.set()
@@ -994,10 +1003,11 @@ class ChatQueueService:
             await asyncio.sleep(WAKE_COALESCE_SECONDS)
 
     async def shutdown(self):
+        self._stopping = True
+        # Wake a waiting loop so it sees the flag even if a cancel is lost.
+        self._wake.set()
         if self.task:
-            self.task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.task
+            await cancel_and_join(self.task)
 
 
 def queue_router(service):
