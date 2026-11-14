@@ -49,4 +49,7 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   for (const reading of ["/catchup", "/quote", "/evidence", "/turn", "terminal catch-up", "supporting evidence", "turn details"]) {
     expect(pairing).toContain(reading);
   }
+  for (const inspector of ["artifact inspector", "tool output", "/results", "stop harness subagent", "checkpoint rewind"]) {
+    expect(pairing).toContain(inspector);
+  }
 });
