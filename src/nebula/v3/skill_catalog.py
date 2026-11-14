@@ -8,12 +8,11 @@ import re
 from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal
 from urllib.parse import unquote, urlsplit
-from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field, StringConstraints, field_validator
 
 from .domain import NebulaModel, RiskClass, ScopePolicy
-from .runtime_platform import RuntimeToolComponents
+from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
 
 
@@ -400,11 +399,7 @@ def skill_resource_components(
     )
     return RuntimeToolComponents(
         broker=SkillResourceBroker(selected),
-        scope=scope
-        or ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
-            engagement_id=engagement_id,
-        ),
+        scope=require_project_scope(scope, "Skill resource"),
         workspace=workspace,
         specs={spec.name: spec},
         runtime_digest=digest,

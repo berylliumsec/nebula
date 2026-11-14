@@ -3,6 +3,9 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
+
 import pytest
 
 from nebula.v3.chat import (
@@ -13,6 +16,7 @@ from nebula.v3.chat import (
 )
 from nebula.v3.chat_agent_messages import (
     AgentMessageService,
+    agent_message_components,
     resolve_agent_messaging_choice,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
@@ -34,11 +38,13 @@ from nebula.v3.domain import (
     ProviderProfile,
     ProviderCapabilityVerification,
     ProviderVerificationStatus,
+    ScopePolicy,
     ToolCallOrigin,
 )
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.harnesses import HarnessConfigurationError
 from nebula.v3.storage import NebulaStore
+from nebula.v3.work import work_components, work_roster_components
 from nebula.v3.tools import InvalidToolArguments, ToolInvocation, ToolNotPermitted
 from tests.v3.test_chat import FakeProvider
 
@@ -604,3 +610,128 @@ async def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def _verified_local_chat(tmp_path, *, stored_scope, work_enabled=True):
+    store = NebulaStore(tmp_path / "project-scope.db")
+    project = await store.create(Engagement(name="Project", work_enabled=work_enabled))
+    scope = None
+    if stored_scope:
+        scope = await store.create(
+            ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id)
+        )
+        project = await store.update(
+            Engagement,
+            project.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=project.revision,
+        )
+    profile = await store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            capability_verifications={
+                "model-a": ProviderCapabilityVerification(
+                    model="model-a", status=ProviderVerificationStatus.VERIFIED
+                )
+            },
+            privacy={"local_only": True},
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    return store, project, scope, profile, provider
+
+
+@pytest.mark.parametrize(
+    ("first_family", "options", "work_enabled", "expected_tool"),
+    [
+        ("agent messages", {}, True, "list_agents"),
+        ("Work", {"allow_agent_messaging": False}, True, "work_list"),
+        ("Work roster", {"allow_agent_messaging": False}, False, "work_agents"),
+        (
+            "subagents",
+            {"allow_agent_messaging": False, "allow_subagents": True},
+            False,
+            None,
+        ),
+    ],
+)
+async def test_core_owned_tool_families_carry_the_projects_stored_scope(
+    tmp_path, first_family, options, work_enabled, expected_tool
+):
+    """Regression: a verified local model with only Core-owned tool families.
+
+    Whichever Core-owned family starts the component chain when no runtime
+    supplies the scope must use the project's stored ScopePolicy: a
+    placeholder id made every such turn fail with "project scope changed".
+    """
+    store, project, scope, profile, provider = await _verified_local_chat(
+        tmp_path, stored_scope=True, work_enabled=work_enabled
+    )
+    service = ChatService(store, provider_factory=lambda _: provider)
+    request = ChatCompletionRequest(
+        engagement_id=project.id,
+        provider_id=profile.id,
+        model="model-a",
+        messages=[{"role": "user", "content": "Coordinate"}],
+        include_knowledge=False,
+        **options,
+    )
+    prepared = await service.prepare_async(request)
+    assert prepared.tool_components is not None, first_family
+    assert prepared.tool_components.scope.id == scope.id
+    if expected_tool is not None:
+        assert expected_tool in prepared.tool_components.specs
+    restarted = ChatService(store, provider_factory=lambda _: provider)
+    resumed = await restarted.prepare_resume(prepared.turn.id)
+    assert resumed.tool_components is not None
+    assert resumed.tool_components.scope.id == scope.id
+    await restarted.complete(resumed)
+    await service.shutdown()
+    await restarted.shutdown()
+
+
+async def test_projects_without_a_stored_scope_keep_their_placeholder_scope(tmp_path):
+    """Turns in scope-less projects keep the id they were persisted with, so
+    turns queued before an upgrade still resume afterwards."""
+    store, project, _scope, profile, provider = await _verified_local_chat(
+        tmp_path, stored_scope=False
+    )
+    service = ChatService(store, provider_factory=lambda _: provider)
+    prepared = await service.prepare_async(
+        ChatCompletionRequest(
+            engagement_id=project.id,
+            provider_id=profile.id,
+            model="model-a",
+            messages=[{"role": "user", "content": "Coordinate"}],
+            include_knowledge=False,
+        )
+    )
+    placeholder = str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{project.id}"))
+    assert prepared.tool_components is not None
+    assert prepared.tool_components.scope.id == placeholder
+    restarted = ChatService(store, provider_factory=lambda _: provider)
+    resumed = await restarted.prepare_resume(prepared.turn.id)
+    assert resumed.tool_components is not None
+    assert resumed.tool_components.scope.id == placeholder
+    await restarted.complete(resumed)
+    await service.shutdown()
+    await restarted.shutdown()
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: agent_message_components(
+            None, engagement_id="project", workspace=Path("/tmp")
+        ),
+        lambda: work_components(None, "project", Path("/tmp")),
+        lambda: work_roster_components(None, "project", Path("/tmp")),
+    ],
+    ids=["agent-messages", "work", "work-roster"],
+)
+def test_core_owned_tool_families_refuse_a_missing_scope(build):
+    with pytest.raises(ValueError, match="require the project's scope policy"):
+        build()

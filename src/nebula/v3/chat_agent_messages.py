@@ -40,7 +40,7 @@ from .domain import (
     ScopePolicy,
     utc_now,
 )
-from .runtime_platform import RuntimeToolComponents
+from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .storage import ChatSessionAgentRow, ConflictError, NotFoundError
 from .tools import (
     InvalidToolArguments,
@@ -644,11 +644,7 @@ def agent_message_components(
 ) -> RuntimeToolComponents:
     return RuntimeToolComponents(
         broker=AgentMessageBroker(service),
-        scope=scope
-        or ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
-            engagement_id=engagement_id,
-        ),
+        scope=require_project_scope(scope, "Agent message"),
         workspace=workspace,
         specs=agent_message_specs(),
         runtime_digest=AGENT_MESSAGE_TOOLS_CONTRACT,

@@ -1,29 +1,31 @@
 {
-  "reviewed_by": "Codex",
-  "reason": "Verify exact reconciliation of a pre-spawn MemoryBudgetError operation with current and legacy top-level host activation receipts, while preserving the pending candidate and preventing replacement under a nonterminal deployment journal.",
-  "exclusions": "CI runs four focused simulation deployer cases across Python 3.11, 3.12, and 3.13. No local tests, database backup, live Core mutation, broad suites, or new workflow.",
-  "python_versions": [
-    "3.11",
-    "3.12",
-    "3.13"
-  ],
+  "reviewed_by": "Claude",
+  "reason": "Once a provider model is verified for tool calling, Core-owned tool families (agent messages, Work, Work roster, subagents, subagent replies, skills) are offered on every chat. When no runtime that loads the project's scope came first, prepare_async/prepare_resume built them with scope=None and each builder invented a uuid5 placeholder ScopePolicy; _eligible_provider_specs compared it with the stored scope and every such chat returned 409 'project scope changed during this response' (main and production 5ec14b4). The fix passes the project's stored scope at all twelve builder hand-offs, keeps the established placeholder id only for projects without a stored scope, and makes the builders refuse a missing scope. Selected suites cover provider chat preparation/resume with these families, goals, conversation search, MCP context modes and the Work tool builders.",
+  "exclusions": "Only suites that pass on pristine main are selected: 26 related files (test_chat.py, test_chat_subagents.py, test_control_assistant_work.py and others) already fail on main for unrelated harness reasons ('coroutine' object not awaited, asyncio.run in a running loop); across all 758 related tests the failure set is identical with and without this change. test_work.py is limited to the four builder tests it changes because test_work_project_batch_links_existing_projects_and_prevents_cycles fails on main independently. No UI, native or Playwright cases: no frontend code changed. Real-Core evidence (a LAN Core whose nine projects returned 409 after verification now completes chats) is recorded in the PR.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 87,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_host_activation.py::test_reconcile_pre_spawn_memory_error_archives_journal_and_preserves_pending",
-    "tests/test_simulation_host_activation.py::test_reconcile_accepts_legacy_top_level_host_activation_receipt",
-    "tests/test_simulation_host_activation.py::test_reconcile_rejects_unknown_error_and_changed_api_or_resident_state",
-    "tests/test_simulation_host_activation.py::test_prepare_rejects_replacing_candidate_under_nonterminal_journal"
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_conversation_search.py",
+    "tests/v3/test_provider_tools_fixture.py",
+    "tests/v3/test_mcp_context_mode.py",
+    "tests/v3/test_next_turn_mcp_exclusion.py",
+    "tests/v3/test_subagent_choice_new_chats.py",
+    "tests/v3/test_work.py::test_provider_work_tools_use_chat_scope_and_opt_out",
+    "tests/v3/test_work.py::test_provider_work_tools_reach_only_linked_child_project",
+    "tests/v3/test_work.py::test_provider_work_pages_and_reads_full_long_item",
+    "tests/v3/test_work.py::test_agent_roster_matches_dashboard_scope_and_refreshes_links"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "875392d873b5cc2e79d36ba3d6d3cc4819b706b871aaa474fb64331b942e753a"
+  "change_digest": "924b73c3f5d61cf67ce504f289ff6e221eaab0cd6270a02a5de0c3b83d849a2c"
 }

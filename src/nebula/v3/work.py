@@ -26,7 +26,7 @@ from .domain import (
     WorkItem,
     WorkUpdate,
 )
-from .runtime_platform import RuntimeToolComponents
+from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
@@ -1113,11 +1113,7 @@ def work_roster_components(
 ) -> RuntimeToolComponents:
     return RuntimeToolComponents(
         broker=WorkRosterBroker(service),
-        scope=scope
-        or ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
-            engagement_id=engagement_id,
-        ),
+        scope=require_project_scope(scope, "Work roster"),
         workspace=workspace,
         specs={
             "work_agents": ToolSpec(
@@ -1341,11 +1337,7 @@ def work_components(
     }
     return RuntimeToolComponents(
         broker=WorkBroker(service),
-        scope=scope
-        or ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
-            engagement_id=engagement_id,
-        ),
+        scope=require_project_scope(scope, "Work"),
         workspace=workspace,
         specs=specs,
         runtime_digest="work-v2",

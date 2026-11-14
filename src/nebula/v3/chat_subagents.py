@@ -99,7 +99,7 @@ from .domain import (
 )
 from .providers import REASONING_EFFORTS, ReasoningEffort
 from .model_pricing import combined_billed_cost
-from .runtime_platform import RuntimeToolComponents
+from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .native_hooks import discover_native_hooks
 from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
 from .skill_catalog import SkillSelection, discover_skills, native_skill_roots
@@ -5596,11 +5596,7 @@ def subagent_components(
 ) -> RuntimeToolComponents:
     return RuntimeToolComponents(
         broker=SubagentBroker(service),
-        scope=scope
-        or ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
-            engagement_id=engagement_id,
-        ),
+        scope=require_project_scope(scope, "Subagent"),
         workspace=workspace,
         specs=subagent_specs(),
         # The versioned contract, not a hash of the specs: Nebula's own tools
@@ -5633,11 +5629,7 @@ def subagent_child_components(
 
     return RuntimeToolComponents(
         broker=SubagentBroker(service),
-        scope=scope
-        or ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
-            engagement_id=engagement_id,
-        ),
+        scope=require_project_scope(scope, "Subagent reply"),
         workspace=workspace,
         specs=subagent_child_specs(),
         runtime_digest="",

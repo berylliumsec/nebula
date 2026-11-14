@@ -158,6 +158,17 @@ def _runner_profile_fingerprint(profile: StoredRunnerProfile) -> str:
     ).hexdigest()
 
 
+def require_project_scope(scope: ScopePolicy | None, family: str) -> ScopePolicy:
+    """Core-owned tool families must start from the project's stored scope.
+
+    A placeholder scope never matches the stored one, so every provider turn
+    offering the family would be rejected as a mid-response scope change.
+    """
+    if scope is None:
+        raise ValueError(f"{family} tools require the project's scope policy")
+    return scope
+
+
 @dataclass(frozen=True)
 class RuntimeToolComponents:
     broker: ToolExecutionBroker
