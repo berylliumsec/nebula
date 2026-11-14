@@ -27,7 +27,13 @@ from .domain import (
     entity_engagement_id,
     utc_now,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError, _entity_lookup_fields
+from .storage import (
+    ConflictError,
+    NebulaStore,
+    NotFoundError,
+    _entity_lookup_fields,
+    revision_conflict,
+)
 
 
 RESOURCE_ENTITY_KINDS: dict[ResourceKind, str] = {
@@ -201,9 +207,7 @@ class ResourceRelationService:
         if ref.project_id != project_id:
             raise ValueError(f"relation reference {ref.id} has the wrong project")
         if ref.revision is not None and row.revision != ref.revision:
-            raise ConflictError(
-                f"revision conflict: expected {ref.revision}, found {row.revision}"
-            )
+            raise revision_conflict(row.kind, ref.id, ref.revision, row.revision)
         return row
 
     async def create(
@@ -279,8 +283,11 @@ class ResourceRelationService:
             if row is None or row.project_id != project_id:
                 raise NotFoundError(f"resource relation not found: {relation_id}")
             if row.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {row.revision}"
+                raise revision_conflict(
+                    ResourceRelationRow.__tablename__,
+                    relation_id,
+                    expected_revision,
+                    row.revision,
                 )
             if (
                 row.predicate == RelationPredicate.INCLUDES.value
@@ -306,8 +313,11 @@ class ResourceRelationService:
                 request.expected_source_revision is not None
                 and source.revision != request.expected_source_revision
             ):
-                raise ConflictError(
-                    f"revision conflict: expected {request.expected_source_revision}, found {source.revision}"
+                raise revision_conflict(
+                    source.kind,
+                    source.id,
+                    request.expected_source_revision,
+                    source.revision,
                 )
             for target in request.targets:
                 self._validate_shape(request.predicate, request.source, target)
@@ -691,8 +701,8 @@ class ResourceRelationService:
                     f"{current.entity_kind} entity not found: {current.id}"
                 )
             if row.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {row.revision}"
+                raise revision_conflict(
+                    current.entity_kind, current.id, expected_revision, row.revision
                 )
             updated = candidate.model_copy(
                 update={
@@ -714,7 +724,8 @@ class ResourceRelationService:
                 # diagnostic-expected: a relations-API write raced this edit; the
                 # unique edge constraint reports it as a revision-style conflict.
                 raise ConflictError(
-                    f"relations of {current.id} changed while the update was in progress"
+                    f"relations of {current.entity_kind} {current.id} changed "
+                    "while the update was in progress"
                 ) from exc
             return updated
 

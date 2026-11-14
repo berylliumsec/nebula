@@ -3,12 +3,15 @@ import {ApiError} from "../api/client";
 
 type SelectionState = Pick<ChatAssistantConfig, "mcpServerIds" | "hookIds" | "excludedMcpServerIds" | "mcpContextMode">;
 
+// Core names the record ("revision conflict on chat_sessions <id>: …");
+// older Cores omit it.
+const REVISION_CONFLICT = /^revision conflict(?: on [a-z_]+ .+)?: expected \d+, found \d+$/;
+
 export function isAssistantSelectionRevisionConflict(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
   return (error.status === 422 && error.code === "chat.value_error"
     && error.operatorDetail === "conversation changed; read its Assistant settings and try again")
-    || (error.status === 409
-      && /^revision conflict: expected \d+, found \d+$/.test(error.operatorDetail ?? ""));
+    || (error.status === 409 && REVISION_CONFLICT.test(error.operatorDetail ?? ""));
 }
 
 function delta(before: readonly string[], after: readonly string[]) {

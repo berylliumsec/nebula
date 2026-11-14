@@ -48,7 +48,7 @@ from .providers import (
     ProviderError,
     provider_from_profile,
 )
-from .storage import ConflictError, NebulaStore
+from .storage import NebulaStore, revision_conflict
 
 PROMPT_VERSION = "scope-import/v1"
 MAX_SCOPE_TEXT = 400_000
@@ -407,8 +407,11 @@ class ScopeImportService:
         )
         actual_revision = current_scope.revision if current_scope else 0
         if actual_revision != request.expected_scope_revision:
-            raise ConflictError(
-                f"revision conflict: expected {request.expected_scope_revision}, found {actual_revision}"
+            raise revision_conflict(
+                ScopePolicy.entity_kind,
+                engagement.scope_policy_id or f"of project {engagement.id}",
+                request.expected_scope_revision,
+                actual_revision,
             )
         by_id = {candidate.id: candidate for candidate in scope_import.candidates}
         if len(set(request.candidate_ids)) != len(request.candidate_ids):

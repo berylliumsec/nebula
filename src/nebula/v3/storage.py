@@ -192,6 +192,22 @@ class ConflictError(StorageError):
     pass
 
 
+def revision_conflict(
+    kind: str, record_id: str, expected: int | None, found: int | None
+) -> ConflictError:
+    """A revision conflict that names the record whose revision moved.
+
+    Only the record's kind and id are named, never its content, so a report
+    such as "revision conflict on chat_sessions <id>: expected 17, found 18"
+    points at the write that lost. The leading words and the "expected N,
+    found M" part are what clients recognize.
+    """
+
+    return ConflictError(
+        f"revision conflict on {kind} {record_id}: expected {expected}, found {found}"
+    )
+
+
 class CorruptRecordError(StorageError):
     pass
 
@@ -638,8 +654,8 @@ class StoreTransaction:
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictError(
-                f"revision conflict: expected {expected_revision}, found {row.revision}"
+            raise revision_conflict(
+                model.entity_kind, entity_id, expected_revision, row.revision
             )
         # The stored payload is the entity's own JSON form, so the change is
         # applied to it directly and validated once. Parsing the stored entity
@@ -706,12 +722,15 @@ class StoreTransaction:
             )
             if goal_transition:
                 before_goal = ChatGoal.model_validate(row.payload)
+        # The statement synchronizes the cached row even when it matches
+        # nothing, so the revision this update read is kept for the error.
+        read_revision = row.revision
         result = await self.session.execute(
             update(EntityRow)
             .where(
                 EntityRow.id == entity_id,
                 EntityRow.kind == model.entity_kind,
-                EntityRow.revision == row.revision,
+                EntityRow.revision == read_revision,
             )
             .values(
                 payload=_dump_entity(updated),
@@ -729,7 +748,8 @@ class StoreTransaction:
         )
         if result.rowcount != 1:
             raise ConflictError(
-                f"entity {entity_id} changed while the update was in progress"
+                f"{model.entity_kind} entity {entity_id} changed while the update "
+                f"was in progress (expected revision {read_revision})"
             )
         (await self.session.flush())
         refreshed = await self.session.get(EntityRow, entity_id)
@@ -800,8 +820,8 @@ class StoreTransaction:
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictError(
-                f"revision conflict: expected {expected_revision}, found {row.revision}"
+            raise revision_conflict(
+                model.entity_kind, entity_id, expected_revision, row.revision
             )
         self._runtime_activity(row.kind, row.id, row.payload)
         (await self.session.delete(row))
@@ -2370,8 +2390,11 @@ class NebulaStore:
                 raise NotFoundError(f"engagements entity not found: {engagement_id}")
             project = _row_to_entity(row, Engagement)
             if project.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {project.revision}"
+                raise revision_conflict(
+                    Engagement.entity_kind,
+                    engagement_id,
+                    expected_revision,
+                    project.revision,
                 )
             if project.workspace_path == workspace_path:
                 return project
@@ -2535,8 +2558,11 @@ class NebulaStore:
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
             if int(row["revision"]) != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {row['revision']}"
+                raise revision_conflict(
+                    model.entity_kind,
+                    entity_id,
+                    expected_revision,
+                    int(row["revision"]),
                 )
             payload = dict(row["payload"])
             payload.update(changes)
@@ -2564,7 +2590,10 @@ class NebulaStore:
                 )
             )
             if result.rowcount != 1:
-                raise ConflictError("entity transition lost an optimistic lock race")
+                raise ConflictError(
+                    f"{model.entity_kind} entity {entity_id} transition lost an "
+                    f"optimistic lock race (expected revision {expected_revision})"
+                )
             event = await self._next_event(
                 connection,
                 run_id=run_id,
@@ -2638,9 +2667,11 @@ class NebulaStore:
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
             if int(row["revision"]) != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, "
-                    f"found {row['revision']}"
+                raise revision_conflict(
+                    model.entity_kind,
+                    entity_id,
+                    expected_revision,
+                    int(row["revision"]),
                 )
 
             payload = dict(row["payload"])
@@ -2669,7 +2700,10 @@ class NebulaStore:
                 )
             )
             if result.rowcount != 1:
-                raise ConflictError("entity transition lost an optimistic lock race")
+                raise ConflictError(
+                    f"{model.entity_kind} entity {entity_id} transition lost an "
+                    f"optimistic lock race (expected revision {expected_revision})"
+                )
 
             event = await self._next_operation_event(
                 connection,
@@ -2747,9 +2781,11 @@ class NebulaStore:
                         )
                     )
                     if current_revision is not None:
-                        raise ConflictError(
-                            "revision conflict: expected "
-                            f"{expected_revision}, found {current_revision}"
+                        raise revision_conflict(
+                            model.entity_kind,
+                            entity_id,
+                            expected_revision,
+                            current_revision,
                         )
                 raise NotFoundError(
                     f"{model.entity_kind} entity not found: {entity_id}"
@@ -2793,8 +2829,8 @@ class NebulaStore:
         if row is None:
             raise NotFoundError(f"chat_sessions entity not found: {session_id}")
         if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictError(
-                f"revision conflict: expected {expected_revision}, found {row.revision}"
+            raise revision_conflict(
+                "chat_sessions", session_id, expected_revision, row.revision
             )
         # Subagent conversations belong to their parent and go with it.
         subagent_rows = (
@@ -3045,9 +3081,7 @@ class NebulaStore:
             if row is None:
                 raise NotFoundError(f"runs entity not found: {run_id}")
             if expected_revision is not None and row.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {row.revision}"
-                )
+                raise revision_conflict("runs", run_id, expected_revision, row.revision)
 
             status = row.payload.get("status")
             if status not in {"complete", "failed", "cancelled", "interrupted"}:
