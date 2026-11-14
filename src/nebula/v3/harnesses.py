@@ -1671,16 +1671,21 @@ class HarnessInteractionRequest(NebulaModel):
     annotations: dict[str, Any] = Field(default_factory=dict)
 
 
+# Saves the adapter handoff receipt in Core's async approval store. Adapters
+# await it after writing the decision, so the receipt is never dropped.
+HandoffReceipt = Callable[[Literal["sent", "failed"]], Awaitable[object]]
+
+
 @dataclass
 class PermissionTicket:
     approval_id: str | None
     tool_call_id: str | None
     decision: asyncio.Future[HarnessPermissionDecision]
-    handoff_receipt: Callable[[Literal["sent", "failed"]], None] | None = None
+    handoff_receipt: HandoffReceipt | None = None
 
-    def acknowledge_handoff(self, status: Literal["sent", "failed"]) -> None:
+    async def acknowledge_handoff(self, status: Literal["sent", "failed"]) -> None:
         if self.handoff_receipt is not None:
-            self.handoff_receipt(status)
+            await self.handoff_receipt(status)
 
 
 async def _respond_permission(
@@ -1691,9 +1696,9 @@ async def _respond_permission(
     except BaseException:
         # Record uncertainty even on cancellation; never resend a partially
         # written response. A receipt failure propagates, leaving startup intent.
-        ticket.acknowledge_handoff("failed")
+        await ticket.acknowledge_handoff("failed")
         raise
-    ticket.acknowledge_handoff("sent")
+    await ticket.acknowledge_handoff("sent")
 
 
 PermissionHandler = Callable[[HarnessPermissionRequest], Awaitable[PermissionTicket]]
@@ -8604,7 +8609,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                         "message": decision.reason or "Denied by Nebula policy",
                     }
                 )
-            ticket.acknowledge_handoff("sent")
+            await ticket.acknowledge_handoff("sent")
             return result
 
         async def enforce_native_tool(

@@ -314,10 +314,10 @@ async def call_core_tool(
                 # A child can ask its parent without consuming an execution
                 # slot. Cancellation still ends the gateway wait.
                 service = runtime.provider_subagents
-                await service._deliver(service._invoking_child(invocation))
-                while not service.wait_ready(pending.wait):
+                await service._deliver(await service._invoking_child(invocation))
+                while not await service.wait_ready(pending.wait):
                     await asyncio.sleep(0.05)
-                output, _ = service.wait_result(pending.wait)
+                output, _ = await service.wait_result(pending.wait)
                 result = ToolExecutionResult(output=output)
             except ApprovalRequired as required:  # diagnostic-expected: the broker persisted the approval before yielding execution
                 await runtime._wait_for_broker_approval(turn, required.approval)
