@@ -30,11 +30,16 @@ async function keyedMutation(api: APIRequestContext, method: Mutation, url: stri
       const unmarked = marks["x-nebula-request-state"] === undefined && marks["x-nebula-command-id"] === undefined;
       return first.status() === 202 && unmarked ? ownAnswer : first;
     },
-    get: (target: string) => api.get(new URL(`/api/v1/${target}`, first!.url()).href),
+    // A follow read is sent as the same caller: it keeps the call's own headers, such as a per-call Authorization.
+    get: (target: string) => api.get(new URL(`/api/v1/${target}`, first!.url()).href, {headers: kept}),
   } as unknown as APIRequestContext;
   // A mutation of a quiet project waits for its worker to start, so a slow host's Core startup wait applies.
-  const timeout = Math.max(60_000, Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS ?? 0));
+  const timeout = Math.max(60_000, Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS) || 0);
   const answer = await coreMutation(carrier, method, url, data, {key, timeout});
+  // A saved request that ended failed or uncertain is not the route's answer; never let a status check pass on it.
+  if (answer.headers()["x-nebula-request-state"] === "needs-reconciliation") {
+    throw new Error(`Core could not finish the saved ${method.toUpperCase()} ${url}: ${await answer.text()}`);
+  }
   return answer === ownAnswer ? first! : answer;
 }
 
@@ -72,7 +77,8 @@ export function keyedCoreRequests(request: APIRequest): APIRequest {
 export async function stopCoreWorkers(dataDir: string): Promise<void> {
   const runtime = path.join(path.resolve(dataDir), "runtime") + path.sep;
   const owned = () => {
-    const listing = spawnSync("ps", ["-Ao", "pid=,pgid=,args="], {encoding: "utf8"});
+    // `ww` keeps the whole command line; a set COLUMNS would otherwise cut it before the release path.
+    const listing = spawnSync("ps", ["-Awwo", "pid=,pgid=,args="], {encoding: "utf8"});
     if (listing.status !== 0) throw new Error(`Could not list Core workers: ${listing.stderr || listing.error}`);
     return listing.stdout.split("\n")
       .map(line => line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/))
@@ -81,7 +87,7 @@ export async function stopCoreWorkers(dataDir: string): Promise<void> {
   };
   const signal = (name: NodeJS.Signals) => {
     for (const worker of owned()) {
-      // A worker leads its own process group; signal the group so the tools it started end with it.
+      // A worker leads its own process group; signal the group so the tools it started there end with it.
       try { process.kill(worker.leader ? -worker.pid : worker.pid, name); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
       }
@@ -109,7 +115,7 @@ export async function removeCoreSockets(dataDir: string): Promise<void> {
     throw error;
   });
   const sockets = origin ? (JSON.parse(origin) as {socket_root?: unknown}).socket_root : undefined;
-  if (typeof sockets === "string" && path.basename(sockets).startsWith("nebula-ipc-")) {
+  if (typeof sockets === "string" && path.dirname(sockets) === "/tmp" && path.basename(sockets).startsWith("nebula-ipc-")) {
     await rm(sockets, {recursive: true, force: true});
   }
 }
