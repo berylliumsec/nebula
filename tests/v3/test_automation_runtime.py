@@ -7,6 +7,7 @@ import itertools
 import json
 import socket
 import shutil
+from datetime import timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -30,6 +31,7 @@ from nebula.v3.automation_runtime import (
     RuntimeBackendSession,
 )
 from nebula.v3.automation_tools import AutomationBroker, PROCESS_IO_NAME
+from nebula.v3.browser_tools import AUTONOMOUS_BROWSER_TOOLS
 from nebula.v3.domain import (
     AgentRun,
     Approval,
@@ -39,14 +41,22 @@ from nebula.v3.domain import (
     AutomationProjectPolicy,
     AutomationSession,
     AutomationSessionStatus,
+    BrowserIdentity,
+    BrowserSession,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
     CommandExecution,
     CommandExecutionStatus,
     Engagement,
+    McpCapabilitySnapshot,
+    McpServerProfile,
+    McpToolSnapshot,
+    McpTransport,
     NativeHookExecution,
+    ProviderCapabilityVerification,
     ProviderProfile,
+    ProviderVerificationStatus,
     RunnerIsolation,
     RunnerProfile,
     RunBudget,
@@ -63,7 +73,9 @@ from nebula.v3.domain import (
 )
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
+from nebula.v3.mcp import mcp_tool_runtime_name
 from nebula.v3.memory_policy import MemoryEnforcementUnavailable
+from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.setup import create_engagement_with_default_scope
 from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 from nebula.v3.tool_results import (
@@ -1842,6 +1854,114 @@ async def test_default_mission_degrades_to_analysis_when_command_runtime_is_unpr
     assert payload["metadata"]["analysis_only"] is True
     assert payload["budget"]["max_duration_seconds"] is None
     assert payload["budget"]["max_tool_calls"] is None
+
+
+async def _probed_mcp_server(store) -> McpServerProfile:
+    return await store.create(
+        McpServerProfile(
+            name="lookup-service",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="http://127.0.0.1:9/mcp",
+            enabled=True,
+            capabilities=McpCapabilitySnapshot(
+                tools=[
+                    McpToolSnapshot(
+                        name="lookup",
+                        description="Look up one record",
+                        input_schema={"type": "object", "properties": {}},
+                        read_only=True,
+                    )
+                ],
+                checked_at=utc_now(),
+            ),
+        )
+    )
+
+
+async def _tool_model(store) -> ProviderProfile:
+    return await store.create(
+        ProviderProfile(
+            name="Local tool model",
+            provider_type="vllm",
+            endpoint="http://127.0.0.1:9/v1",
+            is_local=True,
+            model_allowlist=["security-model"],
+            capability_verifications={
+                "security-model": ProviderCapabilityVerification(
+                    model="security-model",
+                    status=ProviderVerificationStatus.VERIFIED,
+                )
+            },
+        )
+    )
+
+
+@pytest.mark.parametrize("with_browser", [False, True], ids=["mcp", "mcp+browser"])
+async def test_api_native_mcp_mission_starts_with_its_mcp_tools(tmp_path, with_browser):
+    manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+    mcp = await _probed_mcp_server(store)
+    mcp_tool = mcp_tool_runtime_name(mcp.id, "lookup")
+    model = await _tool_model(store)
+    payload = {
+        "engagement_id": engagement.id,
+        "name": "Look up the record",
+        "objective": "Look up the record in the selected service",
+        "provider_id": model.id,
+        "model": "security-model",
+        "mcp_server_ids": [mcp.id],
+        "max_tool_calls": 4,
+        "scheduled_for": (utc_now() + timedelta(days=1)).isoformat(),
+    }
+    if with_browser:
+        identity = await store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Research")
+        )
+        session = await store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Browser session",
+                runtime_kind="agent_security",
+            )
+        )
+        payload["browser_autonomy"] = {
+            "session_id": session.id,
+            "targets": ["https://203.0.113.10/"],
+            "allowed_risk_classes": ["passive"],
+            "max_commands": 4,
+        }
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="runtime-test-token",
+        automation_runtime=manager,
+        tool_platform=RuntimePlatform(
+            store=store, artifact_store=artifacts, data_root=tmp_path / "platform"
+        ),
+        mission_checkpoint_path=tmp_path / "mcp-mission-checkpoints.db",
+    )
+
+    async with TestClient(app) as client:
+        response = await client.post(
+            "/api/v1/missions",
+            headers={"Authorization": "Bearer runtime-test-token"},
+            json=payload,
+        )
+        assert response.status_code == 202, response.text
+        queued = response.json()
+        assert queued["status"] == "queued"
+        assert queued["metadata"]["mcp_tool_names"] == [mcp_tool]
+        assert queued["runtime_snapshot"]["mcp_server_ids"] == [mcp.id]
+
+        # The queued run builds the same frozen components when it executes.
+        service = app.state.mission_service
+        run = await store.get(AgentRun, queued["id"])
+        components = await service._components(run, service.provider_factory(model))
+        assert mcp_tool in components.context["tool_names"]
+        if with_browser:
+            assert set(AUTONOMOUS_BROWSER_TOOLS) <= set(
+                components.context["tool_names"]
+            )
 
 
 async def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):

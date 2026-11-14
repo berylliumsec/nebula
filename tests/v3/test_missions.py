@@ -17,12 +17,17 @@ from nebula.v3.api import (
     MissionStartRequest,
     create_app,
 )
+from nebula.v3.browser_automation import (
+    BrowserAutomationService,
+    BrowserAutonomyRequestModel,
+)
 from nebula.v3.domain import (
     AgentAttempt,
     AgentRun,
     Approval,
     ApprovalStatus,
     BrowserAutomationLease,
+    BrowserAutomationLeaseStatus,
     BrowserIdentity,
     BrowserSession,
     Engagement,
@@ -42,6 +47,7 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3 import missions as missions_module
+from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 from nebula.v3.missions import MissionService
 from nebula.v3.providers import (
     ModelCapabilities,
@@ -688,8 +694,9 @@ async def test_mission_refuses_relink_between_preparation_and_queue_insert(
     assert provider.requests == []
 
 
-async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
-    store = NebulaStore(tmp_path / "browser-mission.db")
+async def _browser_mission_project(store):
+    """A scoped project with an active agent browser session and a tool model."""
+
     project = await store.create(Engagement(name="Scoped browser mission"))
     scope = await store.create(
         ScopePolicy(engagement_id=project.id, allowed_domains=["example.test"])
@@ -717,7 +724,7 @@ async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_pat
         ProviderProfile(
             name="Local browser model",
             provider_type="vllm",
-            endpoint="http://127.0.0.1:8000/v1",
+            endpoint="http://127.0.0.1:9/v1",
             is_local=True,
             model_allowlist=["security-model"],
             capability_verifications={
@@ -728,6 +735,30 @@ async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_pat
             },
         )
     )
+    return project, session, profile
+
+
+def _browser_autonomy(session):
+    return {
+        "session_id": session.id,
+        "targets": ["https://example.test/"],
+        "allowed_risk_classes": ["passive"],
+        "max_commands": 4,
+    }
+
+
+async def _run_leases(store, run_id, project_id):
+    return await store.find_entities(
+        BrowserAutomationLease,
+        {"run_id": run_id},
+        engagement_id=project_id,
+        limit=5,
+    )
+
+
+async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
+    store = NebulaStore(tmp_path / "browser-mission.db")
+    project, session, profile = await _browser_mission_project(store)
     scheduled_for = utc_now() + timedelta(days=1)
     async with TestClient(
         create_app(
@@ -744,12 +775,7 @@ async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_pat
                 profile,
                 scheduled_for=scheduled_for.isoformat(),
                 max_tool_calls=4,
-                browser_autonomy={
-                    "session_id": session.id,
-                    "targets": ["https://example.test/"],
-                    "allowed_risk_classes": ["passive"],
-                    "max_commands": 4,
-                },
+                browser_autonomy=_browser_autonomy(session),
             ),
         )
         assert response.status_code == 202, response.text
@@ -757,22 +783,14 @@ async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_pat
         assert queued["budget"]["max_delegation_depth"] == 1
         assert queued["budget"]["max_tool_calls"] == 4
         assert queued["metadata"]["browser_autonomy"]["session_id"] == session.id
-        assert (
-            len(
-                (
-                    await store.find_entities(
-                        BrowserAutomationLease,
-                        {"run_id": queued["id"]},
-                        engagement_id=project.id,
-                        limit=2,
-                    )
-                )
-            )
-            == 1
-        )
+        leases = await _run_leases(store, queued["id"], project.id)
+        assert [lease.status for lease in leases] == [
+            BrowserAutomationLeaseStatus.ACTIVE
+        ]
+        assert leases[0].session_id == session.id
         service = client.app.state.mission_service
         run = await store.get(AgentRun, queued["id"])
-        components = service._components(run, service.provider_factory(profile))
+        components = await service._components(run, service.provider_factory(profile))
         plan = await components.supervisor.plan(
             run.objective,
             components.context,
@@ -780,6 +798,161 @@ async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_pat
         )
         assert len(plan.tasks) == 1
         assert plan.tasks[0].role.value == "network_service"
+
+
+async def test_api_browser_mission_fails_closed_when_its_lease_is_refused(tmp_path):
+    store = NebulaStore(tmp_path / "browser-lease-conflict.db")
+    project, session, profile = await _browser_mission_project(store)
+    holder = await store.create(
+        AgentRun(engagement_id=project.id, objective="Already driving the session")
+    )
+    held = await BrowserAutomationService(store).create_lease(
+        holder.id,
+        project.id,
+        BrowserAutonomyRequestModel(**_browser_autonomy(session)),
+        "operator",
+    )
+    async with TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            mission_checkpoint_path=tmp_path / "browser-lease-conflict-checkpoints.db",
+        )
+    ) as client:
+        response = await client.post(
+            "/api/v1/missions",
+            headers=_auth(),
+            json=_start_payload(
+                project,
+                profile,
+                scheduled_for=(utc_now() + timedelta(days=1)).isoformat(),
+                max_tool_calls=4,
+                browser_autonomy=_browser_autonomy(session),
+            ),
+        )
+
+    assert response.status_code == 422, response.text
+    assert "already has an active autonomous lease" in response.json()["detail"]
+    refused = [
+        run
+        for run in await store.list_entities(AgentRun, engagement_id=project.id)
+        if run.id != holder.id
+    ]
+    assert [run.status for run in refused] == [RunStatus.FAILED]
+    assert (
+        "browser automation lease could not be created"
+        in (refused[0].metadata["error"])
+    )
+    assert await _run_leases(store, refused[0].id, project.id) == []
+    assert (
+        await store.get(BrowserAutomationLease, held.id)
+    ).status == BrowserAutomationLeaseStatus.ACTIVE
+
+
+async def test_api_stopping_browser_mission_revokes_lease_and_frees_session(tmp_path):
+    store = NebulaStore(tmp_path / "browser-mission-stop.db")
+    project, session, profile = await _browser_mission_project(store)
+    payload = _start_payload(
+        project,
+        profile,
+        scheduled_for=(utc_now() + timedelta(days=1)).isoformat(),
+        max_tool_calls=4,
+        browser_autonomy=_browser_autonomy(session),
+    )
+    async with TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            mission_checkpoint_path=tmp_path / "browser-mission-stop-checkpoints.db",
+        )
+    ) as client:
+        first = await client.post("/api/v1/missions", headers=_auth(), json=payload)
+        assert first.status_code == 202, first.text
+        first_run = first.json()["id"]
+        [lease] = await _run_leases(store, first_run, project.id)
+        assert lease.status == BrowserAutomationLeaseStatus.ACTIVE
+
+        stopped = await client.post(
+            f"/api/v1/runs/{first_run}/stop",
+            headers=_auth(),
+            json={"reason": "Operator stopped the browser mission"},
+        )
+        assert stopped.status_code == 200, stopped.text
+        assert stopped.json()["status"] == "cancelled"
+        revoked = await store.get(BrowserAutomationLease, lease.id)
+        assert revoked.status == BrowserAutomationLeaseStatus.REVOKED
+        assert revoked.stop_reason == "Operator stopped the browser mission"
+
+        # The stopped mission no longer holds the session, so the next one can.
+        second = await client.post("/api/v1/missions", headers=_auth(), json=payload)
+        assert second.status_code == 202, second.text
+        assert [
+            item.status
+            for item in await _run_leases(store, second.json()["id"], project.id)
+        ] == [BrowserAutomationLeaseStatus.ACTIVE]
+
+
+class _IdleHost(HostLoadMonitor):
+    """Admit the mission at once, whatever load the test host is under."""
+
+    def cached(self):
+        return self.sample()
+
+    def sample(self):
+        return HostLoadSnapshot(
+            sampled_at=time.monotonic(),
+            cpu_capacity=4,
+            cpu_ratio=0.0,
+            memory_available_ratio=1.0,
+            busy=False,
+            reason=None,
+            measurements_available=True,
+        )
+
+
+async def test_api_browser_mission_that_fails_releases_its_lease(tmp_path):
+    store = NebulaStore(tmp_path / "browser-mission-fail.db")
+    project, session, profile = await _browser_mission_project(store)
+    async with TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            mission_checkpoint_path=tmp_path / "browser-mission-fail-checkpoints.db",
+            host_load_gate=HostLoadGate(_IdleHost()),
+        )
+    ) as client:
+        # The profile's endpoint refuses connections, so the started mission
+        # fails on its first model call.
+        response = await client.post(
+            "/api/v1/missions",
+            headers=_auth(),
+            json=_start_payload(
+                project,
+                profile,
+                max_tool_calls=4,
+                browser_autonomy=_browser_autonomy(session),
+            ),
+        )
+        assert response.status_code == 202, response.text
+        run_id = response.json()["id"]
+        [lease] = await _run_leases(store, run_id, project.id)
+        deadline = time.monotonic() + 60
+        while (await store.get(AgentRun, run_id)).status not in {
+            RunStatus.FAILED,
+            RunStatus.COMPLETE,
+            RunStatus.CANCELLED,
+        }:
+            assert time.monotonic() < deadline, "mission did not finish"
+            await asyncio.sleep(0.05)
+        service = client.app.state.mission_service
+        task = service._tasks.get(run_id)
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), 30)
+
+    assert (await store.get(AgentRun, run_id)).status == RunStatus.FAILED
+    assert (
+        await store.get(BrowserAutomationLease, lease.id)
+    ).status == BrowserAutomationLeaseStatus.REVOKED
 
 
 async def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
