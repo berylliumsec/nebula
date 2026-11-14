@@ -42,6 +42,27 @@ def test_each_available_metric_at_boundary(metric, value, busy):
     assert result.busy is busy
 
 
+@pytest.mark.parametrize("metric", ["cpu", "memory", "load", "io"])
+def test_a_full_threshold_turns_its_check_off(metric):
+    # A host other workloads keep saturated reads CPU use at or just above 100%
+    # and more runnable tasks than CPUs; 100% must not hold turns forever.
+    readings = {
+        "cpu_ratio": 1.004,
+        "memory_available_ratio": 0.0,
+        "runnable_ratio": 1.625,
+        "io_pressure_ratio": 1.0,
+    }
+    snapshot = replace(
+        HostLoadSnapshot(time.monotonic(), 8, None, None, False, None, True),
+        **readings,
+    )
+    others = {name: 1.0 for name in ("cpu", "memory", "load", "io") if name != metric}
+    held = snapshot.evaluate(HostPressureThresholds(**others, **{metric: 0.8}))
+    assert held.busy and held.pressure_metric == metric
+    released = snapshot.evaluate(HostPressureThresholds(**others, **{metric: 1.0}))
+    assert not released.busy and released.reason is None
+
+
 def test_unknown_metrics_do_not_create_pressure():
     snapshot = HostLoadSnapshot(time.monotonic(), 8, None, None, True, "stale", False)
     assert not snapshot.evaluate(HostPressureThresholds()).busy
@@ -268,3 +289,43 @@ async def test_capacity_wait_rechecks_pressure_and_releases_slots(tmp_path):
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_settings_assistant_can_turn_saturated_checks_off(tmp_path):
+    import json
+
+    from nebula.v3.settings_assistant_tools import catalog as settings_catalog
+
+    # The assistant is told how a saturated host stops holding turns.
+    assert "1 (100%) turns that check off" in json.dumps(settings_catalog())
+    store = NebulaStore(tmp_path / "core.db")
+    await store.create(Engagement(id="project", name="Synthetic pressure"))
+    app = create_app(
+        store, auth_token="synthetic-pressure-token", execution_data_root=tmp_path
+    )
+    async with TestClient(app) as client:
+        headers = {"Authorization": "Bearer synthetic-pressure-token"}
+        before = (await client.get("/api/v1/host-pressure", headers=headers)).json()
+        update = {
+            "host_id": before["host_id"],
+            "expected_revision": before["revision"],
+            "thresholds": dict(cpu=1, memory=0.8, load=1, io=0.8),
+        }
+        gateway = SettingsAssistantApi(app, "synthetic-pressure-token")
+        result = await gateway.request(
+            "project", method="PUT", path="host-pressure", body=update
+        )
+        assert result["read_back"] is True
+        after = (await client.get("/api/v1/host-pressure", headers=headers)).json()
+        assert after["effective_thresholds"] == update["thresholds"]
+    saturated = replace(
+        HostLoadSnapshot(time.monotonic(), 8, None, None, False, None, True),
+        cpu_ratio=1.004,
+        memory_available_ratio=0.6,
+        runnable_ratio=1.625,
+        io_pressure_ratio=0.02,
+    )
+    assert not saturated.evaluate(
+        HostPressureThresholds(**after["effective_thresholds"])
+    ).busy
+    await store.database.dispose()

@@ -24,8 +24,14 @@ test("host pressure settings apply live, queue durably and recover", async ({pag
   const chatUrl = `/projects/${project}/workbench?view=chat&session=${chat}`;
   await page.goto(chatUrl);
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
-  await composer.fill("Synthetic pressure first request");
-  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  // Text typed before the conversation and the device's draft storage scope
+  // load is kept under the earlier draft key and the composer empties (a
+  // separate draft defect). This spec covers host pressure, so type again
+  // until the send button takes the request.
+  await expect(async () => {
+    if (await composer.inputValue() !== "Synthetic pressure first request") await composer.fill("Synthetic pressure first request");
+    await page.getByRole("button", {name: "Send message", exact: true}).click({timeout: 2_000});
+  }).toPass({timeout: 20_000});
   await expect(page.getByText(/Waiting for host pressure: CPU/).first()).toBeVisible({timeout: 20000});
   await page.reload();
   await expect(page.getByText(/Waiting for host pressure: CPU/).first()).toBeVisible({timeout: 20000});

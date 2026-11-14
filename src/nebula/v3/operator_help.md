@@ -409,9 +409,9 @@ another article, such as importing a complete Nebula 2 engagement, using one act
 Terminal per Project, uploading knowledge documents, or exporting an
 integrity-manifested record.
 
-## host-capacity | Host pressure telemetry
+## host-capacity | Host pressure admission
 
-Keywords: host capacity, CPU load, memory, I/O pressure, Butler, telemetry
+Keywords: host capacity, CPU load, memory, I/O pressure, Butler, telemetry, waiting for host pressure, turn off a check, 100%
 
 Sources: src/nebula/v3/host_load.py, src/nebula/v3/provider_scheduler.py, src/nebula/v3/harnesses.py, src/nebula/v3/missions.py
 
@@ -421,6 +421,11 @@ divided by effective CPU capacity, and Core-cgroup I/O PSI `some avg10` each def
 Any available reading at or above its saved threshold queues new work. Falling
 below every threshold permits admission; there are no lower recovery thresholds.
 Running work continues. Unknown metrics do not count as pressure.
+
+A threshold of 100% turns that check off. On a host that other workloads keep
+saturated, CPU use reads 100% and runnable tasks exceed the CPU count, so new
+chats show "Waiting for host pressure" and never start until those checks are
+set to 100%. Keep memory use on unless memory budgets protect the host.
 
 Core I/O PSI is the recent share of time with at least one Core-cgroup task
 stalled on I/O; it is not disk utilization. Host load average and host I/O PSI
@@ -433,7 +438,7 @@ two for direct chats. Explicit environment overrides remain authoritative.
 Butler reads `nebula.work.host_pressure` or `nebula.global.host_pressure` and
 uses `nebula.settings.api_request` GET/PUT `/api/v1/host-pressure`. Use fresh
 `host_id`, `expected_revision` and `thresholds` with `cpu`, `memory`, `load`, `io`
-ratios greater than zero and up to one. Read back saved and effective thresholds,
+ratios greater than zero and up to one; 1 turns that check off. Read back saved and effective thresholds,
 current readings, waiting metric and effective concurrency. Saves apply live and
 persist across restarts. `nebula.work.host_load` remains a current telemetry read.
 

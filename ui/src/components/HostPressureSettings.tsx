@@ -8,6 +8,7 @@ import {announceSettingsSaved} from "./SettingsSaveFeedback";
 const metrics: [PressureMetric, string][] = [["cpu", "CPU use"], ["memory", "Memory use"], ["load", "Runnable tasks / CPU capacity"], ["io", "Core I/O stalls (PSI some avg10)"]];
 const draftFor = (value: HostPressure) => Object.fromEntries(metrics.map(([key]) => [key, String(value.saved_thresholds[key] * 100)])) as Record<PressureMetric, string>;
 const percent = (value: number | null | undefined) => value == null ? "Unknown" : `${(value * 100).toFixed(1)}%`;
+const threshold = (value: number) => value >= 1 ? "Off" : percent(value);
 
 export function HostPressureSettings({api, previewMode = false}: {api?: ApiClient; previewMode?: boolean}) {
   const [saved, setSaved] = useState<HostPressure>();
@@ -86,12 +87,12 @@ export function HostPressureSettings({api, previewMode = false}: {api?: ApiClien
   };
   return <section className="panel setup-card" aria-labelledby="host-pressure-title">
     <header><h3 id="host-pressure-title">Host pressure</h3></header>
-    <p>New starts wait when any reading reaches its threshold. Running work continues.</p>
+    <p>New starts wait when any reading reaches its threshold. 100% turns a check off. Running work continues.</p>
     <p>Core I/O PSI measures time its tasks stall on I/O. Host load and host I/O are shown for context and do not hold new starts.</p>
     <form onSubmit={event => void save(event)} className="host-cpu-form">
       {metrics.map(([key, label]) => <label key={key}><span>{label} threshold (%)</span>
         <input type="number" inputMode="decimal" min="0.01" max="100" step="any" aria-label={`${label} threshold (%)`} value={draft[key]} disabled={!saved || saving || previewMode} onChange={event => setDraft(value => ({...value, [key]: event.target.value}))} />
-        {saved && <small>Current: {percent(saved.readings[key])} · Saved: {percent(saved.saved_thresholds[key])} · Effective: {percent(saved.effective_thresholds[key])}</small>}
+        {saved && <small>Current: {percent(saved.readings[key])} · Saved: {threshold(saved.saved_thresholds[key])} · Effective: {threshold(saved.effective_thresholds[key])}</small>}
       </label>)}
       <div className="host-cpu-actions"><button type="submit" className="button primary" disabled={!saved || !valid || !dirty || saving || conflict || previewMode}>{saving ? "Saving…" : "Save pressure thresholds"}</button>
         <button type="button" className="button quiet" aria-label="Reload host pressure" title="Reload host pressure" disabled={saving} onClick={() => setReload(value => value + 1)}><RefreshCw size={16} /></button></div>
