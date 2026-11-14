@@ -79,6 +79,10 @@ class View:
     reasoning: dict[str, str] = field(default_factory=dict)
     # The main conversation a side chat was opened from.
     parent: dict[str, Any] | None = None
+    # This device's catch-up for the conversation: None until read from Core on
+    # open, "waiting" while a summary waits for /catchup (answers watched live
+    # then leave the read cursor alone, as the GUI's card does), else "current".
+    catchup: str | None = None
 
     @property
     def project_id(self) -> str:

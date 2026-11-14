@@ -45,4 +45,8 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   }
   expect(pairing).toContain("type ahead");
   expect(pairing).toContain("multi-word picker search");
+
+  for (const reading of ["/catchup", "/quote", "/evidence", "/turn", "terminal catch-up", "supporting evidence", "turn details"]) {
+    expect(pairing).toContain(reading);
+  }
 });
