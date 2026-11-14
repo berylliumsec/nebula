@@ -235,13 +235,37 @@ def configure_retained_resources(bundle: Path) -> None:
 STABLE_LISTENER_GRACE_SECONDS = 5
 
 
-def stable_listener_config(app, **options) -> uvicorn.Config:
+def stable_listener_config(
+    app, *, grace_seconds: int = STABLE_LISTENER_GRACE_SECONDS, **options
+) -> uvicorn.Config:
+    # uvicorn treats None as "wait forever", which lets open viewer streams
+    # hold a stop open, so every listener gets a positive bound.
+    if "timeout_graceful_shutdown" in options:
+        raise TypeError("set the listener's bound with grace_seconds")
+    if isinstance(grace_seconds, bool) or not isinstance(grace_seconds, int) or grace_seconds <= 0:
+        raise ValueError("a stable listener needs a positive graceful-shutdown bound")
     return uvicorn.Config(
         app,
         log_level="error",
         access_log=False,
-        timeout_graceful_shutdown=STABLE_LISTENER_GRACE_SECONDS,
+        timeout_graceful_shutdown=grace_seconds,
         **options,
+    )
+
+
+def serve_listener_config(
+    app, *, host: str, port: int, tls_cert, tls_key, inherited: bool
+) -> uvicorn.Config:
+    """The listener `serve` runs: a holder-backed (inherited) listener drains
+    its relays for longer; every other one keeps the viewer-stream bound."""
+
+    return stable_listener_config(
+        app,
+        host=host,
+        port=port,
+        ssl_certfile=str(tls_cert) if tls_cert else None,
+        ssl_keyfile=str(tls_key) if tls_key else None,
+        grace_seconds=relay_stop_bound() if inherited else STABLE_LISTENER_GRACE_SECONDS,
     )
 
 
@@ -375,13 +399,13 @@ async def serve_runtime(
         if open_browser:
             webbrowser.open(endpoint.removesuffix("/api/v1") + "/#token=" + token)
         server = uvicorn.Server(
-            stable_listener_config(
+            serve_listener_config(
                 supervisor.app,
                 host=host,
                 port=port,
-                ssl_certfile=str(tls_cert) if tls_cert else None,
-                ssl_keyfile=str(tls_key) if tls_key else None,
-                timeout_graceful_shutdown=relay_stop_bound() if inherited else None,
+                tls_cert=tls_cert,
+                tls_key=tls_key,
+                inherited=inherited,
             )
         )
         drain = relay_drain(server, supervisor, inherited=inherited)

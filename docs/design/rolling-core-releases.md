@@ -229,7 +229,7 @@ Three independent designs were produced from the same fact sheet.
        may still hold bytes its client stopped reading (a phone that left the
        network, a paused download). It gets 5 s to flush and is then aborted,
        so a stalled reader cannot keep the old generation and its host lock
-       alive. Uvicorn's graceful timeout is set to 50 s as a backstop, so a
+       alive. Uvicorn's graceful timeout is set to 45 s (`relay_stop_bound()`: viewer drain 5 s + relay answer limit 30 s + two 5 s flushes) as a backstop, so a
        holder-backed stop always ends.
      - Without a holder (a self-bound listener) the old generation relays
        every exchange to completion, as before: closing early would gain
@@ -386,7 +386,7 @@ The review checked every kind of work against the design.
   restart.
 - **Old generation hangs.** With a holder, the stop is bounded: at most 30 s
   for an exchange awaiting its receipt, 5 s of flush, then stalled connections
-  are aborted, with uvicorn's 50 s timeout as a backstop. With the onefile
+  are aborted, with uvicorn's 45 s timeout as a backstop. With the onefile
   build, `TimeoutStopSec` and `KillMode=process` kill only the bootloader; the
   supervisor child can survive holding `supervisor.lock`. The next generation
   then refuses to start until that child is gone.
