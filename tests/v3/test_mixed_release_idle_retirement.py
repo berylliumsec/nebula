@@ -372,7 +372,11 @@ async def prepared_target(runtime):
             pass
 
         app.state.runtime_handoff = SimpleNamespace(
-            chat=chat, handles=lambda: {}, restored_digest="a" * 64, tick=tick
+            chat=chat,
+            handles=lambda: {},
+            dispatch_blockers=lambda: [],
+            restored_digest="a" * 64,
+            tick=tick,
         )
         # A handoff or recovery target restores without starting producers
         # until the supervisor activates it.
