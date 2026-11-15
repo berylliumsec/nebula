@@ -775,6 +775,19 @@ means the control is open; it does not claim the operator submitted anything or
 that Core saved a mutation. The [device-boundary audit](butler-device-boundaries.md)
 records those limits and rejects handoffs mislabeled as saved changes.
 
+### Butler from a terminal client
+
+`nebula-chat` and the terminal Assistant send `client_surface: "terminal"` with
+each turn; web clients omit it and stay `browser`. Butler's instructions say it
+is in the terminal, so it does not offer actions that only a web browser can
+finish. Core refuses any Butler action whose result would be a
+requesting-browser handoff (`pending_browser_apply`). It decides from that
+result rather than from a list of action names, so a new handoff action is
+covered and an action that saves in Core keeps working. The refusal tells the
+model the action needs the Nebula web app, and nothing changes. The terminal
+also labels a handoff receipt from an older Core as needing the web app instead
+of reporting the tool as finished.
+
 ### Private TypeSafe, VPN and MCP Settings
 
 For TypeSafe key entry or removal, interactive Butler opens the exact TypeSafe

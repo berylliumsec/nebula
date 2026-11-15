@@ -455,6 +455,15 @@ finishes or is stopped. Approval and input pauses remain visible; browser-owned
 actions such as file pickers, downloads and Voice still require their existing
 device interface and cannot be completed in this text client.
 
+The terminal tells Core it is a terminal client. Butler then avoids offering
+actions that only a web browser can finish, such as opening a page, choosing or
+downloading a file, changing the device theme, pairing a device, or confirming a
+browser-owned change or deletion. If it tries one anyway, Core refuses it,
+nothing changes, and Butler tells you to finish it in the Nebula web app.
+Changes Butler saves in Core still work from the terminal. If an older Core
+returns a browser handoff, the terminal shows that it needs the Nebula web app
+instead of reporting the tool as finished.
+
 Run `nebula-chat unpair` to revoke this terminal and remove its local credentials.
 Devices can also be revoked through Core's existing paired-device controls. If
 Core already rejected an expired or revoked pairing, `unpair` removes the stale

@@ -78,6 +78,12 @@ _CAPABILITY_GUIDANCE = {
         "arguments object to match input_schema, then call its invoke_with tool. "
         "Do not repeat unchanged arguments.",
     ),
+    "browser_only": (
+        "This operation is a handoff that only the Nebula web app can apply; this "
+        "client cannot complete it, so nothing changed.",
+        "Do not repeat this operation here. Tell the operator it needs the Nebula "
+        "web app, or use another described operation that saves in Core.",
+    ),
 }
 _MCP_GUIDANCE = {
     "server_disabled": (

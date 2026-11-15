@@ -235,6 +235,19 @@ _CATEGORIES = (
         "description": "Open product destinations on the requesting device",
     },
 )
+# Where the requesting operator is. A Butler result in the
+# ``pending_browser_apply`` state does nothing until the requesting web app
+# applies it, so a terminal client can never complete one.
+CLIENT_SURFACES = ("browser", "terminal")
+BROWSER_HANDOFF_STATE = "pending_browser_apply"
+BUTLER_TERMINAL_SURFACE_INSTRUCTION = (
+    "The operator is using the Nebula terminal client, which cannot apply "
+    "requesting-browser actions such as opening pages, file pickers, downloads, "
+    "uploads, device settings or browser confirmations. Core refuses an action "
+    "whose result would be a browser handoff here. Do not offer those actions; "
+    "use actions that save in Core, and when only a browser action can do the "
+    "task, tell the operator to finish it in the Nebula web app."
+)
 _SEARCH_FILLER = frozenset(
     {
         "a",
@@ -292,7 +305,11 @@ class ButlerCapabilities:
         background_case_id: str | None = None,
         instructions_root: Path | None = None,
         background_runtime_local: bool = False,
+        client_surface: str = "browser",
     ) -> None:
+        if client_surface not in CLIENT_SURFACES:
+            raise ValueError("unknown Butler client surface")
+        self._client_surface = client_surface
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
         self._store = store
@@ -1204,6 +1221,21 @@ class ButlerCapabilities:
                 )
             else:
                 result = await plugin._handler(payload)
+            if (
+                self._client_surface != "browser"
+                and isinstance(result, dict)
+                and result.get("state") == BROWSER_HANDOFF_STATE
+            ):
+                # Decided from the action's own result, not a list of names:
+                # any action whose outcome is a requesting-browser handoff is
+                # refused here, and an action that saves in Core is not. Such
+                # handlers only validate and describe the browser step, so
+                # nothing has changed when the result is discarded.
+                raise CapabilityInputError(
+                    f"{name} needs the Nebula web app; the {self._client_surface} "
+                    "client cannot apply a browser handoff",
+                    reason="browser_only",
+                )
         except BaseException as exc:
             if step_id is not None:
                 (
