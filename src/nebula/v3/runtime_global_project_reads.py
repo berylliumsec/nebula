@@ -11,17 +11,20 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import aliased
 
-from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_turn_headers import pending_engagement_turn_headers
 from .conditional_reads import conditional, content_etag
+from .linked_project_chats import (
+    UNFINISHED_TURN_STATUSES,
+    linked_project_chats_router,
+    session_state,
+    visible_pending,
+)
 from .database import EntityRow
 from .domain import (
     ChatBookmark,
     ChatGoal,
     ChatMessage,
     ChatSession,
-    ChatTurn,
-    ChatTurnStatus,
     Engagement,
     NotebookRun,
     OperatorExecution,
@@ -40,14 +43,7 @@ from .project_reads import (
 )
 from .storage import NebulaStore, NotFoundError
 
-_UNFINISHED_TURN_STATUSES = (
-    ChatTurnStatus.QUEUED.value,
-    ChatTurnStatus.ROUTING.value,
-    ChatTurnStatus.WAITING_APPROVAL.value,
-    ChatTurnStatus.WAITING_CALLBACK.value,
-    ChatTurnStatus.FINALIZING.value,
-    ChatTurnStatus.INTERRUPTED.value,
-)
+_UNFINISHED_TURN_STATUSES = UNFINISHED_TURN_STATUSES
 
 
 def mount_global_project_reads(
@@ -162,11 +158,7 @@ def mount_global_project_reads(
                 database, engagement_id, statuses=_UNFINISHED_TURN_STATUSES
             )
         pending = {}
-        for header in headers:
-            if header.status == ChatTurnStatus.INTERRUPTED.value and not (
-                header.recovery_required or header.automatic_retry_pending
-            ):
-                continue
+        for header in visible_pending(headers):
             if header.session_id in pending:
                 raise HTTPException(409, "chat session has multiple active turns")
             pending[header.session_id] = header
@@ -185,23 +177,10 @@ def mount_global_project_reads(
             ):
                 continue
             turn = pending.get(session.id)
-            waiting = bool(
-                turn
-                and not is_subagent_session(session)
-                and (
-                    turn.status == ChatTurnStatus.WAITING_APPROVAL.value
-                    or turn.status == ChatTurnStatus.INTERRUPTED.value
-                    and not core_resumes_interrupted_turn(
-                        await store.get(ChatTurn, turn.id)
-                    )
-                )
-            )
             activity.append(
                 {
                     "session_id": session.id,
-                    "state": (
-                        "idle" if turn is None else "waiting" if waiting else "working"
-                    ),
+                    "state": await session_state(store, session, turn),
                     "turn_id": turn.id if turn else None,
                 }
             )
@@ -210,6 +189,10 @@ def mount_global_project_reads(
         ):
             return unchanged
         return activity
+
+    app.include_router(
+        linked_project_chats_router(store), prefix="/api/v1", dependencies=dependencies
+    )
 
     # Deployment inventory reads (the deploy gate, and Butler's pause and
     # resume checks) cover every project, including those without a worker.

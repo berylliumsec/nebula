@@ -1014,7 +1014,7 @@
     },
     {
       "id": "chat.start_and_read",
-      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also links to direct child-project chats",
+      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also lists chats from direct child projects in one Core-paged list",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::streamChat",
         "ui/src/pages/SessionsPage.tsx::getChatSession",
@@ -1027,8 +1027,7 @@
         "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
         "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
         "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
-        "ui/src/pages/ChildProjectConversations.tsx::listChatSessionActivity",
-        "ui/src/pages/ChildProjectConversations.tsx::listChatSessions"
+        "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -5328,11 +5327,7 @@
       "count": 1
     },
     {
-      "key": "ui/src/pages/ChildProjectConversations.tsx::listChatSessionActivity",
-      "count": 1
-    },
-    {
-      "key": "ui/src/pages/ChildProjectConversations.tsx::listChatSessions",
+      "key": "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged",
       "count": 1
     },
     {

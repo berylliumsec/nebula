@@ -2396,6 +2396,19 @@ export interface ChatSessionActivity {
   turnId?: Identifier;
 }
 
+/** A chat owned by a project linked under the one being viewed. */
+export interface LinkedProjectChat {
+  session: ChatSessionSummary;
+  project: { id: Identifier; name: string };
+  state: ChatSessionActivity["state"];
+  turnId?: Identifier;
+}
+
+export interface LinkedProjectChatPage {
+  items: LinkedProjectChat[];
+  nextOffset?: number;
+}
+
 export interface ChatAttentionItem {
   kind: "approval" | "question";
   actionId: Identifier;

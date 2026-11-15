@@ -20,6 +20,7 @@ import type {
   ChatCompletionResponse,
   ChatSessionRenameRequest,
   ChatSessionActivity,
+  LinkedProjectChatPage,
   ChatAttentionItem,
   ChatSessionSummary,
   ChatAssistantConfig,
@@ -9669,6 +9670,38 @@ export class ApiClient {
       sessionTitle: item.session_title,
       requestedAt: item.requested_at,
     })));
+  }
+
+  /**
+   * One bounded page of chats from the projects linked under ``projectId``.
+   * Core orders chats needing the operator first, then running chats, then
+   * the rest by recent activity, before paging. Undefined when Core answered 304.
+   */
+  async listLinkedProjectChatsIfChanged(
+    projectId: string,
+    options: { query?: string; offset?: number; limit?: number },
+    etag: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<{ page: LinkedProjectChatPage; etag?: string } | undefined> {
+    const params = new URLSearchParams({ offset: String(options.offset ?? 0), limit: String(options.limit ?? 25) });
+    if (options.query?.trim()) params.set("q", options.query.trim());
+    const answer = await this.requestIfChanged<{
+      items: Array<{ session: WireChatSession; project: { id: string; name: string }; state: ChatSessionActivity["state"]; turn_id?: string | null }>;
+      next_offset?: number | null;
+    }>(`chat/projects/${encodeURIComponent(projectId)}/linked-chats?${params}`, etag, { signal });
+    if (!answer) return undefined;
+    return {
+      etag: answer.etag,
+      page: {
+        items: answer.value.items.map(item => ({
+          session: mapChatSession(item.session),
+          project: item.project,
+          state: item.state,
+          turnId: item.turn_id ?? undefined,
+        })),
+        nextOffset: answer.value.next_offset ?? undefined,
+      },
+    };
   }
 
   /** ``listChatSessionActivity`` for a poll: undefined when Core answered 304. */

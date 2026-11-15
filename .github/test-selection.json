@@ -1,20 +1,22 @@
 {
-  "change_digest": "aff688d967dcb91e609f7d9c278a5fed4cc002d52aadcd17b52f99d953d1cf3e",
-  "reviewed_by": "Claude (ios-butler-projects); selection reviewed against the diff by the implementing agent, independent diff review still required before merge",
-  "reason": "The NebulaShell (installed iPhone app) UI is reduced to two routes: Butler docked full screen with a project switcher and an app tab bar, and a read-only Projects snapshot of status=active projects holding at least one ordinary chat (new ShellProjects component + projectSnapshots builder). App.tsx shell routes, AppShell docked flag and NebulaControlAssistant docked mode change; the Butler workflow registry links the three new read-only calls to chat.start_and_read and approval.review. Frontend: the new snapshot builder test plus the NebulaControlAssistant and CompactSettingsList suites that exercise NebulaShell. Playwright: area:ios-assistant-only, whose test is rewritten for the new contract. Python: the workflow registry checks. Build 6 of the iOS shell bundles this UI and serves it on a loopback origin (LocalUIServer) that tunnels only /api/* to Core; its pure rewrite rules (ProxyRewrite.swift) are covered by ios/Tests/main.swift (43 checks) run with xcrun swiftc on the research Mac, and the app built unsigned for iphoneos with Xcode 27. A failed per-project read now keeps the project's card (Playwright step added). The area's real-Core entry moves to ui/tests/ios-shell-real-core.spec.ts (real-core.spec.ts is above the commit guard's per-file limit; its old iPhone journey asserts the retired shell and is no longer selected), and ui/tests/fixtures/approval_core.py now awaits Core's async _active_gateway_turn.",
-  "exclusions": "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fails identically on origin/main (useProjectViewLease holdProjectView/releaseProjectView are unreviewed there); this change links all three of its own new calls. src/App.test.tsx has 9 failures on origin/main unrelated to the shell (desktop navigation/provider settings) and does not cover NebulaShell, so it is not selected. No backend, native (ios/ Swift unchanged; docs only) or Rust changes. No setting or operator feature reachable from the settings assistant was added, so the settings catalog is unchanged. CI has no Swift/Xcode job; the iOS checks and build ran on the research Mac and are reported in the PR.",
+  "change_digest": "585adc9de25272ed99b570842cdc26d1461aa7a2e9e1edb9a04bee8cc15c25f5",
+  "reviewed_by": "Claude (assistant-pane-child-chats); selection reviewed against the diff by the implementing agent, independent diff review still required before merge",
+  "reason": "The parent conversation list rendered one section per linked child project and fetched each child's full chat list and activity, so chat-less children showed as empty 'No saved chats' folders and cost two requests each. New Core read GET /api/v1/chat/projects/{id}/linked-chats (src/nebula/v3/linked_project_chats.py, mounted in both the API worker's global reads and the single-process app) returns one bounded page across direct children with activity state, ordered waiting > working > recent before paging; chat_turn_headers gains a cross-project pending-turn query and the session-activity route shares the classification. The UI renders one Subprojects list from it, polls only while the list is visible, and renders nothing when no child has chats. Python: the global project reads tests (new linked-chats case: 40 empty children, active chats ahead of recency across pages, search, grandchild/side-chat/foreign exclusions, ETag 304, no worker contact) and the polling-cost tests for the refactored activity read; the workflow-registry checks because chat.start_and_read's UI calls changed. Frontend: the rewritten component test plus the two SessionsPage suites. Playwright: area:child-project-chats (journey rewritten: many empty children, approval-waiting chat first, paging, search, no per-child reads, open owning project) and area:conversation-order (shares the changed fixture).",
+  "exclusions": "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fails identically on origin/main (2 pre-existing unreviewed signatures); this change links its own new call, so the other registry tests are selected by name. PostgreSQL variants in test_runtime_global_project_reads.py skip without NEBULA_TEST_POSTGRES_URL; they passed locally against Postgres 16. No setting or new operator destination was added, so the settings catalog and product knowledge index are unchanged. No native or Rust changes.",
   "python_browser": false,
   "python_node": true,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 23,
-    "frontend": 81,
+    "python": 53,
+    "frontend": 10,
     "native": 0,
-    "playwright": 12
+    "playwright": 16
   },
   "python": [
+    "tests/v3/test_runtime_global_project_reads.py",
+    "tests/v3/test_chat_polling_cost.py",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_unsupported_action_marked_supported",
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog",
@@ -28,13 +30,14 @@
     "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_ui_protocol_relabelled_as_supported"
   ],
   "frontend": [
-    "ui/src/api/projectSnapshots.test.ts",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx"
+    "ui/src/pages/ChildProjectConversations.test.tsx",
+    "ui/src/pages/chatDraftNavigation.test.tsx",
+    "ui/src/pages/chatMobileDrawerRestore.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:ios-assistant-only"
+    "area:child-project-chats",
+    "area:conversation-order"
   ],
   "checks": []
 }

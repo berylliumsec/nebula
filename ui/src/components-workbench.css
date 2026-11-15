@@ -626,6 +626,8 @@ kbd { font-size: 11px; }
 .child-project-conversations .child-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 1; }
 .child-project-conversations .child-project-chat { grid-template-columns: minmax(0, 1fr); margin-left: 16px; }
 .child-project-conversations .child-project-chat::before { position: absolute; top: 0; bottom: 0; left: -8px; width: 1px; background: var(--border); content: ""; }
+.child-project-group-label { margin: 6px 8px 2px 24px; color: var(--muted); font-size: 11px; }
+.child-project-owner { display: inline-block; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .child-project-status { margin: 4px 8px 8px 24px; color: var(--muted); font-size: 11px; }
 .child-project-status button, .child-project-more { border: 0; color: var(--blue); background: transparent; cursor: pointer; }
 .child-project-more { min-height: 44px; margin-left: 24px; text-align: left; }
