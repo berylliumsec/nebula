@@ -29,7 +29,7 @@ from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import AutomationProjectPolicy, ChatSession, Engagement, NotebookRun
 from .notebook_file_index import FileIndexUnavailable, list_indexed_notebooks
 from .project_reads import active_notebook_runs
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, revise_latest
 
 
 MAX_NOTEBOOK_BYTES = 20_000_000
@@ -940,12 +940,23 @@ class NotebookService:
                     raise NotebookConflict(
                         "project execution mode changed; run this cell again"
                     )
-                run = await self.store.update(
+                # The operator can interrupt the still-queued cell while the
+                # policy is read. The start is decided on the newest run, so
+                # that interrupt is kept rather than overwritten as a failure.
+                run = await revise_latest(
+                    self.store,
                     NotebookRun,
                     run_id,
-                    {"status": "running", "started_at": _now()},
-                    expected_revision=run.revision,
+                    lambda latest: (
+                        None
+                        if latest.status == "interrupted"
+                        else {"status": "running", "started_at": _now()}
+                    ),
                 )
+                if run.status == "interrupted":
+                    self._run_done[run_id].set()
+                    queue.task_done()
+                    continue
                 (
                     await self.store.append_event(
                         run_id, "notebook.running", {"mode": run.execution_mode}
@@ -1013,18 +1024,24 @@ class NotebookService:
         if run.engagement_id != engagement_id:
             raise NotebookError("run is outside the selected project")
         if run.status == "queued":
-            updated = await self.store.update(
-                NotebookRun,
-                run_id,
-                {"status": "interrupted", "completed_at": _now()},
-                expected_revision=run.revision,
-            )
-            (
-                await self.store.append_event(
-                    run_id, "notebook.completed", {"status": "interrupted"}
+            # The run queue can start this cell meanwhile; the interrupt is
+            # decided on the newest run, which may by then be running.
+            interrupted: list[bool] = []
+
+            def interrupt_queued(latest: NotebookRun) -> dict[str, Any] | None:
+                interrupted[:] = [latest.status == "queued"]
+                if not interrupted[0]:
+                    return None
+                return {"status": "interrupted", "completed_at": _now()}
+
+            run = await revise_latest(self.store, NotebookRun, run_id, interrupt_queued)
+            if interrupted and interrupted[0]:
+                (
+                    await self.store.append_event(
+                        run_id, "notebook.completed", {"status": "interrupted"}
+                    )
                 )
-            )
-            return updated
+                return run
         if run.status == "running":
             self._interrupted_runs.add(run_id)
             worker = self.workers.get((engagement_id, run.notebook_path))
