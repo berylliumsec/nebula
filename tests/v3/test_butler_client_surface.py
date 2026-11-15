@@ -352,3 +352,48 @@ async def test_harness_butler_turn_carries_terminal_surface(tmp_path):
     ).invoke(_THEME, change=True)
     assert handed_off["state"] == "pending_browser_apply"
     await runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("nebula.settings.set_device_theme", {"theme": "light"}),
+        ("nebula.navigate.open", {"destination_id": "projects"}),
+    ],
+)
+async def test_harness_direct_settings_tools_refuse_terminal_handoffs(
+    tmp_path, monkeypatch, name, arguments
+):
+    """The legacy direct names skip ButlerCapabilities.invoke; same refusal."""
+    from nebula.v3.domain import HarnessSession
+    from tests.v3.test_harnesses import _runtime
+
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
+
+    async def call(**surface):
+        _, _, harness_turn = await runtime.prepare_chat(
+            engagement_id=project.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Use the light theme.",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            control_assistant=True,
+            **surface,
+        )
+
+        async def active(_session_id):
+            return await store.get(HarnessTurn, harness_turn.id)
+
+        monkeypatch.setattr(runtime, "_active_gateway_turn", active)
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
+        return await runtime._gateway_call_unwrapped(session, name, arguments)
+
+    with pytest.raises(CapabilityInputError) as refused:
+        await call(client_surface="terminal")
+    _browser_only(refused.value, name)
+
+    handed_off = await call()
+    assert handed_off["structuredContent"]["state"] == "pending_browser_apply"
+    await runtime.shutdown()

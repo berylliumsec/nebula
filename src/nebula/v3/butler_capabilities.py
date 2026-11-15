@@ -248,6 +248,28 @@ BUTLER_TERMINAL_SURFACE_INSTRUCTION = (
     "use actions that save in Core, and when only a browser action can do the "
     "task, tell the operator to finish it in the Nebula web app."
 )
+
+
+def refuse_browser_handoff(name: str, result: Any, client_surface: str) -> None:
+    """Refuse a requesting-browser handoff that this client cannot apply.
+
+    Decided from the action's own result, not a list of names: any action whose
+    outcome is a requesting-browser handoff is refused, and an action that saves
+    in Core is not. Such handlers only validate and describe the browser step,
+    so nothing has changed when the result is discarded.
+    """
+    if (
+        client_surface != "browser"
+        and isinstance(result, dict)
+        and result.get("state") == BROWSER_HANDOFF_STATE
+    ):
+        raise CapabilityInputError(
+            f"{name} needs the Nebula web app; the {client_surface} "
+            "client cannot apply a browser handoff",
+            reason="browser_only",
+        )
+
+
 _SEARCH_FILLER = frozenset(
     {
         "a",
@@ -1221,21 +1243,7 @@ class ButlerCapabilities:
                 )
             else:
                 result = await plugin._handler(payload)
-            if (
-                self._client_surface != "browser"
-                and isinstance(result, dict)
-                and result.get("state") == BROWSER_HANDOFF_STATE
-            ):
-                # Decided from the action's own result, not a list of names:
-                # any action whose outcome is a requesting-browser handoff is
-                # refused here, and an action that saves in Core is not. Such
-                # handlers only validate and describe the browser step, so
-                # nothing has changed when the result is discarded.
-                raise CapabilityInputError(
-                    f"{name} needs the Nebula web app; the {self._client_surface} "
-                    "client cannot apply a browser handoff",
-                    reason="browser_only",
-                )
+            refuse_browser_handoff(name, result, self._client_surface)
         except BaseException as exc:
             if step_id is not None:
                 (
