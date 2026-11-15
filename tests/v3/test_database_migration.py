@@ -268,6 +268,49 @@ def test_full_schema_copy_verifies_content_and_keeps_event_guards(
         engine.dispose()
 
 
+def test_checkpoint_generations_copy_verbatim_and_triggers_resume(
+    source: Path, target_url: str
+):
+    # Copying entities and provider rows must not fire the target's checkpoint
+    # triggers: the source generations already count those writes.
+    with sqlite3.connect(source) as connection:
+        expected = connection.execute(
+            "SELECT project_id, generation FROM project_checkpoint_generations "
+            "ORDER BY project_id"
+        ).fetchall()
+    assert ("project", 1) in expected
+    migrate_sqlite_to_postgresql(source, target_url, confirm_core_stopped=True)
+    engine = create_engine(target_url)
+    try:
+        with engine.begin() as connection:
+            copied = connection.exec_driver_sql(
+                "SELECT project_id, generation FROM project_checkpoint_generations "
+                'ORDER BY project_id COLLATE "C"'
+            ).all()
+            assert [tuple(row) for row in copied] == sorted(expected)
+            assert (
+                connection.exec_driver_sql(
+                    "SELECT COUNT(*) FROM pg_trigger AS trigger "
+                    "JOIN pg_class AS relation ON relation.oid = trigger.tgrelid "
+                    "WHERE relation.relnamespace = current_schema()::regnamespace "
+                    "AND NOT trigger.tgisinternal AND trigger.tgenabled <> 'O'"
+                ).scalar_one()
+                == 0
+            )
+            connection.exec_driver_sql(
+                "UPDATE entities SET revision = revision + 1 WHERE id = 'project'"
+            )
+            assert (
+                connection.exec_driver_sql(
+                    "SELECT generation FROM project_checkpoint_generations "
+                    "WHERE project_id = 'project'"
+                ).scalar_one()
+                == 2
+            )
+    finally:
+        engine.dispose()
+
+
 def test_existing_target_is_never_overwritten(source: Path, target_url: str):
     engine = create_engine(target_url)
     with engine.begin() as connection:

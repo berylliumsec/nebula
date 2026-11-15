@@ -449,6 +449,59 @@ def _verify_table(
     _notify(progress, "verified", table.name, count)
 
 
+def _disable_user_triggers(target: Connection) -> list[str]:
+    """Suspend user triggers while copying rows that already carry their effects.
+
+    Source rows are authoritative, including bookkeeping that triggers derived
+    from other tables (for example project_checkpoint_generations). Letting the
+    target triggers fire on COPY would derive those rows a second time: a
+    duplicate primary key, or a silent change to an already verified table.
+    The transaction re-enables them before commit; rollback restores them too.
+    """
+
+    from psycopg import sql
+
+    raw_target = _driver_connection(target)
+    with raw_target.cursor() as cursor:
+        cursor.execute(
+            "SELECT DISTINCT relation.relname FROM pg_trigger AS trigger "
+            "JOIN pg_class AS relation ON relation.oid = trigger.tgrelid "
+            "WHERE relation.relnamespace = current_schema()::regnamespace "
+            "AND NOT trigger.tgisinternal ORDER BY relation.relname"
+        )
+        tables = [str(row[0]) for row in cursor.fetchall()]
+        for table in tables:
+            cursor.execute(
+                sql.SQL("ALTER TABLE {} DISABLE TRIGGER USER").format(
+                    sql.Identifier(table)
+                )
+            )
+    return tables
+
+
+def _enable_user_triggers(target: Connection, tables: Sequence[str]) -> None:
+    from psycopg import sql
+
+    raw_target = _driver_connection(target)
+    with raw_target.cursor() as cursor:
+        for table in tables:
+            cursor.execute(
+                sql.SQL("ALTER TABLE {} ENABLE TRIGGER USER").format(
+                    sql.Identifier(table)
+                )
+            )
+        cursor.execute(
+            "SELECT COUNT(*) FROM pg_trigger AS trigger "
+            "JOIN pg_class AS relation ON relation.oid = trigger.tgrelid "
+            "WHERE relation.relnamespace = current_schema()::regnamespace "
+            "AND NOT trigger.tgisinternal AND trigger.tgenabled <> 'O'"
+        )
+        if cursor.fetchone()[0]:
+            raise MigrationError(
+                "PostgreSQL triggers could not be restored; target rolled back."
+            )
+
+
 def _reset_sequences(target: Connection, metadata: MetaData) -> None:
     from psycopg import sql
 
@@ -530,6 +583,8 @@ def migrate_sqlite_to_postgresql(
                 # original rows too, preserving the complete source history.
                 target.exec_driver_sql("DELETE FROM schema_versions")
                 target.exec_driver_sql("DELETE FROM alembic_version")
+                phase = "suspending PostgreSQL triggers for the copy"
+                triggered_tables = _disable_user_triggers(target)
                 reports = []
                 for table in target_metadata.sorted_tables:
                     phase = f"copying {table.name}"
@@ -544,6 +599,8 @@ def migrate_sqlite_to_postgresql(
                     phase = f"verifying {table.name}"
                     _verify_table(target, table, report, batch_size, progress)
                     reports.append(report)
+                phase = "restoring PostgreSQL triggers"
+                _enable_user_triggers(target, triggered_tables)
                 phase = "final verification"
                 _reset_sequences(target, target_metadata)
                 source_connection.rollback()
