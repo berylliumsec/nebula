@@ -1,45 +1,40 @@
 {
-  "reviewed_by": "Claude",
-  "reason": "Storage sender admission and lifecycle hardening (#1092), finishing #1033 on top of the #1112 sender ingress. Reports run on their own report lane so a source's backlog never delays operator work or control commands; per-source and per-project caps of unexecuted reports answer 429 with Retry-After before anything is saved; disabling, revoking, rotating or moving a source cancels its queued reports; finished reports are pruned with their payloads; promotion, handoff, target and recovery fences count only unfinished reports and run inside the save transaction under the project's ownership lock; an interrupted report is requeued a bounded number of times instead of becoming uncertain; a pending storage dispatch is worker demand and holds idle retirement; project deletion removes the project's source-owned storage rows; project-less storage rows route to their source's project. test_storage_report_backlog, test_storage_alert_dispatch, test_storage_report_compatibility, test_api_worker, test_storage_integrations, test_storage_sender and test_runtime_principal hold the regressions; test_runtime_coordination, test_runtime_delivery, test_runtime_routing, test_deployment_lifecycle, test_project_handoff_agent, test_project_handoff_admission, test_execution_worker, test_runtime_context_requirements, test_shutdown_admission, test_admission_retry, test_idle_retirement_dispatch, test_runtime_quiescence, test_runtime_work_batches and test_api_worker_composition cover the lane, claim, delivery, routing, fence, handoff, admission and shutdown paths changed. test_runtime_coordination and test_api_worker_composition also make CI provision PostgreSQL. The pending-dispatch demand query uses #1129's open-dispatch index predicate (query_predicates.open_storage_row); test_storage_alert_dispatch covers an alert behind 2000 settled dispatches and test_storage_open_rows covers the index.",
-  "exclusions": "No UI or native code changed. test_project_view_leases.py is excluded: test_lease_tables_are_additive_and_downgrade_to_the_previous_schema fails identically on origin/main (its downgrade target predates 0050). test_runtime_worker_features.py, test_mixed_release_idle_retirement.py and test_shutdown_readmission.py spawn real Cores or workers and are excluded; a scratch supervisor Core on PostgreSQL ran the sender, burst, revoke, Retry and shutdown journey instead. Playwright storage-integrations is excluded (real-core.spec.ts is not run on main). All unrelated tests excluded.",
+  "reviewed_by": "Claude butler-notes-core implementer; root cause (create/update only returned pending_browser_apply, applied solely by the web app Butler panel) independently validated on origin/main by a separate Claude subagent before the fix; an independent diff review is still required before merge",
+  "reason": "Butler note creates and edits are written by Core instead of a browser handoff, so terminal and Workbench chats save them. butler_notes.py: create derives a UUIDv5 note ID from a required request_id, validates with the Core note validator and relation service, replays an identical retry and refuses changed content under the same key; update checks the revision and keeps other metadata; both read back and return core_records_saved with a note_saved hint. Delete stays browser-confirmed but returns deleted:false with an honest web-app-confirmation message. UI: nebulaAssistantActions parses note_saved (and no longer turns note_create/note_update into browser writes), NebulaControlAssistant refreshes Notes, butlerNoteAction is deletion-only. Python: test_butler_notes.py (new Core-save, replay and honest-delete tests fail on origin/main), the async-core notes test, scheduled-Butler exclusion, control-plane notes read, product-knowledge index digest and Notes searches (new terminal-notes query fails on main), and registry checker tests. Frontend: butlerNoteAction, nebulaAssistantActions and NebulaControlAssistant tests (note_saved parse and refresh-without-write fail on main).",
+  "exclusions": "Playwright: area butler-notes is the real-core.spec.ts Notes journey; that spec is 1.18 MB and the public commit guard refuses any staged change to it, so its create step (no request_id) cannot be updated here and it is not selected; follow-up needed in a smaller spec. No mocked Playwright journey covers Butler Notes. Not selected because already failing on origin/main fb50019 with identical results: test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls (2 unreviewed useProjectViewLease signatures) and test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. Other test_product_knowledge.py and test_butler_capabilities.py tests do not cover Notes. No native changes. product_knowledge.sqlite3.b85 is gitignored and regenerated; build_product_knowledge.py --verify passes.",
+  "python_browser": false,
+  "python_node": true,
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
-  "python_node": false,
   "expected_tests": {
-    "python": 552,
-    "frontend": 0,
+    "python": 20,
+    "frontend": 120,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_storage_report_backlog.py",
-    "tests/v3/test_storage_alert_dispatch.py",
-    "tests/v3/test_storage_report_compatibility.py",
-    "tests/v3/test_api_worker.py",
-    "tests/v3/test_storage_integrations.py",
-    "tests/v3/test_storage_open_rows.py",
-    "tests/v3/test_storage_sender.py",
-    "tests/v3/test_runtime_principal.py",
-    "tests/v3/test_runtime_coordination.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_runtime_routing.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_project_handoff_admission.py",
-    "tests/v3/test_runtime_context_requirements.py",
-    "tests/v3/test_shutdown_admission.py",
-    "tests/v3/test_admission_retry.py",
-    "tests/v3/test_runtime_work_batches.py",
-    "tests/v3/test_api_worker_composition.py",
-    "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_runtime_quiescence.py"
+    "tests/v3/test_butler_notes.py",
+    "tests/v3/test_async_core.py::test_settings_assistant_actions_await_reads_and_preserve_pending_apply",
+    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_cannot_discover_interactive_project_mutations",
+    "tests/v3/test_control_plane_reads.py::test_interactive_and_scheduled_reads_use_task_owned_sessions",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_project_notes_lifecycle",
+    "tests/v3/test_product_knowledge.py::test_product_search_says_butler_saves_terminal_notes_in_core",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_manual_note_review_and_saved_provenance",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_collector_tracks_client_declarations_through_aliases"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/butlerNoteAction.test.ts",
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/NebulaControlAssistant.test.tsx"
+  ],
   "native": [],
   "playwright": [],
-  "checks": [],
-  "change_digest": "7fb2347dacc703cbafbc477606ce2881866eea4941398753218624ad3645e1f2"
+  "checks": [
+    "frontend-audit"
+  ],
+  "change_digest": "b02eaa101eed2b130a8aea0803e8f7142017da363c51476ea3f2420a9a030c81"
 }

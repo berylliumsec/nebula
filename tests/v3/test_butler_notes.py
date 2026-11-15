@@ -1,4 +1,4 @@
-"""Notes use the selected project, Core references and browser revision guards."""
+"""Notes use the selected project, Core references, Core-saved edits and browser-confirmed deletion."""
 
 from __future__ import annotations
 from tests.v3.async_test_support import (
@@ -14,9 +14,11 @@ from tests.v3.async_test_support import AsyncTestClient as TestClient
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import ButlerCapabilities
+from nebula.v3.butler_notes import ButlerNotes
 from nebula.v3.domain import Asset, Engagement, Evidence, Observation, Report
 from nebula.v3.relations import ResourceRelationService
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tools import CapabilityInputError
 
 
 async def test_butler_notes_retains_accepted_execution_note_identity_and_provenance(
@@ -72,8 +74,16 @@ async def test_butler_notes_retains_accepted_execution_note_identity_and_provena
             },
             change=True,
         )
-        assert update["client_action"]["kind"] == "note_update"
-        assert update["client_action"]["expected_revision"] == note.revision
+        assert update["state"] == "core_records_saved" and update["read_back"] is True
+        assert update["result"]["revision"] > note.revision
+        assert update["client_action"] == {
+            "kind": "note_saved",
+            "project_id": project.id,
+            "note_id": note.id,
+            "title": note.title,
+            "revision": update["result"]["revision"],
+            "operation": "updated",
+        }
         for invalid in (foreign, hidden):
             with pytest.raises(ValueError):
                 await invoke("detail", {"note_id": invalid.id})
@@ -82,7 +92,7 @@ async def test_butler_notes_retains_accepted_execution_note_identity_and_provena
                 "update",
                 {
                     "note_id": note.id,
-                    "expected_revision": note.revision + 1,
+                    "expected_revision": note.revision,
                     "body": "Stale",
                 },
                 change=True,
@@ -90,7 +100,7 @@ async def test_butler_notes_retains_accepted_execution_note_identity_and_provena
         retained = await store.get(Observation, note.id)
         assert retained.observation_type == note.observation_type
         assert retained.source == note.source and retained.metadata == note.metadata
-        assert retained.body == note.body
+        assert retained.body == "Reviewed edit"
 
     (await journey())
 
@@ -171,11 +181,12 @@ async def test_butler_notes_discovery_is_bounded_project_owned_and_revision_chec
                 "body": "Unverified observation",
                 "asset_ids": [asset.id],
                 "evidence_ids": [evidence.id],
+                "request_id": "discovery-create-1",
             },
             change=True,
         )
-        assert created["state"] == "pending_browser_apply"
-        assert created["client_action"]["kind"] == "note_create"
+        assert created["state"] == "core_records_saved"
+        assert created["client_action"]["kind"] == "note_saved"
         assert created["client_action"]["project_id"] == selected.id
         assert (
             len(
@@ -185,7 +196,7 @@ async def test_butler_notes_discovery_is_bounded_project_owned_and_revision_chec
                     )
                 )
             )
-            == 0
+            == 1
         )
         changed = await invoke(
             "update",
@@ -196,17 +207,24 @@ async def test_butler_notes_discovery_is_bounded_project_owned_and_revision_chec
             },
             change=True,
         )
-        assert changed["client_action"]["body"] == "Edited"
-        assert (await store.get(Observation, notes[0].id)).body == "x" * 9000
+        assert changed["read_back"] is True
+        assert (await store.get(Observation, notes[0].id)).body == "Edited"
         for operation, arguments in (
             ("detail", {"note_id": foreign.id}),
             ("detail", {"note_id": hidden.id}),
-            ("create", {"title": "Bad link", "asset_ids": [foreign_asset.id]}),
+            (
+                "create",
+                {
+                    "title": "Bad link",
+                    "asset_ids": [foreign_asset.id],
+                    "request_id": "discovery-bad-link",
+                },
+            ),
             (
                 "update",
                 {
                     "note_id": notes[0].id,
-                    "expected_revision": notes[0].revision + 1,
+                    "expected_revision": notes[0].revision,
                     "body": "Stale",
                 },
             ),
@@ -294,6 +312,158 @@ async def test_butler_note_draft_route_preserves_links_and_core_deletion_guards(
     assert deleted.status_code == 204, deleted.text
     assert (await client.get(path, headers=auth)).status_code == 404
     assert (await store.get(Asset, asset.id)).name == "Host"
+
+
+async def test_butler_notes_create_and_update_save_in_core_without_a_browser(
+    tmp_path,
+):
+    """A terminal or Workbench chat has no browser to apply a note action.
+
+    Core itself must write the note, read it back, and make a retry with the same
+    request key replay the saved note instead of creating a second one.
+    """
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    asset = await store.create(Asset(engagement_id=project.id, name="Host"))
+    evidence = await store.create(
+        Evidence(engagement_id=project.id, title="Proof", evidence_type="manual")
+    )
+    foreign = await store.create(
+        Evidence(engagement_id=other.id, title="Foreign", evidence_type="manual")
+    )
+    capabilities = await ButlerCapabilities.create(
+        store, ArtifactStore(tmp_path / "artifacts"), project.id
+    )
+
+    async def invoke(operation, arguments):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notes.{operation}", "arguments": arguments},
+            change=True,
+        )
+
+    async def project_notes():
+        return await store.find_entities(
+            Observation, {"observation_type": ["note"]}, engagement_id=project.id
+        )
+
+    request = {
+        "title": "  Terminal note  ",
+        "body": "Observed from the terminal.",
+        "asset_ids": [asset.id],
+        "evidence_ids": [evidence.id],
+        "request_id": "terminal-note-0001",
+    }
+    created = await invoke("create", request)
+    assert created["state"] == "core_records_saved"
+    assert created["read_back"] is True and created["replayed"] is False
+    saved = await store.get(Observation, created["result"]["note_id"])
+    assert saved.engagement_id == project.id and saved.observation_type == "note"
+    assert (saved.title, saved.body) == ("Terminal note", request["body"])
+    assert (saved.asset_ids, saved.evidence_ids) == ([asset.id], [evidence.id])
+    assert created["result"]["revision"] == saved.revision
+    assert created["client_action"] == {
+        "kind": "note_saved",
+        "project_id": project.id,
+        "note_id": saved.id,
+        "title": "Terminal note",
+        "revision": saved.revision,
+        "operation": "created",
+    }
+    assert "read its saved fields back" in created["message"]
+
+    replayed = await invoke("create", request)
+    assert replayed["replayed"] is True
+    assert replayed["result"]["note_id"] == saved.id
+    assert [note.id for note in await project_notes()] == [saved.id]
+    with pytest.raises(ValueError, match="different note content"):
+        await invoke("create", {**request, "body": "Changed body"})
+    with pytest.raises(ValueError):
+        await invoke(
+            "create",
+            {
+                **request,
+                "request_id": "terminal-note-0002",
+                "evidence_ids": [foreign.id],
+            },
+        )
+    with pytest.raises(CapabilityInputError, match="request_id"):
+        await invoke("create", {"title": "No key"})
+    assert [note.id for note in await project_notes()] == [saved.id]
+
+    updated = await invoke(
+        "update",
+        {
+            "note_id": saved.id,
+            "expected_revision": saved.revision,
+            "title": "Terminal note, revised",
+        },
+    )
+    assert updated["state"] == "core_records_saved" and updated["read_back"] is True
+    current = await store.get(Observation, saved.id)
+    assert current.title == "Terminal note, revised" and current.body == saved.body
+    assert current.asset_ids == [asset.id] and current.evidence_ids == [evidence.id]
+    assert current.revision > saved.revision
+    assert updated["result"]["revision"] == current.revision
+    assert updated["client_action"]["operation"] == "updated"
+    with pytest.raises(ValueError, match="note changed"):
+        await invoke(
+            "update",
+            {"note_id": saved.id, "expected_revision": saved.revision, "body": "Lost"},
+        )
+    with pytest.raises(ValueError):
+        await invoke(
+            "update", {"note_id": saved.id, "expected_revision": current.revision}
+        )
+    assert (await store.get(Observation, saved.id)).revision == current.revision
+
+
+async def test_butler_note_delete_says_it_waits_for_web_app_confirmation(tmp_path):
+    """Deletion stays operator-confirmed and never reads as done in a terminal."""
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Selected"))
+    note = await store.create(
+        Observation(engagement_id=project.id, observation_type="note", title="Keep")
+    )
+    capabilities = await ButlerCapabilities.create(
+        store, ArtifactStore(tmp_path / "artifacts"), project.id
+    )
+    result = await capabilities.invoke(
+        {
+            "operation": "nebula.notes.delete",
+            "arguments": {"note_id": note.id, "expected_revision": note.revision},
+        },
+        change=True,
+    )
+    assert result["state"] == "pending_browser_apply"
+    assert result["deleted"] is False
+    assert result["operator_confirmation_required"] is True
+    assert result["message"].startswith("Not deleted.")
+    assert "web app" in result["message"]
+    assert result["client_action"] == {
+        "kind": "note_delete",
+        "project_id": project.id,
+        "note_id": note.id,
+        "expected_revision": note.revision,
+        "name": "Keep",
+    }
+    assert (await store.get(Observation, note.id)).title == "Keep"
+    with pytest.raises(ValueError, match="note changed"):
+        await capabilities.invoke(
+            {
+                "operation": "nebula.notes.delete",
+                "arguments": {"note_id": note.id, "expected_revision": 99},
+            },
+            change=True,
+        )
+    descriptions = {
+        tool.spec.name: tool.spec.description
+        for tool in ButlerNotes(store, project.id).actions()
+    }
+    assert "deletes nothing" in descriptions["nebula.notes.delete"]
+    for name in ("nebula.notes.create", "nebula.notes.update"):
+        assert "read_back true" in descriptions[name]
+        assert "browser" not in descriptions[name]
 
 
 pytestmark = pytest.mark.anyio
