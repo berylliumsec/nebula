@@ -120,6 +120,40 @@ def terminal_text(value: Any) -> str:
 CLIENT_SURFACE = "terminal"
 
 
+def rejects_client_surface(response: httpx.Response, body: Any) -> bool:
+    """True when a Core older than ``client_surface`` refused only that field.
+
+    Such a Core rejects unknown request fields with a validation 422 before the
+    chat handler runs, so no message or turn was saved and the turn can be sent
+    once more without the field.
+    """
+    if (
+        response.status_code != 422
+        or not isinstance(body, dict)
+        or "client_surface" not in body
+    ):
+        return False
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        # diagnostic-expected: an unreadable 422 is reported by check_response.
+        return False
+    return isinstance(detail, list) and any(
+        isinstance(item, dict)
+        and item.get("type") == "extra_forbidden"
+        and list(item.get("loc") or [])[-1:] == ["client_surface"]
+        for item in detail
+    )
+
+
+def without_client_surface(body: dict[str, Any]) -> dict[str, Any]:
+    return {name: value for name, value in body.items() if name != "client_surface"}
+
+
+class ClientSurfaceUnsupported(Exception):
+    """Core predates ``client_surface``; nothing was saved for this request."""
+
+
 def _tool_receipt(value: Any, depth: int = 0) -> dict[str, Any] | None:
     """Find a tool result object in a provider receipt or harness payload."""
     if depth > 3:
@@ -403,6 +437,8 @@ class AsyncApi:
     """One exact-origin connection. Writes and submissions are never retried."""
 
     receipt_wait = RECEIPT_WAIT_SECONDS
+    # Cleared once this Core refuses ``client_surface`` as an unknown field.
+    client_surface_supported = True
 
     def __init__(
         self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
@@ -455,6 +491,30 @@ class AsyncApi:
         body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        if body is not None and not self.client_surface_supported:
+            body = without_client_surface(body)
+        try:
+            async for item in self._events(method, path, body=body, params=params):
+                yield item
+            return
+        except ClientSurfaceUnsupported:
+            # diagnostic-expected: an older Core refused only the new field
+            # before saving anything; send the same turn once without it.
+            assert body is not None
+            self.client_surface_supported = False
+        async for item in self._events(
+            method, path, body=without_client_surface(body), params=params
+        ):
+            yield item
+
+    async def _events(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         # Core can spend minutes preparing a turn before acceptance; once
         # accepted its stream includes heartbeats. This is never a retry budget.
         command: str | None = None
@@ -471,6 +531,7 @@ class AsyncApi:
                 command = accepted_receipt(response)
                 delay = _retry_after(response)
             if command is None:
+                await self._refuse_surface(response, body)
                 async for item in self._frames(response):
                     yield item
                 return
@@ -495,9 +556,17 @@ class AsyncApi:
                     if saved_result_pending(response):
                         delay = _retry_after(response)
                         continue
+                await self._refuse_surface(response, body)
                 async for item in self._frames(response):
                     yield item
                 return
+
+    @staticmethod
+    async def _refuse_surface(response: httpx.Response, body: Any) -> None:
+        if response.status_code == 422:
+            await response.aread()
+            if rejects_client_surface(response, body):
+                raise ClientSurfaceUnsupported
 
     async def _frames(
         self, response: httpx.Response

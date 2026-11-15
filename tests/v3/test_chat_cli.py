@@ -375,6 +375,116 @@ def test_browser_handoff_is_reported_as_needing_the_web_app(config, transport):
     assert "nebula.settings.set_device_theme needs the Nebula web app" in result.output
 
 
+# What a Core that predates client_surface answers: FastAPI's validation 422.
+OLDER_CORE_SURFACE_422 = {
+    "detail": [
+        {
+            "type": "extra_forbidden",
+            "loc": ["body", "client_surface"],
+            "msg": "Extra inputs are not permitted",
+            "input": "terminal",
+        }
+    ],
+    "code": "api.request_validation",
+}
+ANSWER = 'event: started\ndata: {"turn_id":"turn-1"}\n\nevent: done\ndata: {"message":{"content":"Older Core answered"}}\n\n'
+
+
+def test_older_core_gets_the_turn_without_the_client_surface(
+    config, transport, monkeypatch
+):
+    monkeypatch.setattr(cli, "_SURFACE_UNSUPPORTED", set())
+    submitted = []
+
+    def handler(req):
+        if req.url.path.endswith("/completions"):
+            body = json.loads(req.content)
+            submitted.append((req.headers["Idempotency-Key"], body))
+            if "client_surface" in body:
+                return httpx.Response(422, json=OLDER_CORE_SURFACE_422)
+            return httpx.Response(200, text=ANSWER)
+        return chat_handler(req)
+
+    transport(handler)
+    result = invoke(
+        config, "chat", "--project", "Project", text="first\nsecond\n/quit\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Core (422)" not in result.output
+    assert result.output.count("Older Core answered") == 2
+    # Refused once, sent again without the field under a new key, then
+    # remembered for this Core so later turns are not refused first.
+    assert [("client_surface" in body) for _, body in submitted] == [
+        True,
+        False,
+        False,
+    ]
+    assert submitted[0][0] != submitted[1][0]
+    assert [body["messages"][0]["content"] for _, body in submitted] == [
+        "first",
+        "first",
+        "second",
+    ]
+
+
+def test_older_supervisor_core_refusal_after_a_receipt_is_sent_once_more(
+    config, transport, monkeypatch
+):
+    monkeypatch.setattr(cli, "_SURFACE_UNSUPPORTED", set())
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    submitted = []
+
+    def handler(req):
+        if req.url.path.endswith("/completions"):
+            body = json.loads(req.content)
+            submitted.append(body)
+            if "client_surface" in body:
+                return httpx.Response(
+                    202,
+                    json={"state": "accepted", "receipt": {"command_id": "cmd-1"}},
+                )
+            return httpx.Response(200, text=ANSWER)
+        if req.url.path.endswith("/runtime/requests/cmd-1/response"):
+            return httpx.Response(422, json=OLDER_CORE_SURFACE_422)
+        return chat_handler(req)
+
+    transport(handler)
+    result = invoke(config, "chat", "--project", "Project", text="hello\n/quit\n")
+    assert result.exit_code == 0, result.output
+    assert "Older Core answered" in result.output
+    assert [("client_surface" in body) for body in submitted] == [True, False]
+
+
+def test_other_validation_errors_are_reported_not_resent(
+    config, transport, monkeypatch
+):
+    monkeypatch.setattr(cli, "_SURFACE_UNSUPPORTED", set())
+    submitted = []
+
+    def handler(req):
+        if req.url.path.endswith("/completions"):
+            submitted.append(json.loads(req.content))
+            return httpx.Response(
+                422,
+                json={
+                    "detail": [
+                        {
+                            "type": "string_too_long",
+                            "loc": ["body", "messages", 0, "content"],
+                            "msg": "String should have at most 10 characters",
+                        }
+                    ]
+                },
+            )
+        return chat_handler(req)
+
+    transport(handler)
+    result = invoke(config, "chat", "--project", "Project", text="hello\n/quit\n")
+    assert "String should have at most 10 characters" in result.output
+    assert len(submitted) == 1
+    assert submitted[0]["client_surface"] == "terminal"
+
+
 def test_disconnected_stream_is_not_reported_complete_or_replayed(config, transport):
     submitted = []
 

@@ -784,9 +784,13 @@ finish. Core refuses any Butler action whose result would be a
 requesting-browser handoff (`pending_browser_apply`). It decides from that
 result rather than from a list of action names, so a new handoff action is
 covered and an action that saves in Core keeps working. The refusal tells the
-model the action needs the Nebula web app, and nothing changes. The terminal
-also labels a handoff receipt from an older Core as needing the web app instead
-of reporting the tool as finished.
+model the action needs the Nebula web app, and nothing changes. The same check
+covers the legacy direct `nebula.settings.*` and `nebula.navigate.open` names
+that a harness gateway still dispatches. A Core older than `client_surface`
+rejects the field as unknown with a validation 422 before its chat handler runs,
+so the terminal resends that turn once without it and remembers that Core; it
+then labels a handoff receipt as needing the web app instead of reporting the
+tool as finished.
 
 ### Private TypeSafe, VPN and MCP Settings
 

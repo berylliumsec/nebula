@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Iterator
 from urllib.parse import quote
@@ -18,10 +18,13 @@ import typer
 
 from .terminal.transport import (
     CLIENT_SURFACE,
+    ClientSurfaceUnsupported,
     RECEIPT_WAIT_SECONDS,
     browser_handoff_notice,
     _retry_after,
     accepted_receipt,
+    rejects_client_surface,
+    without_client_surface,
 )
 from .terminal.transport import (
     ClientError as ClientError,
@@ -374,8 +377,45 @@ def stop(client: httpx.Client, turn_id: str) -> None:
     typer.echo(f"Turn {terminal_text(result['status'])}.")
 
 
+# Cores that refused ``client_surface`` as an unknown field, by base URL.
+_SURFACE_UNSUPPORTED: set[str] = set()
+
+
+def _check_turn_response(response: httpx.Response, body: Any) -> None:
+    if not response.is_success:
+        response.read()
+        if rejects_client_surface(response, body):
+            raise ClientSurfaceUnsupported
+        check_response(response)
+
+
 @contextmanager
 def saved_stream(
+    client: httpx.Client, method: str, path: str, body: dict[str, Any] | None
+) -> Iterator[httpx.Response]:
+    """Open a turn stream; an older Core gets the same turn without the surface.
+
+    Such a Core rejects ``client_surface`` with a validation 422 before its chat
+    handler runs, so nothing was saved and sending once more is not a replay.
+    """
+    origin = str(client.base_url)
+    if body is not None and origin in _SURFACE_UNSUPPORTED:
+        body = without_client_surface(body)
+    with ExitStack() as stack:
+        try:
+            response = stack.enter_context(_saved_stream(client, method, path, body))
+        except ClientSurfaceUnsupported:
+            # diagnostic-expected: an older Core refused only the new field.
+            assert body is not None
+            _SURFACE_UNSUPPORTED.add(origin)
+            response = stack.enter_context(
+                _saved_stream(client, method, path, without_client_surface(body))
+            )
+        yield response
+
+
+@contextmanager
+def _saved_stream(
     client: httpx.Client, method: str, path: str, body: dict[str, Any] | None
 ) -> Iterator[httpx.Response]:
     """Open a turn stream, following Core's saved-request receipt like the TUI.
@@ -390,9 +430,7 @@ def saved_stream(
             response.read()
             command = accepted_receipt(response)
         if command is None:
-            if not response.is_success:
-                response.read()
-                check_response(response)
+            _check_turn_response(response, body)
             yield response
             return
         delay = _retry_after(response)
@@ -415,9 +453,7 @@ def saved_stream(
                 if accepted_receipt(response) is not None:
                     delay = _retry_after(response)
                     continue
-            if not response.is_success:
-                response.read()
-                check_response(response)
+            _check_turn_response(response, body)
             yield response
             return
 

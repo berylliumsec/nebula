@@ -460,9 +460,15 @@ actions that only a web browser can finish, such as opening a page, choosing or
 downloading a file, changing the device theme, pairing a device, or confirming a
 browser-owned change or deletion. If it tries one anyway, Core refuses it,
 nothing changes, and Butler tells you to finish it in the Nebula web app.
-Changes Butler saves in Core still work from the terminal. If an older Core
-returns a browser handoff, the terminal shows that it needs the Nebula web app
-instead of reporting the tool as finished.
+Changes Butler saves in Core still work from the terminal.
+
+A Core older than this terminal does not know that it is a terminal client and
+refuses the turn before saving anything. The terminal then sends the same turn
+once more without saying so, and keeps doing that for that Core until the
+terminal restarts. Butler on that Core may still offer browser-only actions;
+when one returns a browser handoff, the terminal says it needs the Nebula web
+app and that nothing changed, instead of reporting the tool as finished.
+Upgrade Core to get the terminal-aware Butler.
 
 Run `nebula-chat unpair` to revoke this terminal and remove its local credentials.
 Devices can also be revoked through Core's existing paired-device controls. If
