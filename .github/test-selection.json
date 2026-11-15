@@ -1,24 +1,25 @@
 {
-  "reviewed_by": "Codex release integrator",
-  "reason": "Restores the retired optional assessment_id on browser traffic and command records so main can read records an earlier release wrote (live has 202 browser_traffic rows carrying it; main's strict validation would fail on them). Selection: the new regression test plus the browser suites that load these models.",
-  "exclusions": "None beyond the selection; no migration and no data change.",
+  "reviewed_by": "Codex; root cause independently validated by release validator",
+  "reason": "Execution guard binds WHERE and SET parameters for each SQL batch while preserving project authority; ordinary queued project commands recover expired dead owners; browser control uses the control lane; a safe read fenced during quiescence returns coded503 while mutations remain nonretryable. Focused in-process tests cover SQL ownership, recovery, durable delivery and read-versus-write quiescence. Runtime coordination selected to provision PostgreSQL in CI.",
+  "exclusions": "No frontend or native changes. Browser UI and real supervisor Core acceptance are recorded separately; these are not substitutes for final release suites. No startup heartbeat change is included.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 55,
+    "python": 275,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_browser_legacy_fields.py",
-    "tests/v3/test_browser_automation.py",
-    "tests/v3/test_browser_research.py",
-    "tests/v3/test_browser_security.py"
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_worker_read_quiescence.py",
+    "tests/v3/test_runtime_coordination.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "711be043d66062e82d75cc0e02ebe02304f092bf2a2bf542b6a75614a018c331"
+  "change_digest": "d36c1b0277752372ac3018f60dc9de83a21b67f6f9fcf31ce93a9fed2cefb554"
 }

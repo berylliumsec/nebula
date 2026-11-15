@@ -589,6 +589,7 @@ from .writing_ai import (
     WritingTransformResponse,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .runtime_coordination import LeaseLost
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
     CHAT_RESUME_COMMAND,
@@ -3439,6 +3440,35 @@ def create_execution_kernel(
         )
         response.headers["Retry-After"] = "1"
         return response
+
+    @app.exception_handler(LeaseLost)
+    async def lease_lost_handler(request: Request, exc: LeaseLost) -> JSONResponse:
+        # Only reads can be safely repeated. A mutation may already have had
+        # effects; its durable command must retain its existing reconciliation.
+        if request.scope["type"] != "http" or request.method not in {
+            "GET",
+            "HEAD",
+            "OPTIONS",
+        }:
+            raise exc
+        record_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.project.read_fenced",
+            "A read reached a worker that no longer owns the project; read again.",
+            stage="request",
+            retryable=True,
+        )
+        return JSONResponse(
+            {
+                "detail": "The project worker changed while this read ran. Saved work is unchanged; read again shortly.",
+                "code": "project_runtime_unavailable",
+                "reason": "closing",
+                "retryable": True,
+            },
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:

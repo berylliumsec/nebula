@@ -10,6 +10,7 @@ from nebula.v3.database import (
     DeploymentOperationRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
+    RuntimeCommandRow,
     RuntimeProcessRow,
     RuntimeRecoveryRow,
 )
@@ -231,6 +232,72 @@ async def test_expired_owner_with_only_archived_chat_is_not_recovered(recovery):
         owner = await session.get(ProjectOwnershipRow, "one")
         assert owner.runtime_id == recovery.lease.runtime_id
         assert owner.fencing_token == recovery.lease.fencing_token
+    assert recovery.management.calls == []
+
+
+async def archive_open_chat(recovery):
+    (chat,) = await recovery.store.find_entities(
+        ChatSession, {}, engagement_id="one", limit=1
+    )
+    await recovery.store.update(
+        ChatSession,
+        chat.id,
+        {"metadata": {"archived_at": "2026-11-13T00:00:00+00:00"}},
+        expected_revision=chat.revision,
+    )
+
+
+async def project_command(recovery, state):
+    """A project-routed write, such as a note or rename, with no chat start."""
+    receipt = await recovery.coordinator.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="synthetic-project-write",
+        name="http.invoke/v1",
+        payload={"format": 1, "request_reference": "synthetic-reference"},
+    )
+    if state != "queued":
+        async with recovery.coordinator.database.session() as session:
+            row = await session.get(RuntimeCommandRow, receipt.command_id)
+            row.state = state
+            row.runtime_id = recovery.lease.runtime_id
+            row.fencing_token = recovery.lease.fencing_token
+    return receipt
+
+
+@pytest.mark.parametrize("state", ["queued", "running"])
+@pytest.mark.parametrize("project_status", ["active", "archived"])
+async def test_expired_owner_with_only_project_work_is_recovered(
+    recovery, state, project_status
+):
+    # A project with no open chat still has a worker admitted for its queued
+    # work. If that worker dies, the work must not wait forever for a worker
+    # that only a chat would bring back.
+    await archive_open_chat(recovery)
+    if project_status == "archived":
+        # An archived project's delete or unarchive is still delivered.
+        await recovery.store.update(Engagement, "one", {"status": "archived"})
+    await project_command(recovery, state)
+
+    await recovery.automatic.reconcile()
+
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    assert recovery.management.calls[2][1]["expected_owner"] == expected_owner(recovery)
+
+
+@pytest.mark.parametrize("state", ["uncertain", "succeeded"])
+async def test_expired_owner_without_unfinished_project_work_is_not_recovered(
+    recovery, state
+):
+    await archive_open_chat(recovery)
+    await project_command(recovery, state)
+
+    await recovery.automatic.reconcile()
+
     assert recovery.management.calls == []
 
 

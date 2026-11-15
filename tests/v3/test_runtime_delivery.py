@@ -13,6 +13,7 @@ from nebula.v3.execution_scope import current_execution_lease
 from nebula.v3.memory_actor import memory_actor
 from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS, LeaseLost
 from nebula.v3.runtime_delivery import DurableHttpRunner, HttpIntent, RuntimeDelivery
+from nebula.v3.runtime_routes import command_lane, forwarding_lane
 from nebula.v3.runtime_vault import RuntimeVault
 from nebula.v3.storage import NotFoundError
 from tests.v3.test_runtime_coordination import cluster as cluster
@@ -316,3 +317,43 @@ async def test_final_send_does_not_publish_completion_before_app_returns(
     assert [frame.kind for frame in after.frames] == (
         ["head", "body"] if cancelled else ["head", "body", "end"]
     )
+
+
+async def test_browser_companion_control_bypasses_uncertain_work(cluster, tmp_path):
+    (first, second), _, _ = cluster
+    delivery = RuntimeDelivery(first, RuntimeVault(tmp_path / "browser-control"))
+    work = await accept(delivery, key="held-browser-work")
+    lease = await first.claim_project("project", "old")
+    claimed = await first.claim_next(lease, lane="work")
+    assert claimed is not None and claimed.receipt.command_id == work.command_id
+    await first.finish_command(lease, work.command_id, result={}, state="uncertain")
+    assert await second.claim_next(lease, lane="work") is None
+
+    path = "/api/v1/browser-companion/synthetic-session/control"
+    assert command_lane(path) == "control"
+    assert forwarding_lane({"method": "PUT", "path": path}) == "control"
+    command = await delivery.accept(
+        HttpIntent.capture(
+            "PUT",
+            path,
+            b"",
+            [(b"content-type", b"application/json")],
+            b'{"paused":true}',
+        ),
+        project_id="project",
+        actor_id="operator",
+        idempotency_key="browser-stop",
+        lane=command_lane(path),
+    )
+    effects = []
+
+    async def stop(scope, receive, send):
+        effects.append((scope["path"], await receive()))
+        await reply(scope, receive, send)
+
+    assert await DurableHttpRunner(delivery, stop, operator_token="synthetic").run_one(
+        lease, lane="control"
+    )
+    assert effects[0][0] == path
+    assert (await delivery.page("operator", command.command_id)).state == "succeeded"
+    assert (await delivery.page("operator", work.command_id)).state == "uncertain"
