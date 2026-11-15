@@ -1,14 +1,14 @@
 {
   "reviewed_by": "Claude #1100 fixing agent; each defect independently reproduced on 7495a04 by a separate validator subagent (revision-sweep/validation.md); an independent diff review is still required before merge",
   "reason": "#1100 runtime revision races: operator executions (Cancel during terminal persist discarded output and evidence; Cancel losing to persist raised; Cancel during the RUNNING transition recorded failed with a raw conflict), automation LAN results vs process finalization (results dropped with a raw revision conflict, or finalization failing and process_io raising), and notebook Interrupt on a queued cell being overwritten as failed. Each write now decides again on the newest record; Cancel/Interrupt are honoured, finished output is kept, no program is run twice. Python: new test_runtime_revision_races.py (all 6 fail on 7495a04) plus the passing execution, automation-runtime and notebook tests.",
-  "exclusions": "Not selected: 8 test_executions.py, 7 test_automation_runtime.py and 8 test_notebooks.py tests fail identically on origin/main 7495a04 (same failure set before and after; host commands need a protected memory-runner/v1 agent on this host, sync stub resolvers). No UI, frontend, native or Playwright changes; the races need a forced interleaving a real-Core journey cannot reproduce deterministically. Also not selected: the 3 test_automation_runtime.py tests that set NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS (host-mode consent and the temporary host override, one on a disposable LAN Core). They exercise that operator override, not these revision races, and this release work must not enable the override, even in tests.",
+  "exclusions": "Not selected: 8 test_executions.py, 7 test_automation_runtime.py and 8 test_notebooks.py tests fail identically on origin/main 7495a04 (same failure set before and after; host commands need a protected memory-runner/v1 agent on this host, sync stub resolvers). No UI, frontend, native or Playwright changes; the races need a forced interleaving a real-Core journey cannot reproduce deterministically. Also not selected: the 3 test_automation_runtime.py tests that set NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS (host-mode consent and the temporary host override, one on a disposable LAN Core). They exercise that operator override, not these revision races, and this release work must not enable the override, even in tests. Also not selected: test_network_request_fails_closed_when_disabled_or_scope_is_url_only, which fails on origin/main itself since #1125 (2f1d195): the never approval policy now bypasses the saved scope through effective_scope, so its URL-only denial no longer raises. That is unrelated to this change and is reported separately.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 62,
+    "python": 61,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -47,7 +47,6 @@
     "tests/v3/test_automation_runtime.py::test_large_or_truncated_command_output_stays_artifact_only",
     "tests/v3/test_automation_runtime.py::test_legacy_results_without_a_recorded_status_are_not_replayed_as_failed",
     "tests/v3/test_automation_runtime.py::test_network_boundary_prompts_once_and_enables_whole_project_scope",
-    "tests/v3/test_automation_runtime.py::test_network_request_fails_closed_when_disabled_or_scope_is_url_only",
     "tests/v3/test_automation_runtime.py::test_never_policy_is_automatic_and_background_process_can_be_cancelled",
     "tests/v3/test_automation_runtime.py::test_process_wrapper_accepts_an_existing_process_group",
     "tests/v3/test_automation_runtime.py::test_project_vpn_selection_and_vault_secret_survive_core_restart",
