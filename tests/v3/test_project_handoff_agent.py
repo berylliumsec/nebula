@@ -271,3 +271,18 @@ async def test_running_provider_admission_without_resource_cannot_transfer(
         current.phase, current.blockers = "transferable", []
     with pytest.raises(CoordinationConflict, match="changed after"):
         await project.coordinator.transfer("one")
+
+
+async def test_butler_dispatch_in_flight_keeps_the_project_finishing(project, agent):
+    # A Butler action between its dispatching commit and its saved outcome
+    # keeps its only receipt in this process; a target could record it only
+    # as uncertain, so the source keeps finishing until it settles.
+    agent.app.state.butler_authority = SimpleNamespace(_dispatching={"action"})
+    assert agent.dispatch_blockers() == ["A Butler action is being dispatched"]
+    assert await agent.tick() == "finishing"
+    handoff = await row(project)
+    assert "A Butler action is being dispatched" in handoff.blockers
+    with pytest.raises(CoordinationConflict):
+        await project.coordinator.transfer("one")
+    agent.app.state.butler_authority._dispatching.clear()
+    assert await agent.tick() == "transferable"

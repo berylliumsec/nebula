@@ -850,6 +850,23 @@ class ChatGoalService:
                 raise ConflictError(
                     "the interrupted response needs recovery before the goal can resume"
                 )
+            # Every spent budget refuses resume the same way, before the goal
+            # changes, instead of starting a run that dispatch pauses again.
+            # Restart recovery (allow_pending_recovery) may still finish the
+            # turn that was running on the last step or tokens: that turn is
+            # already counted, and refusing it would leave it unresumable and
+            # unsettled. A spent time budget settles that turn instead.
+            if not allow_pending_recovery:
+                if (
+                    goal.step_budget is not None
+                    and goal.current_step >= goal.step_budget
+                ):
+                    raise ConflictError("goal step budget is exhausted")
+                if (
+                    goal.token_budget is not None
+                    and goal.usage.total_tokens >= goal.token_budget
+                ):
+                    raise ConflictError("goal token budget is exhausted")
             if (
                 goal.time_budget_seconds is not None
                 and goal.elapsed_seconds >= goal.time_budget_seconds

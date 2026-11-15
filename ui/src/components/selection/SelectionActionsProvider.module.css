@@ -12,33 +12,22 @@
   border-radius: 0.65rem;
   box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 35%);
   backdrop-filter: blur(12px);
-  transform: translateX(-50%);
+  transform-origin: top center;
 }
 
 .popover[data-placement="above"] {
-  transform: translate(-50%, -100%);
+  transform-origin: bottom center;
 }
 
 .popover.exiting {
   pointer-events: none;
-  animation: selection-actions-exit-below 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  animation: selection-actions-exit 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
-.popover.exiting[data-placement="above"] {
-  animation-name: selection-actions-exit-above;
-}
-
-@keyframes selection-actions-exit-below {
+@keyframes selection-actions-exit {
   to {
     opacity: 0;
-    transform: translate(-50%, 0) scale(0.96);
-  }
-}
-
-@keyframes selection-actions-exit-above {
-  to {
-    opacity: 0;
-    transform: translate(-50%, -100%) scale(0.96);
+    transform: scale(0.96);
   }
 }
 
@@ -83,8 +72,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .popover.exiting,
-  .popover.exiting[data-placement="above"] {
+  .popover.exiting {
     animation-duration: 1ms;
   }
 }

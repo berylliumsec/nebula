@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { ApiError } from "../api/client";
 import { readWhenProjectReady } from "../api/projectRuntime";
 import type { ChatSessionActivity } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -15,7 +16,7 @@ type WorkItem = {
   id: string; engagement_id: string; title: string; description: string;
   status: Status; priority: Priority; assignee_session_id: string | null;
   source_kind: "chat" | "mission" | "manual" | "import"; source_id: string | null;
-  created_at: string; updated_at: string; last_update_at: string | null;
+  created_at: string; updated_at: string; last_update_at: string | null; revision: number;
 };
 type WorkUpdate = {
   id: string; engagement_id: string; item_id: string; summary: string;
@@ -82,7 +83,11 @@ export function WorkPage() {
   const [summary, setSummary] = useState("");
   const [nextStep, setNextStep] = useState("");
   const [blocker, setBlocker] = useState("");
-  const [nextStatus, setNextStatus] = useState<Status>("in_progress");
+  // The status the operator picked, for the item it was picked on; a live update to that item does not replace it.
+  const [statusChoice, setStatusChoice] = useState<{ itemId: string; status: Status }>();
+  const blockerHintId = useId();
+  // Core saves any check-in with a blocker as Blocked, so the form shows that status instead of the operator's choice.
+  const blocked = blocker.trim() !== "";
   const selectedProject = engagements.find((project) => project.id === projectId);
   const activeProjects = useMemo(() => engagements.filter((project) => project.status !== "archived"), [engagements]);
   const projectById = useMemo(() => new Map(activeProjects.map((project) => [project.id, project])), [activeProjects]);
@@ -98,6 +103,9 @@ export function WorkPage() {
   }, [activeProjects, projectById]);
   const directChildren = childrenByParent.get(projectId ?? "") ?? [];
   const selectedItem = items.find((item) => item.id === itemId);
+  const chosenStatus = selectedItem && statusChoice?.itemId === selectedItem.id ? statusChoice.status : undefined;
+  const nextStatus: Status = chosenStatus ?? selectedItem?.status ?? "in_progress";
+  const checkInStatus: Status = blocked ? "blocked" : nextStatus;
   const selectedUpdates = itemUpdates.filter((update) => update.item_id === itemId && update.engagement_id === projectId);
   const latestUpdate = selectedUpdates[0];
 
@@ -218,7 +226,6 @@ export function WorkPage() {
     return () => controller.abort();
   }, [api, coreState, refresh, retryResource]);
 
-  useEffect(() => { if (selectedItem) setNextStatus(selectedItem.status); }, [selectedItem?.id, selectedItem?.status]);
   useEffect(() => { if (engagement?.id && !createProjectId) setCreateProjectId(engagement.id); }, [engagement?.id, createProjectId]);
 
   const counts = useMemo(() => Object.fromEntries(columns.map((column) => [column.id, items.filter((item) => item.status === column.id).length])) as Record<Status, number>, [items]);
@@ -327,13 +334,24 @@ export function WorkPage() {
     const target = `engagements/${encodeURIComponent(trackingAgent.projectId)}/work`;
     try {
       if (trackItemId) {
-        const current = await api.request<WorkItem>(`${target}/${encodeURIComponent(trackItemId)}`);
-        if (current.assignee_session_id && current.assignee_session_id !== trackingAgent.sessionId) {
-          throw new Error("This item was assigned to another conversation. Refresh Work and choose another item.");
+        // Link at the revision just read, so a conversation that claims the item in between is never overwritten.
+        let linked = false;
+        for (let attempt = 0; attempt < 2 && !linked; attempt += 1) {
+          const current = await api.request<WorkItem>(`${target}/${encodeURIComponent(trackItemId)}`);
+          if (current.assignee_session_id === trackingAgent.sessionId) { linked = true; break; }
+          if (current.assignee_session_id) throw new Error("This item was assigned to another conversation. Refresh Work and choose another item.");
+          if (current.status === "done") throw new Error("This item was marked Done. Choose another item.");
+          try {
+            await api.request<WorkItem>(`${target}/${encodeURIComponent(trackItemId)}`, {
+              method: "PATCH", body: JSON.stringify({ assignee_session_id: trackingAgent.sessionId, expected_revision: current.revision }),
+            });
+            linked = true;
+          } catch (failure) {
+            // 409: the item changed after the read; read it again once.
+            if (!(failure instanceof ApiError && failure.status === 409)) throw failure;
+          }
         }
-        await api.request<WorkItem>(`${target}/${encodeURIComponent(trackItemId)}`, {
-          method: "PATCH", body: JSON.stringify({ assignee_session_id: trackingAgent.sessionId }),
-        });
+        if (!linked) throw new Error("This item kept changing while it was being linked. Refresh Work and try again.");
       } else {
         // Core returns a request ID's first item even after it is Done, so each Done item names the next request.
         // Repeated clicks and other clients reach the same open item; a finished item is never reused.
@@ -383,10 +401,12 @@ export function WorkPage() {
     setBusy(true); setError(undefined);
     try {
       await api.request<WorkUpdate>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}/updates`, {
-        method: "POST", body: JSON.stringify({ summary: summary.trim(), next_step: nextStep.trim() || null, blocker: blocker.trim() || null, status: nextStatus }),
+        // An untouched status is left out (unless a blocker makes it Blocked), so Core keeps the item's latest status instead of this page's older copy.
+        method: "POST", body: JSON.stringify({ summary: summary.trim(), next_step: nextStep.trim() || null, blocker: blocker.trim() || null, status: blocked ? "blocked" : chosenStatus }),
       });
       setSummary(""); setNextStep(""); setBlocker("");
       await refresh();
+      setStatusChoice(undefined);
     } catch (failure) {
       void logCaughtDiagnostic("interface.work_page.check_in_failed", "A Work update could not be saved.", failure, "work_page");
       setError(errorText(failure));
@@ -507,7 +527,7 @@ export function WorkPage() {
                 : <p className="work-description">{selectedItem.description}</p>)}
               <dl className="work-fields"><div><dt>Assigned to</dt><dd>{selectedItem.assignee_session_id ? <Link to={resourcePath(projectId, "conversation", selectedItem.assignee_session_id)}>{assignee(selectedItem)}</Link> : "Unassigned"}</dd></div><div><dt>Last update</dt><dd>{time(selectedItem.last_update_at)}</dd></div></dl>
               {selectedUpdates.length !== 1 && <><h3>Earlier check-ins</h3><ol className="work-timeline">{selectedUpdates.slice(1).map((update) => <li key={update.id}><span className="work-timeline-dot" /><div><div className="work-timeline-top"><strong>{update.actor_kind === "agent" ? "Agent" : update.actor_kind === "import" ? "Imported" : "Operator"}</strong><time dateTime={update.created_at}>{time(update.created_at)}</time></div><WorkUpdateDetails update={update} projectId={selectedItem.engagement_id} /></div></li>)}{!selectedUpdates.length && <li className="work-no-updates">No check-ins yet.</li>}</ol></>}
-              <form className="work-checkin-form" onSubmit={(event) => void checkIn(event)}><h3>Post an update</h3><label>Progress<textarea required maxLength={4000} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What changed?" /></label><label>Next step<input maxLength={2000} value={nextStep} onChange={(event) => setNextStep(event.target.value)} /></label><label>Blocker<input maxLength={2000} value={blocker} onChange={(event) => setBlocker(event.target.value)} /></label><label>Status<select value={nextStatus} onChange={(event) => setNextStatus(event.target.value as Status)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}</select></label><button className="button primary" type="submit" disabled={busy || !summary.trim()}>Save update</button></form>
+              <form className="work-checkin-form" onSubmit={(event) => void checkIn(event)}><h3>Post an update</h3><label>Progress<textarea required maxLength={4000} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What changed?" /></label><label>Next step<input maxLength={2000} value={nextStep} onChange={(event) => setNextStep(event.target.value)} /></label><label>Blocker<input maxLength={2000} value={blocker} onChange={(event) => setBlocker(event.target.value)} /></label><label>Status<select value={checkInStatus} disabled={blocked} aria-describedby={blocked ? blockerHintId : undefined} onChange={(event) => setStatusChoice({ itemId: selectedItem.id, status: event.target.value as Status })}>{columns.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}</select>{blocked && <small id={blockerHintId} className="work-field-hint">A blocker saves this update as Blocked.</small>}</label><button className="button primary" type="submit" disabled={busy || !summary.trim()}>Save update</button></form>
             </> : <div role="alert" className="work-empty-inline">This item is unavailable. <Link to={projectSurface(projectId, "work")}>Return to board</Link></div>}
           </aside>}
         </div>

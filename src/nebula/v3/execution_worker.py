@@ -352,9 +352,18 @@ class ProjectExecution:
             not item.task.done() for item in chat._precompactions.values()
         ):
             local.append("Conversation maintenance is still active")
-        return await self.context.coordinator.quiesce_checkpoint(
+        local.extend(agent.dispatch_blockers())
+        proof = await self.context.coordinator.quiesce_checkpoint(
             self.lease, local_blockers=local
         )
+        # Read again after the checkpoint, as a handoff does: a follow-up claim
+        # or Butler dispatch that began while it ran is not visible in SQL, and
+        # stopping the worker now would strand it for the next owner to review
+        # as a crash. Nothing has stopped yet, so this is still a refusal.
+        late = agent.dispatch_blockers()
+        if late:
+            raise RuntimeIpcError("; ".join(late))
+        return proof
 
     async def relinquish(self, payload):
         if payload:

@@ -146,6 +146,8 @@
 .work-checkin-form :where(input, textarea, select), .work-dialog :where(input, textarea, select) { width: 100%; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; color: var(--text-strong); padding: 9px 10px; font: inherit; font-size: 12px; }
 .work-checkin-form textarea, .work-dialog textarea { min-height: 70px; resize: vertical; }
 .work-checkin-form button { justify-self: start; }
+.work-checkin-form .work-field-hint { font-weight: var(--weight-regular); }
+.work-checkin-form select:disabled { color: var(--text-strong); opacity: 0.75; cursor: not-allowed; }
 .work-dialog-backdrop { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; background: var(--overlay-scrim); padding: 16px; }
 .work-dialog { width: min(480px, 100%); display: grid; gap: 16px; background: var(--surface-raised); border: 1px solid var(--border-soft); border-radius: var(--radius-dialog); padding: 20px; box-shadow: var(--shadow); }
 .work-dialog header, .work-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

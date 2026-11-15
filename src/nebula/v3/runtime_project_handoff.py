@@ -287,6 +287,23 @@ class ProjectHandoffAgent:
                     )
         return found
 
+    def dispatch_blockers(self) -> list[str]:
+        """Name dispatches whose only receipt is still in this process.
+
+        A follow-up claimed by this worker's dispatcher but not yet linked to a
+        durable turn looks settled in SQL; a later owner would review it as a
+        crash. A Butler action between its dispatching commit and its saved
+        outcome could be recorded only as uncertain. Handoff and quiescence
+        both refuse while either is in flight.
+        """
+        blockers = []
+        if self.queue is not None and getattr(self.queue, "_inflight", None):
+            blockers.append("A queued follow-up is being dispatched")
+        butler = getattr(self.app.state, "butler_authority", None)
+        if butler is not None and getattr(butler, "_dispatching", None):
+            blockers.append("A Butler action is being dispatched")
+        return blockers
+
     async def tick(self):
         try:
             return await self._tick()
@@ -494,22 +511,12 @@ class ProjectHandoffAgent:
             not item.task.done() for item in self.chat._precompactions.values()
         )
         blockers = ["Conversation maintenance is finishing"] if busy else []
-        # A follow-up claimed by this worker's dispatcher but not yet linked to
-        # a durable turn looks settled in SQL; its target would then review it
-        # as a crash. Read after the checkpoint: a claim committed before that
-        # read is still in flight here, or its turn has since changed the
-        # checkpointed revisions and transfer refuses the stale proof.
-        if self.queue is not None and getattr(self.queue, "_inflight", None):
-            blockers.append("A queued follow-up is being dispatched")
-        # A Butler action between its dispatching commit and its saved outcome
-        # keeps its only receipt in this process; a new owner could record it
-        # only as uncertain. Read after the checkpoint: a dispatch that ended
-        # before this read either ended before the checkpoint or changed the
-        # revisions that transfer re-checks, and one starting later is refused
-        # by that check or fenced before its action leaves planned.
-        butler = getattr(self.app.state, "butler_authority", None)
-        if butler is not None and getattr(butler, "_dispatching", None):
-            blockers.append("A Butler action is being dispatched")
+        # Read after the checkpoint: a claim or Butler dispatch committed
+        # before that read is still in flight here, or its turn or outcome has
+        # since changed the checkpointed revisions and transfer refuses the
+        # stale proof. One starting later is refused by that check or fenced
+        # before its action leaves planned.
+        blockers.extend(self.dispatch_blockers())
         return await self.coordinator.checkpoint(
             self.lease, checkpoint=checkpoint, blockers=blockers
         )

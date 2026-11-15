@@ -50,7 +50,11 @@ async def ready(
             pass
 
         app.state.runtime_handoff = SimpleNamespace(
-            chat=chat, handles=lambda: {}, restored_digest=None, tick=tick
+            chat=chat,
+            handles=lambda: {},
+            dispatch_blockers=lambda: [],
+            restored_digest=None,
+            tick=tick,
         )
         try:
             yield app
@@ -373,7 +377,11 @@ async def test_shutdown_waits_for_a_project_that_is_still_starting(runtime):
             pass
 
         app.state.runtime_handoff = SimpleNamespace(
-            chat=chat, handles=lambda: {}, restored_digest=None, tick=tick
+            chat=chat,
+            handles=lambda: {},
+            dispatch_blockers=lambda: [],
+            restored_digest=None,
+            tick=tick,
         )
         try:
             yield app

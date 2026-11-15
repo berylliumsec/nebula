@@ -1142,3 +1142,41 @@ async def test_work_import_api_can_attach_to_existing_project_and_reject_duplica
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_check_in_tools_tell_agents_a_blocker_saves_the_item_as_blocked(tmp_path):
+    from nebula.v3.control_assistant_work import WORK_ITEM_CHECK_IN_SCHEMA
+    from nebula.v3.harnesses import _GATEWAY_WORK_SCHEMAS
+
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Release planning"))
+    service = WorkService(store)
+    created = await service.create(
+        project.id, WorkCreate(title="Ship notes", status="review"), actor_id="agent"
+    )
+    # Core's rule: any blocker saves the item as blocked, whatever status is given.
+    update = await service.check_in(
+        project.id,
+        created.id,
+        WorkCheckIn(summary="Waiting on review", blocker="None", status="done"),
+        actor_kind="agent",
+        actor_id="agent",
+    )
+    assert update.status == "blocked"
+    assert (await service.get(project.id, created.id)).status == "blocked"
+
+    provider = work_components(
+        service,
+        project.id,
+        tmp_path,
+        ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id),
+    ).specs["work_check_in"]
+    gateway_description, gateway_schema = _GATEWAY_WORK_SCHEMAS["work.check_in"]
+    for description, blocker in (
+        (provider.description, provider.input_schema["properties"]["blocker"]),
+        (gateway_description, gateway_schema["properties"]["blocker"]),
+        (None, WORK_ITEM_CHECK_IN_SCHEMA["properties"]["blocker"]),
+    ):
+        if description is not None:
+            assert "blocker saves the item as blocked" in description
+        assert "saves the item as blocked" in blocker["description"]

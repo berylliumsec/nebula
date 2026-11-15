@@ -531,7 +531,11 @@ WORK_ITEM_CHECK_IN_SCHEMA: dict[str, Any] = {
         "expected_revision": {"type": "integer", "minimum": 1},
         "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
         "next_step": {"type": "string", "maxLength": 2000},
-        "blocker": {"type": "string", "maxLength": 2000},
+        "blocker": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Only when the work cannot continue; any blocker saves the item as blocked whatever status is given.",
+        },
         "status": WORK_ITEM_CREATE_SCHEMA["properties"]["status"],
         "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
     },
