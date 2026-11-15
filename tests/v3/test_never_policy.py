@@ -282,7 +282,8 @@ async def test_runtime_platform_broker_obeys_never_and_policy_revocation(
     assert permitted.scope.bypass_permissions
     result = await permitted.broker.execute(invocation(permitted), permitted.scope)
     assert result.exit_code == 0
-    assert result.stdout == "fixture cwd"
+    assert result.receipt is not None
+    assert any(item.text == "fixture cwd" for item in result.receipt.output_preview)
     assert len(calls) == 1
     assert not (await store.get(ScopePolicy, scope.id)).bypass_permissions
 
