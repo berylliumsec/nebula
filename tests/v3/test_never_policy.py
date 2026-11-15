@@ -174,7 +174,13 @@ def test_native_thread_approval_defers_only_core_gateway_when_bypassed(bypass):
 @pytest.mark.parametrize("bypass", [False, True], ids=["ordinary", "bypassed"])
 def test_native_process_approval_defers_only_core_gateway_when_bypassed(bypass):
     overrides = _codex_mcp_overrides(gateway_config(), {}, bypass_permissions=bypass)
-    values = dict(item.split("=", 1) for item in overrides if item != "-c")
+    values = dict(
+        item.replace('"nebula"', "nebula")
+        .replace('"external"', "external")
+        .split("=", 1)
+        for item in overrides
+        if item != "-c"
+    )
     assert values["mcp_servers.nebula.default_tools_approval_mode"] == (
         '"approve"' if bypass else '"auto"'
     )
@@ -221,6 +227,16 @@ async def test_runtime_platform_broker_obeys_never_and_policy_revocation(
     scope = await store.create(ScopePolicy(id="scope", engagement_id="project"))
     await store.create(
         Engagement(id="project", name="Policy fixture", scope_policy_id=scope.id)
+    )
+    from nebula.v3.domain import ChatSession, ChatTurn
+
+    await store.create(
+        ChatSession(
+            id="chat", engagement_id="project", title="Fixture", model="fixture"
+        )
+    )
+    await store.create(
+        ChatTurn(id="turn", engagement_id="project", session_id="chat", model="fixture")
     )
     policy = await store.create(
         AutomationProjectPolicy(
@@ -270,6 +286,32 @@ async def test_runtime_platform_broker_obeys_never_and_policy_revocation(
     with pytest.raises(PolicyDenied, match="fixture explicit command denial"):
         await restricted.broker.execute(invocation(restricted), restricted.scope)
     assert len(calls) == 1
+
+
+async def test_autonomous_browser_scope_tracks_never_and_revocation(tmp_path):
+    from nebula.v3.browser_automation import BrowserAutomationService
+    from nebula.v3.browser_tools import BrowserAutomationToolPlatform
+    from nebula.v3.storage import NebulaStore
+    from tests.v3.test_browser_automation import _project
+
+    store = NebulaStore(tmp_path / "browser.db")
+    project, scope_id = await _project(store)
+    policy = await store.create(
+        AutomationProjectPolicy(engagement_id=project.id, approval_policy="never")
+    )
+    service = BrowserAutomationService(store)
+    assert (await service._scope(project.id)).bypass_permissions
+    platform = BrowserAutomationToolPlatform(store, service)
+    assert (await platform.runtime_components(project.id)).scope.bypass_permissions
+    await store.update(
+        AutomationProjectPolicy,
+        policy.id,
+        {"approval_policy": "on_boundary"},
+        expected_revision=policy.revision,
+    )
+    assert not (await service._scope(project.id)).bypass_permissions
+    assert not (await platform.runtime_components(project.id)).scope.bypass_permissions
+    assert not (await store.get(ScopePolicy, scope_id)).bypass_permissions
 
 
 async def test_harness_existing_connection_refreshes_when_project_policy_changes(

@@ -91,7 +91,7 @@ describe("project policy hydration", () => {
     await act(async () => { resolve(policy("first")); });
     expect(approval).toBeEnabled();
     expect(approval).toHaveValue("on_boundary");
-    expect(approval).toHaveAccessibleDescription(/provider and harness tool approvals/);
+    expect(approval).toHaveAccessibleDescription(/all Core-managed tools/);
   });
 
   it("ignores an earlier project's policy response after switching projects", async () => {
