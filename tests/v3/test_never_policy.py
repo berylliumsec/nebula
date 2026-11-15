@@ -241,7 +241,13 @@ async def test_runtime_platform_broker_obeys_never_and_policy_revocation(
         )
     )
     await store.create(
-        ChatTurn(id="turn", engagement_id="project", session_id="chat", model="fixture")
+        ChatTurn(
+            id="turn",
+            engagement_id="project",
+            session_id="chat",
+            model="fixture",
+            provider_profile_id="fixture-provider",
+        )
     )
     policy = await store.create(
         AutomationProjectPolicy(
