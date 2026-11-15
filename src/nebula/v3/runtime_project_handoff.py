@@ -169,6 +169,7 @@ async def restored_checkpoint(coordinator, lease):
     # Recovery preparation does its own unlocked scan. Ordinary handoff must
     # compare the accepted checkpoint as well, without pinning heartbeat SQL.
     async with coordinator.database.session() as session:
+        await coordinator.coordination._check(session, lease, lock=False)
         pending = await session.scalar(
             select(RuntimeRecoveryRow.operation_id)
             .where(

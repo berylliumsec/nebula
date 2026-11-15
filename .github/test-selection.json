@@ -8,7 +8,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 46,
+    "python": 48,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -21,5 +21,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "789ff67a9ae3afaf52c4cd4116f92b53357444de0a8820e1c261dd0bcbf05684"
+  "change_digest": "cb68b5610b30528812f809a48ad9ee87768bee2ac9923aea827a4dcfac6a9f46"
 }

@@ -262,6 +262,16 @@ async def test_missing_project_generation_is_zero(cluster):
     assert await generation(cluster[0][0].database, "never-created") == 0
 
 
+async def test_no_handoff_still_requires_current_lease(host):
+    from tests.v3.test_runtime_recovery import expire, pair
+
+    deployment, _target, old = await pair(host)
+    assert await handoff.restored_checkpoint(deployment, old) is None
+    await expire(deployment)
+    with pytest.raises(LeaseLost):
+        await handoff.restored_checkpoint(deployment, old)
+
+
 @pytest.mark.parametrize("phase", ["prepare", "verify"])
 @pytest.mark.parametrize("change_input", [False, True])
 async def test_recovery_scan_keeps_heartbeat_and_writer_live(
