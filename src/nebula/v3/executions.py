@@ -65,7 +65,13 @@ from .sandbox import (
     SandboxWorkspaceAccess,
 )
 from .project_reads import filter_executions, project_executions
-from .storage import NebulaStore, NotFoundError
+from .storage import (
+    REVISE_ATTEMPTS,
+    NebulaStore,
+    NotFoundError,
+    RevisionConflict,
+    revise_latest,
+)
 from .runtime_platform import (
     OperatorRuntimeResolution,
     RuntimePlatform,
@@ -660,20 +666,35 @@ class ExecutionService:
         if execution.status in TERMINAL_EXECUTION_STATUSES:
             return execution
         if execution.status != OperatorExecutionStatus.CANCELLING:
-            execution = await self.store.update(
-                OperatorExecution,
-                execution.id,
-                {"status": OperatorExecutionStatus.CANCELLING},
-                expected_revision=execution.revision,
+            # The execution saves its own progress (running, terminal output)
+            # while Cancel is requested. Cancel is decided on the newest
+            # record: an execution that has meanwhile finished is returned as
+            # it ended, and one still in progress is cancelled.
+            requested: list[bool] = []
+
+            def request_cancel(latest: OperatorExecution) -> dict[str, Any] | None:
+                requested[:] = [
+                    latest.status not in TERMINAL_EXECUTION_STATUSES
+                    and latest.status != OperatorExecutionStatus.CANCELLING
+                ]
+                if not requested[0]:
+                    return None
+                return {"status": OperatorExecutionStatus.CANCELLING}
+
+            execution = await revise_latest(
+                self.store, OperatorExecution, execution.id, request_cancel
             )
-            (
-                await self._event(
-                    execution,
-                    "execution.cancelling",
-                    {"status": execution.status.value},
-                    key="cancelling",
+            if execution.status in TERMINAL_EXECUTION_STATUSES:
+                return execution
+            if requested and requested[0]:
+                (
+                    await self._event(
+                        execution,
+                        "execution.cancelling",
+                        {"status": execution.status.value},
+                        key="cancelling",
+                    )
                 )
-            )
         task = self._tasks.get(execution.id)
         if task is not None:
             task.cancel()
@@ -1027,15 +1048,31 @@ class ExecutionService:
                 raise ExecutionServiceError(
                     "preview_stale", "target DNS resolution changed while queued"
                 )
-        execution = await self.store.update(
+        # Cancel can be requested while the runtime is resolved. The start
+        # is decided on the newest record, so a requested Cancel is honoured
+        # before anything runs instead of failing the execution.
+        execution = await revise_latest(
+            self.store,
             OperatorExecution,
             execution.id,
-            {
-                "status": OperatorExecutionStatus.RUNNING,
-                "started_at": utc_now(),
-            },
-            expected_revision=execution.revision,
+            lambda latest: (
+                {"status": OperatorExecutionStatus.RUNNING, "started_at": utc_now()}
+                if latest.status == OperatorExecutionStatus.QUEUED
+                else None
+            ),
         )
+        if execution.status == OperatorExecutionStatus.CANCELLING:
+            (
+                await self._terminal_without_output(
+                    execution,
+                    OperatorExecutionStatus.CANCELLED,
+                    "cancelled",
+                    "execution cancelled",
+                )
+            )
+            return
+        if execution.status != OperatorExecutionStatus.RUNNING:
+            return
         (
             await self._event(
                 execution,
@@ -1418,16 +1455,32 @@ class ExecutionService:
                 "evidence_id": evidence.id if evidence else None,
                 "workspace_changes": workspace_changes[:1000],
             }
-            async with self.store.transaction() as transaction:
-                (await transaction.add_all([item.artifact for item in stored]))
-                if evidence is not None:
-                    (await transaction.add(evidence))
-                updated = await transaction.update(
-                    OperatorExecution,
-                    execution.id,
-                    changes,
-                    expected_revision=execution.revision,
-                )
+            # An operator Cancel can save the execution while its output is
+            # stored. The program has already ended, so its output and
+            # evidence are saved on the newest record rather than discarded.
+            # Only a record that has meanwhile become terminal keeps its
+            # saved outcome.
+            for attempt in range(1, REVISE_ATTEMPTS + 1):
+                try:
+                    async with self.store.transaction() as transaction:
+                        (await transaction.add_all([item.artifact for item in stored]))
+                        if evidence is not None:
+                            (await transaction.add(evidence))
+                        updated = await transaction.update(
+                            OperatorExecution,
+                            execution.id,
+                            changes,
+                            expected_revision=execution.revision,
+                        )
+                    break
+                except RevisionConflict:
+                    latest = await self.store.get(OperatorExecution, execution.id)
+                    if (
+                        attempt == REVISE_ATTEMPTS
+                        or latest.status in TERMINAL_EXECUTION_STATUSES
+                    ):
+                        raise
+                    execution = latest
         except Exception as caught_error:
             record_caught_exception(
                 "executions",
@@ -1463,25 +1516,31 @@ class ExecutionService:
         code: str,
         detail: str,
     ) -> OperatorExecution:
-        updated = await self.store.update(
-            OperatorExecution,
-            execution.id,
-            {
+        ended: list[bool] = []
+
+        def end(latest: OperatorExecution) -> dict[str, Any] | None:
+            # A Cancel request saved meanwhile is not an outcome; an outcome
+            # another writer saved meanwhile is kept.
+            ended[:] = [latest.status not in TERMINAL_EXECUTION_STATUSES]
+            if not ended[0]:
+                return None
+            return {
                 "status": status,
                 "completed_at": utc_now(),
                 "error_code": code,
                 "error_detail": detail[:4000],
-            },
-            expected_revision=execution.revision,
-        )
-        (
-            await self._event(
-                updated,
-                "execution.terminal",
-                {"status": status.value, "error_code": code},
-                key="terminal",
+            }
+
+        updated = await revise_latest(self.store, OperatorExecution, execution.id, end)
+        if ended and ended[0]:
+            (
+                await self._event(
+                    updated,
+                    "execution.terminal",
+                    {"status": status.value, "error_code": code},
+                    key="terminal",
+                )
             )
-        )
         return updated
 
     async def _event(

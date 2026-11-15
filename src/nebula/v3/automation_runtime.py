@@ -73,10 +73,12 @@ from .sandbox import (
     _runtime_environment,
 )
 from .storage import (
+    REVISE_ATTEMPTS,
     ConflictError,
     CorruptRecordError,
     NebulaStore,
     NotFoundError,
+    RevisionConflict,
     StoreTransaction,
 )
 from .credentials import CredentialStore
@@ -1718,15 +1720,49 @@ class AutomationRuntimeManager:
     async def accept_results(
         self, process_id: str, api_key: str, request: ProcessResultsRequest
     ) -> CommandExecution:
-        """Complete a background command from a LAN results webhook."""
+        """Complete a background command from a LAN results webhook.
 
-        execution = await self.store.get(
-            CommandExecution, self._execution_id(process_id)
-        )
+        The process's own finalization can save the record while results are
+        accepted. A results post that loses that race is decided again on
+        the newest record: results are recorded on a still-open process, and
+        a process that has meanwhile ended is refused with its outcome, never
+        with a raw revision conflict. The posted output is stored once.
+        """
+
+        posted: list[tuple[Literal["stdout", "output"], Artifact]] | None = None
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            execution = await self.store.get(
+                CommandExecution, self._execution_id(process_id)
+            )
+            if posted is None:
+                self._check_results_key(execution, api_key)
+            settled = self._settled_results(execution, request)
+            if settled is not None:
+                return settled
+            if posted is None:
+                posted = self._callback_artifacts(execution, request)
+            try:
+                return await self._record_results(execution, request, posted)
+            except RevisionConflict:
+                # diagnostic-expected: decide again on the newest record; the
+                # last loss reaches the caller.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+        raise ConflictError("process kept changing while results were recorded")
+
+    @staticmethod
+    def _check_results_key(execution: CommandExecution, api_key: str) -> None:
         expected = execution.metadata.get("results_key_sha256")
         provided = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
         if not isinstance(expected, str) or not hmac.compare_digest(expected, provided):
             raise AutomationPolicyDenied("invalid results API key")
+
+    @staticmethod
+    def _settled_results(
+        execution: CommandExecution, request: ProcessResultsRequest
+    ) -> CommandExecution | None:
+        """The record if these results are already saved; raise if it cannot take them."""
+
         if execution.metadata.get("results_received"):
             effective_exit = (
                 request.exit_code
@@ -1757,12 +1793,19 @@ class AutomationRuntimeManager:
             raise ConflictError(
                 f"process cannot accept results from {execution.status.value}"
             )
+        return None
+
+    async def _record_results(
+        self,
+        execution: CommandExecution,
+        request: ProcessResultsRequest,
+        posted: list[tuple[Literal["stdout", "output"], Artifact]],
+    ) -> CommandExecution:
         status = (
             CommandExecutionStatus.COMPLETED
             if request.status == "complete"
             else CommandExecutionStatus.FAILED
         )
-        posted = self._callback_artifacts(execution, request)
         async with self.store.transaction() as transaction:
             # The posted output and the execution that points at it commit
             # together, so a receipt never names an artifact that is missing.
@@ -2519,54 +2562,68 @@ class AutomationRuntimeManager:
                 kind="stderr",
                 metadata=metadata,
             )
-            current = await self.store.get(CommandExecution, process.execution.id)
-            if current.metadata.get("results_received"):
-                # The callback already settled the outcome and woke the
-                # owner; the process's own output still joins the record so
-                # process_io and receipts find it as for any command.
-                process.execution = await self.store.update(
-                    CommandExecution,
-                    current.id,
-                    {
-                        "stdout_artifact_id": stdout.id,
-                        "stderr_artifact_id": stderr.id,
-                        "redacted_stdout_artifact_id": redacted_stdout.id,
-                        "redacted_stderr_artifact_id": redacted_stderr.id,
-                        "observed_stdout_bytes": process.stdout.observed,
-                        "observed_stderr_bytes": process.stderr.observed,
-                        "stdout_truncated": process.stdout.truncated,
-                        "stderr_truncated": process.stderr.truncated,
-                    },
-                    expected_revision=current.revision,
-                )
-                return process.execution
-            process.execution = await self.store.update(
-                CommandExecution,
-                current.id,
-                {
-                    "status": status,
-                    "completed_at": utc_now(),
-                    "exit_code": exit_code,
-                    "stdout_artifact_id": stdout.id,
-                    "stderr_artifact_id": stderr.id,
-                    "redacted_stdout_artifact_id": redacted_stdout.id,
-                    "redacted_stderr_artifact_id": redacted_stderr.id,
-                    "observed_stdout_bytes": process.stdout.observed,
-                    "observed_stderr_bytes": process.stderr.observed,
-                    "stdout_truncated": process.stdout.truncated,
-                    "stderr_truncated": process.stderr.truncated,
-                    "error": (
-                        "command timed out"
-                        if status == CommandExecutionStatus.TIMED_OUT
-                        else "command was cancelled"
-                        if status == CommandExecutionStatus.CANCELLED
-                        else "Core stopped before the process completed"
-                        if status == CommandExecutionStatus.INTERRUPTED
-                        else None
-                    ),
-                },
-                expected_revision=current.revision,
-            )
+            # A results post can save the record while the process's own
+            # output is stored. The outcome is then decided again on the
+            # newest record, so the process's output joins the posted results
+            # instead of finalization failing.
+            for attempt in range(1, REVISE_ATTEMPTS + 1):
+                try:
+                    current = await self.store.get(
+                        CommandExecution, process.execution.id
+                    )
+                    if current.metadata.get("results_received"):
+                        # The callback already settled the outcome and woke the
+                        # owner; the process's own output still joins the record so
+                        # process_io and receipts find it as for any command.
+                        process.execution = await self.store.update(
+                            CommandExecution,
+                            current.id,
+                            {
+                                "stdout_artifact_id": stdout.id,
+                                "stderr_artifact_id": stderr.id,
+                                "redacted_stdout_artifact_id": redacted_stdout.id,
+                                "redacted_stderr_artifact_id": redacted_stderr.id,
+                                "observed_stdout_bytes": process.stdout.observed,
+                                "observed_stderr_bytes": process.stderr.observed,
+                                "stdout_truncated": process.stdout.truncated,
+                                "stderr_truncated": process.stderr.truncated,
+                            },
+                            expected_revision=current.revision,
+                        )
+                        return process.execution
+                    process.execution = await self.store.update(
+                        CommandExecution,
+                        current.id,
+                        {
+                            "status": status,
+                            "completed_at": utc_now(),
+                            "exit_code": exit_code,
+                            "stdout_artifact_id": stdout.id,
+                            "stderr_artifact_id": stderr.id,
+                            "redacted_stdout_artifact_id": redacted_stdout.id,
+                            "redacted_stderr_artifact_id": redacted_stderr.id,
+                            "observed_stdout_bytes": process.stdout.observed,
+                            "observed_stderr_bytes": process.stderr.observed,
+                            "stdout_truncated": process.stdout.truncated,
+                            "stderr_truncated": process.stderr.truncated,
+                            "error": (
+                                "command timed out"
+                                if status == CommandExecutionStatus.TIMED_OUT
+                                else "command was cancelled"
+                                if status == CommandExecutionStatus.CANCELLED
+                                else "Core stopped before the process completed"
+                                if status == CommandExecutionStatus.INTERRUPTED
+                                else None
+                            ),
+                        },
+                        expected_revision=current.revision,
+                    )
+                    break
+                except RevisionConflict:
+                    # diagnostic-expected: decide again on the newest record;
+                    # the last loss reaches the caller.
+                    if attempt == REVISE_ATTEMPTS:
+                        raise
             if (
                 process.execution.background
                 and self.process_terminal_observer
