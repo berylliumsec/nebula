@@ -27,6 +27,7 @@ import { useNavigationChords } from "../state/useNavigationChords";
 import { GuideProvider } from "../guides/GuideProvider";
 import { useGuideAction } from "../guides/guideActions";
 import { isNebulaShell } from "../hooks/useCompactLayout";
+import { ShellTabBar } from "./ShellProjects";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", harnesses: "Harnesses", library: "Library", providerCatalog: "Provider setup",
@@ -38,6 +39,7 @@ const resourceLabels: Record<string, string> = {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
+  const shellButlerRoute = isNebulaShell() && /^\/projects\/[^/]+\/butler\/?$/.test(location.pathname);
   const { resolvedTheme } = useTheme();
   const {
     approvals,
@@ -281,9 +283,9 @@ export function AppShell() {
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
             <GuideProvider>
-            {isNebulaShell() ? <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
+            {isNebulaShell() ? <NebulaControlAssistant docked={shellButlerRoute} dockFooter={<ShellTabBar docked />} onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
             <div className="app-shell assistant-only-shell workbench-route">
-              <a className="skip-link" href="#main-content">Skip to chat</a>
+              <a className="skip-link" href="#main-content">Skip to content</a>
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {workspaceState === "failed" && <div className="workspace-state-banner failed" role="alert"><DiagnosticErrorNotice error={coreError ?? "Check the Core connection and retry."} title={authorizationRecovery === "pair" ? "Pair this phone to continue." : "Core is unavailable."} fallback="Check the Core connection and retry." compact /><button className="button primary" type="button" onClick={reconnect}>Retry connection</button><a className="button quiet" href="nebula://settings">App connection</a></div>}
                 {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><strong>Some Core features are unavailable.</strong>{coreError && <small>{coreError}</small>}<button className="button quiet" type="button" onClick={reconnect}>Retry</button></div>}
