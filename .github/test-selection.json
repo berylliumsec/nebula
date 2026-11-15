@@ -1,40 +1,27 @@
 {
-  "reviewed_by": "Claude #1095 implementer; all four defects independently reproduced on 7495a04 by a separate Claude validation subagent (issues/work-goals/validation.md); an independent diff review is still required before merge",
-  "reason": "Fixes #1095. Work page: Link item PATCHes with the expected_revision it just read (one re-read on 409) and refuses an item that became Done, so a concurrent claim is reported, not overwritten; the operator's check-in status choice is kept per item across live updates and an untouched status is omitted so Core keeps the latest; while a blocker is entered the Status select shows Blocked (disabled) with a described hint. Provider work_check_in, gateway work.check_in and Butler check_in_work_item now say a blocker saves Blocked. Goals: ChatGoalService.write refuses resume of a step- or token-exhausted goal with 409 before any change (as for time), except restart recovery (allow_pending_recovery), which must still finish the turn that ran on the last step/tokens; dispatch_running_goal treats GoalBudgetConfigurationError as expected instead of logging chat.goal.dispatch_failed. Python: test_chat_goals.py (new: 409 parity for step/token/time over HTTP with the real dispatcher and no diagnostic, the restart-recovery exemption, the dispatch budget race, and restart recovery of a final step/token turn; the step/token and dispatch cases fail on 7495a04), test_chat_stream_follow.py (restart-recovery goal gating), test_work_gateway.py (gateway Work tools), and six test_work.py node IDs: the new blocker-rule test covering the provider, gateway and Butler check-in descriptions, plus the check-in, revision, provider-tool and API tests around the changed code. Frontend: WorkPage.test.tsx (revision-safe link, Done refusal, kept status, blocker form). Playwright: work-import real-Core journey, extended with a blocked check-in, at desktop and Chromium/WebKit 390.",
-  "exclusions": "Run locally but not selected because they hold failures already present on 7495a04 that this diff does not touch (unawaited async store/catalog calls in the tests, and a harness runtime-switch fixture that changes a runtime before the chat service is initialized): test_control_assistant_work.py (36 such failures; Butler's check-in schema change is asserted by the selected test_work.py blocker test), test_harness_chat_goals.py (2, test_goal_resume_uses_saved_next_harness_in_same_chat; its other tests, including budget pauses and resume, pass with this diff), test_work.py::test_work_project_batch_links_existing_projects_and_prevents_cycles, test_butler_capabilities.py (1) and test_all_tool_failure_guidance.py (2), which only name Work tools. real-core.spec.ts work hub area stays excluded (owned by the real-core-e2e repair). Other work-import profiles (320/430/compact) are the same journey at other widths. No native, settings or product-knowledge (docs/*.md) changes; the Butler workflow registry UI call inventory is unchanged.",
-  "python_browser": false,
-  "python_node": false,
+  "reviewed_by": "Claude",
+  "reason": "Storage dispatch scan past old history (#1093). The dispatch loop and the Storage page now select open rows (pending dispatches, unresolved incidents, unfinished actions) through new partial indexes before limiting, page by (created_at, id), and keep the newest history on the page; a project worker reads only its own sources' dispatches. Migration 0051_storage_open_rows adds three partial indexes only. test_storage_open_rows covers the paged scan, project isolation, index use in the query plan, and upgrade/downgrade of 0051 on rows saved before it; test_storage_integrations covers a pending dispatch after 2000 settled ones and the dashboard keeping new and open records; test_runtime_bundle reviews the new migration head. One test_runtime_coordination case is selected so CI provisions PostgreSQL and the storage tests run on both SQLite and PostgreSQL.",
+  "exclusions": "No UI, native, provider, harness or API-worker change. Playwright storage-integrations area excluded: the scan has no UI change and real-core.spec.ts is not run on main; a scratch supervisor Core and a cross-version PostgreSQL probe (7495a04 code writing on a 0051 database) were run locally instead. All unrelated tests excluded.",
   "python_versions": [
     "3.12"
   ],
+  "python_browser": false,
+  "python_node": false,
   "expected_tests": {
-    "python": 53,
-    "frontend": 21,
+    "python": 29,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_stream_follow.py",
-    "tests/v3/test_work_gateway.py",
-    "tests/v3/test_work.py::test_work_default_on_and_check_ins_are_durable_and_idempotent",
-    "tests/v3/test_work.py::test_work_item_revision_checks_preserve_edits_and_idempotent_check_ins",
-    "tests/v3/test_work.py::test_provider_work_tools_use_chat_scope_and_opt_out",
-    "tests/v3/test_work.py::test_provider_work_tools_reach_only_linked_child_project",
-    "tests/v3/test_work.py::test_work_api_auth_scope_and_refresh",
-    "tests/v3/test_work.py::test_check_in_tools_tell_agents_a_blocker_saves_the_item_as_blocked"
+    "tests/v3/test_storage_open_rows.py",
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_runtime_coordination.py::test_only_one_connection_can_claim_a_project"
   ],
-  "frontend": [
-    "ui/src/pages/WorkPage.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "work-import/assistant-real-desktop",
-    "work-import/assistant-real-chromium-390",
-    "work-import/assistant-real-webkit-390"
-  ],
-  "checks": [
-    "frontend-audit"
-  ],
-  "change_digest": "33e8bba519facda4499f4de53618f0b4c98b8dce14a129740f6ecdacd3a705ab"
+  "playwright": [],
+  "checks": [],
+  "change_digest": "b7ba0f8fc15c687d877c607219e155132ed40e51843103a94e59c32d42f861e6"
 }

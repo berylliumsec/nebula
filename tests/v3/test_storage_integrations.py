@@ -745,4 +745,154 @@ async def test_harness_source_dispatch_opens_its_session_and_queues_the_alert(
     assert queue.items[0]["request"]["harness_session_id"] == chat.harness_session_id
 
 
+async def _seed_history(store, model, count, *, prefix="older", days=1, **fields):
+    """Insert ``count`` rows ``days`` old, as a long-lived Core keeps them."""
+    from sqlalchemy import insert
+
+    from nebula.v3.database import EntityRow
+
+    started = utc_now() - timedelta(days=days)
+    rows = []
+    for index in range(count):
+        entity = model(
+            id=f"{prefix}-{model.entity_kind}-{index:05d}",
+            created_at=started + timedelta(seconds=index),
+            updated_at=started + timedelta(seconds=index),
+            **{
+                key: value.format(index=index) if isinstance(value, str) else value
+                for key, value in fields.items()
+            },
+        )
+        rows.append(
+            dict(
+                id=entity.id,
+                kind=entity.entity_kind,
+                engagement_id=None,
+                revision=entity.revision,
+                payload=entity.model_dump(mode="json"),
+                created_at=entity.created_at,
+                updated_at=entity.updated_at,
+            )
+        )
+    async with store.database.session() as session:
+        for offset in range(0, len(rows), 500):
+            await session.execute(insert(EntityRow), rows[offset : offset + 500])
+
+
+async def test_a_new_report_is_dispatched_after_two_thousand_older_dispatches(
+    tmp_path,
+):
+    client, store = await setup(tmp_path)
+    created = await enroll(client)
+    source = created["source"]
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
+    )
+    # Every report that opens or worsens an incident leaves a dispatch row,
+    # and settled rows are kept. Two thousand of them are ordinary history.
+    await _seed_history(
+        store,
+        StorageDispatch,
+        2000,
+        incident_id="older-incident-{index}",
+        source_id=source["id"],
+        event_id="older-{index}",
+        prompt="An older storage alert",
+        status="queued",
+    )
+    sender = {"Authorization": "Bearer " + created["token"]}
+    accepted = await client.post("/api/v1/storage/events", headers=sender, json=event())
+    assert accepted.status_code == 202, accepted.text
+    service = client.app.state.storage_integrations
+    await service.dispatch_pending()
+    [incident] = await store.list_entities(StorageIncident)
+    [dispatch] = await store.find_entities(
+        StorageDispatch, {"incident_id": incident.id}
+    )
+    # Dispatch number 2,001 still reaches the incident chat.
+    assert dispatch.status == "queued", dispatch
+    queue = await store.get(ChatQueue, "chat-queue-" + incident.chat_session_id)
+    assert [item["key"] for item in queue.items] == [dispatch.id]
+
+
+async def test_the_storage_page_lists_new_and_open_records_past_old_history(
+    tmp_path,
+):
+    client, store = await setup(tmp_path)
+    created = await enroll(client)
+    source = created["source"]
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
+    )
+    old = utc_now() - timedelta(days=1)
+    # An offer still waiting for the operator, older than any settled record.
+    await _seed_history(
+        store,
+        StorageAction,
+        1,
+        prefix="waiting",
+        days=2,
+        source_id=source["id"],
+        incident_id="older-incident",
+        offer_id="offer-{index}",
+        title="Expand the volume",
+    )
+    for model, fields in (
+        (
+            StorageIncident,
+            dict(
+                volume_key="older-volume-{index}",
+                state="resolved",
+                opened_at=old,
+                last_observed_at=old,
+                resolved_at=old,
+                chat_session_id="older-chat-{index}",
+            ),
+        ),
+        (
+            StorageAction,
+            dict(
+                incident_id="older-incident-{index}",
+                offer_id="offer-{index}",
+                title="Expand the volume",
+                status="complete",
+            ),
+        ),
+        (
+            StorageDispatch,
+            dict(
+                incident_id="older-incident-{index}",
+                event_id="older-{index}",
+                prompt="An older storage alert",
+                status="queued",
+            ),
+        ),
+    ):
+        await _seed_history(store, model, 2000, source_id=source["id"], **fields)
+    sender = {"Authorization": "Bearer " + created["token"]}
+    accepted = await client.post("/api/v1/storage/events", headers=sender, json=event())
+    assert accepted.status_code == 202, accepted.text
+    await client.app.state.storage_integrations.dispatch_pending()
+    dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
+    incidents, actions = dashboard["incidents"], dashboard["actions"]
+    # Each list stays bounded, keeps the open records and the newest history,
+    # and is still ordered oldest first.
+    assert len(incidents) == len(actions) == len(dashboard["dispatches"]) == 2000
+    assert incidents[-1]["state"] == "warning", incidents[-1]
+    assert "older-storage_incidents-00000" not in {item["id"] for item in incidents}
+    assert actions[0]["id"] == "waiting-storage_actions-00000"
+    assert actions[0]["status"] == "offered"
+    dispatch = dashboard["dispatches"][-1]
+    assert dispatch["incident_id"] == incidents[-1]["id"]
+    assert (dispatch["status"], dispatch["queue_status"]) == ("queued", "queued")
+
+
 pytestmark = pytest.mark.anyio
