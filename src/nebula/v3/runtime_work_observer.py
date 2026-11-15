@@ -53,7 +53,13 @@ class WorkSnapshot:
 
     @property
     def cursor(self) -> str:
-        return f"v1:{self.projects}:{self.work}"
+        # Keep the opaque event ID compact: Linux WebKit can withhold the tail
+        # of a larger Fetch stream chunk until the next heartbeat arrives.
+        value = json.dumps(
+            ["nebula.work-observation-cursor/v2", self.projects, self.work],
+            separators=(",", ":"),
+        ).encode()
+        return f"v2:{sha256(value).hexdigest()}"
 
     def change_from(self, previous: WorkSnapshot) -> Literal["projects", "work"] | None:
         if self.projects != previous.projects:
