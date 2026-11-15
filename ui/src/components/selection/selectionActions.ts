@@ -103,9 +103,18 @@ export function createSelectionDraft(
   };
 }
 
+const SECRET_AUTOCOMPLETE = /\b(?:current-password|new-password|one-time-code)\b/;
+
+/**
+ * Secret fields never feed selection actions: password inputs, fields whose
+ * autocomplete names a password or one-time code, and anything inside
+ * `data-nebula-sensitive`, which marks issued tokens, keys and pairing links.
+ */
 export function isSensitiveSelectionElement(element: Element): boolean {
   if (element.closest("[data-nebula-sensitive], [data-selection-actions='off']")) return true;
-  return element instanceof HTMLInputElement && element.type.toLowerCase() === "password";
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return false;
+  if (element instanceof HTMLInputElement && element.type.toLowerCase() === "password") return true;
+  return SECRET_AUTOCOMPLETE.test((element.getAttribute("autocomplete") ?? "").toLowerCase());
 }
 
 function elementForNode(node: Node | null): Element | null {

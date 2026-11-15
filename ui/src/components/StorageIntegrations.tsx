@@ -152,7 +152,7 @@ export function StorageIntegrations() {
     {issued && <div className="storage-issued panel" role="status"><strong>Save this token now · it is shown once</strong>
       <label>Webhook URL<input id="storage-webhook-url" readOnly value={issued.webhook_url} onFocus={(event) => event.target.select()} /></label>
       <button className="button quiet" type="button" onClick={() => void copy(issued.webhook_url, "storage-webhook-url")}><Copy size={15} /> Copy URL</button>
-      <label>Source token<input id="storage-source-token" readOnly value={issued.token} onFocus={(event) => event.target.select()} /></label>
+      <label>Source token<input id="storage-source-token" readOnly data-nebula-sensitive value={issued.token} onFocus={(event) => event.target.select()} /></label>
       <button className="button quiet" type="button" onClick={() => void copy(issued.token, "storage-source-token")}><Copy size={15} /> Copy token</button>
       <p>Send a test report to <code>/api/v1/storage/test</code> before enabling live delivery. This validates the token and JSON without creating a device.</p>
       <button className="button secondary" type="button" onClick={() => setIssued(undefined)}>Done</button>

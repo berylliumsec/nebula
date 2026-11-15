@@ -12231,6 +12231,41 @@ test("stabilization audit primary mutation dialogs through the shared dialog con
   await captureDialog("dialog-operator", page.getByRole("button", { name: "Add operator" }), "Add operator");
 });
 
+test("stabilization audit primary mutation dialogs keep their buttons clear of the selected-text toolbar", async ({ page }) => {
+  await openWorkspace(page, "/project?view=assets", "Assets");
+  await page.getByRole("button", { name: "Add asset" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add asset", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Name", { exact: true }).fill("web-frontend-01");
+  // The last field sits directly above the footer, where the toolbar used to land.
+  const tags = dialog.getByLabel("Tags", { exact: true });
+  await tags.fill("production, api");
+  await tags.dblclick();
+  const toolbar = page.getByRole("toolbar", { name: "Selected text actions" });
+  await expect(toolbar).toBeVisible();
+  const viewport = page.viewportSize()!;
+  const bar = (await toolbar.boundingBox())!;
+  expect(bar.x).toBeGreaterThanOrEqual(0);
+  expect(bar.y).toBeGreaterThanOrEqual(0);
+  expect(bar.x + bar.width).toBeLessThanOrEqual(viewport.width);
+  expect(bar.y + bar.height).toBeLessThanOrEqual(viewport.height);
+  // Every dialog command is still the element drawn at its centre.
+  for (const label of ["Cancel", "Add asset", "Close asset dialog"]) {
+    const bounds = (await dialog.getByRole("button", { name: label, exact: true }).boundingBox())!;
+    const hit = await page.evaluate(({ x, y }) => {
+      const button = document.elementFromPoint(x, y)?.closest("button");
+      return button?.getAttribute("aria-label") || button?.textContent?.trim();
+    }, { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
+    expect(hit).toBe(label);
+  }
+  // A press where Cancel is drawn reaches Cancel, not a toolbar action such as Take note.
+  const cancel = (await dialog.getByRole("button", { name: "Cancel", exact: true }).boundingBox())!;
+  const assetsUrl = page.url();
+  await page.mouse.click(cancel.x + cancel.width / 2, cancel.y + cancel.height / 2);
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(assetsUrl);
+});
+
 test("product typography and touch contracts hold on primary surfaces", async ({ page }) => {
   for (const [, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);

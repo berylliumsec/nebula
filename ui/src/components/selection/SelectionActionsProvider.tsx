@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,6 +23,7 @@ import {
   type PresentSelectionInput,
   type SelectionActionDraft,
 } from "./selectionActions";
+import { dialogObstacles, placeSelectionToolbar, type ToolbarPlacement } from "./toolbarPlacement";
 import { logCaughtDiagnostic } from "../../diagnostics";
 
 interface SelectionActionsContextValue {
@@ -162,20 +164,34 @@ export function SelectionActionsProvider({
   }, [closeActions, dismissSelection, domOptions]);
 
   const context = useMemo(() => ({ presentSelection, dismissSelection }), [presentSelection, dismissSelection]);
-  const viewportWidth = globalThis.innerWidth || 1024;
-  const viewportHeight = globalThis.innerHeight || 768;
-  const center = draft ? (draft.anchor.left + draft.anchor.right) / 2 : 0;
-  const showAbove = draft ? draft.anchor.bottom + 64 > viewportHeight : false;
-  const position = draft ? {
-    left: viewportWidth <= 520 ? viewportWidth / 2 : Math.max(220, Math.min(center || 220, viewportWidth - 220)),
-    top: showAbove ? Math.max(12, draft.anchor.top - 8) : Math.max(12, draft.anchor.bottom + 8),
-  } : undefined;
+  // The toolbar renders hidden first so its real size, including wrapping on
+  // a phone, decides where it fits. A placement belongs to one draft only.
+  const [placed, setPlaced] = useState<{ draft: SelectionActionDraft; placement: ToolbarPlacement | null }>();
+  useLayoutEffect(() => {
+    const node = popoverRef.current;
+    if (!draft || !node) return;
+    const rect = node.getBoundingClientRect();
+    setPlaced({
+      draft,
+      placement: placeSelectionToolbar({
+        anchor: draft.anchor,
+        size: { width: rect.width, height: rect.height },
+        viewport: { width: globalThis.innerWidth || 1024, height: globalThis.innerHeight || 768 },
+        ...dialogObstacles(draft.anchor, node),
+      }),
+    });
+  }, [draft]);
+  const placement = draft && placed?.draft === draft ? placed.placement : undefined;
+  const showAbove = placement?.side === "above";
+  const position = placement
+    ? { left: placement.left, top: placement.top }
+    : { left: 0, top: 0, visibility: "hidden" as const, pointerEvents: "none" as const };
 
   const preserveSelection = (event: ReactPointerEvent) => event.preventDefault();
 
   return <SelectionActionsContext.Provider value={context}>
     {children}
-    {draft && <div
+    {draft && placement !== null && <div
       ref={popoverRef}
       className={`${styles.popover}${isExiting ? ` ${styles.exiting}` : ""}`}
       style={position}
