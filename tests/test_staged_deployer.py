@@ -309,8 +309,15 @@ def test_lost_handoff_reply_reconciles_before_retiring_or_advancing():
     host.hold_unverified = False
     assert host.deployer(record).promote("v2")["status"] == "promoted"
     actions = [action for action, _ in host.calls]
-    assert actions.count("handoff") == 1
-    assert actions.index("retire") < actions.index("prepare_execution", 1)
+    handoffs = [
+        parameters["project_id"]
+        for action, parameters in host.calls
+        if action == "handoff"
+    ]
+    assert sorted(handoffs) == ["project", "project-2"]
+    first_prepare = actions.index("prepare_execution")
+    second_prepare = actions.index("prepare_execution", first_prepare + 1)
+    assert actions.index("retire") < second_prepare
 
 
 def test_third_execution_version_stays_staged():

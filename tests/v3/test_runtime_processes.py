@@ -459,3 +459,99 @@ async def test_actual_supervisor_process_exit_leaves_worker_reachable(
             if parent is not None and parent.poll() is None:
                 signal_process(parent.pid, process_birth(parent.pid), signal.SIGKILL)
                 await asyncio.to_thread(parent.wait, timeout=5)
+
+
+async def test_start_returns_committed_worker_after_identity_client_close_fails(
+    managed, monkeypatch
+):
+    await managed.stage("v1")
+    original = managed.host.rpc
+    armed = True
+
+    async def failing_close(runtime_id):
+        nonlocal armed
+        client = await original(runtime_id)
+        if armed:
+            armed = False
+            close = client.close
+
+            async def lost_close():
+                await close()
+                raise TimeoutError("synthetic identity client cleanup failure")
+
+            client.close = lost_close
+        return client
+
+    monkeypatch.setattr(managed.host, "rpc", failing_close)
+    identity = await managed.host.spawn("v1", "execution")
+    assert identity is not None
+    assert same_process(identity.pid, identity.process_birth)
+    async with managed.database.session() as session:
+        row = await session.get(RuntimeProcessRow, identity.runtime_id)
+        assert row.state == "ready"
+        assert (row.pid, row.process_birth) == (identity.pid, identity.process_birth)
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+async def test_migration_admission_checkpoint_failure_closes_and_joins_child(
+    monkeypatch, tmp_path, error_type
+):
+    import nebula.v3.runtime_processes as processes
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args):
+            return SimpleNamespace(install_path=str(tmp_path), manifest_sha256="a" * 64)
+
+    closed, joined, communicated = [], [], []
+    child = SimpleNamespace(
+        pid=12345, stdin=SimpleNamespace(close=lambda: closed.append(True))
+    )
+
+    async def wait():
+        assert closed == [True]
+        joined.append(True)
+
+    async def communicate(*args):
+        communicated.append(True)
+        pytest.fail("bootstrap must not be sent after checkpoint failure")
+
+    child.wait, child.communicate = wait, communicate
+
+    async def spawn(*args, **kwargs):
+        return child
+
+    async def checkpoint(**values):
+        if values["phase"] == "migration_admitted":
+            raise error_type("synthetic admission checkpoint failure")
+
+    async def preflight(*args, **kwargs):
+        return {"current_head": "old-head", "schema": 5}
+
+    root = RuntimeProcessHost.__new__(RuntimeProcessHost)
+    root._launch = asyncio.Lock()
+    root.closed = False
+    root.lock = SimpleNamespace(descriptor=1)
+    root.coordinator = SimpleNamespace(
+        database=SimpleNamespace(session=Session, url="sqlite:///synthetic"),
+        migration_preflight=preflight,
+    )
+    monkeypatch.setattr(
+        processes.ReleaseStore,
+        "verify",
+        lambda *a, **k: SimpleNamespace(
+            migration_head="new-head", core_executable="synthetic"
+        ),
+    )
+    monkeypatch.setattr(processes.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(processes, "detached_worker_environment", lambda *a: {})
+    monkeypatch.setattr(processes, "process_birth", lambda pid: "synthetic-birth")
+    monkeypatch.setattr(processes, "operation_checkpoint", checkpoint)
+    with pytest.raises(error_type, match="synthetic admission"):
+        await root.migrate("v2", expected_revision=1)
+    assert closed == [True] and joined == [True] and communicated == []

@@ -24,6 +24,7 @@ from .host_cpu_budget import (
     HostCpuStatus,
     HostCpuUpdate,
 )
+from .project_reads import active_control_assistant_session
 from .report_cpu_executor import ReportCpuExecutor
 from .diagnostic_requests import DiagnosticsSettingsRequest, BrowserDiagnosticBatch
 from .diagnostic_requests import BrowserDiagnosticEvent as BrowserDiagnosticEvent
@@ -12059,25 +12060,7 @@ def create_execution_kernel(
         dependencies=[Depends(require_auth)],
     )
     async def get_control_assistant_session(engagement_id: str) -> ChatSession | None:
-        (await store.get(Engagement, engagement_id))
-        return next(
-            (
-                item
-                for item in (
-                    await store.find_entities(
-                        ChatSession,
-                        {},
-                        engagement_id=engagement_id,
-                        newest_first=True,
-                        limit=None,
-                    )
-                )
-                if item.metadata.get("control_assistant") is True
-                and not item.metadata.get("butler_recovery_case_id")
-                and item.metadata.get("archived_at") is None
-            ),
-            None,
-        )
+        return await active_control_assistant_session(store, engagement_id)
 
     @app.get(
         f"{API_PREFIX}/butler/memory",

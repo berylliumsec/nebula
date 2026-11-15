@@ -37,6 +37,8 @@ def _offline_api_read(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         deployer, "confirm_api_read", lambda *_args: None, raising=False
     )
+    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
+    monkeypatch.setattr(deployer, "stop_supervisor_service", lambda _identity: deployer.service("stop"))
 
 
 class _ApiCore:
@@ -676,6 +678,7 @@ def test_interrupted_activation_restarts_selected_release_without_discovery(
 def test_failed_host_activation_can_journal_code_only_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(deployer, "host_connection", lambda **_kwargs: None)
     releases = tmp_path / "releases"
     releases.mkdir()
     old = releases / ("a" * 40)
@@ -1236,3 +1239,178 @@ def test_prepare_rejects_replacing_candidate_under_nonterminal_journal(
     saved = deployer.state()
     assert saved["pending"] == meta["pending"]
     assert saved["runtime_deployment"]["id"] == meta["deployment_id"]
+
+
+def test_rollback_host_receipts_need_no_migration() -> None:
+    version, digest = "b" * 40, "d" * 64
+    record = {
+        "runtime_deployment": {
+            "id": "rollback-1",
+            "action": "rollback",
+            "version": version,
+            "steps": {
+                "stage": {
+                    "action": "stage",
+                    "operation_id": "rollback-1:stage",
+                    "parameters": {"manifest_sha256": digest},
+                    "receipt": {"state": "succeeded"},
+                }
+            },
+        }
+    }
+    assert deployer.require_stage_migration_receipts(
+        record, version=version, manifest_sha256=digest
+    ) == {
+        "deployment_id": "rollback-1",
+        "stage_operation_id": "rollback-1:stage",
+        "migration_operation_id": None,
+    }
+    record["runtime_deployment"]["action"] = "promote"
+    with pytest.raises(RuntimeError, match="additive-migration receipts"):
+        deployer.require_stage_migration_receipts(
+            record, version=version, manifest_sha256=digest
+        )
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_completed_host_activation_reads_its_journaled_api_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, promoted: bool
+) -> None:
+    old, version, package = "a" * 40, "b" * 40, "synthetic-package"
+    release = tmp_path / version
+    release.mkdir()
+    (release / "nebula-runtime.json").write_text(json.dumps({"version": version}))
+    monkeypatch.setattr(deployer, "runtime_release", lambda _v: (release, "d" * 64))
+    monkeypatch.setattr(deployer, "runtime_package_version", lambda _v: package)
+    monkeypatch.setattr(
+        deployer, "require_stage_migration_receipts", lambda *a, **k: {}
+    )
+    monkeypatch.setattr(deployer, "current_release_version", lambda: version)
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **k: {
+            "package_version": package,
+            "pid": 42,
+            "process_birth": "synthetic-birth",
+        },
+    )
+    monkeypatch.setattr(deployer, "unit_state", lambda _u: "active")
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: {})
+    monkeypatch.setattr(deployer, "require_runtime_process_in_service", lambda *a: None)
+    monkeypatch.setattr(
+        deployer,
+        "read_supervisor_health",
+        lambda: (
+            {
+                "status": "ok",
+                "database": "ok",
+                "commit": version,
+                "recovery_version": package,
+            },
+            {**_status(), "api_version": version},
+        ),
+    )
+    record = {
+        "deployment_mode": "supervisor",
+        "pending": version,
+        "active": version,
+        "runtime_deployment": {
+            "action": "promote",
+            "version": version,
+            "host_activation": {
+                "version": version,
+                "operation_id": "host-1",
+                "state": "complete",
+            },
+            "steps": {
+                "api": {
+                    "action": "prepare_api",
+                    "parameters": {"version": version},
+                    "receipt": {
+                        "state": "succeeded",
+                        "result": {"runtime_id": "api-new"},
+                    },
+                },
+                "promote-api": {
+                    "action": "promote_api",
+                    "parameters": {"runtime_id": "api-new"},
+                    "receipt": {"state": "succeeded" if promoted else "uncertain"},
+                },
+            },
+        },
+        "host_activation": {
+            "version": version,
+            "previous_version": old,
+            "operation_id": "host-1",
+            "state": "complete",
+            "prior_status": {"api_version": old},
+            "readback": {"health_commit": version, "api_version": old},
+        },
+    }
+    if promoted:
+        result = deployer.activate_supervisor_host(record, version)
+        assert result["current_readback"]["api_version"] == version
+        assert result["api_version"] == old  # preserve the original activation receipt
+    else:
+        with pytest.raises(RuntimeError, match="unexpectedly changed the API release"):
+            deployer.activate_supervisor_host(record, version)
+
+
+@pytest.mark.parametrize("head", ["old-head", "accepted-head"])
+def test_migration_readback_uses_exact_database_without_host_endpoint(
+    tmp_path, monkeypatch, head
+):
+    import sqlite3
+
+    version = "b" * 40
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "nebula-runtime.json").write_text(
+        json.dumps({"version": version, "migration_head": "accepted-head"})
+    )
+    data = tmp_path / "data"
+    data.mkdir()
+    with sqlite3.connect(data / "nebula.db") as connection:
+        connection.execute("CREATE TABLE alembic_version (version_num TEXT)")
+        connection.execute("INSERT INTO alembic_version VALUES (?)", (head,))
+    monkeypatch.setattr(
+        deployer, "runtime_release", lambda _version: (release, "c" * 64)
+    )
+    monkeypatch.setattr(deployer, "DATA", data)
+    monkeypatch.setattr(deployer, "configured_postgres", lambda _path: None)
+    monkeypatch.setattr(
+        deployer, "api", lambda: pytest.fail("old host has no migration endpoint")
+    )
+    assert deployer.migration_status(version) == {
+        "version": version,
+        "current_head": head,
+        "target_head": "accepted-head",
+    }
+    with sqlite3.connect(data / "nebula.db") as connection:
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchall() == [(head,)]
+
+
+def test_postgres_migration_readback_is_read_only_and_hides_errors(tmp_path, monkeypatch):
+    version = "b" * 40
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "nebula-runtime.json").write_text(json.dumps({"version": version, "migration_head": "accepted"}))
+    monkeypatch.setattr(deployer, "runtime_release", lambda _v: (release, "c" * 64))
+    monkeypatch.setattr(deployer, "configured_postgres", lambda _p: {"PGPASSWORD": "private-value", "PGDATABASE": "synthetic"})
+    calls = []
+    def read(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        assert "private-value" not in repr(arguments)
+        assert "BEGIN READ ONLY" in arguments[-1]
+        assert kwargs["env"]["PGPASSWORD"] == "private-value"
+        return SimpleNamespace(returncode=0, stdout="BEGIN\naccepted\nCOMMIT\n")
+    monkeypatch.setattr(deployer.subprocess, "run", read)
+    assert deployer.migration_status(version)["current_head"] == "accepted"
+    assert len(calls) == 1
+    monkeypatch.setattr(deployer.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="private-value"))
+    with pytest.raises(RuntimeError, match="PostgreSQL access") as error:
+        deployer.migration_status(version)
+    assert "private-value" not in str(error.value)

@@ -42,6 +42,7 @@ from .domain import (
     ScopePolicy,
     utc_now,
 )
+from .project_reads import presented_chat_goal, stored_chat_goal
 from .providers import ReasoningEffort
 from .chat_snapshot_parts import (
     resolve_skill_snapshots,
@@ -282,29 +283,11 @@ class ChatGoalService:
             )
 
     async def get(self, session_id: str) -> ChatGoal:
-        (await self.store.get(ChatSession, session_id))
-        goals = await self.store.list_session_entities(ChatGoal, session_id)
-        if not goals:
-            raise NotFoundError(f"chat goal not found for session: {session_id}")
-        if len(goals) > 1:
-            raise ConflictError("conversation has more than one authoritative goal")
-        return goals[0]
+        return await stored_chat_goal(self.store, session_id)
 
     async def read(self, session_id: str) -> ChatGoal:
         """Return current presentation state without advancing durable revision."""
-        goal = await self.get(session_id)
-        if goal.status != ChatGoalStatus.RUNNING or goal.active_since is None:
-            return goal
-        # The open stretch is reported as banked up to now and still open from
-        # now, so a client that adds the time since ``active_since`` to
-        # ``elapsed_seconds`` counts it once, not twice.
-        now = utc_now()
-        return goal.model_copy(
-            update={
-                "elapsed_seconds": goal.active_elapsed_seconds(now),
-                "active_since": now,
-            }
-        )
+        return presented_chat_goal(await self.get(session_id), now=utc_now())
 
     async def create(self, session_id: str, body: GoalCreate) -> ChatGoal:
         session = await self.store.get(ChatSession, session_id)
