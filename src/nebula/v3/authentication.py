@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.requests import HTTPConnection
 
 from .domain import PairedDeviceSession, utc_now
 from .storage import NebulaStore, NotFoundError
@@ -123,6 +124,15 @@ class CoreAuthentication:
             and origin
             and self.secrets_equal(origin, f"{scheme}://{host}")
         )
+
+    def presents_operator_token(self, connection: HTTPConnection) -> bool:
+        """Whether a request carries the operator token. It authorizes nothing:
+        the stable listener uses it only to choose forwarding capacity, and the
+        receiving worker still runs `require_auth` in full."""
+        if self.allow_unauthenticated:
+            return True
+        scheme, _, token = connection.headers.get("authorization", "").partition(" ")
+        return scheme.lower() == "bearer" and self.secrets_equal(token, self.token)
 
     async def require_bearer_auth(
         self,

@@ -1,6 +1,8 @@
 """Stable listener checks use retained API processes and synthetic data only."""
 
 import asyncio
+from datetime import timedelta
+import hashlib
 import threading
 from types import SimpleNamespace
 
@@ -8,8 +10,10 @@ import httpx
 import pytest
 
 from nebula.v3.process_identity import same_process
-from nebula.v3.domain import Engagement
+from nebula.v3.domain import Engagement, PairedDeviceSession, utc_now
 from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_http import HttpUpstream
+from nebula.v3.runtime_routes import forwarding_lane
 from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_release_store import bundle
 from tests.v3.test_runtime_http import server
@@ -205,3 +209,203 @@ async def test_concurrent_close_callers_join_the_same_cleanup(supervised, monkey
         release.set()
         await asyncio.gather(first, second)
     assert not returned_early
+
+
+async def test_control_capacity_is_reserved_for_requests_with_a_credential(
+    supervised, monkeypatch
+):
+    root, fixture = supervised.supervisor, supervised.managed
+    now = utc_now()
+    for device, revoked in (("live", None), ("revoked", now)):
+        await fixture.store.create(
+            PairedDeviceSession(
+                id=device,
+                name="Synthetic paired browser",
+                token_sha256=hashlib.sha256(device.encode()).hexdigest(),
+                csrf_sha256=hashlib.sha256(b"csrf").hexdigest(),
+                last_used_at=now,
+                idle_expires_at=now + timedelta(days=1),
+                absolute_expires_at=now + timedelta(days=2),
+                revoked_at=revoked,
+            )
+        )
+
+    async def promoted(scope):
+        return HttpUpstream(
+            "unix:///synthetic/api.sock", b"k" * 32, forwarding_lane(scope)
+        )
+
+    monkeypatch.setattr(root.routing, "api_upstream", promoted)
+
+    async def lane(method, path, *headers):
+        scope = {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [(name.encode(), value.encode()) for name, value in headers],
+        }
+        upstream = await root._api_upstream(scope)
+        return upstream.lane, "public" if upstream.public else "operator"
+
+    stop = "/api/v1/chat/turns/turn/cancel"
+    decision = "/api/v1/approvals/approval/decision"
+    operator = ("authorization", "Bearer " + _TOKEN)
+    assert await lane("POST", stop, operator) == ("control", "operator")
+    assert await lane("POST", decision, ("cookie", "nebula_device=live")) == (
+        "control",
+        "operator",
+    )
+    # Without a credential the request leaves the control lane and travels in
+    # the public pool; the API worker still authenticates it and answers 401.
+    assert await lane("POST", stop) == ("work", "public")
+    assert await lane("POST", decision, ("authorization", "Bearer guess")) == (
+        "work",
+        "public",
+    )
+    assert await lane("POST", stop, ("cookie", "nebula_device=revoked")) == (
+        "work",
+        "public",
+    )
+    assert await lane("POST", stop, ("cookie", "nebula_device=unknown")) == (
+        "work",
+        "public",
+    )
+    assert await lane("POST", "/api/v1/chat/completions", operator) == (
+        "work",
+        "operator",
+    )
+    assert await lane("POST", "/api/v1/chat/completions") == ("work", "public")
+    assert await lane("GET", stop, operator) == ("read", "operator")
+    assert await lane("GET", stop) == ("read", "public")
+    # A recognised device keeps operator capacity without a lookup per
+    # request. Recognition selects capacity only: the API worker still
+    # refuses the revoked device on its next request.
+    lookups = []
+    lookup = root.authentication.device_for_token
+
+    async def counted(token):
+        lookups.append(token)
+        return await lookup(token)
+
+    monkeypatch.setattr(root.authentication, "device_for_token", counted)
+    for _ in range(3):
+        assert await lane("GET", stop, ("cookie", "nebula_device=live")) == (
+            "read",
+            "operator",
+        )
+    assert lookups == []
+    for _ in range(2):
+        assert await lane("GET", stop, ("cookie", "nebula_device=unknown")) == (
+            "read",
+            "public",
+        )
+    assert lookups == ["unknown", "unknown"]
+    # An unknown cookie beside the operator token is never recognised.
+    assert await lane("GET", stop, operator, ("cookie", "nebula_device=other")) == (
+        "read",
+        "operator",
+    )
+    assert await lane("GET", stop, ("cookie", "nebula_device=other")) == (
+        "read",
+        "public",
+    )
+    assert lookups == ["unknown", "unknown", "other"]
+
+
+async def test_unauthenticated_traffic_cannot_deny_an_operator_stop(supervised):
+    """Real supervisor and API worker processes: neither a volume of
+    unauthenticated control-path requests nor uploads that never finish keep
+    the operator's Stop from reaching the API worker."""
+    root, fixture = supervised.supervisor, supervised.managed
+    await fixture.stage("v1", _API_WORKER)
+    api = await root.prepare_api("v1")
+    status = await root.coordinator.status()
+    await root.promote_api(api.runtime_id, expected_revision=status.revision)
+    async with server(root.app) as endpoint:
+        async with httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(uds=endpoint[7:]),
+            base_url="http://same-listener",
+            trust_env=False,
+            timeout=30,
+        ) as client:
+
+            async def operator_stop(turn):
+                return await client.post(
+                    f"/api/v1/chat/turns/{turn}/cancel",
+                    json={},
+                    headers={
+                        "Authorization": "Bearer " + _TOKEN,
+                        "Idempotency-Key": "stop-" + turn,
+                    },
+                )
+
+            async def operator_decision(approval):
+                return await client.post(
+                    f"/api/v1/approvals/{approval}/decision",
+                    json={"decision": "reject"},
+                    headers={
+                        "Authorization": "Bearer " + _TOKEN,
+                        "Idempotency-Key": "decide-" + approval,
+                    },
+                )
+
+            def reached_the_api_worker(response):
+                # The unknown turn names no project: the API worker's command
+                # path answered, not a capacity refusal on the way to it.
+                return response.status_code == 409 and "project does not exist" in (
+                    response.text
+                )
+
+            concurrency = asyncio.Semaphore(16)
+
+            async def stranger(index):
+                async with concurrency:
+                    response = await client.post(
+                        f"/api/v1/chat/turns/flood-{index}/cancel", json={}
+                    )
+                    return response.status_code
+
+            # More than the 256 control requests the API worker's replay set
+            # held per 30 s window before requests were numbered.
+            assert set(await asyncio.gather(*(stranger(i) for i in range(300)))) == {
+                401
+            }
+            assert reached_the_api_worker(await operator_stop("after-volume"))
+            assert reached_the_api_worker(await operator_decision("after-volume"))
+
+            # Unfinished uploads: more than the 16 control connections on
+            # control paths, and more than the 64 connections reads and changes
+            # share on another path.
+            writers = []
+            try:
+                for index in range(90):
+                    path = (
+                        b"/api/v1/chat/turns/slow-%d/cancel" % index
+                        if index < 20
+                        else b"/api/v1/engagements"
+                    )
+                    _reader, writer = await asyncio.open_unix_connection(endpoint[7:])
+                    writer.write(
+                        b"POST %s HTTP/1.1\r\n"
+                        b"Host: same-listener\r\nContent-Type: application/json\r\n"
+                        b"Content-Length: 4096\r\n\r\n{" % path
+                    )
+                    await writer.drain()
+                    writers.append(writer)
+                async with asyncio.timeout(10):
+                    while sum(root.proxy.active.values()) < 90:
+                        await asyncio.sleep(0.05)
+                # Queued behind them, the Stop waited out the proxy's 5 s
+                # connection wait and was answered 503; so did reads.
+                started = asyncio.get_running_loop().time()
+                assert reached_the_api_worker(await operator_stop("during-uploads"))
+                assert reached_the_api_worker(await operator_decision("during-uploads"))
+                read = await client.get(
+                    "/api/v1/engagements",
+                    headers={"Authorization": "Bearer " + _TOKEN},
+                )
+                assert read.status_code == 200, read.text
+                assert asyncio.get_running_loop().time() - started < 4
+            finally:
+                for writer in writers:
+                    writer.close()
