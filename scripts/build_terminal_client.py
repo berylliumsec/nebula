@@ -34,6 +34,7 @@ CLIENT_FILES = (
     "terminal/projects.py",
     "terminal/reading.py",
     "terminal/inspect.py",
+    "terminal/view_lease.py",
 )
 
 
