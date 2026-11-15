@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Storage sender admission and lifecycle hardening (#1092), finishing #1033 on top of the #1112 sender ingress. Reports run on their own report lane so a source's backlog never delays operator work or control commands; per-source and per-project caps of unexecuted reports answer 429 with Retry-After before anything is saved; disabling, revoking, rotating or moving a source cancels its queued reports; finished reports are pruned with their payloads; promotion, handoff, target and recovery fences count only unfinished reports and run inside the save transaction under the project's ownership lock; an interrupted report is requeued a bounded number of times instead of becoming uncertain; a pending storage dispatch is worker demand and holds idle retirement; project deletion removes the project's source-owned storage rows; project-less storage rows route to their source's project. test_storage_report_backlog, test_storage_alert_dispatch, test_storage_report_compatibility, test_api_worker, test_storage_integrations, test_storage_sender and test_runtime_principal hold the regressions; test_runtime_coordination, test_runtime_delivery, test_runtime_routing, test_deployment_lifecycle, test_project_handoff_agent, test_project_handoff_admission, test_execution_worker, test_runtime_context_requirements, test_shutdown_admission, test_admission_retry, test_idle_retirement_dispatch, test_runtime_quiescence, test_runtime_work_batches and test_api_worker_composition cover the lane, claim, delivery, routing, fence, handoff, admission and shutdown paths changed. test_runtime_coordination and test_api_worker_composition also make CI provision PostgreSQL.",
+  "reason": "Storage sender admission and lifecycle hardening (#1092), finishing #1033 on top of the #1112 sender ingress. Reports run on their own report lane so a source's backlog never delays operator work or control commands; per-source and per-project caps of unexecuted reports answer 429 with Retry-After before anything is saved; disabling, revoking, rotating or moving a source cancels its queued reports; finished reports are pruned with their payloads; promotion, handoff, target and recovery fences count only unfinished reports and run inside the save transaction under the project's ownership lock; an interrupted report is requeued a bounded number of times instead of becoming uncertain; a pending storage dispatch is worker demand and holds idle retirement; project deletion removes the project's source-owned storage rows; project-less storage rows route to their source's project. test_storage_report_backlog, test_storage_alert_dispatch, test_storage_report_compatibility, test_api_worker, test_storage_integrations, test_storage_sender and test_runtime_principal hold the regressions; test_runtime_coordination, test_runtime_delivery, test_runtime_routing, test_deployment_lifecycle, test_project_handoff_agent, test_project_handoff_admission, test_execution_worker, test_runtime_context_requirements, test_shutdown_admission, test_admission_retry, test_idle_retirement_dispatch, test_runtime_quiescence, test_runtime_work_batches and test_api_worker_composition cover the lane, claim, delivery, routing, fence, handoff, admission and shutdown paths changed. test_runtime_coordination and test_api_worker_composition also make CI provision PostgreSQL. The pending-dispatch demand query uses #1129's open-dispatch index predicate (query_predicates.open_storage_row); test_storage_alert_dispatch covers an alert behind 2000 settled dispatches and test_storage_open_rows covers the index.",
   "exclusions": "No UI or native code changed. test_project_view_leases.py is excluded: test_lease_tables_are_additive_and_downgrade_to_the_previous_schema fails identically on origin/main (its downgrade target predates 0050). test_runtime_worker_features.py, test_mixed_release_idle_retirement.py and test_shutdown_readmission.py spawn real Cores or workers and are excluded; a scratch supervisor Core on PostgreSQL ran the sender, burst, revoke, Retry and shutdown journey instead. Playwright storage-integrations is excluded (real-core.spec.ts is not run on main). All unrelated tests excluded.",
   "python_versions": [
     "3.12"
@@ -8,7 +8,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 544,
+    "python": 552,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -19,6 +19,7 @@
     "tests/v3/test_storage_report_compatibility.py",
     "tests/v3/test_api_worker.py",
     "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_storage_open_rows.py",
     "tests/v3/test_storage_sender.py",
     "tests/v3/test_runtime_principal.py",
     "tests/v3/test_runtime_coordination.py",
@@ -40,5 +41,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "59563eb28fcc35500698ad48eb409bccb41c24948ed7ac09bb31dce0f9860f12"
+  "change_digest": "f6d7c2f4d38e27a52c07170dac28d58895aba61338ab44cd4e4b045904a167f8"
 }
