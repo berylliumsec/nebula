@@ -16,7 +16,7 @@ from .domain import (
     ProviderProfile,
     RiskClass,
 )
-from .storage import NebulaStore
+from .storage import NebulaStore, revise_latest
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
@@ -653,38 +653,35 @@ async def set_default_model(
         or not isinstance(model, str)
     ):
         raise ValueError("kind, profile_id, and model are required")
+    # The assistant sends no profile revision. Health checks and each turn's
+    # bookkeeping save these profiles, so the choice is checked and saved on
+    # the profile as stored now.
     if kind == "provider":
-        provider = await store.get(ProviderProfile, profile_id)
-        choices = provider.model_allowlist
-        if not provider.enabled or model not in choices:
-            raise ValueError("choose an enabled provider and one of its allowed models")
-        (
-            await store.update(
-                ProviderProfile,
-                provider.id,
-                {
-                    "metadata": {**provider.metadata, "default_model": model},
-                },
-                expected_revision=provider.revision,
-            )
+
+        def provider_default(latest: ProviderProfile) -> dict[str, Any]:
+            if not latest.enabled or model not in latest.model_allowlist:
+                raise ValueError(
+                    "choose an enabled provider and one of its allowed models"
+                )
+            return {"metadata": {**latest.metadata, "default_model": model}}
+
+        provider = await revise_latest(
+            store, ProviderProfile, profile_id, provider_default
         )
         saved_provider = await store.get(ProviderProfile, provider.id)
         observed = saved_provider.metadata.get("default_model")
         profile_name = provider.name
     else:
-        harness = await store.get(HarnessProfile, profile_id)
-        choices = harness.capabilities.models
-        if not harness.enabled or model not in choices:
-            raise ValueError(
-                "choose an enabled harness and one of its advertised models"
-            )
-        (
-            await store.update(
-                HarnessProfile,
-                harness.id,
-                {"default_model": model},
-                expected_revision=harness.revision,
-            )
+
+        def harness_default(latest: HarnessProfile) -> dict[str, Any]:
+            if not latest.enabled or model not in latest.capabilities.models:
+                raise ValueError(
+                    "choose an enabled harness and one of its advertised models"
+                )
+            return {"default_model": model}
+
+        harness = await revise_latest(
+            store, HarnessProfile, profile_id, harness_default
         )
         saved_harness = await store.get(HarnessProfile, harness.id)
         observed = saved_harness.default_model

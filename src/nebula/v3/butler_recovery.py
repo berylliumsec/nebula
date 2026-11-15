@@ -61,7 +61,7 @@ from .butler_global_capabilities import measured_harness_capacity
 from .butler_instructions import ButlerInstructionsError, read_butler_instructions
 from .butler_precedent import read_precedents
 from .chat_assistant_config import chat_assistant_config
-from .storage import NebulaStore, NotFoundError
+from .storage import REVISE_ATTEMPTS, NebulaStore, NotFoundError, RevisionConflict
 from .tools import BudgetExhausted, CapacityReached, InvalidToolArguments, PolicyDenied
 from .harnesses import HarnessConfigurationError
 
@@ -1506,29 +1506,44 @@ class ButlerRecoveryService:
             )
 
     async def _renew_project_lease(self, project_id: str, worker_id: str) -> bool:
-        """Keep one owned investigation valid without claiming another worker's lease."""
+        """Keep one owned investigation valid without claiming another worker's lease.
 
-        async with self.store.transaction(immediate=True) as transaction:
-            state = await _entity_in_transaction(
-                transaction, ButlerProjectState, project_state_id(project_id)
-            )
-            now = utc_now()
-            if (
-                state is None
-                or state.lease_owner != worker_id
-                or state.lease_expires_at is None
-                or state.lease_expires_at <= now
-            ):
-                return False
-            (
-                await transaction.update(
-                    ButlerProjectState,
-                    state.id,
-                    {"lease_expires_at": now + LEASE_DURATION},
-                    expected_revision=state.revision,
-                )
-            )
-        return True
+        On PostgreSQL the read does not lock the row, so oversight replay can
+        save the project state between this read and the renewal. A renewal
+        that loses only that race reads the state again and renews on it;
+        the lease owner and expiry are checked on every read.
+        """
+
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            try:
+                async with self.store.transaction(immediate=True) as transaction:
+                    state = await _entity_in_transaction(
+                        transaction, ButlerProjectState, project_state_id(project_id)
+                    )
+                    now = utc_now()
+                    if (
+                        state is None
+                        or state.lease_owner != worker_id
+                        or state.lease_expires_at is None
+                        or state.lease_expires_at <= now
+                    ):
+                        return False
+                    (
+                        await transaction.update(
+                            ButlerProjectState,
+                            state.id,
+                            {"lease_expires_at": now + LEASE_DURATION},
+                            expected_revision=state.revision,
+                        )
+                    )
+                return True
+            except RevisionConflict:
+                # diagnostic-expected: renew again on the newest state; the
+                # last loss reaches the heartbeat.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+                await asyncio.sleep(0)
+        return False
 
     async def recover_interrupted_cases(self, project_id: str) -> int:
         """A crashed worker cannot replay an action whose side effect is unclear."""

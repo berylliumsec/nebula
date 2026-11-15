@@ -448,14 +448,32 @@ class ButlerImprovementService:
             expected_revision=candidate.revision,
         )
 
+    async def _hold(
+        self, candidate: ButlerIssueCandidate, reason: str
+    ) -> ButlerIssueCandidate:
+        """Keep a draft unpublished without churning it.
+
+        Each oversight pass decides every held draft again. A hold the draft
+        already carries writes nothing, so passes neither bump its revision
+        under an operator's open edit nor fail against one. A draft the
+        operator changed after this pass read it is left for the next pass,
+        which decides on the newest draft; nothing was published, so no
+        effect is lost.
+        """
+
+        latest = await self.store.get(ButlerIssueCandidate, candidate.id)
+        if latest.revision != candidate.revision or (
+            latest.status == "held" and latest.reason == reason
+        ):
+            return latest
+        return await self._set_candidate(latest, status="held", reason=reason)
+
     async def publish(self, candidate: ButlerIssueCandidate) -> ButlerIssueCandidate:
         destination = await self.store.get(
             ButlerIssueDestination, candidate.destination_id
         )
         if not destination.enabled or not destination.auto_publish:
-            return await self._set_candidate(
-                candidate, status="held", reason="automatic_publishing_not_granted"
-            )
+            return await self._hold(candidate, "automatic_publishing_not_granted")
         try:
             visibility = await self._target(
                 destination
@@ -468,9 +486,7 @@ class ButlerImprovementService:
                 exc,
                 stage="issue-target",
             )
-            return await self._set_candidate(
-                candidate, status="held", reason="target_visibility_unavailable"
-            )
+            return await self._hold(candidate, "target_visibility_unavailable")
         title, body = _outgoing(candidate)
         reason = next(
             (
@@ -490,7 +506,7 @@ class ButlerImprovementService:
         if visibility == "public" and not candidate.public_independent:
             reason = reason or "public_reproduction_not_independent"
         if reason:
-            return await self._set_candidate(candidate, status="held", reason=reason)
+            return await self._hold(candidate, reason)
         try:
             existing = await self._find(destination, candidate.dedup_key)
         except Exception as exc:
@@ -501,9 +517,7 @@ class ButlerImprovementService:
                 exc,
                 stage="issue-lookup",
             )
-            return await self._set_candidate(
-                candidate, status="held", reason="duplicate_lookup_unavailable"
-            )
+            return await self._hold(candidate, "duplicate_lookup_unavailable")
         if existing:
             return await self._set_candidate(
                 candidate,

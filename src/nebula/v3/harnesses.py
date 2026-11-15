@@ -9639,11 +9639,14 @@ class HarnessRuntimeService:
         self._gateway_oci_components.clear()
         self._broker_approval_ids.clear()
 
-    async def health(self, profile_id: str) -> HarnessHealth:
-        profile = await self.store.get(HarnessProfile, profile_id)
-        result = await self.adapter_factory(profile.kind).probe(
-            profile, self.credential_store
-        )
+    @staticmethod
+    def probe_changes(profile: HarnessProfile, result: HarnessHealth) -> dict[str, Any]:
+        """The profile changes that record ``result`` on ``profile`` as stored now.
+
+        The probe's own findings replace the stored ones; the turn
+        bookkeeping a running turn saves on the same profile is kept.
+        """
+
         capabilities = result.capabilities.model_copy(
             update={
                 "checked_at": result.checked_at,
@@ -9670,14 +9673,25 @@ class HarnessRuntimeService:
         changes: dict[str, Any] = {"capabilities": capabilities}
         if capabilities.models and profile.default_model not in capabilities.models:
             changes["default_model"] = capabilities.models[0]
-        (
-            await self.store.update(
-                HarnessProfile,
-                profile.id,
-                changes,
-                expected_revision=profile.revision,
-            )
+        return changes
+
+    @staticmethod
+    async def record_probe(
+        store: Any, profile_id: str, result: HarnessHealth
+    ) -> HarnessHealth:
+        """Save a health probe on the profile's newest revision and report it.
+
+        A turn of the same harness saves its turn state on the profile while
+        the probe runs; the probe is recorded beside it instead of failing.
+        """
+
+        saved = await revise_latest(
+            store,
+            HarnessProfile,
+            profile_id,
+            lambda latest: HarnessRuntimeService.probe_changes(latest, result),
         )
+        capabilities = saved.capabilities
         return result.model_copy(
             update={
                 "authentication_state": capabilities.authentication_state,
@@ -9686,6 +9700,13 @@ class HarnessRuntimeService:
                 "last_successful_turn_at": capabilities.last_successful_turn_at,
             }
         )
+
+    async def health(self, profile_id: str) -> HarnessHealth:
+        profile = await self.store.get(HarnessProfile, profile_id)
+        result = await self.adapter_factory(profile.kind).probe(
+            profile, self.credential_store
+        )
+        return await self.record_probe(self.store, profile.id, result)
 
     async def test_turn(self, profile_id: str) -> HarnessHealth:
         from .harness_diagnostics import run_harness_test_turn

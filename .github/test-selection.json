@@ -1,26 +1,38 @@
 {
   "reviewed_by": "Claude #1100 fixing agent; each defect independently reproduced on 7495a04 by a separate validator subagent (revision-sweep/validation.md); an independent diff review is still required before merge",
-  "reason": "#1100 browser assistant revision races: save_credential, remove_credential, save_file and remove_file wrote the browser session with a revision the panel's 3 s tab poll moved (the protected value was rolled back), and decide saved a performed action as failed with no result when Stop assistant control marked it stale. The four writers now go through _change_session (save_file retries its artifact transaction) and decide records its result on the newest action row. Python: new test_browser_companion_revision_races.py (all 4 fail on 7495a04) plus test_browser_companion.py and test_browser_companion_control_race.py.",
-  "exclusions": "No UI, frontend, native or Playwright changes: the companion panel calls the same endpoints. The interleaving needs a forced pause between read and write that a real-Core journey cannot reproduce deterministically.",
-  "python_browser": true,
+  "reason": "#1100 settings and Butler revision races: harness health checks (runtime and Host Settings route) failed against the same harness's turn bookkeeping and lost their result; a provider health check failed to save its model catalog against the chat page's automatic capability check; the settings assistant's set_default_model failed against turn bookkeeping; Butler's investigation lease renewal lost to oversight replay on PostgreSQL; oversight passes rewrote unchanged held issue drafts, bumping their revision under an operator's edit and aborting on one. Each now saves on the newest record or skips a no-op/stale hold. Python: new test_settings_revision_races.py (all 6 fail on 7495a04; the PostgreSQL case skips without NEBULA_TEST_POSTGRES_URL and was run locally on a scratch database) plus the Butler improvements/oversight/recovery, provider verification, host settings and settings assistant files.",
+  "exclusions": "Not selected: test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets and ::test_provider_tools_are_bounded_to_catalog_and_project fail identically on origin/main 7495a04. The PostgreSQL heartbeat test skips in CI because the workflow only provisions PostgreSQL for its listed files; the workflow is not changed to keep CI narrow. The settings assistant's discoverable actions and catalog are unchanged (no new feature or setting). No UI, frontend, native or Playwright changes.",
+  "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 66,
+    "python": 144,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_browser_companion_revision_races.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_browser_companion_control_race.py"
+    "tests/v3/test_settings_revision_races.py",
+    "tests/v3/test_butler_improvements.py",
+    "tests/v3/test_butler_oversight.py",
+    "tests/v3/test_butler_recovery.py",
+    "tests/v3/test_provider_verification.py",
+    "tests/v3/test_runtime_host_settings_bridge.py",
+    "tests/v3/test_runtime_host_settings.py",
+    "tests/v3/test_settings_assistant_api.py",
+    "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them",
+    "tests/v3/test_settings_assistant_tools.py::test_control_session_keeps_its_identity_and_accepts_selected_assistant_tools",
+    "tests/v3/test_settings_assistant_tools.py::test_control_session_lookup_is_authenticated_and_project_scoped",
+    "tests/v3/test_settings_assistant_tools.py::test_default_model_change_requires_advertised_value_and_reads_back",
+    "tests/v3/test_settings_assistant_tools.py::test_post_tool_change_reads_back_from_core",
+    "tests/v3/test_settings_assistant_tools.py::test_project_context_reads_mode_and_linked_workspace_without_creating_policy",
+    "tests/v3/test_settings_assistant_tools.py::test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "b9b5cf7e898e8326ebead53f35b9280469090549c9ddbee8f7efddd73a7982b6"
+  "change_digest": "6b2b676e913d07e114e0d2fe655dfda2281e7d7eb138e577f6a69e95b23d616d"
 }
