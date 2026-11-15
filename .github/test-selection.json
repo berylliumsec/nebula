@@ -1,40 +1,17 @@
 {
-  "change_digest": "aff688d967dcb91e609f7d9c278a5fed4cc002d52aadcd17b52f99d953d1cf3e",
-  "reviewed_by": "Claude (ios-butler-projects); selection reviewed against the diff by the implementing agent, independent diff review still required before merge",
-  "reason": "The NebulaShell (installed iPhone app) UI is reduced to two routes: Butler docked full screen with a project switcher and an app tab bar, and a read-only Projects snapshot of status=active projects holding at least one ordinary chat (new ShellProjects component + projectSnapshots builder). App.tsx shell routes, AppShell docked flag and NebulaControlAssistant docked mode change; the Butler workflow registry links the three new read-only calls to chat.start_and_read and approval.review. Frontend: the new snapshot builder test plus the NebulaControlAssistant and CompactSettingsList suites that exercise NebulaShell. Playwright: area:ios-assistant-only, whose test is rewritten for the new contract. Python: the workflow registry checks. Build 6 of the iOS shell bundles this UI and serves it on a loopback origin (LocalUIServer) that tunnels only /api/* to Core; its pure rewrite rules (ProxyRewrite.swift) are covered by ios/Tests/main.swift (43 checks) run with xcrun swiftc on the research Mac, and the app built unsigned for iphoneos with Xcode 27. A failed per-project read now keeps the project's card (Playwright step added). The area's real-Core entry moves to ui/tests/ios-shell-real-core.spec.ts (real-core.spec.ts is above the commit guard's per-file limit; its old iPhone journey asserts the retired shell and is no longer selected), and ui/tests/fixtures/approval_core.py now awaits Core's async _active_gateway_turn.",
-  "exclusions": "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fails identically on origin/main (useProjectViewLease holdProjectView/releaseProjectView are unreviewed there); this change links all three of its own new calls. src/App.test.tsx has 9 failures on origin/main unrelated to the shell (desktop navigation/provider settings) and does not cover NebulaShell, so it is not selected. No backend, native (ios/ Swift unchanged; docs only) or Rust changes. No setting or operator feature reachable from the settings assistant was added, so the settings catalog is unchanged. CI has no Swift/Xcode job; the iOS checks and build ran on the research Mac and are reported in the PR.",
-  "python_browser": false,
-  "python_node": true,
-  "python_versions": [
-    "3.12"
-  ],
+  "change_digest": "4bdcb08bfa4b459b914d2d5ec1d4f2ada5deed299117ca95be47f1381ec4a136",
+  "reviewed_by": "Codex; documentation-only installation receipt reviewed against the diff",
+  "reason": "Record the signed build 6 installation, device version readback, launch, and pending physical on-screen checks in ios/QUALITY.md. No product source or tests change.",
+  "exclusions": "No Python, frontend, native, or Playwright tests apply to this documentation-only receipt. Physical iPhone acceptance is separately pending operator observation.",
   "expected_tests": {
-    "python": 23,
-    "frontend": 81,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_unsupported_action_marked_supported",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_handoff_to_unknown_destination",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_mutation_disguised_as_open_handoff",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_browser_opening_marked_as_saved_mutation",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_collector_tracks_client_declarations_through_aliases",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_protocol_claiming_model_authority",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_protocol_without_a_reviewed_parent_workflow",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_ordinary_record_mutation_hidden_as_ui_projection",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_ui_protocol_relabelled_as_supported"
-  ],
-  "frontend": [
-    "ui/src/api/projectSnapshots.test.ts",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:ios-assistant-only"
-  ],
+  "playwright": [],
   "checks": []
 }
