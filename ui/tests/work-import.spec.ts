@@ -102,7 +102,8 @@ test("work hub import finds a project and its saved task after refresh", async (
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   try {
     await waitForCoreApi(api);
-    const projects = Array.from({ length: 80 }, (_, index) => ({
+    // Exceed the 80-row cap without relying on the optional Scratch project.
+    const projects = Array.from({ length: 81 }, (_, index) => ({
       external_id: `sample-${index + 1}`, name: `Sample project ${index + 1}`,
     }));
     const first = await coreMutation(api, "post", "work/import", { source: "sample-tracker", projects: projects.slice(0, 50) });
@@ -149,7 +150,12 @@ test("work hub import finds a project and its saved task after refresh", async (
     await pairingApi.dispose();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Work import browser");
-    await page.getByRole("button", { name: "Pair device" }).click();
+    // Pairing clears the fragment before submit; await the replacement document.
+    const [pairedPage] = await Promise.all([
+      page.waitForNavigation({url: `${core.origin}/`, waitUntil: "load", timeout: 20_000}),
+      page.getByRole("button", { name: "Pair device" }).click(),
+    ]);
+    expect(pairedPage?.ok()).toBe(true);
     await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
     await page.route("**/api/v1/work/agents", (route) => route.fulfill({ json: [{
       session_id: "sample-active-session", engagement_id: parentId,
