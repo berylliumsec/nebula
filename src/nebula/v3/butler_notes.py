@@ -10,7 +10,14 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from .api_validation import ApiEntityValidator
-from .domain import Asset, Evidence, Observation, RiskClass
+from .domain import (
+    Asset,
+    Engagement,
+    EngagementStatus,
+    Evidence,
+    Observation,
+    RiskClass,
+)
 from .relations import ResourceRelationService
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .read_workers import read_in_worker
@@ -69,6 +76,12 @@ class ButlerNotes:
         projected = await self.relations.project_legacy(note)
         assert isinstance(projected, Observation)
         return projected
+
+    async def _writable(self) -> None:
+        if (
+            await self.store.get(Engagement, self.project_id)
+        ).status == EngagementStatus.ARCHIVED:
+            raise ValueError("restore the selected project before changing its notes")
 
     @staticmethod
     def _summary(note: Observation) -> dict[str, Any]:
@@ -205,6 +218,7 @@ class ButlerNotes:
         }
 
     async def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        await self._writable()
         values = await self._changes(arguments)
         note = Observation(
             id=str(
@@ -252,6 +266,7 @@ class ButlerNotes:
         return await self._receipt(saved, fields, operation="created")
 
     async def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        await self._writable()
         note = await self._note(arguments["note_id"])
         if note.revision != arguments["expected_revision"]:
             raise ValueError("note changed; read its current revision")
@@ -269,6 +284,7 @@ class ButlerNotes:
         return await self._receipt(saved, changes, operation="updated")
 
     async def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        await self._writable()
         note = await self._note(arguments["note_id"])
         if note.revision != arguments["expected_revision"]:
             raise ValueError("note changed; read its current revision")
