@@ -24,14 +24,16 @@ export function useProjectRuntimeRecovery(api: RuntimeClient, waitKey: number, o
   }, [api, waitKey]);
 }
 
-/** "reconnecting" while any view waits for its project's worker. */
+/** "reconnecting" while any view (or a write this page sent) waits for its project's worker. */
 export function useProjectRuntimeState(api: RuntimeClient): ProjectRuntimeState {
   const recovery = api?.projectRuntime;
   const [state, setState] = useState<ProjectRuntimeState>(() => recovery?.state ?? "available");
+  // Also re-render when the wait moves between a view's read and a write, which keeps the state.
+  const [, setVersion] = useState(0);
   useEffect(() => {
     if (!recovery) { setState("available"); return; }
     setState(recovery.state);
-    return recovery.subscribe(setState);
+    return recovery.subscribe((next) => { setState(next); setVersion((value) => value + 1); });
   }, [recovery]);
   return state;
 }

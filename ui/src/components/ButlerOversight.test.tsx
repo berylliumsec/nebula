@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
 import { ButlerOversight } from "./ButlerOversight";
+import { startingProject } from "../test/projectRuntimeStarting";
 
 const overview = {
   project_id: "project-a",
@@ -31,6 +32,21 @@ function client(request: ReturnType<typeof vi.fn>): ApiClient {
 }
 
 describe("ButlerOversight", () => {
+  it("waits for the project's starting worker and shows oversight without a refresh error", async () => {
+    const { projectRuntime, unavailable } = startingProject();
+    const request = vi.fn()
+      .mockImplementationOnce(async (path: string) => { throw unavailable(path); })
+      .mockResolvedValue(overview);
+    const api = { ...client(request), projectRuntime } as unknown as ApiClient;
+    render(<ButlerOversight api={api} projectId="project-a" coreState="online" />);
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("Needs refresh")).not.toBeInTheDocument();
+    expect((await screen.findAllByText("2 watched goals · Watch", {}, { timeout: 4_000 }))[0]).toBeVisible();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("opens the durable investigation and children without using the interactive Butler chat", async () => {
     const user = userEvent.setup();
     const navigate = vi.fn();

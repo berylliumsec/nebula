@@ -15,6 +15,13 @@
  * work in it (reads never admit a worker), so it is probed less often and
  * described differently. A write from this page (unarchive, a project command,
  * a message) may be what readmits the worker, so it restarts the backoff.
+ *
+ * A view that shows a project holds its view lease (useProjectViewLease), which
+ * is demand: Core starts the worker. While a lease for the project is held, an
+ * "idle" answer is only the moment before Core saw that lease, so it is shown
+ * and probed as "starting". The lease also reports whether the worker is up;
+ * while it is starting, a write this page sent (which Core holds until the
+ * worker answers) is shown the same calm way instead of as a dead control.
  */
 
 export const PROJECT_RUNTIME_UNAVAILABLE = "project_runtime_unavailable";
@@ -39,6 +46,9 @@ export interface ProjectRuntimeProbeResult {
 }
 
 export type ProjectRuntimeProbe = (path: string, signal: AbortSignal) => Promise<ProjectRuntimeProbeResult>;
+
+/** What a held project-view lease last reported about the project's worker. */
+export type ProjectViewRuntime = "pending" | "starting" | "ready" | "held" | "refused";
 
 /**
  * True when a read failed only because no ready worker owns its project yet.
@@ -88,6 +98,13 @@ function readKey(path: string): string {
   return path.replace(/^\//, "").split("#", 1)[0];
 }
 
+/** The project a read names, when its path names one. */
+function projectOfPath(path: string): string | undefined {
+  const match = /(?:^|\/)engagements\/([^/?#]+)/.exec(path);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]); } catch { /* diagnostic-expected: an undecodable segment is used as written. */ return match[1]; }
+}
+
 function pageHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
@@ -100,24 +117,72 @@ export class ProjectRuntimeRecovery {
   private readonly failed = new Map<string, { path: string; retryAfterMs?: number; reason: ProjectRuntimeReason; detail?: string }>();
   private readonly waiters = new Set<() => void>();
   private readonly listeners = new Set<(state: ProjectRuntimeState) => void>();
+  /** Held project-view leases: project -> how many views hold one, and what Core last said. */
+  private readonly views = new Map<string, { count: number; runtime: ProjectViewRuntime }>();
+  private writes = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private probing?: AbortController;
   private attempt = 0;
   private watchingVisibility = false;
-  private lastState: ProjectRuntimeState = "available";
+  private lastState = "available:false";
 
   constructor(private readonly probe: ProjectRuntimeProbe) {}
 
   /** While a view waits for a project read Core could not route yet: "reconnecting", or "idle" when nothing will start the worker until the operator resumes work. */
   get state(): ProjectRuntimeState {
-    if (!this.failed.size || !this.waiters.size) return "available";
-    const reason = this.latest()?.reason;
-    return reason === "idle" || reason === "held" ? reason : "reconnecting";
+    if (this.readsWaiting) {
+      const reason = this.reasonOf(this.latest());
+      return reason === "idle" || reason === "held" ? reason : "reconnecting";
+    }
+    return this.writeWaiting ? "reconnecting" : "available";
+  }
+
+  /** True when only a write this page sent waits for a starting project, not a view's read. */
+  get waitingForWrite(): boolean {
+    return !this.readsWaiting && this.writeWaiting;
   }
 
   /** Core's text for the latest wait, such as why a start is held. */
   get detail(): string | undefined {
-    return this.state === "available" ? undefined : this.latest()?.detail;
+    return this.readsWaiting ? this.latest()?.detail : undefined;
+  }
+
+  /** A view started holding a lease for this project (before Core answered it). */
+  holdingView(projectId: string): void {
+    const current = this.views.get(projectId);
+    this.views.set(projectId, { count: (current?.count ?? 0) + 1, runtime: current?.runtime ?? "pending" });
+    this.notify();
+  }
+
+  /** What Core said about the project's worker when it took or renewed a view lease. */
+  viewRuntime(projectId: string, runtime: ProjectViewRuntime): void {
+    const current = this.views.get(projectId);
+    if (!current) return;
+    current.runtime = runtime;
+    this.notify();
+    // The lease made the project wanted: a waiting "idle" read is now starting.
+    this.nudge();
+  }
+
+  /** A view stopped holding its lease for this project (or Core refused it). */
+  releasedView(projectId: string): void {
+    const current = this.views.get(projectId);
+    if (!current) return;
+    if (current.count <= 1) this.views.delete(projectId);
+    else current.count -= 1;
+    this.notify();
+  }
+
+  /** This page sent a write; Core answers it once the project's worker can. */
+  writeStarted(): void {
+    this.writes += 1;
+    this.notify();
+  }
+
+  /** A write this page sent was answered (or failed). */
+  writeSettled(): void {
+    this.writes = Math.max(0, this.writes - 1);
+    this.notify();
   }
 
   subscribe(listener: (state: ProjectRuntimeState) => void): () => void {
@@ -177,10 +242,29 @@ export class ProjectRuntimeRecovery {
     return [...this.failed.values()].at(-1);
   }
 
+  private get readsWaiting(): boolean {
+    return this.failed.size > 0 && this.waiters.size > 0;
+  }
+
+  private get writeWaiting(): boolean {
+    return this.writes > 0 && [...this.views.values()].some(view => view.runtime === "starting");
+  }
+
+  /** "idle" while a view holds this project's lease only means Core has not seen the lease yet. */
+  private reasonOf(entry: { path: string; reason: ProjectRuntimeReason } | undefined): ProjectRuntimeReason | undefined {
+    if (!entry || entry.reason !== "idle") return entry?.reason;
+    const project = projectOfPath(entry.path);
+    const wanted = (view?: { runtime: ProjectViewRuntime }) => Boolean(view && view.runtime !== "refused");
+    const leased = project ? wanted(this.views.get(project)) : [...this.views.values()].some(wanted);
+    return leased ? "starting" : "idle";
+  }
+
   private notify(): void {
     const state = this.state;
-    if (state === this.lastState) return;
-    this.lastState = state;
+    // Listeners also hear when a wait moves between a view's read and a write.
+    const key = `${state}:${this.waitingForWrite}`;
+    if (key === this.lastState) return;
+    this.lastState = key;
     for (const listener of [...this.listeners]) listener(state);
   }
 
@@ -192,7 +276,7 @@ export class ProjectRuntimeRecovery {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.run();
-    }, projectRuntimeRetryDelay(this.attempt, latest?.retryAfterMs, latest?.reason));
+    }, projectRuntimeRetryDelay(this.attempt, latest?.retryAfterMs, this.reasonOf(latest)));
   }
 
   private async run(): Promise<void> {
@@ -226,6 +310,8 @@ export class ProjectRuntimeRecovery {
   private recovered(): void {
     this.failed.clear();
     this.attempt = 0;
+    // A read the worker answered: a lease that still said "starting" is out of date.
+    for (const view of this.views.values()) if (view.runtime === "starting") view.runtime = "ready";
     this.stop();
     const waiting = [...this.waiters];
     this.waiters.clear();
@@ -259,4 +345,28 @@ export class ProjectRuntimeRecovery {
     this.timer = undefined;
     void this.run();
   };
+}
+
+/**
+ * Read project data the way a view should while its project's worker starts:
+ * a coded project-runtime 503 is not an error, so wait for the shared probe to
+ * see the worker answer and read again (each failure waits again). Anything
+ * else, or an aborted wait, rejects as usual. `onWaiting` runs before each wait
+ * so the view can show its calm loading state instead of an empty or failed one.
+ */
+export async function readWhenProjectReady<T>(
+  recovery: Pick<ProjectRuntimeRecovery, "waitForRuntime"> | undefined,
+  read: () => Promise<T>,
+  signal?: AbortSignal,
+  onWaiting?: () => void,
+): Promise<T> {
+  for (;;) {
+    try {
+      return await read();
+    } catch (error) {
+      if (!recovery || signal?.aborted || !isProjectRuntimeUnavailable(error)) throw error;
+      onWaiting?.();
+      await recovery.waitForRuntime(signal);
+    }
+  }
 }

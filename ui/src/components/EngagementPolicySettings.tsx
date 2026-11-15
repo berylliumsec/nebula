@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
 import type { AutomationProjectPolicy, EngagementScopePolicy, NotebookRun, ScopeToolCandidate, TypeSafeIntegration, VpnProfile, WebSearchRuntime } from "../api/types";
 import { ApiError } from "../api/client";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -122,6 +123,7 @@ export function EngagementPolicySettings() {
   const [validationError, setValidationError] = useState<string>();
   const [conflictingNotebookRuns, setConflictingNotebookRuns] = useState<NotebookRun[]>([]);
   const loadRevision = useRef(0);
+  const loadAbort = useRef<AbortController | undefined>(undefined);
   const policyReady = Boolean(engagement && scope?.engagementId === engagement.id && policy?.engagementId === engagement.id);
   // A pinned tool whose server was removed, disabled or re-probed stays listed
   // so that saving the form never drops the choice silently.
@@ -160,15 +162,21 @@ export function EngagementPolicySettings() {
   const load = useCallback(async () => {
     if (!api || coreState !== "online" || !engagement) return;
     const revision = ++loadRevision.current;
+    loadAbort.current?.abort();
+    const controller = new AbortController();
+    loadAbort.current = controller;
     setPolicy(undefined);
     setScope(undefined);
     setSaving(undefined);
     setError(undefined);
     setConflictingNotebookRuns([]);
     try {
+      // While the project's worker starts these read "Loading project policy…" and
+      // read again once it answers, instead of failing as "idle" or "not ready".
+      const projectId = engagement.id;
       const [nextScope, nextPolicy, nextVpnProfiles] = await Promise.all([
-        api.getEngagementScope(engagement.id),
-        api.getAutomationPolicy(engagement.id),
+        readWhenProjectReady(api.projectRuntime, () => api.getEngagementScope(projectId), controller.signal),
+        readWhenProjectReady(api.projectRuntime, () => api.getAutomationPolicy(projectId), controller.signal),
         api.listVpnProfiles().catch((vpnError) => {
           if (vpnError instanceof ApiError && (vpnError.status === 404 || vpnError.status === 501)) return [];
           void logCaughtDiagnostic("interface.engagement_policy.vpn_profiles_unavailable", "VPN profiles are unavailable in this Core build.", vpnError, "engagement_policy");
@@ -201,7 +209,7 @@ export function EngagementPolicySettings() {
     }
   }, [api, coreState, engagement?.id]);
 
-  useEffect(() => { void load(); return () => { loadRevision.current += 1; }; }, [load]);
+  useEffect(() => { void load(); return () => { loadRevision.current += 1; loadAbort.current?.abort(); }; }, [load]);
 
   useEffect(() => {
     const follow = (event: Event) => setTypesafe((event as CustomEvent<TypeSafeIntegration>).detail);

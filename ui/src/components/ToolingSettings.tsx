@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2, UploadCloud } from "lucide-react";
 import { ApiError } from "../api/client";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../api/runtimeSettingsEvents";
 import type { AutomationProjectPolicy, AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
 import { useCredentialVault, vaultUnavailableNote } from "../hooks/useCredentialVault";
@@ -46,36 +47,44 @@ export function AutomationRuntimeSettings() {
   const [projectPolicy, setProjectPolicy] = useState<AutomationProjectPolicy>();
   const [selectingVpn, setSelectingVpn] = useState<string>();
   const [removingVpn, setRemovingVpn] = useState<string>();
+  const loadAbort = useRef<AbortController | undefined>(undefined);
 
   const load = useCallback(async () => {
+    loadAbort.current?.abort();
     if (!api || coreState !== "online") {
       setLoading(false);
       return;
     }
+    const controller = new AbortController();
+    loadAbort.current = controller;
     setLoading(true);
     setError(undefined);
     try {
+      const projectId = engagement?.id;
       const [nextRuntime, nextVpnProfiles, nextProjectPolicy] = await Promise.all([
-        api.getAutomationRuntime(undefined, engagement?.id),
+        api.getAutomationRuntime(undefined, projectId),
         api.listVpnProfiles().catch((vpnError) => {
           if (unavailable(vpnError)) return [];
           void logCaughtDiagnostic("interface.automation_runtime.vpn_profiles_unavailable", "VPN profiles are unavailable in this Core build.", vpnError, "automation_runtime");
           return Promise.reject(vpnError);
         }),
-        engagement ? api.getAutomationPolicy(engagement.id) : Promise.resolve(undefined),
+        // The project's policy waits for its worker while it starts ("Checking runtime…").
+        projectId ? readWhenProjectReady(api.projectRuntime, () => api.getAutomationPolicy(projectId), controller.signal) : Promise.resolve(undefined),
       ]);
+      if (controller.signal.aborted) return;
       setRuntime(nextRuntime);
       setVpnProfiles(nextVpnProfiles);
       setProjectPolicy(nextProjectPolicy);
     } catch (loadError) {
+      if (controller.signal.aborted) return; // diagnostic-expected: a newer load or leaving Settings superseded this one.
       void logCaughtDiagnostic("interface.automation_runtime.caught_failure_01", "A handled interface operation failed.", loadError, "automation_runtime");
       setError(loadError instanceof Error ? loadError.message : "Could not load the automation runtime.");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, [api, coreState, engagement?.id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); return () => loadAbort.current?.abort(); }, [load]);
 
   useEffect(() => {
     const refresh = (event: Event) => {

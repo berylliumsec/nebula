@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkPage } from "./WorkPage";
+import { startingProject } from "../test/projectRuntimeStarting";
 
 const { workspace, saved, live } = vi.hoisted(() => {
   const project: { id: string; name: string; status: string; workEnabled: boolean; parentEngagementId?: string } = { id: "project-1", name: "Documentation portal", status: "active", workEnabled: true };
@@ -94,6 +95,49 @@ describe("Work operator journey", () => {
     await user.click(within(form).getByRole("button", { name: "Save update" }));
     expect(await screen.findByText("Filters render in search results")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+  });
+
+  it("waits for a starting project's board instead of failing, then shows the saved item", async () => {
+    const { projectRuntime, unavailable } = startingProject();
+    const api = workspace.api as typeof workspace.api & { projectRuntime?: unknown };
+    api.projectRuntime = projectRuntime;
+    const original = api.request.getMockImplementation()!;
+    api.request.mockImplementationOnce(async (path: string) => { throw unavailable(path); });
+    try {
+      openItem();
+      await vi.waitFor(() => expect(api.request).toHaveBeenCalledWith("engagements/project-1/work", expect.any(Object)));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: "Build the search page" }, { timeout: 4_000 })).toBeVisible();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      delete api.projectRuntime;
+      api.request.mockImplementation(original);
+    }
+  });
+
+  it("shows Create item in progress while a cold project's worker takes the write", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    const original = workspace.api.request.getMockImplementation()!;
+    workspace.api.request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/work") && init?.method === "POST") await new Promise<void>((resolve) => { finish = resolve; });
+      return original(path, init);
+    });
+    try {
+      openItem();
+      await user.click(await screen.findByRole("button", { name: "New item" }));
+      const dialog = screen.getByRole("dialog", { name: "New work item" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Cold start item");
+      await user.click(within(dialog).getByRole("button", { name: "Create item" }));
+      const create = within(dialog).getByRole("button", { name: "Create item" });
+      // Busy, not a dead control: announced as in progress until Core answers.
+      expect(create).toHaveAttribute("aria-busy", "true");
+      expect(create.querySelector(".spin")).not.toBeNull();
+      await act(async () => { finish(); });
+      expect(await screen.findByRole("heading", { name: "Cold start item" })).toBeVisible();
+    } finally {
+      workspace.api.request.mockImplementation(original);
+    }
   });
 
   it("starts with agent tools on and keeps saved Work when they are disabled", async () => {

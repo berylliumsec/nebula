@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { Copy, Database, RefreshCw } from "lucide-react";
+import { Copy, Database, LoaderCircle, RefreshCw } from "lucide-react";
 import type { HarnessProfile, StorageSource } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -170,7 +170,7 @@ export function StorageIntegrations() {
         <label>Callback origin<input type="url" value={callbackUrl} onChange={(event) => setCallbackUrl(event.target.value)} placeholder="https://storage.example" /></label>
         <label>Credential reference<input value={callbackRef} onChange={(event) => setCallbackRef(event.target.value)} placeholder="env:STORAGE_CALLBACK_TOKEN" /></label>
       </div><p>Only this operator-configured destination receives callback requests. Every remote change still requires a preview and approval.</p></details>
-      <button className="button primary" disabled={busy || previewMode || !chosenRuntime || !model || !projectId} type="submit">Add disabled source</button>
+      <button className="button primary" aria-busy={busy} disabled={busy || previewMode || !chosenRuntime || !model || !projectId} type="submit">{busy && <LoaderCircle className="spin" size={14} aria-hidden="true" />}Add disabled source</button>
     </form>
     <div className="storage-source-list" aria-label="Storage sources">{sources.length ? sources.map((source) => <article className="panel" id={`storage-source-${source.id}`} key={source.id}>
       <div className="storage-source-heading"><Database size={19} /><div><strong>{source.name}</strong><small>{source.enabled ? "Enabled" : "Disabled"} · {engagements.find((item) => item.id === source.engagement_id)?.name ?? "Project unavailable"} · {source.last_report_at ? `Last report ${new Date(source.last_report_at).toLocaleString()}` : "No reports yet"}</small></div></div>

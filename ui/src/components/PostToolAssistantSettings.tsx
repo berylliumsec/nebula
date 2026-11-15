@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Check, Cpu, LoaderCircle, RefreshCw, Sparkles } from "lucide-react";
 import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import type { ApiClient } from "../api/client";
 import type { HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -51,8 +52,10 @@ export function PostToolAssistantSettings({ api, engagementId, providers, previe
   useEffect(() => {
     let active = true;
     if (!api || !engagementId) return () => { active = false; };
+    const controller = new AbortController();
     setLoading(true);
-    void Promise.all([api.getPostToolAssistant(engagementId), api.listHarnesses()])
+    // While the project's worker starts, stay loading and read again when it answers.
+    void Promise.all([readWhenProjectReady(api.projectRuntime, () => api.getPostToolAssistant(engagementId), controller.signal), api.listHarnesses()])
       .then(([nextConfig, nextHarnesses]) => {
         if (!active) return;
         setConfig(nextConfig);
@@ -61,11 +64,12 @@ export function PostToolAssistantSettings({ api, engagementId, providers, previe
         setError(undefined);
       })
       .catch((caught) => {
+        if (!active) return; // diagnostic-expected: another project or reload superseded this read.
         void logCaughtDiagnostic("interface.post_tool_assistant_settings.load_failed", "Post-tool assistant settings could not be loaded.", caught, "post_tool_assistant_settings");
-        if (active) setError(caught instanceof Error ? caught.message : "Tool follow-up settings are unavailable.");
+        setError(caught instanceof Error ? caught.message : "Tool follow-up settings are unavailable.");
       })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    return () => { active = false; controller.abort(); };
   }, [api, engagementId, reloadVersion]);
 
   useEffect(() => {

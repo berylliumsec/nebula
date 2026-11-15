@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client";
 import { butlerResourceKey, getButlerOverview, type ButlerOverview } from "../api/butlerOverview";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { isProjectRuntimeUnavailable, readWhenProjectReady } from "../api/projectRuntime";
 
 type OverviewState = {
   projectId: string;
@@ -11,13 +12,22 @@ type OverviewState = {
   error?: string;
 };
 
-/** Core owns oversight; this hook retains only the last snapshot for one project. */
-export function useButlerOverview(api: ApiClient | undefined, projectId: string, coreState: "checking" | "online" | "offline") {
+/**
+ * Core owns oversight; this hook retains only the last snapshot for one project.
+ * A shown overview (`waitForProject`) waits while the project's worker starts
+ * and reads again when it answers; a background read (the closed dialog's
+ * attention count) just keeps its last snapshot, since a starting worker is not
+ * an oversight failure.
+ */
+export function useButlerOverview(api: ApiClient | undefined, projectId: string, coreState: "checking" | "online" | "offline", waitForProject = true) {
   const [state, setState] = useState<OverviewState>({ projectId, loading: true });
   const request = useRef<AbortController | undefined>(undefined);
+  // Polls leave a read that is waiting for the worker alone instead of restarting it.
+  const waiting = useRef(false);
 
   const refresh = useCallback(async () => {
     request.current?.abort();
+    waiting.current = false;
     if (!api || coreState !== "online") {
       setState((current) => ({
         projectId,
@@ -35,10 +45,17 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
       loading: true,
     }));
     try {
-      const overview = await getButlerOverview(api, projectId, controller.signal);
+      const overview = waitForProject
+        ? await readWhenProjectReady(api.projectRuntime, () => getButlerOverview(api, projectId, controller.signal), controller.signal, () => { waiting.current = true; })
+        : await getButlerOverview(api, projectId, controller.signal);
       if (!controller.signal.aborted) setState({ projectId, overview, loading: false });
     } catch (caught) {
       if (controller.signal.aborted) return;
+      if (isProjectRuntimeUnavailable(caught)) {
+        // diagnostic-expected: not shown, and the project's worker is starting; the shown dialog reads again.
+        setState((current) => ({ projectId, overview: current.projectId === projectId ? current.overview : undefined, loading: false }));
+        return;
+      }
       void logCaughtDiagnostic("interface.butler_oversight.load_failed", "Butler oversight could not be loaded.", caught, "butler_oversight");
       setState((current) => ({
         projectId,
@@ -47,9 +64,9 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
         error: caught instanceof Error ? caught.message : "Could not load Butler oversight.",
       }));
     } finally {
-      if (request.current === controller) request.current = undefined;
+      if (request.current === controller) { request.current = undefined; waiting.current = false; }
     }
-  }, [api, projectId, coreState]);
+  }, [api, projectId, coreState, waitForProject]);
 
   useEffect(() => {
     void refresh();
@@ -57,7 +74,7 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
   }, [refresh]);
 
   useEffect(() => {
-    const resume = () => { if (document.visibilityState === "visible") void refresh(); };
+    const resume = () => { if (document.visibilityState === "visible" && !waiting.current) void refresh(); };
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("online", resume);
     return () => {
@@ -71,7 +88,7 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
   useEffect(() => {
     if (!api || coreState !== "online") return;
     const interval = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState === "visible" && !waiting.current) void refresh();
     }, 15_000);
     return () => window.clearInterval(interval);
   }, [api, coreState, refresh]);
@@ -82,6 +99,7 @@ export function useButlerOverview(api: ApiClient | undefined, projectId: string,
       : kind === "action" ? current?.nextActionOffset : kind === "recovery" ? current?.nextRecoveryOffset : current?.nextResourceOffset;
     if (!api || coreState !== "online" || !current || offset === undefined || state.loading || state.loadingMore) return;
     request.current?.abort();
+    waiting.current = false;
     const controller = new AbortController();
     request.current = controller;
     setState((previous) => ({ ...previous, loadingMore: kind, error: undefined }));

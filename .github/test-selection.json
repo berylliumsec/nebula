@@ -1,26 +1,70 @@
 {
-  "reviewed_by": "Codex terminal gate follow-up, independent causal validation by terminal_regression_cause and baseline_websocket_hang_cause",
-  "reason": "Test-only repairs for the two independently diagnosed terminal failures: child-session open requires the valid catch-up response in its MockTransport fixture, and markdown/F10 assertions must await the rendered navigation and footer regions rather than sampling a partially consumed PTY redraw. Both existing test nodes retain their assertions and exercise only those repaired contracts. Also repair the independently diagnosed reconnect fixture hang: await both output injections, enqueue the coroutine thread-safely from a worker thread, and yield the event loop while observing detach; retain auth, replay sequence, and same-process assertions.",
-  "exclusions": "No production behavior changes; no real Core/API/provider or operator data. The baseline-common Idle/WORKING PTY failure is deferred and untouched. No frontend, native, Playwright, browser, Node, PostgreSQL, LAN, or full-suite coverage applies to these Python MockTransport, subprocess PTY, and in-memory ASGI/stub-process reconnect test-only repairs (isolated SQLite, no actual Core process or Docker).",
+  "reviewed_by": "Claude gate2-fix implementer; root cause independently validated by a separate Claude subagent (gate2-fix/validation.md)",
+  "reason": "Project surfaces that read worker-backed data now hold the project-view lease while shown (Settings, open Butler dialog) and wait in place on coded 503 idle/starting via the shared #1068 recovery (Code tree/quick-open, Files, Settings policy/tooling/follow-up/skills/setup, Work board, Butler oversight/history/settings); the lease reports Core's runtime state so held projects read as starting and cold writes show 'Starting this project'; Create item/Add disabled source show busy; Butler settings deep link dispatch is deferred past the wrapping dialog's listener. Unit tests cover each surface's lease and recovery. Playwright: the 10 Gate 2 regression journeys' areas (desktop plus Chromium/WebKit 390 where the area has them) whose expectations were updated (cold first-write waits, API reads hold a lease and honour Retry-After, 056/122 select the fixture project by URL), plus the runtime-pane-recovery and project-view-lease journeys whose banner copy and lease contract this changes.",
+  "exclusions": "No backend source changes, so no Python tests. No native code. Other impact-rule areas touched only through shared files (Butler chat/workspace/report areas via NebulaControlAssistant.tsx, editor-files-scroll/coding-makeover via CodeEditorPanel, project-lifecycle/project-deletion via ProjectRuntimeNotice, workspace-quota via WorkspacePanel, conversation-progress/core-connection-resilience via client.ts write counting) are excluded: their flows are unchanged except for the in-place wait on coded 503s and the banner copy, which the selected unit tests and the runtime-pane-recovery journey cover. SettingsPage.test.tsx is excluded: 5 cases fail on main because its mocks omit api.request (baseline-shared, deferred fixture repair); SettingsPage.runtime.test.tsx covers the changed Settings code. Mobile 320/430 and compact profiles are excluded to keep CI narrow; 390 px Chromium/WebKit cover mobile.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 3,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 214,
     "native": 0,
-    "playwright": 0
+    "playwright": 30
   },
-  "python": [
-    "tests/test_terminal_agents.py::test_subagent_chat_opens_instead_of_being_refused",
-    "tests/test_terminal_pty.py::test_full_screen_renders_markdown_and_toggles_original_source",
-    "tests/v3/test_container_terminal.py::test_container_terminal_websocket_reconnects_to_the_same_process"
+  "python": [],
+  "frontend": [
+    "ui/src/api/projectRuntime.test.ts",
+    "ui/src/hooks/useProjectViewLease.test.tsx",
+    "ui/src/components/ProjectRuntimeNotice.test.tsx",
+    "ui/src/components/ButlerOversight.test.tsx",
+    "ui/src/components/CodeEditorPanel.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
+    "ui/src/components/PostToolAssistantSettings.test.tsx",
+    "ui/src/components/ToolingSettings.test.tsx",
+    "ui/src/components/ToolingSettings.runtime.test.tsx",
+    "ui/src/components/WorkspacePanel.test.tsx",
+    "ui/src/pages/SettingsPage.runtime.test.tsx",
+    "ui/src/pages/WorkPage.test.tsx",
+    "ui/src/components/NebulaControlAssistant.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
-  "checks": [],
-  "change_digest": "b2da40e83e58bc014800b3a188ed44bfe96cb2178fba85b0a5acebb396ae0511"
+  "playwright": [
+    "storage-integrations/assistant-real-desktop",
+    "storage-integrations/assistant-real-chromium-390",
+    "storage-integrations/assistant-real-webkit-390",
+    "work-hub/assistant-real-desktop",
+    "work-hub/assistant-real-chromium-390",
+    "work-hub/assistant-real-webkit-390",
+    "butler-effort/assistant-real-desktop",
+    "butler-effort/assistant-real-chromium-390",
+    "butler-effort/assistant-real-webkit-390",
+    "butler-capacity-history/assistant-real-desktop",
+    "butler-capacity-history/assistant-real-chromium-390",
+    "butler-capacity-history/assistant-real-webkit-390",
+    "butler-oversight/assistant-real-desktop",
+    "butler-oversight/assistant-real-chromium-390",
+    "butler-oversight/assistant-real-webkit-390",
+    "assistant-direct-request/assistant-real-desktop",
+    "assistant-direct-request/assistant-real-chromium-390",
+    "assistant-direct-request/assistant-real-webkit-390",
+    "host-startup-default/assistant-real-desktop",
+    "host-startup-default/assistant-real-chromium-390",
+    "host-startup-default/assistant-real-webkit-390",
+    "shell-goal-draft/assistant-real-desktop",
+    "shell-goal-draft/assistant-real-chromium-390",
+    "shell-goal-draft/assistant-real-webkit-390",
+    "mission-supervisor-core/real-core",
+    "mission-supervisor-core/assistant-real-chromium-390",
+    "mission-supervisor-core/assistant-real-webkit-390",
+    "file-search-real-core/real-core",
+    "runtime-pane-recovery/model-desktop",
+    "project-view-lease/model-desktop"
+  ],
+  "checks": [
+    "desktop-ui-build",
+    "frontend-audit"
+  ],
+  "change_digest": "9411b5cee1f4cbb6b3d4d0c2f0d124e8d98cf232fc765277ca517202c4f622fd"
 }
