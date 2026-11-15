@@ -1006,6 +1006,17 @@ def test_product_search_finds_full_width_terminal_and_split_pane_help(monkeypatc
     assert "F10 Source" in content
 
 
+def test_product_search_explains_butler_browser_actions_in_the_terminal(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler terminal client browser action needs the Nebula web app"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "core refuses it" in text
+    assert "finish it in the nebula web app" in text
+    assert "client_surface" in text
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

@@ -440,6 +440,7 @@ class RuntimePlatform:
         settings_assistant: bool = False,
         operator_message: str = "",
         background_case_id: str | None = None,
+        client_surface: str = "browser",
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
         """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
@@ -491,6 +492,7 @@ class RuntimePlatform:
                     else None,
                     workspace=self.workspace_service,
                     container_terminals=self.container_terminal_service,
+                    client_surface=client_surface,
                 )
             ).plugins():
                 registry.register(plugin)

@@ -839,6 +839,7 @@ class ChatQueueService:
                     pending_provider_subagent=request.harness_pending_provider_subagent(),
                     allow_agent_messaging=request.allow_agent_messaging,
                     control_assistant=request.control_assistant,
+                    client_surface=request.client_surface,
                     queue_claim=claim,
                 )
                 await self.harness.start_chat_turn(turn.id)
