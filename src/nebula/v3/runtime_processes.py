@@ -1080,6 +1080,9 @@ class RuntimeProcessHost:
                 raise RuntimeIpcError(
                     "The original process namespace cannot verify retirement"
                 )
+            completed = await self.coordinator.retirement_readback(runtime_id)
+            if completed is not None:
+                return completed
             identity = await self.coordinator.begin_retirement(runtime_id)
             client = await self.rpc(runtime_id)
             try:

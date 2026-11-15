@@ -519,3 +519,252 @@ async def test_reconcile_holds_foreign_same_boot_namespace(host, monkeypatch):
     monkeypatch.setattr(operations, "same_process", lambda *args: False)
     with pytest.raises(CoordinationConflict, match="namespace"):
         await ledger.reconcile("foreign", actor_id="operator")
+
+
+async def _saved_retirement(host):
+    from nebula.v3.database import (
+        RuntimeInstanceRow,
+        RuntimeProcessRow,
+        DeploymentReceiptRow,
+    )
+    from nebula.v3.process_identity import process_birth
+    import os
+
+    coordinator = host[0]
+    runtime_id = await coordinator.reserve_worker(
+        "v1",
+        role="execution",
+        endpoint="unix:///isolated/retired.sock",
+        credential_reference="fake-reference",
+    )
+    async with coordinator.coordination._write() as session:
+        row = await session.get(RuntimeProcessRow, runtime_id)
+        row.pid = 999999999
+        row.process_birth = process_birth(os.getpid())
+        row.state = "retired"
+        identity = dict(
+            runtime_id=runtime_id,
+            version=row.version,
+            role=row.role,
+            pid=row.pid,
+            process_birth=row.process_birth,
+            endpoint=row.endpoint,
+        )
+        instance = await session.get(RuntimeInstanceRow, runtime_id)
+        instance.lease_expires_at_ms = 0
+        session.add(
+            DeploymentReceiptRow(
+                id="retired-proof",
+                action="worker.retired",
+                result=identity,
+                occurred_at_ms=1,
+            )
+        )
+    return identity
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        None,
+        "missing_process",
+        "missing_instance",
+        "live_lease",
+        "wrong_version",
+        "wrong_role",
+        "identity_mismatch",
+        "missing_receipt",
+        "live_process",
+        "owner",
+        "resource",
+        "command",
+        "capacity",
+        "foreign_namespace",
+        "legacy_receipt",
+        "legacy_wrong_version",
+        "legacy_wrong_role",
+    ],
+)
+async def test_retirement_reconciles_only_exact_durable_terminal_proof(
+    host, monkeypatch, guard
+):
+    from nebula.v3 import runtime_operations as operations
+    from nebula.v3.database import (
+        RuntimeInstanceRow,
+        RuntimeProcessRow,
+        DeploymentReceiptRow,
+        ProjectOwnershipRow,
+        RuntimeResourceRow,
+        RuntimeCommandRow,
+        RuntimeCapacityReservationRow,
+    )
+    from nebula.v3.process_identity import process_birth
+    import os
+
+    identity = await _saved_retirement(host)
+    old = DeploymentOperations(host[0], owner_id="old-host")
+    calls = []
+
+    async def dispatch(action, parameters):
+        calls.append(action)
+        raise CoordinationConflict("there is no live process incarnation to retire")
+
+    args = dict(
+        operation_id="old-retirement",
+        actor_id="operator",
+        action="retire",
+        parameters={"runtime_id": identity["runtime_id"]},
+        dispatch=dispatch,
+    )
+    assert (await old.execute(**args))["state"] == "uncertain"
+    async with host[0].coordination._write() as session:
+        row = await session.get(RuntimeProcessRow, identity["runtime_id"])
+        instance = await session.get(RuntimeInstanceRow, identity["runtime_id"])
+        receipt = await session.get(DeploymentReceiptRow, "retired-proof")
+        if guard in {"legacy_receipt", "legacy_wrong_version", "legacy_wrong_role"}:
+            receipt.result = {
+                key: receipt.result[key] for key in ("runtime_id", "version", "role")
+            }
+            if guard == "legacy_wrong_version":
+                receipt.result = {**receipt.result, "version": "v2"}
+            if guard == "legacy_wrong_role":
+                receipt.result = {**receipt.result, "role": "api"}
+        elif guard == "missing_process":
+            await session.delete(row)
+        elif guard == "missing_instance":
+            await session.delete(instance)
+        elif guard == "live_lease":
+            instance.lease_expires_at_ms = 9999999999999
+        elif guard == "wrong_version":
+            instance.version = "v2"
+        elif guard == "wrong_role":
+            instance.role = "api"
+        elif guard == "identity_mismatch":
+            receipt.result = {**receipt.result, "pid": 123}
+        elif guard == "missing_receipt":
+            await session.delete(receipt)
+        elif guard == "live_process":
+            row.pid, row.process_birth = os.getpid(), process_birth(os.getpid())
+            receipt.result = {
+                **receipt.result,
+                "pid": row.pid,
+                "process_birth": row.process_birth,
+            }
+        elif guard == "owner":
+            session.add(
+                ProjectOwnershipRow(
+                    project_id="one",
+                    runtime_id=identity["runtime_id"],
+                    fencing_token=1,
+                    lease_expires_at_ms=0,
+                    command_sequence=0,
+                )
+            )
+        elif guard == "resource":
+            session.add(
+                RuntimeResourceRow(
+                    id="held-resource",
+                    project_id="one",
+                    runtime_id=identity["runtime_id"],
+                    fencing_token=1,
+                    kind="vendor_reference",
+                    state="open",
+                    restoration="restorable",
+                    detail="",
+                    checkpoint={},
+                    updated_at_ms=1,
+                )
+            )
+        elif guard == "command":
+            session.add(
+                RuntimeCommandRow(
+                    id="held-command",
+                    project_id="one",
+                    runtime_id=identity["runtime_id"],
+                    fencing_token=1,
+                    sequence=1,
+                    name="test",
+                    state="uncertain",
+                    actor_id="operator",
+                    idempotency_key="test",
+                    payload={},
+                    payload_hash="a" * 64,
+                    result=None,
+                    accepted_at_ms=1,
+                )
+            )
+        elif guard == "capacity":
+            session.add(
+                RuntimeCapacityReservationRow(
+                    id="held-capacity",
+                    runtime_id=identity["runtime_id"],
+                    project_id="one",
+                    fencing_token=1,
+                    request_key="test",
+                    demands={},
+                    state="held",
+                    created_at_ms=1,
+                )
+            )
+    fresh = DeploymentOperations(host[0], owner_id="new-host")
+    monkeypatch.setattr(operations, "same_process", lambda *_: False)
+    if guard == "foreign_namespace":
+        current = operations.process_origin()
+        monkeypatch.setattr(
+            operations,
+            "process_origin",
+            lambda: current.rsplit(":", 1)[0] + ":999999999",
+        )
+    if guard not in {None, "legacy_receipt"}:
+        with pytest.raises(CoordinationConflict):
+            await fresh.reconcile("old-retirement", actor_id="operator")
+        assert (await fresh.status("old-retirement", actor_id="operator"))[
+            "state"
+        ] == "uncertain"
+    else:
+        result = await fresh.reconcile("old-retirement", actor_id="operator")
+        assert (
+            result["state"] == "succeeded"
+            and result["result"]["runtime_id"] == identity["runtime_id"]
+        )
+        assert await fresh.reconcile("old-retirement", actor_id="operator") == result
+        assert await fresh.execute(**args) == result
+    assert calls == ["retire"]
+
+
+async def test_redundant_retirement_reads_proof_without_repeating_process_effect(host):
+    from types import SimpleNamespace
+    from nebula.v3.runtime_processes import RuntimeProcessHost
+    from nebula.v3.process_identity import process_origin
+
+    identity = await _saved_retirement(host)
+    process_host = SimpleNamespace(
+        _launch=asyncio.Lock(),
+        closed=False,
+        lock=SimpleNamespace(descriptor=1),
+        launch_origin=process_origin(),
+        coordinator=host[0],
+    )
+    # No RPC/process methods are supplied: a repeated completed retirement may
+    # only read its durable proof and return the same exact incarnation.
+    result = await RuntimeProcessHost.retire(process_host, identity["runtime_id"])
+    assert result.model_dump(mode="json") == {
+        "protocol": "nebula.runtime/v1",
+        **identity,
+    }
+
+
+async def test_missing_incarnation_retirement_is_a_definite_refusal(host):
+    async def dispatch(_action, parameters):
+        await host[0].begin_retirement(parameters["runtime_id"])
+        raise AssertionError("unreachable")
+
+    receipt = await DeploymentOperations(host[0]).execute(
+        operation_id="missing-retire",
+        actor_id="operator",
+        action="retire",
+        parameters={"runtime_id": "missing-incarnation"},
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "failed"
+    assert receipt["result"]["error_type"] == "OperationRejected"

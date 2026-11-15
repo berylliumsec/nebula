@@ -321,7 +321,7 @@ class DeploymentOperations:
                         "The original operation host is not confirmed gone"
                     )
             phase = recovery.get("phase")
-            if phase == "dispatch" and not same_owner:
+            if phase == "dispatch" and not same_owner and row.action != "retire":
                 raise CoordinationConflict(
                     "Previous host did not publish an effect boundary"
                 )
@@ -373,6 +373,12 @@ class DeploymentOperations:
                             "Unadmitted worker reservation needs verified abort"
                         )
                 state = "failed"
+            elif row.action == "retire":
+                identity = await self.coordinator._retirement_readback(
+                    session, row.parameters["runtime_id"]
+                )
+                if identity is not None:
+                    result, state = identity.model_dump(mode="json"), "succeeded"
             elif row.action in {"prepare_api", "prepare_execution"}:
                 runtime_id = recovery.get("runtime_id")
                 if isinstance(runtime_id, str):
