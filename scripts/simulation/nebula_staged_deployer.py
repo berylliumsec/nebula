@@ -812,6 +812,42 @@ class StagedDeployer:
                 continue
             successor_verified = False
             if project.get("runtime_id") not in (target_id, None):
+                # A previously attempted retirement may have completed through
+                # coordinated host shutdown. Refresh only its immutable Core
+                # receipt before requiring that proof for the successor. This
+                # path never dispatches retirement or allocates another ID.
+                for step in journal["steps"].values():
+                    if (
+                        step.get("action") == "retire"
+                        and step.get("parameters") == {"runtime_id": source_id}
+                        and step.get("receipt", {}).get("state")
+                        in {"running", "uncertain"}
+                    ):
+                        try:
+                            operation_id = step["operation_id"]
+                            receipt = self.get("deployment/operations/" + operation_id)
+                            if (
+                                receipt.get("state") == "uncertain"
+                                and self.reconcile_operation is not None
+                            ):
+                                receipt = self.reconcile_operation(operation_id)
+                            if receipt.get("operation_id") != operation_id:
+                                raise RuntimeError(
+                                    "Retirement readback named another operation"
+                                )
+                            step["receipt"] = receipt
+                            self.save(self.record)
+                        except (RuntimeError, OSError) as error:
+                            return waiting(
+                                status,
+                                [
+                                    {
+                                        "project_id": project_id,
+                                        "detail": str(error)[:1000],
+                                    }
+                                ],
+                                pinned,
+                            )
                 successor_verified = verified_successor(
                     status, project, source_id, target_id, expected_fence
                 )

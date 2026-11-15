@@ -908,3 +908,73 @@ def test_successor_with_incomplete_proof_keeps_the_deployment_held(host, missing
         deployer.state()["runtime_deployment"]["target_runtime_by_project"][project_id]
         == original_target
     )
+
+
+@pytest.mark.parametrize("retirement_proven", [True, False])
+def test_successor_reads_original_retirement_receipt_before_holding(
+    host, monkeypatch, retirement_proven
+):
+    project_id, original_target, source, successor, record = _replace_verified_target(
+        host
+    )
+    step = next(
+        step
+        for step in record["runtime_deployment"]["steps"].values()
+        if step["action"] == "retire" and step["parameters"]["runtime_id"] == source
+    )
+    operation_id = step["operation_id"]
+    original = {
+        **host.ledger[operation_id],
+        "state": "uncertain",
+        "result": {"error_type": "CoordinationConflict"},
+    }
+    host.ledger[operation_id] = original
+    step["receipt"] = {
+        key: value for key, value in original.items() if key != "request_hash"
+    }
+    deployer.atomic_json(deployer.STATE, record)
+    reads = []
+
+    def readback(requested_id):
+        reads.append(requested_id)
+        assert requested_id == operation_id
+        if retirement_proven:
+            host.ledger[operation_id] = {
+                **original,
+                "state": "succeeded",
+                "result": {
+                    "runtime_id": source,
+                    "state": "retired",
+                    "reconciled": True,
+                },
+            }
+        return {
+            key: value
+            for key, value in host.ledger[operation_id].items()
+            if key != "request_hash"
+        }
+
+    monkeypatch.setattr(deployer, "reconcile_operation", readback)
+    before = list(host.dispatched)
+    if retirement_proven:
+        promote_until_converged(host)
+        saved = deployer.state()["runtime_deployment"]
+        assert saved["reconciled_successors"][project_id]["runtime_id"] == successor
+        assert saved["target_runtime_by_project"][project_id] == original_target
+        assert (
+            saved["steps"][
+                next(
+                    key
+                    for key, value in saved["steps"].items()
+                    if value["operation_id"] == operation_id
+                )
+            ]["receipt"]["state"]
+            == "succeeded"
+        )
+    else:
+        assert deployer.promote()["status"] == "waiting_for_handoffs"
+        assert host.dispatched == before
+    assert reads == [operation_id]
+    assert len(host.actions("retire")) == len(
+        [item for item in before if item[1] == "retire"]
+    ) + (1 if retirement_proven else 0)

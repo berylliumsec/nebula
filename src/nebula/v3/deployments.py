@@ -2196,52 +2196,105 @@ class DeploymentCoordinator:
 
     async def retirement_blockers(self, runtime_id: str) -> list[str]:
         async with self.database.session() as session:
-            owners = list(
-                await session.scalars(
-                    select(ProjectOwnershipRow.project_id).where(
-                        ProjectOwnershipRow.runtime_id == runtime_id
-                    )
+            return await self._retirement_blockers(session, runtime_id)
+
+    async def _retirement_blockers(self, session, runtime_id: str) -> list[str]:
+        owners = list(
+            await session.scalars(
+                select(ProjectOwnershipRow.project_id).where(
+                    ProjectOwnershipRow.runtime_id == runtime_id
                 )
             )
-            resources = list(
-                await session.scalars(
-                    select(RuntimeResourceRow.id).where(
-                        RuntimeResourceRow.runtime_id == runtime_id,
-                        RuntimeResourceRow.state != "closed",
-                    )
+        )
+        resources = list(
+            await session.scalars(
+                select(RuntimeResourceRow.id).where(
+                    RuntimeResourceRow.runtime_id == runtime_id,
+                    RuntimeResourceRow.state != "closed",
                 )
             )
-            commands = list(
-                await session.scalars(
-                    select(RuntimeCommandRow.id).where(
-                        RuntimeCommandRow.runtime_id == runtime_id,
-                        RuntimeCommandRow.state.in_(_UNFINISHED),
-                    )
+        )
+        commands = list(
+            await session.scalars(
+                select(RuntimeCommandRow.id).where(
+                    RuntimeCommandRow.runtime_id == runtime_id,
+                    RuntimeCommandRow.state.in_(_UNFINISHED),
                 )
             )
-            capacity = list(
-                await session.scalars(
-                    select(RuntimeCapacityReservationRow.id).where(
-                        RuntimeCapacityReservationRow.runtime_id == runtime_id,
-                        RuntimeCapacityReservationRow.state == "held",
-                    )
+        )
+        capacity = list(
+            await session.scalars(
+                select(RuntimeCapacityReservationRow.id).where(
+                    RuntimeCapacityReservationRow.runtime_id == runtime_id,
+                    RuntimeCapacityReservationRow.state == "held",
                 )
             )
-            return [
-                *(
-                    "Project " + item + " still belongs to this worker"
-                    for item in owners
-                ),
-                *("Resource " + item + " remains resident" for item in resources),
-                *(
-                    "Command " + item + " is unfinished or uncertain"
-                    for item in commands
-                ),
-                *(
-                    "Capacity reservation " + item + " remains held"
-                    for item in capacity
-                ),
-            ]
+        )
+        return [
+            *("Project " + item + " still belongs to this worker" for item in owners),
+            *("Resource " + item + " remains resident" for item in resources),
+            *("Command " + item + " is unfinished or uncertain" for item in commands),
+            *("Capacity reservation " + item + " remains held" for item in capacity),
+        ]
+
+    async def retirement_readback(self, runtime_id: str) -> WorkerIdentity | None:
+        """Read a completed exact retirement; never admit or repeat an effect."""
+        async with self.coordination._write() as session:
+            await self._host(session)
+            return await self._retirement_readback(session, runtime_id)
+
+    async def _retirement_readback(
+        self, session, runtime_id: str
+    ) -> WorkerIdentity | None:
+        row = await session.get(RuntimeProcessRow, runtime_id)
+        runtime = await session.get(RuntimeInstanceRow, runtime_id)
+        if (
+            row is None
+            or row.state != "retired"
+            or row.pid <= 0
+            or not row.process_birth
+            or not row.endpoint
+            or runtime is None
+            or runtime.lease_expires_at_ms != 0
+            or (runtime.version, runtime.role) != (row.version, row.role)
+            or same_process(row.pid, row.process_birth)
+            or await self._retirement_blockers(session, runtime_id)
+        ):
+            return None
+        receipt = await session.scalar(
+            select(DeploymentReceiptRow)
+            .where(
+                DeploymentReceiptRow.action == "worker.retired",
+                DeploymentReceiptRow.result["runtime_id"].as_string() == runtime_id,
+            )
+            .order_by(DeploymentReceiptRow.occurred_at_ms.desc())
+            .limit(1)
+        )
+        if receipt is None:
+            return None
+        identity = WorkerIdentity(
+            runtime_id=row.runtime_id,
+            version=row.version,
+            role="api" if row.role == "api" else "execution",
+            pid=row.pid,
+            process_birth=row.process_birth,
+            endpoint=row.endpoint,
+        )
+        # Runtime IDs identify immutable incarnations and cannot revive after
+        # retirement. Older receipts bind that row by ID/version/role; newer
+        # receipts additionally retain the complete process identity.
+        proof = receipt.result
+        exact = identity.model_dump(mode="json")
+        if any(
+            proof.get(key) != exact[key] for key in ("runtime_id", "version", "role")
+        ):
+            return None
+        if any(
+            key in proof and proof[key] != exact[key]
+            for key in ("pid", "process_birth", "endpoint")
+        ):
+            return None
+        return identity
 
     async def retire_missing_api(self, identity: WorkerIdentity) -> None:
         """Release only an exactly identified API proven absent by its host.
@@ -2309,7 +2362,7 @@ class DeploymentCoordinator:
                 populate_existing=True,
             )
             if row is None or not row.pid or row.state == "retired":
-                raise CoordinationConflict(
+                raise OperationRejected(
                     "there is no live process incarnation to retire"
                 )
             if host.api_runtime_id == runtime_id:
@@ -2378,11 +2431,7 @@ class DeploymentCoordinator:
             await self._receipt(
                 session,
                 "worker.retired",
-                {
-                    "runtime_id": row.runtime_id,
-                    "version": row.version,
-                    "role": row.role,
-                },
+                identity.model_dump(mode="json"),
             )
 
     async def resolve_uncertain(
