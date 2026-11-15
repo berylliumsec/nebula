@@ -62,7 +62,13 @@ from .orchestration import (
 from .providers import ModelProvider, ProviderError, provider_from_profile
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .mcp import McpProbeError, mcp_tool_runtime_name, resolve_mcp_profiles
-from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
+from .storage import (
+    REVISE_ATTEMPTS,
+    ConflictError,
+    CorruptRecordError,
+    NebulaStore,
+    NotFoundError,
+)
 
 MAX_API_MISSION_TOKENS = 200_000
 MAX_API_MISSION_COST_USD = 100.0
@@ -783,7 +789,13 @@ class MissionService:
                 "run is not owned by this API mission service; cancellation "
                 "cannot be confirmed"
             )
-        if run.status != RunStatus.CANCELLING:
+        # The mission's own task keeps saving the run (status, dispatch
+        # counters) while Stop is requested. The stop request is saved on the
+        # run's newest revision, so that bookkeeping never loses the Stop and
+        # leaves the mission running to completion.
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            if run.status == RunStatus.CANCELLING:
+                break
             try:
                 run, _ = await self.store.update_with_event(
                     AgentRun,
@@ -796,7 +808,17 @@ class MissionService:
                     actor_id=actor_id,
                     idempotency_key="run:stop_requested",
                 )
+                break
             except ConflictError as exc:
+                latest = await self.store.get(AgentRun, run.id)
+                if latest.status in _TERMINAL_RUN_STATUSES:
+                    raise MissionStateError(
+                        f"run {run.id} is already terminal ({latest.status.value})"
+                    ) from exc
+                if latest.revision != run.revision and attempt < REVISE_ATTEMPTS:
+                    # diagnostic-expected: request Stop again on the newest run.
+                    run = latest
+                    continue
                 record_caught_exception(
                     "missions",
                     "missions.missions.caught_failure_005",
@@ -804,11 +826,6 @@ class MissionService:
                     exc,
                     stage="missions",
                 )
-                latest = await self.store.get(AgentRun, run.id)
-                if latest.status in _TERMINAL_RUN_STATUSES:
-                    raise MissionStateError(
-                        f"run {run.id} is already terminal ({latest.status.value})"
-                    ) from exc
                 raise
 
         async with self._lock:
