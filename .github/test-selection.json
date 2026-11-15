@@ -1,70 +1,39 @@
 {
-  "reviewed_by": "Claude butler-notes-core implementer; root cause (create/update only returned pending_browser_apply, applied solely by the web app Butler panel) independently validated on origin/main by a separate Claude subagent before the fix; an independent review of #1132 requested the archived-project guard and the browser journey added here",
-  "reason": "Butler note creates and edits are written by Core instead of a browser handoff, so terminal and Workbench chats save them. butler_notes.py: create derives a UUIDv5 note ID from a required request_id, validates with the Core note validator and relation service, replays an identical retry and refuses changed content under the same key; update checks the revision and keeps other metadata; both read back and return core_records_saved with a note_saved hint. Delete stays browser-confirmed but returns deleted:false with an honest web-app-confirmation message. UI: nebulaAssistantActions parses note_saved (and no longer turns note_create/note_update into browser writes), NebulaControlAssistant refreshes Notes, butlerNoteAction is deletion-only. Python: test_butler_notes.py (new Core-save, replay and honest-delete tests fail on origin/main), the async-core notes test, scheduled-Butler exclusion, control-plane notes read, product-knowledge index digest and Notes searches (new terminal-notes query fails on main), and registry checker tests. Frontend: butlerNoteAction, nebulaAssistantActions and NebulaControlAssistant tests (note_saved parse and refresh-without-write fail on main). Review follow-up: butler_notes.py refuses create, update and delete in an archived project (as butler_records/butler_data/butler_sources do); new test_butler_notes_cannot_change_an_archived_project fails without the guard. New small real-Core Playwright spec ui/tests/butler-notes.spec.ts (area butler-notes re-pointed from real-core.spec.ts, added to the assistant-real testMatch and full_include) drives the production-built web Butler panel on a LAN Core: Core-saved create (with request_id) and edit appear in Notes with no browser note write, reload shows saved fields, cancelled deletion keeps the note, confirmed deletion removes only the note; it fails on the earlier base fb50019 at the Created-note step. Manifest/selection tests are selected because playwright-impact.json and playwright.config.ts changed.",
-  "exclusions": "Playwright: three of the eight butler-notes profiles are selected (desktop, Chromium 390, WebKit 390); they passed locally on this host. The old real-core.spec.ts journey 'assistant upgrade Butler creates edits and deletes project Notes on production LAN Core' is now stale (its create step has no request_id; it also used unkeyed mutations that return 428 since b833782) and is no longer catalogued; that 1.18 MB file cannot be edited under the public commit guard, so its removal is a follow-up. Known Core defect outside this change, recorded in the spec and docs: a GET of a deleted entity ID resolves to no project and is routed to the global execution runtime, answering 503 'starting' instead of 404, so the panel reports a successful deletion as unconfirmed; the spec accepts that honest message and asserts absence via the project note list. Not selected because already failing on origin/main 2e922bd with identical results: test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls (2 unreviewed useProjectViewLease signatures) and test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. Other test_product_knowledge.py and test_butler_capabilities.py tests do not cover Notes. No native changes. product_knowledge.sqlite3.b85 is gitignored and regenerated; build_product_knowledge.py --verify passes.",
+  "reviewed_by": "Claude butler-client-surface implementer (workflow Track B); root cause independently validated on origin/main by a separate Claude agent before the fix; an independent diff review is still required before merge",
+  "reason": "Butler handoff actions (notes, settings/theme/navigation, downloads, credentials, devices, diagnostics, etc.) return pending_browser_apply and change nothing until the requesting web app applies them, but Core could not tell a terminal turn from a browser turn, so Butler offered them in nebula-chat and the terminal printed 'Tool finished'. ChatCompletionRequest gains optional client_surface ('browser' default for existing web clients, 'terminal' from nebula-chat and the terminal Assistant); it is saved in the provider turn request_snapshot and harness turn metadata, passed to ButlerCapabilities on direct, queued, resumed and retried turns, and adds a terminal note to Butler's instructions. On the terminal surface ButlerCapabilities.invoke refuses any result in the pending_browser_apply state (decided from the action's result, not a name list, so a new handoff is covered and notes create/update stop being refused once they save in Core) with fixed browser_only guidance; the terminal labels an older Core's handoff receipt as needing the Nebula web app. Python: test_butler_client_surface.py (new: real handoffs incl. notes.delete refused on terminal and unchanged on browser, a synthetic future handoff action refused by result for read and change routes, Core-saving change still works, request/surface validation, provider API turn end to end with snapshot and instructions, harness turn metadata/prompt/capabilities; all 7 fail on origin/main), terminal shell and chat CLI tests for the sent field and the handoff notice (5 fail on main), the product-help search test for the new docs (fails on main) plus the index digest/sync tests, and existing Butler capability, settings browser-intent, harness Butler gateway and queued Butler follow-up tests around the changed paths.",
+  "exclusions": "No UI, native or Playwright changes: the web app omits client_surface and keeps today's behavior, and ui/src/settingsCatalog.ts is unchanged because no setting changed. Run locally but not selected because they already fail on origin/main with identical results (this diff does not touch them): test_butler_capabilities.py::test_global_chat_settings_read_runs_outside_event_loop, test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets and ::test_provider_tools_are_bounded_to_catalog_and_project, test_harnesses.py::test_assistant_settings_keep_chat_history_and_replace_frozen_runtime[model|profile|mcp], test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. The rest of test_butler_capabilities.py, test_tool_failures.py, test_settings_assistant_tools.py, test_butler_memory.py, test_butler_notes.py, test_product_knowledge.py, test_chat_cli.py, test_terminal_shell.py and test_terminal_transport.py passed locally (84+ tests) and are not selected to keep the run focused.",
   "python_browser": false,
-  "python_node": true,
+  "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 83,
-    "frontend": 120,
+    "python": 22,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_notes.py",
-    "tests/v3/test_async_core.py::test_settings_assistant_actions_await_reads_and_preserve_pending_apply",
-    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_cannot_discover_interactive_project_mutations",
-    "tests/v3/test_control_plane_reads.py::test_interactive_and_scheduled_reads_use_task_owned_sessions",
+    "tests/v3/test_butler_client_surface.py",
+    "tests/v3/test_butler_capabilities.py::test_butler_browser_action_is_not_reported_as_saved_state",
+    "tests/v3/test_butler_capabilities.py::test_butler_pre_dispatch_errors_name_the_repair",
+    "tests/v3/test_butler_capabilities.py::test_butler_unlisted_operation_receipt_gives_exact_recovery",
+    "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them",
+    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session",
+    "tests/v3/test_chat_queue.py::test_queued_butler_follow_up_dispatches_after_worker_reconnect",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_butler_browser_actions_in_the_terminal",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_project_notes_lifecycle",
-    "tests/v3/test_product_knowledge.py::test_product_search_says_butler_saves_terminal_notes_in_core",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_manual_note_review_and_saved_provenance",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog",
-    "tests/v3/test_butler_workflow_registry.py::test_registry_collector_tracks_client_declarations_through_aliases",
-    "tests/test_test_selection.py",
-    "tests/test_playwright_impact.py::test_assistant_real_core_uses_bounded_shards",
-    "tests/test_playwright_impact.py::test_authentication_recovery_selection_is_bounded_to_real_core_cases",
-    "tests/test_playwright_impact.py::test_browser_area_only_collects_named_browser_assistant_journeys",
-    "tests/test_playwright_impact.py::test_candidate_success_is_not_its_own_baseline",
-    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans",
-    "tests/test_playwright_impact.py::test_deleted_and_renamed_paths_preserve_all_impact_paths",
-    "tests/test_playwright_impact.py::test_documentation_and_empty_diffs_select_no_jobs",
-    "tests/test_playwright_impact.py::test_entries_are_deduplicated_and_stably_ordered",
-    "tests/test_playwright_impact.py::test_explicit_area_selection_overrides_global_fallback",
-    "tests/test_playwright_impact.py::test_first_user_selection_covers_only_the_onboarding_journey",
-    "tests/test_playwright_impact.py::test_full_manifest_covers_every_permanent_playwright_project",
-    "tests/test_playwright_impact.py::test_global_changes_require_review_without_starting_tests",
-    "tests/test_playwright_impact.py::test_invalid_name_status_is_rejected",
-    "tests/test_playwright_impact.py::test_invalid_or_arbitrary_explicit_selection_is_rejected",
-    "tests/test_playwright_impact.py::test_latest_successful_preparation_ignores_newer_failed_release",
-    "tests/test_playwright_impact.py::test_matrix_lane_cli_writes_every_output",
-    "tests/test_playwright_impact.py::test_matrix_lanes_preserve_a_release_selection_below_github_limit",
-    "tests/test_playwright_impact.py::test_missing_baseline_does_not_authorize_full",
-    "tests/test_playwright_impact.py::test_project_and_exact_entry_selection_are_catalog_bounded",
-    "tests/test_playwright_impact.py::test_representative_area_mapping",
-    "tests/test_playwright_impact.py::test_sharded_core_api_and_shell_entries_deduplicate",
-    "tests/test_playwright_impact.py::test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build",
-    "tests/test_playwright_impact.py::test_unknown_watched_path_requires_review",
-    "tests/test_playwright_impact.py::test_workflow_gates_every_matrix_lane",
-    "tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_chat_cli.py::test_chat_resumes_saved_session_streams_and_sends_only_the_new_message",
+    "tests/v3/test_chat_cli.py::test_browser_handoff_is_reported_as_needing_the_web_app",
+    "tests/test_terminal_shell.py::test_browser_handoff_receipt_is_not_reported_as_finished",
+    "tests/test_terminal_shell.py::test_browser_handoff_notice_reads_provider_and_harness_receipts",
+    "tests/test_terminal_shell.py::test_provider_body_uses_saved_settings_and_excludes_harness_fields",
+    "tests/test_terminal_shell.py::test_stream_reports_acceptance_and_tool_progress_before_answer"
   ],
-  "frontend": [
-    "ui/src/components/butlerNoteAction.test.ts",
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/components/NebulaControlAssistant.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-notes/assistant-real-desktop",
-    "butler-notes/assistant-real-chromium-390",
-    "butler-notes/assistant-real-webkit-390"
-  ],
-  "checks": [
-    "frontend-audit"
-  ],
-  "change_digest": "36990669c795843995c1c9fb07957502ca04124a3402b8ad3129404db65ff856"
+  "playwright": [],
+  "checks": [],
+  "change_digest": "007deb59397d1551f0c5c1b681753b07e3836105c32a577bcde04fc57c9fcc7c"
 }
