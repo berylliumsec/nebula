@@ -237,7 +237,7 @@ class RuntimeAutoAdmission:
                 # A recorded storage alert opens its incident chat from the
                 # project's worker; keep or start one until it has.
                 storage_alert = pending_storage_dispatches(
-                    ProjectOwnershipRow.project_id
+                    ProjectOwnershipRow.project_id, session.bind.dialect.name
                 )
                 now = asyncio.get_running_loop().time()
                 # Projects waiting out a retry delay must not fill the batch
@@ -973,7 +973,9 @@ class RuntimeAutoAdmission:
                     project_work,
                     # A storage alert recorded before the owner died opens its
                     # incident chat only from a recovered worker.
-                    pending_storage_dispatches(ProjectOwnershipRow.project_id),
+                    pending_storage_dispatches(
+                        ProjectOwnershipRow.project_id, session.bind.dialect.name
+                    ),
                 ),
             )
             if self._recovery_cursor is not None:

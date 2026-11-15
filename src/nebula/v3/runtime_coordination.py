@@ -159,23 +159,31 @@ def project_worker_commands(project_id, states: Sequence[str] = ("queued",)) -> 
     )
 
 
-def pending_storage_dispatches(project_id) -> Any:
+def pending_storage_dispatches(project_id, dialect: str) -> Any:
     """SQL EXISTS for a recorded storage alert whose incident chat is not open yet.
 
     A storage report finishes once it records; the source's project worker then
     opens the incident chat from its dispatch loop. Until it does, the dispatch
     needs that project's worker exactly like queued project work. A dispatch
     belongs to the project its source belongs to now.
+
+    The dispatch side is the exact predicate of the partial index
+    ``ix_entities_storage_dispatches_open``, so this check reads only pending
+    dispatches however much settled history a Core keeps.
     """
     from sqlalchemy.orm import aliased
+
+    from .query_predicates import open_storage_row, storage_payload_text
 
     dispatch, source = aliased(EntityRow), aliased(EntityRow)
     return (
         select(dispatch.id)
-        .join(source, source.id == dispatch.payload["source_id"].as_string())
+        .join(
+            source,
+            source.id == storage_payload_text(dispatch, "source_id", dialect),
+        )
         .where(
-            dispatch.kind == "storage_dispatches",
-            dispatch.payload["status"].as_string() == "pending",
+            open_storage_row(dispatch, "storage_dispatches", dialect),
             source.kind == "storage_sources",
             source.engagement_id == project_id,
         )

@@ -2,6 +2,7 @@
 opens its incident chat, and a deleted project leaves no alert behind."""
 
 import asyncio
+from datetime import timedelta
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,10 +10,10 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 import httpx
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from nebula.v3 import runtime_auto_admission
-from nebula.v3.database import DeploymentHostRow, ProjectOwnershipRow
+from nebula.v3.database import DeploymentHostRow, EntityRow, ProjectOwnershipRow
 from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import (
     Engagement,
@@ -25,8 +26,10 @@ from nebula.v3.domain import (
 )
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
+from nebula.v3.query_predicates import open_storage_row
 from nebula.v3.runtime_coordination import (
     CoordinationConflict,
+    pending_storage_dispatches,
     STORAGE_REPORT_COMMAND,
 )
 from nebula.v3.runtime_project_handoff import _HANDLES
@@ -184,6 +187,93 @@ async def test_a_pending_alert_brings_back_and_keeps_its_projects_worker(alerts)
         await coordinator.release_quiesced_project(
             lease, checkpoint={"project_id": "one", "paused_sha256": "x"}
         )
+
+
+async def _settled_history(store, source, count):
+    """``count`` settled dispatches, a day old, as a long-lived Core keeps them."""
+    from sqlalchemy import insert
+
+    started = utc_now() - timedelta(days=1)
+    rows = []
+    for index in range(count):
+        entity = StorageDispatch(
+            id=f"settled-dispatch-{index:05d}",
+            incident_id=f"settled-incident-{index}",
+            source_id=source.id,
+            event_id=f"settled-{index}",
+            prompt="An older storage alert",
+            status="queued",
+            created_at=started + timedelta(seconds=index),
+            updated_at=started + timedelta(seconds=index),
+        )
+        rows.append(
+            dict(
+                id=entity.id,
+                kind=entity.entity_kind,
+                engagement_id=None,
+                revision=entity.revision,
+                payload=entity.model_dump(mode="json"),
+                created_at=entity.created_at,
+                updated_at=entity.updated_at,
+            )
+        )
+    async with store.database.session() as session:
+        for offset in range(0, len(rows), 500):
+            await session.execute(insert(EntityRow), rows[offset : offset + 500])
+
+
+async def test_an_alert_behind_two_thousand_settled_dispatches_is_demand_and_sent(
+    alerts,
+):
+    coordinator, store = alerts.coordinator, alerts.store
+    source = await _source(store, "one")
+    await _settled_history(store, source, 2000)
+    dispatch = await _alert(store, source)
+    async with coordinator.coordination._write() as session:
+        await coordinator.coordination._ensure_project(session, "one")
+    dialect = coordinator.database.engine.dialect.name
+    # The demand check is the open-dispatch index's own predicate, so it reads
+    # the one pending dispatch, not the settled history.
+    demand = select(pending_storage_dispatches("one", dialect)).compile(
+        dialect=coordinator.database.engine.dialect,
+        compile_kwargs={"literal_binds": True},
+    )
+    index = select(EntityRow.id).where(
+        open_storage_row(EntityRow, "storage_dispatches", dialect)
+    )
+    predicate = str(
+        index.whereclause.compile(
+            dialect=coordinator.database.engine.dialect,
+            compile_kwargs={"literal_binds": True},
+        )
+    ).replace("entities.", "entities_1.")
+    assert predicate in str(demand)
+    await alerts.automatic.reconcile()
+    assert alerts.attached == ["one"]
+    # The project's dispatch loop reaches dispatch number 2,001 ...
+    service = StorageIntegrationService(store, None, None, None)
+    async with coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+    lease = SimpleNamespace(
+        project_id="one", runtime_id=owner.runtime_id, fencing_token=owner.fencing_token
+    )
+    with execution_context(lease):
+        pending = [item.id async for item in service._pending_dispatches()]
+    assert pending == [dispatch.id]
+    # ... and once it is sent, the worker is idle again.
+    current = await store.get(StorageDispatch, dispatch.id)
+    await store.update(
+        StorageDispatch,
+        dispatch.id,
+        {"status": "queued"},
+        expected_revision=current.revision,
+    )
+    async with coordinator.database.session() as session:
+        assert not await session.scalar(
+            select(pending_storage_dispatches("one", dialect))
+        )
+    await alerts.automatic.reconcile()
+    assert alerts.retired == ["one"]
 
 
 async def test_an_expired_owner_with_storage_work_is_recovered(alerts):

@@ -1020,7 +1020,11 @@ class DeploymentCoordinator:
     @staticmethod
     async def _project_has_pending_storage_alert(session, project_id: str) -> bool:
         return bool(
-            await session.scalar(select(pending_storage_dispatches(project_id)))
+            await session.scalar(
+                select(
+                    pending_storage_dispatches(project_id, session.bind.dialect.name)
+                )
+            )
         )
 
     async def request_project_retirement(self, lease: ProjectLease) -> bool:
