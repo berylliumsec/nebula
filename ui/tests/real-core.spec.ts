@@ -12317,7 +12317,11 @@ test("assistant upgrade clear request reaches the model without repeat confirmat
     await composer.fill(request);
     await composer.press("Enter");
     await expect(assistant).toContainText("The requested project summary is ready.", { timeout: 30_000 });
-    const dispatched = stub.requests.find((item) => JSON.stringify(item.messages).includes(request));
+    // Core also asks the model to title the new conversation, and that request quotes the first exchange too.
+    const dispatched = stub.requests.find((item) => {
+      const sent = JSON.stringify(item.messages);
+      return sent.includes(request) && !sent.includes("Name this conversation from its first exchange");
+    });
     expect(dispatched).toBeTruthy();
     expect(JSON.stringify(dispatched!.messages)).toContain("Do not ask to confirm it again.");
     expect(JSON.stringify(dispatched!.messages)).toContain("separate tool or policy approval");

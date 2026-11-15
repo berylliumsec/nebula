@@ -1,7 +1,7 @@
 {
-  "reviewed_by": "Claude gate2-fix implementer; root cause independently validated by a separate Claude subagent (gate2-fix/validation.md)",
-  "reason": "Project surfaces that read worker-backed data now hold the project-view lease while shown (Settings, open Butler dialog) and wait in place on coded 503 idle/starting via the shared #1068 recovery (Code tree/quick-open, Files, Settings policy/tooling/follow-up/skills/setup, Work board, Butler oversight/history/settings); the lease reports Core's runtime state so held projects read as starting and cold writes show 'Starting this project'; Create item/Add disabled source show busy; Butler settings deep link dispatch is deferred past the wrapping dialog's listener. Unit tests cover each surface's lease and recovery. Playwright: the 10 Gate 2 regression journeys' areas (desktop plus Chromium/WebKit 390 where the area has them) whose expectations were updated (cold first-write waits, API reads hold a lease and honour Retry-After, 056/122 select the fixture project by URL), plus the runtime-pane-recovery and project-view-lease journeys whose banner copy and lease contract this changes.",
-  "exclusions": "No backend source changes, so no Python tests. No native code. Other impact-rule areas touched only through shared files (Butler chat/workspace/report areas via NebulaControlAssistant.tsx, editor-files-scroll/coding-makeover via CodeEditorPanel, project-lifecycle/project-deletion via ProjectRuntimeNotice, workspace-quota via WorkspacePanel, conversation-progress/core-connection-resilience via client.ts write counting) are excluded: their flows are unchanged except for the in-place wait on coded 503s and the banner copy, which the selected unit tests and the runtime-pane-recovery journey cover. SettingsPage.test.tsx is excluded: 5 cases fail on main because its mocks omit api.request (baseline-shared, deferred fixture repair); SettingsPage.runtime.test.tsx covers the changed Settings code. Mobile 320/430 and compact profiles are excluded to keep CI narrow; 390 px Chromium/WebKit cover mobile.",
+  "reviewed_by": "Claude gate2-fix implementer; root cause independently validated by a separate Claude subagent (gate2-fix/validation.md); review findings B1-B4 addressed by a follow-up Claude agent (gate2-fix/VERIFY.md)",
+  "reason": "Project surfaces that read worker-backed data now hold the project-view lease while shown (Settings, open Butler dialog) and wait in place on coded 503 idle/starting via the shared #1068 recovery (Code tree/quick-open, Files, Settings policy/tooling/follow-up/skills/setup, Work board, Butler oversight/history/settings); the lease reports Core's runtime state so held projects read as starting and cold writes show 'Starting this project'; Create item/Add disabled source show busy; Butler settings deep link dispatch is deferred past the wrapping dialog's listener. Unit tests cover each surface's lease and recovery. Playwright: the Gate 2 regression journeys' areas (desktop plus Chromium/WebKit 390 where the area has them) whose expectations were updated (cold first-write waits, API reads hold a lease and honour Retry-After, 056/122 select the fixture project by URL). 012 (storage-integrations), 129 (host-startup-default), runtime-pane-recovery and project-view-lease are deselected; see exclusions.",
+  "exclusions": "No backend source changes, so no Python tests. No native code. Other impact-rule areas touched only through shared files (Butler chat/workspace/report areas via NebulaControlAssistant.tsx, editor-files-scroll/coding-makeover via CodeEditorPanel, project-lifecycle/project-deletion via ProjectRuntimeNotice, workspace-quota via WorkspacePanel, conversation-progress/core-connection-resilience via client.ts write counting) are excluded: their flows are unchanged except for the in-place wait on coded 503s and the banner copy, which the selected unit tests and the runtime-pane-recovery journey cover. SettingsPage.test.tsx is excluded: 5 cases fail on main because its mocks omit api.request (baseline-shared, deferred fixture repair); SettingsPage.runtime.test.tsx covers the changed Settings code. Mobile 320/430 and compact profiles are excluded to keep CI narrow; 390 px Chromium/WebKit cover mobile. Deselected after PR CI run 43702425098, each still an open release item, not a pass: storage-integrations (012) now passes the cold start, then POST storage/test with the issued source token gets 401 'valid bearer token required' from the API worker catch-all's operator auth (api_worker.py public_request -> principal), which live 5ec14b4 has identically (b833782); the storage-sender path belongs to the deferred storage-sender backlog, not this PR. host-startup-default (129) now passes the read refusal, then the host command is refused with runtime.memory_enforcement_unavailable, the intended memory-runner/v1 hold; it can pass only with the forbidden override, which is never set. runtime-pane-recovery and project-view-lease fail identically on unmodified main e89519e (runtime-continuity.spec.ts:151 and :222, the worker never retires after the project is left); that Core-side defect needs its own root cause and PR.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
@@ -11,7 +11,7 @@
     "python": 0,
     "frontend": 214,
     "native": 0,
-    "playwright": 30
+    "playwright": 22
   },
   "python": [],
   "frontend": [
@@ -31,9 +31,6 @@
   ],
   "native": [],
   "playwright": [
-    "storage-integrations/assistant-real-desktop",
-    "storage-integrations/assistant-real-chromium-390",
-    "storage-integrations/assistant-real-webkit-390",
     "work-hub/assistant-real-desktop",
     "work-hub/assistant-real-chromium-390",
     "work-hub/assistant-real-webkit-390",
@@ -49,22 +46,17 @@
     "assistant-direct-request/assistant-real-desktop",
     "assistant-direct-request/assistant-real-chromium-390",
     "assistant-direct-request/assistant-real-webkit-390",
-    "host-startup-default/assistant-real-desktop",
-    "host-startup-default/assistant-real-chromium-390",
-    "host-startup-default/assistant-real-webkit-390",
     "shell-goal-draft/assistant-real-desktop",
     "shell-goal-draft/assistant-real-chromium-390",
     "shell-goal-draft/assistant-real-webkit-390",
     "mission-supervisor-core/real-core",
     "mission-supervisor-core/assistant-real-chromium-390",
     "mission-supervisor-core/assistant-real-webkit-390",
-    "file-search-real-core/real-core",
-    "runtime-pane-recovery/model-desktop",
-    "project-view-lease/model-desktop"
+    "file-search-real-core/real-core"
   ],
   "checks": [
     "desktop-ui-build",
     "frontend-audit"
   ],
-  "change_digest": "9411b5cee1f4cbb6b3d4d0c2f0d124e8d98cf232fc765277ca517202c4f622fd"
+  "change_digest": "5cd9668688def6579a6f1a358805313c016d30f6373e1ea09efad0bab32eb20c"
 }
