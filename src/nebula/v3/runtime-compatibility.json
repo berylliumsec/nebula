@@ -17,6 +17,7 @@
       "project.handoff/v1",
       "project.participants/v1",
       "project.quiesce/v1",
+      "project.idle-retirement/v1",
       "provider.tools-context/v1",
       "provider.tools-context-ownership/v1",
       "harness.standing-instructions/v1",

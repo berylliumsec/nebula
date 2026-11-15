@@ -1,25 +1,34 @@
 {
-  "reviewed_by": "Codex; root cause independently validated by release validator",
-  "reason": "Execution guard binds WHERE and SET parameters for each SQL batch while preserving project authority; ordinary queued project commands recover expired dead owners; browser control uses the control lane; a safe read fenced during quiescence returns coded503 while mutations remain nonretryable. Focused in-process tests cover SQL ownership, recovery, durable delivery and read-versus-write quiescence. Runtime coordination selected to provision PostgreSQL in CI.",
-  "exclusions": "No frontend or native changes. Browser UI and real supervisor Core acceptance are recorded separately; these are not substitutes for final release suites. No startup heartbeat change is included.",
+  "reviewed_by": "Codex",
+  "reason": "Independently reproduced release blockers: resumable host/API promotion, rollback receipts, exact worker readiness, bounded host restoration, mixed-version retirement and chatless deployment inventory. Durable reconciliation records origin and child identities before bootstrap, rejects active/foreign/legacy unknown effects, and retains original outcomes. Selected model, subprocess lifecycle, ledger, ASGI inventory and shared-read regression tests; normal deployment rehearsal remains separate. Integrated with view leases and chatless command recovery: retain current admission holds, execution-version cap, and fresh revision reads. Boundary tests cover view demand through retirement, queued-work recovery and per-project lost-reply handoff oracle.",
+  "exclusions": "No UI/native code change. Candidate LAN upgrade/rollback rehearsal and final release suites remain required. Dedicated worktree Python3.12 venv for process tests; Python3.11 retained. No production execution; synthetic fixtures and owned PostgreSQL database only.",
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 275,
+    "python": 165,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_scope.py",
-    "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_worker_read_quiescence.py",
-    "tests/v3/test_runtime_coordination.py"
+    "tests/test_simulation_host_activation.py",
+    "tests/test_simulation_deploy_resume.py",
+    "tests/test_simulation_host_restart.py",
+    "tests/v3/test_runtime_operations.py",
+    "tests/v3/test_runtime_processes.py::test_start_returns_committed_worker_after_identity_client_close_fails",
+    "tests/v3/test_runtime_processes.py::test_published_worker_survives_cancellation_after_committed_readiness",
+    "tests/v3/test_runtime_processes.py::test_two_failed_real_starts_do_not_prevent_a_later_version",
+    "tests/v3/test_deployment_inventory_reads.py",
+    "tests/v3/test_mixed_release_idle_retirement.py",
+    "tests/v3/test_chat_goals.py::test_running_goal_read_reports_live_elapsed_without_changing_revision",
+    "tests/v3/test_runtime_processes.py::test_migration_admission_checkpoint_failure_closes_and_joins_child",
+    "tests/test_staged_deployer.py",
+    "tests/v3/test_project_view_leases.py::test_a_live_view_admits_the_project_and_a_lapsed_one_lets_it_retire",
+    "tests/v3/test_runtime_auto_recovery.py::test_expired_owner_with_only_project_work_is_recovered"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "d36c1b0277752372ac3018f60dc9de83a21b67f6f9fcf31ce93a9fed2cefb554"
+  "change_digest": "31b57284e3c3db758ec5d2d126013120b08c410612f84c3d84c236b06ae59435"
 }

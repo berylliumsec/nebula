@@ -14,6 +14,7 @@ IPC_PROTOCOL: Final = "nebula.runtime/v1"
 MAX_EXECUTION_VERSIONS = 2
 GLOBAL_EXECUTION_PROJECT = "__nebula_host_work__"
 SHARED_MEMORY_BOOTSTRAP_KEY = "shared_butler_memory_v1"
+IDLE_RETIREMENT_FEATURE: Final = "project.idle-retirement/v1"
 SHA256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 RuntimeVersion = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$")]
 
@@ -143,6 +144,16 @@ class ProjectDeploymentStatus(NebulaModel):
     admission_held: bool = False
 
 
+class ProcessDeploymentStatus(NebulaModel):
+    """One unretired worker incarnation, owned by a project or not."""
+
+    runtime_id: str
+    version: str
+    role: str
+    state: str
+    ready_verified: bool = False
+
+
 class DeploymentStatus(NebulaModel):
     protocol: Literal["nebula.runtime/v1"] = IPC_PROTOCOL
     revision: int
@@ -153,3 +164,5 @@ class DeploymentStatus(NebulaModel):
     projects: list[ProjectDeploymentStatus]
     health: Literal["ready", "degraded", "starting", "staged"]
     detail: str
+    # None distinguishes older hosts without an authoritative process inventory.
+    processes: list[ProcessDeploymentStatus] | None = None

@@ -105,6 +105,38 @@ the journal as a proven pre-spawn rejection while preserving the accepted pendin
 candidate. It does not retry the operation or edit Core's operation ledger. Other
 uncertain outcomes remain blocked for separate reconciliation. An incomplete
 cleanup is reported separately from a healthy API promotion.
+Normal promotion and rollback retries refresh the saved operation receipt first.
+A definite no-effect refusal receives a new numbered attempt and current revision;
+unknown effects are not replayed. The deployer reconciles confirmed API promotion,
+project ownership and retirement from current deployment status.
+An unknown migration is settled only when a read-only query against the configured
+Core database confirms that release's exact accepted migration head as the current
+database head. This works before activation and never runs a migration. Missing
+process inventory on an older host is unknown, not an empty inventory. A worker
+start remains held until its original receipt confirms completion or no effect;
+absence alone cannot prove an in-flight request has stopped. Preserve the journal and
+use the recorded operation ID to inspect it; never edit it to force progress.
+
+New hosts expose authenticated operation reconciliation at
+`POST /api/v1/deployment/operations/{operation_id}/reconcile`. It never repeats
+an effect. New operations retain private origin and child identities before
+bootstrap admission; reconciliation rejects active invocations and live migration
+children, then records either exact completion or a verified no-effect refusal.
+The original outcome remains in the deployment receipt history. Older operations
+without this linkage remain held, and an older host without this endpoint reports
+that limitation explicitly. Do not substitute process-list absence for this proof.
+
+A rollback can replace an unfinished promotion once its original operations have
+terminal receipts, while preserving its complete journal. It restores compatible code, API and project targets without downgrading
+or restoring the database. Completed host activation is read back against its own
+journaled later API promotion, so rerunning promotion does not reject its own API.
+
+Deployment inventory reads for goals, missions, notebook runs and execution history
+are served from SQL without starting a project worker. The workspace gate still
+fails closed if a live owner does not answer. Idle retirement is requested only
+from releases advertising `project.idle-retirement/v1`; older workers remain
+available until the explicit handoff.
+
 `offline-rollback` refuses to run in supervisor mode. Coherent legacy snapshots
 remain a separate disaster-recovery artifact, outside the code rollback path.
 Legacy mutations also verify the live protocol before stopping a service. A
