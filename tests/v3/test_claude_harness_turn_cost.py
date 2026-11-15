@@ -143,7 +143,7 @@ async def test_claude_mission_spend_is_the_cli_session_total(tmp_path: Path) -> 
                 costed("Stage three done.", 0.000315),
             ]
         )
-        chat = Chat(tmp_path, lambda: cli)
+        chat = await Chat.create(tmp_path, lambda: cli)
         run = await chat.service.start_mission(
             engagement_id=chat.engagement.id,
             name="Cost review",
@@ -218,7 +218,7 @@ async def test_claude_resumed_session_does_not_bill_its_earlier_spend(
 
     async def scenario() -> tuple[list[list[HarnessEvent]], list[str | None]]:
         adapter = ResumingAdapter(lambda: clis.pop(0))
-        chat = Chat(tmp_path, adapter=adapter)
+        chat = await Chat.create(tmp_path, adapter=adapter)
         turns = []
         first, _ = await chat.send("first")
         turns.append(first)

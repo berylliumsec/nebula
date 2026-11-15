@@ -24,6 +24,7 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import inspect
 import json
 import sys
 import textwrap
@@ -353,7 +354,12 @@ async def _collect(stream: Any) -> list[HarnessEvent]:
 async def _until(predicate: Any, *, timeout: float = DEADLINE_SECONDS) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
-    while not predicate():
+    while True:
+        reached = predicate()
+        if inspect.isawaitable(reached):
+            reached = await reached
+        if reached:
+            return
         if loop.time() > deadline:
             raise AssertionError("condition was not reached")
         await asyncio.sleep(0.01)
@@ -699,7 +705,7 @@ async def test_codex_withdrawn_approval_expires_the_pending_nebula_card(tmp_path
             ]
 
         task = await service.start_chat_turn(turn_id)
-        await _until(lambda: bool(pending()))
+        await _until(pending)
         card = (await pending())[0]
         rpc.events.put_nowait(_turn_completed("interrupted"))
         rpc.events.put_nowait(_notification("serverRequest/resolved", requestId=71))
@@ -742,7 +748,7 @@ async def test_codex_withdrawn_question_expires_the_pending_nebula_interaction(
             ]
 
         task = await service.start_chat_turn(turn_id)
-        await _until(lambda: bool(pending()))
+        await _until(pending)
         question = (await pending())[0]
         rpc.events.put_nowait(_turn_completed("interrupted"))
         rpc.events.put_nowait(_notification("serverRequest/resolved", requestId=72))
@@ -1277,9 +1283,9 @@ async def test_claude_stop_after_guidance_also_stops_the_guidance_turn(
         # The real CLI echoes a prompt only with the turn's first assistant
         # message, so a stop before it relies on the adapter's --replay flag.
         connection = await (
-            (await _claude(cli, tmp_path))
+            _claude(cli, tmp_path)
             if early_echo
-            else (await _claude(cli, tmp_path, acknowledges_user_messages=True))
+            else _claude(cli, tmp_path, acknowledges_user_messages=True)
         )
         events: list[HarnessEvent] = []
 

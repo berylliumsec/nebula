@@ -117,17 +117,19 @@ async def test_pending_lookup_work_is_bounded_by_active_calls(
 
     def capture(conn, cursor, statement, parameters, context, executemany):
         if statement.startswith("SELECT") and "FROM entities" in statement:
-            queries.append(
-                (
-                    statement,
-                    parameters,
-                    cursor.connection.execute(
-                        "EXPLAIN QUERY PLAN " + statement, parameters
-                    ).fetchall(),
+            # The store's async engine wraps aiosqlite; its DBAPI adapter runs
+            # each call on the driver's worker and bypasses these events.
+            connection = conn.connection.dbapi_connection
+            explain = connection.cursor()
+            explain.execute("EXPLAIN QUERY PLAN " + statement, parameters)
+            queries.append((statement, parameters, explain.fetchall()))
+            explain.close()
+            connection.run_async(
+                lambda driver: driver.set_progress_handler(
+                    lambda: steps.append(1) or 0, 100
                 )
             )
-            cursor.connection.set_progress_handler(lambda: steps.append(1) or 0, 100)
-            progress_connections.append(cursor.connection)
+            progress_connections.append(connection)
 
     try:
         baseline_steps = None
@@ -158,7 +160,7 @@ async def test_pending_lookup_work_is_bounded_by_active_calls(
                 ] == [f"active-{index}" for index in range(4)]
             finally:
                 for connection in progress_connections:
-                    connection.set_progress_handler(None, 0)
+                    await connection.driver_connection.set_progress_handler(None, 0)
                 progress_connections.clear()
                 event.remove(
                     store.database.engine.sync_engine, "before_cursor_execute", capture
