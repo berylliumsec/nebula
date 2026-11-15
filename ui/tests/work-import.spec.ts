@@ -1,16 +1,20 @@
 import AxeBuilder from "@axe-core/playwright";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, request as playwrightRequest, test } from "@playwright/test";
+import { coreMutation, removeCoreData, waitForCoreApi } from "./fixtures/core-api";
+import { removeCoreSockets, stopCoreWorkers } from "./fixtures/core-harness";
+import { withOwnedCleanup } from "./fixtures/owned-cleanup";
 
 interface TestCore {
   process: ChildProcessWithoutNullStreams;
   dataDir: string;
   origin: string;
   token: string;
+  output?: () => string;
 }
 
 function localNetworkIpv4(): string {
@@ -34,7 +38,7 @@ async function startCore(): Promise<TestCore> {
   const binary = candidates.find(existsSync);
   if (!binary) throw new Error("No Nebula Core test binary is available.");
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-work-import-core-"));
-  const token = "work-import-test-token";
+  const token = "work-import-test-administration-token";
   const child = spawn(binary, [
     "serve", "--host", "0.0.0.0", "--port", "0", "--token", token,
     "--allow-remote", "--allow-insecure-device-pairing", "--allow-browser-diagnostics",
@@ -44,8 +48,9 @@ async function startCore(): Promise<TestCore> {
     env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) },
   });
   let output = "";
+  const startupTimeout = Math.max(30_000, Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS) || 0);
   const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), startupTimeout);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const port = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
@@ -60,8 +65,10 @@ async function startCore(): Promise<TestCore> {
       clearTimeout(timeout);
       reject(new Error(`Real Core exited with ${code}.\n${output}`));
     });
-  });
-  return { process: child, dataDir, origin, token };
+  }).catch(error => withOwnedCleanup(async () => { throw error; }, [
+    {name: "failed Work fixture Core", dispose: () => stopCore({process: child, dataDir, origin: "", token, output: () => output})},
+  ]));
+  return { process: child, dataDir, origin, token, output: () => output };
 }
 
 async function stopCore(core: TestCore): Promise<void> {
@@ -73,7 +80,20 @@ async function stopCore(core: TestCore): Promise<void> {
     ]);
     if (core.process.exitCode === null) core.process.kill("SIGKILL");
   }
-  await rm(core.dataDir, { recursive: true, force: true });
+  await stopCoreWorkers(core.dataDir);
+  await removeCoreSockets(core.dataDir);
+  const evidence = process.env.NEBULA_TEST_CORE_EVIDENCE_DIR;
+  if (evidence) {
+    const directory = path.join(evidence, path.basename(core.dataDir));
+    await mkdir(directory, {recursive: true});
+    const scrub = (value: string) => value.replaceAll(core.token, "<synthetic-token>");
+    await writeFile(path.join(directory, "fixture-output.log"), scrub(core.output?.() ?? ""));
+    const logs = path.join(core.dataDir, "logs");
+    for (const name of await readdir(logs).catch(() => [] as string[])) {
+      if (name.endsWith(".log")) await writeFile(path.join(directory, name), scrub(await readFile(path.join(logs, name), "utf8")));
+    }
+  }
+  await removeCoreData(core.dataDir);
 }
 
 test("work hub import finds a project and its saved task after refresh", async ({ page }, testInfo) => {
@@ -81,10 +101,11 @@ test("work hub import finds a project and its saved task after refresh", async (
   const core = await startCore();
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   try {
+    await waitForCoreApi(api);
     const projects = Array.from({ length: 80 }, (_, index) => ({
       external_id: `sample-${index + 1}`, name: `Sample project ${index + 1}`,
     }));
-    const first = await api.post("work/import", { data: { source: "sample-tracker", projects: projects.slice(0, 50) } });
+    const first = await coreMutation(api, "post", "work/import", { source: "sample-tracker", projects: projects.slice(0, 50) });
     expect(first.ok(), await first.text()).toBe(true);
     const lastBatch = { source: "sample-tracker", projects: [
       ...projects.slice(50),
@@ -93,7 +114,7 @@ test("work hub import finds a project and its saved task after refresh", async (
         update: { summary: "Draft is waiting for approval", blocker: "Approval pending", next_step: "Ask the reviewer" },
       }] },
     ] };
-    const imported = await api.post("work/import", { data: lastBatch });
+    const imported = await coreMutation(api, "post", "work/import", lastBatch);
     expect(imported.ok(), await imported.text()).toBe(true);
     const importedResult = await imported.json() as { projects: Array<{ engagement_id: string; items: Array<{ item_id: string }> }> };
     const parentId = (await first.json() as { projects: Array<{ engagement_id: string }> }).projects[0].engagement_id;
@@ -117,9 +138,9 @@ test("work hub import finds a project and its saved task after refresh", async (
       "asyncio.run(_seed())"
     ].join("\n"), core.dataDir, parentId], { cwd: repository, env: { ...process.env, PYTHONPATH: path.join(repository, "src") }, encoding: "utf8" });
     expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0);
-    const linked = await api.patch("work/projects", { data: { project_ids: [importedResult.projects.at(-1)!.engagement_id], parent_engagement_id: parentId } });
+    const linked = await coreMutation(api, "patch", "work/projects", { project_ids: [importedResult.projects.at(-1)!.engagement_id], parent_engagement_id: parentId });
     expect(linked.ok(), await linked.text()).toBe(true);
-    const repeated = await api.post("work/import", { data: lastBatch });
+    const repeated = await coreMutation(api, "post", "work/import", lastBatch);
     expect(repeated.ok(), await repeated.text()).toBe(true);
     expect(await repeated.json()).toEqual(importedResult);
 
@@ -143,14 +164,31 @@ test("work hub import finds a project and its saved task after refresh", async (
     const trackDialog = page.getByRole("dialog", { name: "Track conversation work" });
     await expect(trackDialog).toContainText("Sample project 1 · Sample research handoff");
     await trackDialog.getByRole("button", { name: "Create and link" }).click();
-    await expect(trackDialog).toBeHidden();
-    const tracked = await (await api.get(`engagements/${parentId}/work`)).json() as Array<{ id: string; assignee_session_id: string | null; source_id: string | null }>;
-    const trackedItem = tracked.find((item) => item.assignee_session_id === "sample-active-session");
-    expect(trackedItem?.source_id).toBe("sample-active-session");
+    await expect(trackDialog).toBeHidden({timeout: 20_000});
+    type SavedItem = { id: string; title: string; status: string; assignee_session_id: string | null; source_id: string | null };
+    const tracked = await (await api.get(`engagements/${parentId}/work`)).json() as SavedItem[];
+    const firstItem = tracked.find((item) => item.assignee_session_id === "sample-active-session");
+    expect(firstItem?.source_id).toBe("sample-active-session");
+    // Finishing the tracked item and tracking the conversation again creates a new open item instead of returning the Done one.
+    const finished = await coreMutation(api, "post", `engagements/${parentId}/work/${firstItem!.id}/updates`, { summary: "Handoff finished", status: "done" });
+    expect(finished.ok(), await finished.text()).toBe(true);
+    await expect.poll(async () => (await (await api.get(`engagements/${parentId}/work/${firstItem!.id}`)).json() as SavedItem).status).toBe("done");
+    await page.reload();
+    await page.getByRole("button", { name: "Track work" }).click();
+    const trackTitle = trackDialog.getByRole("textbox", { name: "Title" });
+    await trackTitle.fill("Second research handoff");
+    // fill() leaves the replaced text selected, which opens the selected-text toolbar over the dialog; a typing operator's caret closes it.
+    await trackTitle.press("End");
+    await trackDialog.getByRole("button", { name: "Create and link" }).click();
+    await expect(trackDialog).toBeHidden({timeout: 20_000});
+    const retracked = await (await api.get(`engagements/${parentId}/work`)).json() as SavedItem[];
+    const sessionItems = retracked.filter((item) => item.assignee_session_id === "sample-active-session");
+    expect(sessionItems.map((item) => [item.title, item.status]).sort()).toEqual([["Sample research handoff", "done"], ["Second research handoff", "in_progress"]]);
+    const trackedItem = sessionItems.find((item) => item.status !== "done");
     await page.reload();
     await page.getByRole("button", { name: "1 Working now" }).click();
     const workingDetails = page.getByRole("region", { name: "Working now details" });
-    await expect(workingDetails).toContainText("Sample project 1 · Working · Sample research handoff");
+    await expect(workingDetails).toContainText("Sample project 1 · Working · Second research handoff");
     await expect(workingDetails.getByRole("link", { name: "Work item" })).toHaveAttribute("href", new RegExp(`/projects/${parentId}/work/${trackedItem!.id}$`));
     await expect(workingDetails.getByRole("link", { name: /Sample research handoff/ })).toHaveAttribute("href", new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
     await workingDetails.getByRole("link", { name: /Sample research handoff/ }).click();
@@ -162,7 +200,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Show subprojects of Sample project 1" })).toBeVisible();
     await page.getByRole("searchbox", { name: "Search projects" }).fill("Imported plan");
-    await expect(page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ })).toBeVisible();
+    await expect(page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ }).first()).toBeVisible();
     await page.locator(".work-project-list .work-project-primary").filter({ hasText: "Imported plan" }).click();
     await expect(page.getByRole("heading", { name: "Imported plan", exact: true })).toBeVisible();
     await page.goBack();
@@ -182,7 +220,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     const createDialog = page.getByRole("dialog", { name: "New work item" });
     await createDialog.getByRole("textbox", { name: "Title" }).fill("Prepare follow-up");
     await createDialog.getByRole("button", { name: "Create item" }).click();
-    await expect(page.getByRole("heading", { name: "Prepare follow-up" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Prepare follow-up" })).toBeVisible({timeout: 20_000});
     await page.locator(".work-card").filter({ hasText: "Review the release plan" }).click();
     await expect(page.getByRole("heading", { name: "Review the release plan" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Draft is waiting for approval");
@@ -192,7 +230,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Approval pending");
     const selected = importedResult.projects.at(-1)!;
     await expect(page.locator(".work-live-state")).toHaveText("Live");
-    const liveUpdate = await api.post(`engagements/${selected.engagement_id}/work/${selected.items[0].item_id}/updates`, { data: { summary: "Reviewer approved the plan", status: "done" } });
+    const liveUpdate = await coreMutation(api, "post", `engagements/${selected.engagement_id}/work/${selected.items[0].item_id}/updates`, { summary: "Reviewer approved the plan", status: "done" });
     expect(liveUpdate.ok(), await liveUpdate.text()).toBe(true);
     await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Reviewer approved the plan");
     await expect(page.locator(".work-timeline")).toContainText("Draft is waiting for approval");
