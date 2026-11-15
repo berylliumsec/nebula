@@ -1183,6 +1183,7 @@ def test_explicit_startup_chat_overrides_remembered_selection(
     tmp_path, remembered, project
 ):
     requested = {**SESSION, "id": "requested-chat", "title": "Requested"}
+    leases: list[tuple[str, str]] = []
 
     def handler(request):
         path = request.url.path
@@ -1202,6 +1203,9 @@ def test_explicit_startup_chat_overrides_remembered_selection(
             return response({"busy": False, "detail": "Ready"})
         if path.endswith("/catch-up"):
             return response({"initialized": True, "revision": 1, "items": []})
+        if path.startswith("/api/v1/engagements/project-a/view-leases/"):
+            leases.append((request.method, path))
+            return response({"renew_after_seconds": 30}) if request.method == "PUT" else httpx.Response(204)
         pytest.fail(f"Unexpected startup request: {path}")
 
     async def run():
@@ -1223,6 +1227,10 @@ def test_explicit_startup_chat_overrides_remembered_selection(
         await shell.run(project=project, chat="Requested")
         assert shell.current().session_id == "requested-chat"
         assert shell.settings.entry["selection"]["session_id"] == "requested-chat"
+        # The open project held one view lease, released when the shell exited.
+        assert leases and leases[-1][0] == "DELETE"
+        assert {path for _method, path in leases} == {leases[-1][1]}
+        assert shell.view_lease.task is None
 
     asyncio.run(run())
 

@@ -151,6 +151,31 @@ class ProjectBoard:
             raise ClientError("Core did not confirm the link. Press R to reload.")
         return observed
 
+    async def conversation_title(self, session: dict[str, Any]) -> str:
+        """Core's current title for the conversation.
+
+        The terminal's copy of a conversation is taken when it opens or when
+        its first turn is accepted, before Core names it, so it can still say
+        "Conversation". Like the GUI's Track dialog, offer the name Core holds
+        now; the local copy is only the fallback when Core cannot be read.
+        """
+        fallback = str(session.get("title") or "Conversation")
+        try:
+            current = await self.api.request(
+                "GET", f"chat-sessions/{key(session['id'])}"
+            )
+        except (ClientError, httpx.HTTPError, ValueError):
+            return fallback
+        if (
+            isinstance(current, dict)
+            and current.get("id") == session["id"]
+            and current.get("engagement_id") == self.project_id
+            and isinstance(current.get("title"), str)
+            and current["title"].strip()
+        ):
+            return current["title"]
+        return fallback
+
     async def track(self, session_id: str, title: str) -> dict[str, Any]:
         """The GUI's Create and link for a conversation.
 
@@ -259,7 +284,7 @@ async def run_action(
         title = (
             await prompter.ask(
                 "Work item title for this conversation",
-                default=_label(session.get("title") or "Conversation"),
+                default=_label(await service.conversation_title(session)),
             )
         ).strip()
         if not title:

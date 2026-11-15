@@ -38,6 +38,9 @@ class WorkCore:
         self.requests = {}
         # Makes every new item come back Done, to check the bounded chain.
         self.finished = False
+        # Conversations as Core holds them now (Core names a chat after its
+        # first turn is accepted).
+        self.sessions = {"chat-a": dict(SESSION)}
 
     @staticmethod
     def item(identifier, title, status, **changes):
@@ -53,6 +56,12 @@ class WorkCore:
         }
 
     def __call__(self, request):
+        if request.url.path.startswith("/api/v1/chat-sessions/"):
+            assert request.method == "GET"
+            session = self.sessions.get(request.url.path.rsplit("/", 1)[1])
+            if session is None:
+                return httpx.Response(404, json={"detail": "Not found"})
+            return httpx.Response(200, json=session)
         path = request.url.path.removeprefix("/api/v1/engagements/project-a")
         body = json.loads(request.content) if request.content else None
         if request.method != "GET":
@@ -317,6 +326,45 @@ def test_track_creates_and_links_then_shows_cores_existing_done_item(tmp_path):
             f"track:chat-a:after:{again}",
         ]
         assert third not in {selected, again}
+        await api.close()
+
+    run(go())
+
+
+def test_track_offers_cores_current_title_not_the_terminals_placeholder(tmp_path):
+    core = WorkCore()
+    core.sessions["chat-a"]["title"] = "Staging Load Chat"
+    # The terminal's copy, made when the first turn was accepted.
+    local = {**SESSION, "title": "Conversation"}
+
+    async def go():
+        _, api = _api(tmp_path, core)
+        service = ProjectBoard(api, "project-a")
+        prompter = Prompter(None)
+        message, selected = await run_action(
+            "track", service, prompter, item=None, session=local
+        )
+        assert prompter.labels[0][1] == "Staging Load Chat"
+        assert core.items[selected]["title"] == "Staging Load Chat"
+        assert core.writes[-1][2]["request_id"] == "track:chat-a"
+        assert message == (
+            "Tracking this conversation as Staging Load Chat (In Progress)."
+        )
+
+        # Core cannot be read (or answers for another project): keep the
+        # terminal's title rather than failing the action.
+        core.sessions.clear()
+        prompter = Prompter("Kept")
+        await run_action("track", service, prompter, item=None, session=local)
+        assert prompter.labels[0][1] == "Conversation"
+        core.sessions["chat-a"] = {
+            **SESSION,
+            "title": "Elsewhere",
+            "engagement_id": "project-b",
+        }
+        prompter = Prompter("Kept")
+        await run_action("track", service, prompter, item=None, session=local)
+        assert prompter.labels[0][1] == "Conversation"
         await api.close()
 
     run(go())

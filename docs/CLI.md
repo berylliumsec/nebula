@@ -101,7 +101,9 @@ on-demand view, not a live activity feed. The board also takes the web Work
 page's actions, each read back from Core: N creates a Ready item (title and
 optional description); U checks in on the selected item (summary, optional next
 step and blocker, and its status, defaulting to the current one); T tracks the
-current conversation as a new In Progress item linked to it; L links the
+current conversation as a new In Progress item linked to it, offering the
+conversation's current title from Core (including the name Core gives a new
+chat after its first turn) as the default; L links the
 selected item to the current conversation (refused when another conversation
 owns it); A turns agent Work tools on or off. Prompts open inside the board;
 Enter saves and Escape cancels without a write. The status line reports Core's
@@ -360,6 +362,11 @@ lapses. A view lease never overrides the memory budget: while Core cannot place
 the worker, the page shows "Waiting to start this project" with Core's reason.
 Clients hold a lease with `PUT /api/v1/engagements/{project}/view-leases/{lease_id}`
 (optional `ttl_seconds`, 30–300) and end it with `DELETE` on the same path.
+The terminal Assistant (`nebula-chat`) holds the same lease while it shows a
+project, in a saved conversation, a new conversation or Butler: it asks for 90
+seconds, renews about every 30, retries a failed renewal after 10 seconds (so a
+Core restart or reconnect renews or recreates the same lease), moves the lease
+when you open another project, and releases it when you switch Core or quit.
 
 Core prints its host administration token once at startup. Keep it on the host;
 remote chat uses device pairing. `NEBULA_V3_API_TOKEN` can supply the host token

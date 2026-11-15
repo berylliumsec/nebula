@@ -25,6 +25,7 @@ from .transport import (
 )
 from .tui import TuiUI, activity_label, turn_details
 from .ui import COMMANDS, CancelledInput, InterruptedPrompt, TerminalUI
+from .view_lease import ProjectViewLease
 
 
 REASONING_READ_LIMIT = 20
@@ -75,6 +76,14 @@ class Shell:
         self._state_unavailable = False
         self._state_lock = asyncio.Lock()
         self._pending_kinds: set[str] = set()
+        # The open project tells Core it is in use, as the GUI's project views do.
+        self.view_lease = ProjectViewLease(self._lease_notice)
+
+    def _lease_notice(self, message: str) -> None:
+        if isinstance(self.ui, TuiUI):
+            self.ui.activity(message)
+        elif callable(getattr(self.ui, "say", None)):
+            self.ui.say(message)
 
     def _clear_current_draft_text(self) -> None:
         if self.view is not None:
@@ -236,6 +245,7 @@ class Shell:
             raise
         await self.detach()
         await self.stop_selected_state()
+        await self.view_lease.release()
         if self._api is not None and self._api is not candidate:
             await self._api.close()
         self.settings.core = candidate_settings.core
@@ -461,6 +471,7 @@ class Shell:
             view.parent = parent
         self.views[identity] = view
         self.view = view
+        await self.view_lease.hold(self._api, project["id"])
         self._last_progress = ""
         self._known_busy = False
         self._pending_kinds.clear()
@@ -1771,6 +1782,7 @@ class Shell:
         finally:
             await self.detach()
             await self.stop_selected_state()
+            await self.view_lease.release()
             if self._api:
                 await self._api.close()
 
