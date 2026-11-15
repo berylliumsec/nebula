@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import delete, insert, update
 
 from nebula.v3.database import EntityRow, ProviderToolManifestRow, ProviderTurnQueueRow
+from nebula.v3.domain import utc_now
 from nebula.v3.runtime_checkpoint_generation import (
     assert_checkpoint_generation,
     read_checkpoint_generation,
@@ -41,7 +42,12 @@ async def seed_input(database, family):
         # test also covers writes by older retained execution releases.
         await session.execute(
             insert(EntityRow).values(
-                id="input", kind="chat_turns", engagement_id="project", payload={}
+                id="input",
+                kind="chat_turns",
+                engagement_id="project",
+                payload={},
+                created_at=utc_now(),
+                updated_at=utc_now(),
             )
         )
     if family == "entities":
@@ -63,7 +69,12 @@ async def insert_input(session, family):
     if family == "entities":
         await session.execute(
             insert(EntityRow).values(
-                id="new-input", kind="observations", engagement_id="project", payload={}
+                id="new-input",
+                kind="observations",
+                engagement_id="project",
+                payload={},
+                created_at=utc_now(),
+                updated_at=utc_now(),
             )
         )
     elif family == "queue":
@@ -218,6 +229,8 @@ async def test_moving_input_invalidates_old_and_new_project(cluster, family):
                     kind="chat_turns",
                     engagement_id="other",
                     payload={},
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
                 )
             )
             # Capture the new project's baseline after its turn is inserted.

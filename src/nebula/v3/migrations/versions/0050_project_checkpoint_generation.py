@@ -99,7 +99,8 @@ def upgrade():
                     BEGIN
                         INSERT INTO project_checkpoint_generations
                             (project_id, generation)
-                        {select_projects}
+                        SELECT project_id, 1 FROM ({select_projects}) AS projects
+                        WHERE project_id IS NOT NULL
                         ON CONFLICT (project_id) DO UPDATE SET generation =
                             project_checkpoint_generations.generation + 1;
                     END"""
