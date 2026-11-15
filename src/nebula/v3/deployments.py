@@ -1523,6 +1523,10 @@ class DeploymentCoordinator:
             return HandoffPhase(row.phase)
 
     async def transfer(self, project_id: str) -> ProjectLease:
+        from .runtime_project_handoff import snapshot_project_checkpoint
+        from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+        scanned, generation = await snapshot_project_checkpoint(self, project_id)
         async with self.coordination._write() as session:
             await self._host(session)
             owner = await session.get(
@@ -1555,6 +1559,7 @@ class DeploymentCoordinator:
             old = ProjectLease(
                 project_id, handoff.source_runtime_id, handoff.source_fencing_token
             )
+            await assert_checkpoint_generation(session, project_id, generation)
             await self.coordination._check(session, old, lock=False)
             now = await self.coordination._clock_ms(session)
             await self.coordination._live_execution(
@@ -1627,12 +1632,7 @@ class DeploymentCoordinator:
                     "project changed after its transferable checkpoint"
                 )
             if handoff.checkpoint.get("format") == "nebula.project-checkpoint/v1":
-                from .runtime_project_handoff import project_sql_checkpoint
-
-                if (
-                    await project_sql_checkpoint(session, project_id)
-                    != handoff.checkpoint
-                ):
+                if scanned != handoff.checkpoint:
                     raise CoordinationConflict(
                         "Project state changed after its handoff checkpoint; verify a fresh boundary"
                     )
@@ -1814,6 +1814,10 @@ class DeploymentCoordinator:
             raise ValueError(
                 "recovery requires a bounded operation and authenticated actor"
             )
+        from .runtime_project_handoff import snapshot_project_checkpoint
+        from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+        scanned, generation = await snapshot_project_checkpoint(self, project_id)
         async with self.coordination._write() as session:
             await self._host(session)
             prior = await session.get(RuntimeRecoveryRow, operation_id)
@@ -1844,6 +1848,7 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "project ownership changed; read fresh recovery state"
                 )
+            await assert_checkpoint_generation(session, project_id, generation)
             now = await self.coordination._clock_ms(session)
             if owner.lease_expires_at_ms > now:
                 raise CoordinationConflict("the project owner is still live")
@@ -1905,12 +1910,10 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "the recovery target must support prepared project restoration"
                 )
-            from .runtime_project_handoff import project_sql_checkpoint
-
             checkpoint = {
                 "format": "nebula.project-recovery/v1",
                 "operation_id": operation_id,
-                "project_state": await project_sql_checkpoint(session, project_id),
+                "project_state": scanned,
             }
             blockers = await self._recovery_blockers(
                 session, project_id, target_runtime_id
@@ -2009,7 +2012,14 @@ class DeploymentCoordinator:
             }
 
     async def prepare_recovery(self, lease: ProjectLease, *, operation_id: str) -> str:
+        from .runtime_project_handoff import snapshot_project_checkpoint
+        from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+        scanned, generation = await snapshot_project_checkpoint(
+            self, lease.project_id, lease=lease
+        )
         async with self.coordination.fenced(lease) as session:
+            await assert_checkpoint_generation(session, lease.project_id, generation)
             row = await session.get(RuntimeRecoveryRow, operation_id)
             if (
                 row is None
@@ -2031,14 +2041,10 @@ class DeploymentCoordinator:
             )
             if blockers:
                 raise CoordinationConflict("; ".join(blockers[:10]))
-            from .runtime_project_handoff import project_sql_checkpoint
-
             row.checkpoint = {
                 "format": "nebula.project-recovery/v1",
                 "operation_id": operation_id,
-                "project_state": await project_sql_checkpoint(
-                    session, lease.project_id
-                ),
+                "project_state": scanned,
             }
             row.phase, row.blockers, row.revision = "prepared", [], row.revision + 1
             row.updated_at_ms = await self.coordination._clock_ms(session)
@@ -2052,7 +2058,14 @@ class DeploymentCoordinator:
     async def verify_recovery(
         self, lease: ProjectLease, *, operation_id: str, restored_checkpoint_digest: str
     ) -> None:
+        from .runtime_project_handoff import snapshot_project_checkpoint
+        from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+        scanned, generation = await snapshot_project_checkpoint(
+            self, lease.project_id, lease=lease
+        )
         async with self.coordination.fenced(lease) as session:
+            await assert_checkpoint_generation(session, lease.project_id, generation)
             row = await session.get(RuntimeRecoveryRow, operation_id)
             if (
                 row is None
@@ -2079,11 +2092,7 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "recovery acquired unresolved effects before verification"
                 )
-            from .runtime_project_handoff import project_sql_checkpoint
-
-            if row.checkpoint["project_state"] != await project_sql_checkpoint(
-                session, lease.project_id
-            ):
+            if row.checkpoint["project_state"] != scanned:
                 raise CoordinationConflict(
                     "project changed before recovery verification"
                 )
@@ -2121,8 +2130,15 @@ class DeploymentCoordinator:
 
     async def relinquish_failed_restoration(self, lease: ProjectLease) -> None:
         """Expire a cleaned pre-activation grant; keep all evidence and its fence."""
+        from .runtime_project_handoff import snapshot_project_checkpoint
+        from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+        scanned, generation = await snapshot_project_checkpoint(
+            self, lease.project_id, lease=lease
+        )
         async with self.coordination._write() as session:
             await self.coordination._check(session, lease, lock=True)
+            await assert_checkpoint_generation(session, lease.project_id, generation)
             handoff = await session.get(ProjectHandoffRow, lease.project_id)
             if (
                 handoff is None
@@ -2132,10 +2148,8 @@ class DeploymentCoordinator:
                 raise CoordinationConflict(
                     "only an unverified restoration may relinquish"
                 )
-            from .runtime_project_handoff import project_sql_checkpoint
-
             expected = handoff.checkpoint.get("project_state", handoff.checkpoint)
-            if expected != await project_sql_checkpoint(session, lease.project_id):
+            if expected != scanned:
                 raise CoordinationConflict(
                     "restoration changed project state; explicit recovery is required"
                 )

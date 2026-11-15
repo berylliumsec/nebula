@@ -122,21 +122,26 @@ async def test_checkpoint_accepts_more_than_old_limit_in_multiple_batches(host):
     count = 20 * CHECKPOINT_BATCH_ROWS + 9
     now = utc_now()
     async with coordinator.database.session() as session:
-        await session.execute(
-            insert(EntityRow),
-            [
-                {
-                    "id": f"synthetic-{index:08d}",
-                    "kind": "observations",
-                    "engagement_id": "one",
-                    "revision": 1,
-                    "payload": {},
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                for index in range(count)
-            ],
-        )
+        # Explicit multi-VALUES statements avoid psycopg executemany issuing
+        # 200,009 individual statements (and generation-trigger updates in a
+        # single transaction). The full inventory and digest proof are unchanged.
+        for start in range(0, count, 500):
+            await session.execute(
+                insert(EntityRow).values(
+                    [
+                        {
+                            "id": f"synthetic-{index:08d}",
+                            "kind": "observations",
+                            "engagement_id": "one",
+                            "revision": 1,
+                            "payload": {},
+                            "created_at": now,
+                            "updated_at": now,
+                        }
+                        for index in range(start, min(start + 500, count))
+                    ]
+                )
+            )
     async with coordinator.database.session() as session:
         checkpoint = await project_sql_checkpoint(session, "one")
         assert checkpoint["entity_count"] == count + 1

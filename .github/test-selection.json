@@ -1,31 +1,25 @@
 {
-  "reviewed_by": "Claude worker-retire implementer; root cause independently validated by a separate Claude subagent (worker-retire/validation.md, causal one-line fixture experiment); an independent diff review is still required before merge",
-  "reason": "Test-only fix. The runtime-continuity acceptance bundles (tests/v3/runtime_continuity_bundle.py) copied a fixed allowlist of features from runtime-compatibility.json and omitted project.idle-retirement/v1, so since a73dd02 Core's idle retirement treated every fixture worker as an older release and never retired it; project-view-lease (runtime-continuity.spec.ts:222) and runtime-pane-recovery (:151) timed out waiting for retirement. The bundle manifest now declares every feature the source declares, as a release build does. Python: the mixed-release idle retirement file, with new tests that the acceptance bundle declares every release feature (fails on 03c704c) and that a worker of that release stays while a view or chat is open and retires once the closed view's grace has run out (fails on 03c704c), plus the existing older-release and quiescence-hold guards. Playwright: the two runtime-continuity journeys this fixes, re-selected after #1110 deselected them, on desktop and Chromium/WebKit 390.",
-  "exclusions": "No product source changes; Core idle-retirement rules (feature gate, open chat, live view lease, command and view grace, quiesce blockers) are unchanged and covered by the existing selected file plus test_project_view_leases.py, which this diff does not touch. Other runtime-continuity journeys use the same bundles but do not start automatic admission with a short grace, or keep an open chat, so retirement does not run in them; the retained-continuity pytest acceptance (test_runtime_continuity_acceptance.py) never starts automatic admission and is excluded as a process-heavy suite unaffected beyond the manifest feature list the worker already accepts. No UI, frontend unit or native changes. Mobile 320/430 and compact profiles are excluded to keep CI narrow; 390 px Chromium/WebKit cover mobile.",
-  "python_browser": false,
-  "python_node": false,
+  "reviewed_by": "Codex; independent causal reviewer and regression author",
+  "reason": "Only checkpoint heartbeat, generation concurrency and v1 digest compatibility on SQLite and PostgreSQL.",
+  "exclusions": "No UI, native, origin, provider or harness adapter changes. All unrelated tests excluded. User prohibits local tests and backups. CI only, Python 3.12.",
   "python_versions": [
     "3.12"
   ],
+  "python_browser": false,
+  "python_node": false,
   "expected_tests": {
-    "python": 29,
+    "python": 48,
     "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_mixed_release_idle_retirement.py"
+    "tests/v3/test_checkpoint_heartbeat.py",
+    "tests/v3/test_runtime_checkpoint_batches.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "project-view-lease/model-desktop",
-    "project-view-lease/model-chromium-390",
-    "project-view-lease/model-webkit-390",
-    "runtime-pane-recovery/model-desktop",
-    "runtime-pane-recovery/model-chromium-390",
-    "runtime-pane-recovery/model-webkit-390"
-  ],
+  "playwright": [],
   "checks": [],
-  "change_digest": "059e6508a0f69a1d1911fb840d3eedc49825fdaf24d26c7df79b814a837d85c4"
+  "change_digest": "cb68b5610b30528812f809a48ad9ee87768bee2ac9923aea827a4dcfac6a9f46"
 }
