@@ -22,7 +22,11 @@ from nebula.v3.runtime_delivery import RuntimeDelivery
 from nebula.v3.runtime_global_api import RuntimeGlobalApi
 from nebula.v3.runtime_routing import RuntimeRouting
 from nebula.v3.runtime_vault import RuntimeVault
-from nebula.v3.runtime_work_observer import SqlWorkObserver, WorkObservationUnavailable
+from nebula.v3.runtime_work_observer import (
+    SqlWorkObserver,
+    WorkObservationUnavailable,
+    WorkSnapshot,
+)
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_runtime_global_reads import reads as reads
 from tests.v3.test_runtime_coordination import location as location
@@ -80,6 +84,7 @@ async def change(frame):
     for _ in range(100):
         value = await frame()
         if "event: change" in value:
+            assert len(value.encode()) <= 124
             return value
     pytest.fail("Work stream did not observe a committed change")
 
@@ -88,6 +93,15 @@ def tune(observer):
     observer.poll_interval = 0.02
     observer.heartbeat_interval = 0.08
     observer.scan_timeout = 1
+
+
+def test_work_cursor_is_stable_and_sensitive_to_both_full_digests():
+    snapshot = WorkSnapshot(work="a" * 64, projects="b" * 64)
+    assert snapshot.cursor == WorkSnapshot(work="a" * 64, projects="b" * 64).cursor
+    assert snapshot.cursor.startswith("v2:")
+    assert len(bytes.fromhex(snapshot.cursor.removeprefix("v2:"))) == 32
+    assert snapshot.cursor != WorkSnapshot(work="c" * 64, projects="b" * 64).cursor
+    assert snapshot.cursor != WorkSnapshot(work="a" * 64, projects="c" * 64).cursor
 
 
 async def test_public_work_stream_auth_ready_heartbeat_and_disconnect_release_capacity(
@@ -102,7 +116,8 @@ async def test_public_work_stream_auth_ready_heartbeat_and_disconnect_release_ca
         assert head["status"] == 200
         assert dict(head["headers"])[b"cache-control"] == b"no-store"
         ready = await frame()
-        assert "event: ready\ndata: {}" in ready and ready.startswith("id: v1:")
+        assert "event: ready\ndata: {}" in ready and ready.startswith("id: v2:")
+        assert len(ready.encode()) <= 124
         assert await frame() == ": keep-alive\n\n"
         async with stream(reads.app) as (busy, _):
             assert busy["status"] == 429
@@ -244,7 +259,7 @@ async def test_work_observation_filters_explicit_project_and_ignores_token_check
         assert '"kind": "work"' in await change(frame)
         await reads.store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE})
         assert '"kind": "work"' in await change(frame)
-        assert "id: v1:" in ready
+        assert "id: v2:" in ready
 
 
 async def test_observer_shares_scan_bounds_subscribers_and_does_no_idle_polling(
