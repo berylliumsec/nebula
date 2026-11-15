@@ -1,15 +1,18 @@
-"""Project note discovery and exact requesting-browser mutation handoffs."""
+"""Project note discovery, Core-saved note edits and confirmed deletion handoffs."""
 
 from __future__ import annotations
 
 from .async_utils import call_async
 
+import hashlib
+import json
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
+from .api_validation import ApiEntityValidator
 from .domain import Asset, Evidence, Observation, RiskClass
 from .relations import ResourceRelationService
-from .storage import NebulaStore
+from .storage import ConflictError, NebulaStore, NotFoundError
 from .read_workers import read_in_worker
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -24,6 +27,19 @@ _FIELDS: dict[str, Any] = {
     "asset_ids": _REFERENCES,
     "evidence_ids": _REFERENCES,
 }
+_REQUEST_ID = {
+    "type": "string",
+    "minLength": 8,
+    "maxLength": 120,
+    "pattern": r"^[A-Za-z0-9_.:-]+$",
+    "description": "Choose one stable request key for this note; reuse it unchanged when retrying. Core derives the note identity.",
+}
+_DELETE_PENDING = (
+    "Not deleted. Deleting a note needs the operator to confirm it in the Butler "
+    "panel of the Nebula web app; terminal and Workbench chats cannot show that "
+    "confirmation. Ask the operator to confirm there or delete it from Project "
+    "Notes, and read the note list before saying it was deleted."
+)
 
 
 def _schema(properties: dict[str, Any], *required: str) -> dict[str, Any]:
@@ -40,6 +56,7 @@ class ButlerNotes:
         self.store = store
         self.project_id = project_id
         self.relations = ResourceRelationService(store)
+        self.validator = ApiEntityValidator(store)
 
     async def _note(self, note_id: str) -> Observation:
         note = await self.store.get(Observation, note_id)
@@ -139,46 +156,135 @@ class ButlerNotes:
                     raise ValueError("note links must belong to the selected project")
         return changes
 
-    async def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _fields(note: Observation, fields: dict[str, Any]) -> dict[str, Any]:
         return {
-            "state": "pending_browser_apply",
+            field: sorted(getattr(note, field))
+            if field in ("asset_ids", "evidence_ids")
+            else getattr(note, field)
+            for field in fields
+        }
+
+    async def _receipt(
+        self,
+        saved: Observation,
+        fields: dict[str, Any],
+        *,
+        operation: str,
+        replayed: bool = False,
+    ) -> dict[str, Any]:
+        observed = await self._note(saved.id)
+        if observed.revision < saved.revision or self._fields(
+            observed, fields
+        ) != self._fields(saved, fields):
+            raise ValueError(
+                "Core wrote the note but its current fields differ; inspect it before retrying"
+            )
+        return {
+            "state": "core_records_saved",
+            "read_back": True,
+            "replayed": replayed,
+            "operation": operation,
+            "result": {
+                **self._summary(observed),
+                "asset_ids": observed.asset_ids,
+                "evidence_ids": observed.evidence_ids,
+            },
+            "message": (
+                f"Core {operation} note \u201c{observed.title}\u201d at revision "
+                f"{observed.revision} and read its saved fields back."
+            ),
             "client_action": {
-                "kind": "note_create",
+                "kind": "note_saved",
                 "project_id": self.project_id,
-                "note_id": str(uuid4()),
-                "body": "",
-                "asset_ids": [],
-                "evidence_ids": [],
-                **(await self._changes(arguments)),
+                "note_id": observed.id,
+                "title": observed.title,
+                "revision": observed.revision,
+                "operation": operation,
             },
         }
 
-    async def change(
-        self, arguments: dict[str, Any], *, delete: bool = False
-    ) -> dict[str, Any]:
+    async def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        values = await self._changes(arguments)
+        note = Observation(
+            id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"nebula:butler:{self.project_id}:notes:{arguments['request_id']}",
+                )
+            ),
+            engagement_id=self.project_id,
+            observation_type="note",
+            title=values["title"],
+            body=values.get("body", ""),
+            asset_ids=values.get("asset_ids", []),
+            evidence_ids=values.get("evidence_ids", []),
+            source="operator-note",
+        )
+        fields = self._fields(note, _FIELDS)
+        digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+        note.metadata = {"butler_create_digest": digest}
+
+        async def replay() -> dict[str, Any]:
+            current = await self._note(note.id)
+            if current.metadata.get("butler_create_digest") != digest:
+                raise ValueError(
+                    "this request key already names different note content; inspect it before retrying"
+                )
+            return await self._receipt(
+                current, fields, operation="created", replayed=True
+            )
+
+        try:
+            await self.store.get(Observation, note.id)
+        except NotFoundError:
+            # diagnostic-expected: the first call has no note at its derived identity.
+            pass
+        else:
+            return await replay()
+        (await self.validator.validate_create(note))
+        try:
+            saved = await self.relations.create_legacy_entity(note)
+        except ConflictError:
+            # diagnostic-expected: a concurrent retry may have created the same derived identity.
+            return await replay()
+        assert isinstance(saved, Observation)
+        return await self._receipt(saved, fields, operation="created")
+
+    async def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
         note = await self._note(arguments["note_id"])
         if note.revision != arguments["expected_revision"]:
             raise ValueError("note changed; read its current revision")
-        changes = {} if delete else (await self._changes(arguments))
-        if not delete and not changes:
+        changes = await self._changes(arguments)
+        if not changes:
             raise ValueError("provide a note field to change")
+        candidate = Observation.model_validate(
+            {**note.model_dump(mode="python"), **changes}
+        )
+        (await self.validator.validate_update(note, candidate))
+        saved = await self.relations.replace_legacy_entity(
+            note, candidate, expected_revision=note.revision
+        )
+        assert isinstance(saved, Observation)
+        return await self._receipt(saved, changes, operation="updated")
+
+    async def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        note = await self._note(arguments["note_id"])
+        if note.revision != arguments["expected_revision"]:
+            raise ValueError("note changed; read its current revision")
         return {
             "state": "pending_browser_apply",
+            "deleted": False,
+            "operator_confirmation_required": True,
+            "message": _DELETE_PENDING,
             "client_action": {
-                "kind": "note_delete" if delete else "note_update",
+                "kind": "note_delete",
                 "project_id": self.project_id,
                 "note_id": note.id,
                 "expected_revision": note.revision,
                 "name": note.title,
-                **changes,
             },
         }
-
-    async def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await self.change(arguments)
-
-    async def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await self.change(arguments, delete=True)
 
     def actions(self) -> list[AnalysisTool]:
         current = {"note_id": _ID, "expected_revision": _REVISION}
@@ -212,21 +318,21 @@ class ButlerNotes:
             ),
             (
                 "nebula.notes.create",
-                "Ask the requesting browser to create a project note and verify its exact saved ID, fields and links. Notes record claims without verifying them.",
-                _schema(_FIELDS, "title"),
+                "Create one selected-project note in Core with same-project links and exact readback. Reuse request_id for a retry; a changed note needs a new key. Say the note is saved only when the result has read_back true. Notes record claims without verifying them.",
+                _schema({**_FIELDS, "request_id": _REQUEST_ID}, "title", "request_id"),
                 False,
                 self.create,
             ),
             (
                 "nebula.notes.update",
-                "Ask the requesting browser to edit only supplied note fields at its current revision and read Core back.",
+                "Edit only supplied note fields in Core at the observed revision, keeping other note metadata, and read the saved note back. Say it is saved only when the result has read_back true.",
                 _schema({**_FIELDS, **current}, "note_id", "expected_revision"),
                 False,
                 self.update,
             ),
             (
                 "nebula.notes.delete",
-                "Ask the requesting browser to confirm deletion of an exact project note at its current revision. Core refuses report-linked notes; source evidence is retained.",
+                "Ask the operator to confirm deleting an exact project note at its current revision in the Nebula web app's Butler panel. This call deletes nothing; terminal and Workbench chats cannot confirm it, so report the returned message and never say the note was deleted until a later read shows it absent. Core refuses report-linked notes; source evidence is retained.",
                 _schema(current, "note_id", "expected_revision"),
                 False,
                 self.delete,
@@ -234,6 +340,7 @@ class ButlerNotes:
         )
         result = []
         for name, description, schema, read, handler in operations:
+            idempotent = read or name == "nebula.notes.create"
 
             async def run(
                 arguments: dict[str, Any],
@@ -256,7 +363,7 @@ class ButlerNotes:
                         if read
                         else RiskClass.WORKSPACE_WRITE,
                         idempotency=IdempotencyBehavior.SAFE
-                        if read
+                        if idempotent
                         else IdempotencyBehavior.NON_IDEMPOTENT,
                     ),
                     run,

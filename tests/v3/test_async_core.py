@@ -207,9 +207,17 @@ async def test_settings_assistant_actions_await_reads_and_preserve_pending_apply
                     "title": "Proposed title",
                 },
             )
-            assert proposed.output["state"] == "pending_browser_apply"
+            assert proposed.output["state"] == "core_records_saved"
             assert proposed.output["client_action"]["note_id"] == note.id
-            assert (await store.get(Observation, note.id)).title == "Saved note"
+            saved = await store.get(Observation, note.id)
+            assert saved.title == "Proposed title"
+            pending = await invoke(
+                "nebula.notes.delete",
+                {"note_id": note.id, "expected_revision": saved.revision},
+            )
+            assert pending.output["state"] == "pending_browser_apply"
+            assert pending.output["deleted"] is False
+            assert (await store.get(Observation, note.id)).title == "Proposed title"
         finally:
             await store.event_history.close()
             await store.database.dispose()

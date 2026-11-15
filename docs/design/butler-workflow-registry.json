@@ -1334,8 +1334,6 @@
         "ui/src/state/WorkspaceContext.tsx::listAssets",
         "ui/src/state/WorkspaceContext.tsx::listEvidence",
         "ui/src/components/butlerNoteAction.ts::getObservation",
-        "ui/src/components/butlerNoteAction.ts::createButlerNote",
-        "ui/src/components/butlerNoteAction.ts::updateObservation",
         "ui/src/components/butlerNoteAction.ts::deleteObservation",
         "ui/src/components/butlerNoteAction.ts::observationDependencies",
         "ui/src/components/AIWritingDialog.tsx::transformWriting"
@@ -1346,7 +1344,7 @@
         "read": "nebula.notes.detail",
         "change": "nebula.notes.create, nebula.notes.update and nebula.notes.delete"
       },
-      "authority": "Interactive selected-project browser receipt; browser-owned create UUID; exact current revision and title for edits or deletion; destructive browser confirmation; Core dependencies remain authoritative",
+      "authority": "Interactive selected-project Butler; Core-written create (UUIDv5 from request_id) and revision-checked edit with read-back; exact current revision and title plus destructive browser confirmation for deletion; Core dependencies remain authoritative",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler creates edits and deletes project Notes on production LAN Core",
       "result": "Saved linked note fields appear in Project Notes and survive reload; report dependency and cancellation retain the note; confirmed deletion reads exact absence without removing its evidence or assets",
       "status": "supported"
@@ -5103,10 +5101,6 @@
       "count": 1
     },
     {
-      "key": "ui/src/components/butlerNoteAction.ts::createButlerNote",
-      "count": 1
-    },
-    {
       "key": "ui/src/components/butlerNoteAction.ts::deleteObservation",
       "count": 1
     },
@@ -5116,10 +5110,6 @@
     },
     {
       "key": "ui/src/components/butlerNoteAction.ts::observationDependencies",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/butlerNoteAction.ts::updateObservation",
       "count": 1
     },
     {

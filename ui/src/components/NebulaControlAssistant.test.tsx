@@ -1504,6 +1504,47 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByText("Core confirmed the record change and refreshed evidence.")).toBeVisible();
   });
 
+  it("refreshes Notes for a Core-saved Butler note without writing it again", async () => {
+    const user = userEvent.setup();
+    const retryResource = vi.fn().mockResolvedValue(undefined);
+    const noteId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const createButlerNote = vi.fn();
+    const updateObservation = vi.fn();
+    let calls = 0;
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      const steps = [
+        {operation: "nebula.notes.create", title: "Saved note", revision: 1, kind: "created"},
+        {operation: "nebula.notes.update", title: "Revised note", revision: 2, kind: "updated"},
+      ] as const;
+      const step = steps[calls++] ?? steps[1];
+      onEvent({type: "tool_completed", turnId: "turn", toolCallId: `note-${calls}`, capability: "nebula.capabilities.change",
+        status: "complete", summary: "Core saved the note", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: step.operation, butler_project_id: "project", state: "core_records_saved", read_back: true,
+          client_action: {kind: "note_saved", project_id: "project", note_id: noteId, title: step.title, revision: step.revision, operation: step.kind}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model", message: {role: "assistant", content: `Saved fixture note ${calls}.`}};
+    });
+    vi.mocked(useWorkspace).mockReturnValue({api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler),
+      getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, createButlerNote, updateObservation}, retryResource,
+      coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true, permitsSensitiveData: true,
+        models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    const composer = screen.getByRole("textbox", {name: "Ask Butler a question"});
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "Create the synthetic project note{enter}");
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("notes"));
+    expect(await screen.findByText("Created note “Saved note” at Core revision 1. Core confirmed its saved fields and links.")).toBeVisible();
+    retryResource.mockRejectedValueOnce(new Error("Synthetic list outage"));
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "Revise the synthetic project note{enter}");
+    expect(await screen.findByText("Updated note “Revised note” at Core revision 2. Core confirmed its saved fields and links. The Notes list could not refresh; use Retry Notes.")).toBeVisible();
+    expect(retryResource).toHaveBeenCalledTimes(2);
+    expect(createButlerNote).not.toHaveBeenCalled();
+    expect(updateObservation).not.toHaveBeenCalled();
+  });
+
   it("lets the requesting browser upload binary workspace bytes after a scoped Butler handoff", async () => {
     const user = userEvent.setup();
     const {sha256Hex} = await import("../sha256");

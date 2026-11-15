@@ -1783,7 +1783,21 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setView("chat");
       return "Opened write-only credential entry on this browser. No secret has been sent to Butler or saved yet.";
     }
-    if (action.kind === "note_create" || action.kind === "note_update" || action.kind === "note_delete") {
+    if (action.kind === "note_saved") {
+      // Core already wrote and read back this note; only refresh the Notes list here.
+      const saved = `${action.operation === "created" ? "Created" : "Updated"} note “${action.title}” at Core revision ${action.revision}. Core confirmed its saved fields and links.`;
+      if (!api || coreState !== "online" || engagement?.id !== action.projectId || activeImageProject.current !== action.projectId) {
+        return `${saved} Select its project to see it in Notes.`;
+      }
+      try {
+        await retryResource("notes");
+      } catch {
+        // diagnostic-expected: WorkspaceContext records the failed Notes read and exposes Retry Notes.
+        return `${saved} The Notes list could not refresh; use Retry Notes.`;
+      }
+      return saved;
+    }
+    if (action.kind === "note_delete") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {
         throw new Error("Reconnect to Core and select the original project before changing its note.");
       }

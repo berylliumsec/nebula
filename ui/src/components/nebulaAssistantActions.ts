@@ -6,7 +6,6 @@ import { assistantDestination, type AssistantDestination } from "../assistantDes
 type Runtime = { kind: "provider" | "harness"; id: string; model: string };
 export type ProjectMode = "docker" | "host";
 export type ProjectScopeMode = "bounded" | "all_destinations" | "allow_all";
-type NoteChanges = {title?: string; body?: string; assetIds?: string[]; evidenceIds?: string[]};
 export type SettingClientAction =
   | { kind: "artifact_download"; projectId: string; artifactId: string; expectedRevision: number; ownerKind: "tool_call" | "execution"; ownerId: string; sha256: string; size: number; filename: string }
   | { kind: "execution_refresh"; projectId: string; executionId: string }
@@ -14,8 +13,7 @@ export type SettingClientAction =
   | { kind: "bookmarks_refresh"; projectId: string; sessionId: string }
   | { kind: "guides_refresh"; projectId: string }
   | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" | "evidence" }
-  | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
-  | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
+  | { kind: "note_saved"; projectId: string; noteId: string; title: string; revision: number; operation: "created" | "updated" }
   | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
   | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" | "runner-profiles" | "ssh-environments" | "operator-profiles" }
   | { kind: "runtime_settings_refresh"; projectId: string; resource: "web-search" | "setup" | "automation-runtime" }
@@ -170,6 +168,15 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     return undefined;
   }
   if (receipt.state === "core_records_saved") {
+    // Core wrote and read back the note itself; the browser only refreshes Notes.
+    const noteOperation = operation === "nebula.notes.create" ? "created" : operation === "nebula.notes.update" ? "updated" : undefined;
+    if (noteOperation && projectAction && typeof projectId === "string" && value.project_id === projectId
+        && receipt.read_back === true && value.kind === "note_saved" && value.operation === noteOperation
+        && validNoteReferences([value.note_id]) && typeof value.title === "string" && value.title.trim().length > 0
+        && value.title.length <= 500 && Number.isInteger(value.revision) && Number(value.revision) >= 1) {
+      return {kind: "note_saved", projectId, noteId: value.note_id as string, title: value.title,
+        revision: Number(value.revision), operation: noteOperation};
+    }
     const resource = value.resource;
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && receipt.read_back === true && value.kind === "records_refresh"
@@ -228,29 +235,10 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     }
     const noteId = typeof value.note_id === "string" && value.note_id.length > 0 && value.note_id.length <= 200
       && !/[\x00-\x1f]/.test(value.note_id) ? value.note_id : undefined;
-    const validNoteFields = (value.title === undefined || (typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500))
-      && (value.body === undefined || (typeof value.body === "string" && value.body.length <= 100000))
-      && (value.asset_ids === undefined || validNoteReferences(value.asset_ids))
-      && (value.evidence_ids === undefined || validNoteReferences(value.evidence_ids));
-    if (operation === "nebula.notes.create" && value.kind === "note_create" && noteId && uuidPattern.test(noteId)
-        && validNoteFields && typeof value.title === "string" && typeof value.body === "string"
-        && validNoteReferences(value.asset_ids) && validNoteReferences(value.evidence_ids)) {
-      return {kind: "note_create", projectId, noteId, title: value.title, body: value.body,
-        assetIds: value.asset_ids, evidenceIds: value.evidence_ids};
-    }
-    if (noteId && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+    if (operation === "nebula.notes.delete" && value.kind === "note_delete" && noteId
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
         && typeof value.name === "string" && value.name.length <= 500) {
-      if (operation === "nebula.notes.delete" && value.kind === "note_delete") {
-        return {kind: "note_delete", projectId, noteId, name: value.name, expectedRevision: Number(value.expected_revision)};
-      }
-      if (operation === "nebula.notes.update" && value.kind === "note_update" && validNoteFields
-          && [value.title, value.body, value.asset_ids, value.evidence_ids].some(field => field !== undefined)) {
-        return {kind: "note_update", projectId, noteId, name: value.name, expectedRevision: Number(value.expected_revision),
-          ...(typeof value.title === "string" ? {title: value.title} : {}),
-          ...(typeof value.body === "string" ? {body: value.body} : {}),
-          ...(validNoteReferences(value.asset_ids) ? {assetIds: value.asset_ids} : {}),
-          ...(validNoteReferences(value.evidence_ids) ? {evidenceIds: value.evidence_ids} : {})};
-      }
+      return {kind: "note_delete", projectId, noteId, name: value.name, expectedRevision: Number(value.expected_revision)};
     }
     if (operation === "nebula.sources.add" && value.kind === "source_add"
         && ["file", "url"].includes(String(value.input_kind))) {

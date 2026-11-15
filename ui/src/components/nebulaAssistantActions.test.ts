@@ -295,18 +295,40 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, state: "pending_browser_apply"}}, "project")).toBeUndefined();
   });
-  it("accepts only scoped bounded note changes with exact identity and revisions", () => {
+  it("accepts Core-saved note receipts as a Notes refresh and never as a browser write", () => {
+    const noteId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "note-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Core saved the note", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.notes.update", butler_project_id: "project", state: "core_records_saved", read_back: true,
+        client_action: {kind: "note_saved", project_id: "project", note_id: noteId, title: "Note", revision: 4, operation: "updated"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "note_saved", projectId: "project", noteId, title: "Note", revision: 4, operation: "updated"});
+    const created = {...event, receipt: {...event.receipt, butler_operation: "nebula.notes.create",
+      client_action: {kind: "note_saved", project_id: "project", note_id: noteId, title: "Note", revision: 1, operation: "created"}}};
+    expect(settingClientAction(created, "project")).toEqual({kind: "note_saved", projectId: "project", noteId, title: "Note", revision: 1, operation: "created"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...event.receipt!.client_action as object, operation: "created"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...event.receipt!.client_action as object, revision: 0}}}, "project")).toBeUndefined();
+    // An older browser-apply create or update receipt must not make this browser write the note again.
+    expect(settingClientAction({...created, receipt: {butler_operation: "nebula.notes.create", butler_project_id: "project", state: "pending_browser_apply",
+      client_action: {kind: "note_create", project_id: "project", note_id: noteId, title: "Note", body: "", asset_ids: [], evidence_ids: []}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {butler_operation: "nebula.notes.update", butler_project_id: "project", state: "pending_browser_apply",
+      client_action: {kind: "note_update", project_id: "project", note_id: noteId, name: "Note", expected_revision: 3, body: "Edited"}}}, "project")).toBeUndefined();
+  });
+  it("keeps note deletion as an exact browser-confirmed action", () => {
     const noteId = "b96e898d-207f-4943-846e-c00f4415fc26";
     const event: ChatStreamEvent = {
       type: "tool_completed", turnId: "turn", toolCallId: "note-call", capability: "nebula.capabilities.change",
       status: "complete", summary: "Pending browser", evidenceIds: [], artifacts: [], step: 0,
-      receipt: {butler_operation: "nebula.notes.update", butler_project_id: "project", state: "pending_browser_apply",
-        client_action: {kind: "note_update", project_id: "project", note_id: noteId, name: "Note", expected_revision: 3, body: "Edited"}},
+      receipt: {butler_operation: "nebula.notes.delete", butler_project_id: "project", state: "pending_browser_apply", deleted: false,
+        client_action: {kind: "note_delete", project_id: "project", note_id: noteId, name: "Note", expected_revision: 3}},
     };
-    expect(settingClientAction(event, "project")).toEqual({kind: "note_update", projectId: "project", noteId, name: "Note", expectedRevision: 3, body: "Edited"});
+    expect(settingClientAction(event, "project")).toEqual({kind: "note_delete", projectId: "project", noteId, name: "Note", expectedRevision: 3});
     expect(settingClientAction(event, "other")).toBeUndefined();
-    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "note_update", project_id: "project",
-      note_id: noteId, name: "Note", expected_revision: 0, body: "Unsafe"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "note_delete", project_id: "project",
+      note_id: noteId, name: "Note", expected_revision: 0}}}, "project")).toBeUndefined();
   });
   it("accepts an exact provider credential attachment and rejects unsafe receipt fields", () => {
     const providerId = "b96e898d-207f-4943-846e-c00f4415fc26";

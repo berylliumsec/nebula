@@ -731,6 +731,17 @@ def test_product_search_finds_butler_project_notes_lifecycle(monkeypatch):
     )
 
 
+def test_product_search_says_butler_saves_terminal_notes_in_core(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler save a project note from the terminal or Workbench chat, and delete it there?"
+    )
+    text = " ".join(" ".join(str(item["text"]).split()) for item in matches)
+    assert "creates or edits exact note fields in Core" in text
+    assert "Core reads saved fields and links back" in text
+    assert "Butler reports that the note was not deleted" in text
+
+
 def test_product_search_explains_manual_note_review_and_saved_provenance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
