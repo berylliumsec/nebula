@@ -1,30 +1,29 @@
 {
-  "reviewed_by": "Claude idle-retirement implementer for #1113; both defects independently reproduced on 7495a04 by a separate Claude validation subagent (issues/idle-retirement/validation.md) before the fix; an independent diff review is still required before merge",
-  "reason": "Core fix for #1113. (1) Idle retirement skipped a worker whose release lacks project.idle-retirement/v1 (or whose process/release row is missing) without any record, so resident older-release workers looked leaked; RuntimeAutoAdmission now records one forced info diagnostic runtime.idle_retirement.skipped per worker, project and reason, and still never retires it (#1111 demand rules unchanged). (2) ExecutionWorker._prepare_quiescence, used by idle retirement and host-shutdown quiescence, ignored a follow-up claim in queue._inflight and a Butler action in _dispatching that the handoff checkpoint already refuses; both paths now share ProjectHandoffAgent.dispatch_blockers, read before and again after the SQL quiesce checkpoint, so the worker refuses with quiesce_blockers and the host aborts the retirement hold instead of stranding the claim. Python: new tests/v3/test_idle_retirement_dispatch.py (the queue, Butler and silent-skip cases, all failing on 7495a04), a new handoff test for the Butler blocker, and the handoff, quiescence and mixed-release idle-retirement files whose fake agents gained dispatch_blockers. Playwright: the two real-Core journeys that retire idle project workers through the changed quiesce gate, desktop only.",
-  "exclusions": "No UI, frontend unit, native or settings changes; the diagnostic appears through the existing diagnostics surface and no setting or assistant destination is added. No admission hold row is written for a skipped worker: that row means a wanted worker is starting and would mislead views. Mobile 390/320/430 and compact Playwright profiles are excluded because no layout or client code changes; the retained-continuity process acceptance and handoff journeys are excluded because the handoff checkpoint behavior is unchanged (only refactored into the shared helper, covered by test_project_handoff_agent.py).",
-  "python_browser": false,
-  "python_node": false,
+  "reviewed_by": "Claude; #1096 independent validation (selection toolbar geometry and secret fields)",
+  "reason": "Only the selected-text toolbar placement, its sensitive-field rule, and the storage token, Butler token and pairing link markers. Vitest covers placement geometry, secret-field exclusion, and the storage token through Ask Nebula and drafts; the selection-toolbar Playwright area checks the Add asset dialog buttons stay reachable at 1440, 1024, 393, 320 and WebKit 390, and keeps the Ask Nebula popup journey.",
+  "exclusions": "No Core, API, provider, harness or native change. Python suites excluded (tests/test_playwright_impact.py already fails on main for unrelated specs missing from full_include). Unrelated vitest and Playwright suites excluded.",
   "python_versions": [
     "3.12"
   ],
+  "python_browser": false,
+  "python_node": false,
   "expected_tests": {
-    "python": 81,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 44,
     "native": 0,
-    "playwright": 2
+    "playwright": 10
   },
-  "python": [
-    "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_mixed_release_idle_retirement.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/selection/selectionActions.test.tsx",
+    "ui/src/components/selection/toolbarPlacement.test.ts",
+    "ui/src/components/StorageIntegrations.selection.test.tsx",
+    "ui/src/components/AskNebulaPopup.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "project-view-lease/model-desktop",
-    "runtime-pane-recovery/model-desktop"
+    "area:selection-toolbar"
   ],
   "checks": [],
-  "change_digest": "c66382156fde8fdc0f0500323790e6657f0c65aed4d28555db42c91f2b042711"
+  "change_digest": "bd8e838ec76cf78b4a27da7d0829a0453398dff3286483eb0a6cbc567480119d"
 }
