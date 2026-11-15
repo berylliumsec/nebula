@@ -62,10 +62,17 @@ recorded the report within about five seconds (for example while it starts),
 Core has already saved it and returns `202` with `accepted: true`,
 `queued: true` and null `duplicate` and `current`; the worker records it when it
 runs. A duplicate event ID with changed content returns `409`; older
-observations are accepted as receipts but cannot replace current state. A
-`503` asks the sender to retry the same body, for example while Core updates or
-moves the project's worker, or after a run Core could not finish. Wait at least
-15 seconds for a response. The full [JSON Schema](schemas/storage-event-v1.schema.json)
+observations are accepted as receipts but cannot replace current state. Core
+identifies a report by its validated content, so whitespace or key order does
+not make a retry a new report. A source may have at most 32 reports waiting to
+run, and a project 128 across its sources; beyond that Core saves nothing and
+returns `429`. A `503` asks the sender to retry the same body, for example
+while Core updates or moves the project's worker, or after a run Core could not
+finish. Both carry `Retry-After`; wait that many seconds before retrying. Wait at
+least 15 seconds for a response. Disabling, revoking, rotating or moving a
+source cancels its reports that have not run yet. Core keeps finished reports
+for about ten minutes; a later resend runs again and is deduplicated by event
+ID. The full [JSON Schema](schemas/storage-event-v1.schema.json)
 is versioned with this route and appears in Core's OpenAPI document.
 
 The same body can be sent to `POST /api/v1/storage/test` while a source is

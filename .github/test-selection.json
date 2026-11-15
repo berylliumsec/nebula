@@ -1,37 +1,44 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Storage senders on a supervisor Core (#1112). The API worker authenticates POST /api/v1/storage/test, /events and /inventory with the source token on explicit routes matched on the decoded path, validates every body before saving (422 without echoing input), answers /test itself and saves reports as storage.report/v1 commands for the source's project under a principal bound to the token digest; delivery confines that principal to the report paths and revalidates it on replay; authentication refuses it on operator routes; an interrupted report fails retryably; handoff and API promotion fence pending reports. test_api_worker (sender routes, path spellings, undecodable bodies, capacity, retries, release gate), test_runtime_principal, test_storage_integrations, test_storage_sender and test_storage_report_compatibility hold the regression tests; test_runtime_delivery, test_runtime_coordination, test_runtime_routing, test_deployment_lifecycle, test_chat_acceptance_compatibility, test_authentication_api, test_api_worker_composition, test_runtime_global_api and test_runtime_work_batches cover the delivery, claim, routing, deployment-fence, authentication and response-view paths these changes touch. test_runtime_coordination and test_api_worker_composition also make CI provision PostgreSQL.",
-  "exclusions": "No UI or native code changed. test_runtime_worker_features.py is excluded: it spawns real worker processes; a scratch supervisor Core on PostgreSQL started API and execution workers from a release declaring storage.report/v1 and ran the sender journey instead. Playwright area storage-integrations is excluded: real-core.spec.ts is not run on main and its provider fixture cannot finish turns on this host; the same journey was run with curl against the scratch supervisor Core. All unrelated tests excluded.",
+  "reason": "Storage sender admission and lifecycle hardening (#1092), finishing #1033 on top of the #1112 sender ingress. Reports run on their own report lane so a source's backlog never delays operator work or control commands; per-source and per-project caps of unexecuted reports answer 429 with Retry-After before anything is saved; disabling, revoking, rotating or moving a source cancels its queued reports; finished reports are pruned with their payloads; promotion, handoff, target and recovery fences count only unfinished reports and run inside the save transaction under the project's ownership lock; an interrupted report is requeued a bounded number of times instead of becoming uncertain; a pending storage dispatch is worker demand and holds idle retirement; project deletion removes the project's source-owned storage rows; project-less storage rows route to their source's project. test_storage_report_backlog, test_storage_alert_dispatch, test_storage_report_compatibility, test_api_worker, test_storage_integrations, test_storage_sender and test_runtime_principal hold the regressions; test_runtime_coordination, test_runtime_delivery, test_runtime_routing, test_deployment_lifecycle, test_project_handoff_agent, test_project_handoff_admission, test_execution_worker, test_runtime_context_requirements, test_shutdown_admission, test_admission_retry, test_idle_retirement_dispatch, test_runtime_quiescence, test_runtime_work_batches and test_api_worker_composition cover the lane, claim, delivery, routing, fence, handoff, admission and shutdown paths changed. test_runtime_coordination and test_api_worker_composition also make CI provision PostgreSQL.",
+  "exclusions": "No UI or native code changed. test_project_view_leases.py is excluded: test_lease_tables_are_additive_and_downgrade_to_the_previous_schema fails identically on origin/main (its downgrade target predates 0050). test_runtime_worker_features.py, test_mixed_release_idle_retirement.py and test_shutdown_readmission.py spawn real Cores or workers and are excluded; a scratch supervisor Core on PostgreSQL ran the sender, burst, revoke, Retry and shutdown journey instead. Playwright storage-integrations is excluded (real-core.spec.ts is not run on main). All unrelated tests excluded.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 398,
+    "python": 544,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_storage_report_backlog.py",
+    "tests/v3/test_storage_alert_dispatch.py",
+    "tests/v3/test_storage_report_compatibility.py",
     "tests/v3/test_api_worker.py",
-    "tests/v3/test_runtime_principal.py",
     "tests/v3/test_storage_integrations.py",
     "tests/v3/test_storage_sender.py",
-    "tests/v3/test_storage_report_compatibility.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_runtime_principal.py",
     "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_runtime_delivery.py",
     "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_chat_acceptance_compatibility.py",
-    "tests/v3/test_authentication_api.py",
+    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_project_handoff_admission.py",
+    "tests/v3/test_runtime_context_requirements.py",
+    "tests/v3/test_shutdown_admission.py",
+    "tests/v3/test_admission_retry.py",
+    "tests/v3/test_runtime_work_batches.py",
     "tests/v3/test_api_worker_composition.py",
-    "tests/v3/test_runtime_global_api.py",
-    "tests/v3/test_runtime_work_batches.py"
+    "tests/v3/test_idle_retirement_dispatch.py",
+    "tests/v3/test_runtime_quiescence.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "31bbf836965e708f4607bfd2091ce214afcb90ca38a5531cb61d122f29700d18"
+  "change_digest": "59563eb28fcc35500698ad48eb409bccb41c24948ed7ac09bb31dce0f9860f12"
 }
