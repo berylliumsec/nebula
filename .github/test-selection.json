@@ -1,27 +1,29 @@
 {
-  "reviewed_by": "Claude",
-  "reason": "Storage dispatch scan past old history (#1093). The dispatch loop and the Storage page now select open rows (pending dispatches, unresolved incidents, unfinished actions) through new partial indexes before limiting, page by (created_at, id), and keep the newest history on the page; a project worker reads only its own sources' dispatches. Migration 0051_storage_open_rows adds three partial indexes only. test_storage_open_rows covers the paged scan, project isolation, index use in the query plan, and upgrade/downgrade of 0051 on rows saved before it; test_storage_integrations covers a pending dispatch after 2000 settled ones and the dashboard keeping new and open records; test_runtime_bundle reviews the new migration head. One test_runtime_coordination case is selected so CI provisions PostgreSQL and the storage tests run on both SQLite and PostgreSQL.",
-  "exclusions": "No UI, native, provider, harness or API-worker change. Playwright storage-integrations area excluded: the scan has no UI change and real-core.spec.ts is not run on main; a scratch supervisor Core and a cross-version PostgreSQL probe (7495a04 code writing on a 0051 database) were run locally instead. All unrelated tests excluded.",
+  "reviewed_by": "Claude issue track tests-drafts; root causes independently validated by a separate subagent (load reproduction, bisect to 64e0379 and 134b071)",
+  "reason": "Test-and-manifest-only repairs for #1098. The full-manifest coverage test (whole tests/test_playwright_impact.py, 41 nodes) proves memory-budgets.spec.ts and application-reopen.spec.ts are now catalogued and the manifest stays valid. chatDraftNavigation.test.tsx proves the pre-warmed draft navigation test still passes with unchanged assertions. The two application-reopen entries prove the new fixtureConfigs routing runs the orphaned reopen journey through the CI test:e2e path on desktop Chromium and phone WebKit.",
+  "exclusions": "No product source changes. memory-budgets.spec.ts routing is unchanged (only full_include rows added), so it is not rerun. The other six application-reopen viewports, client.test.ts (already green on main since da328e3) and all unrelated suites are excluded. No native, PostgreSQL, real-Core or full-suite coverage applies. Python 3.12 only.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 29,
-    "frontend": 0,
+    "python": 41,
+    "frontend": 1,
     "native": 0,
-    "playwright": 0
+    "playwright": 2
   },
   "python": [
-    "tests/v3/test_storage_open_rows.py",
-    "tests/v3/test_storage_integrations.py",
-    "tests/v3/test_runtime_bundle.py",
-    "tests/v3/test_runtime_coordination.py::test_only_one_connection_can_claim_a_project"
+    "tests/test_playwright_impact.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/chatDraftNavigation.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "entry:application-reopen/model-desktop",
+    "entry:application-reopen/model-webkit-390"
+  ],
   "checks": [],
-  "change_digest": "b7ba0f8fc15c687d877c607219e155132ed40e51843103a94e59c32d42f861e6"
+  "change_digest": "b02dd115a6be284c6d1bb16cf33e8a28651b1580e5c8711994902fdae141fbe6"
 }
