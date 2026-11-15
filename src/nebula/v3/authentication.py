@@ -16,6 +16,7 @@ from starlette.requests import HTTPConnection
 
 from .domain import PairedDeviceSession, utc_now
 from .storage import NebulaStore, NotFoundError
+from .storage_sender import parse_storage_source_actor
 
 bearer = HTTPBearer(auto_error=False)
 _runtime_principal: ContextVar[str | None] = ContextVar(
@@ -30,10 +31,14 @@ def runtime_principal(actor: str) -> Iterator[None]:
     The execution adapter separately revalidates the durable device record and
     uses this context only while invoking Core. No raw credential is retained.
     """
-    if actor != "operator" and not (
-        actor.startswith("device:")
-        and 7 < len(actor) <= 200
-        and not any(character in actor for character in "\x00\r\n")
+    if (
+        actor != "operator"
+        and not (
+            actor.startswith("device:")
+            and 7 < len(actor) <= 200
+            and not any(character in actor for character in "\x00\r\n")
+        )
+        and parse_storage_source_actor(actor) is None
     ):
         raise ValueError("runtime principal must identify an authenticated Core actor")
     token = _runtime_principal.set(actor)
@@ -41,6 +46,11 @@ def runtime_principal(actor: str) -> Iterator[None]:
         yield
     finally:
         _runtime_principal.reset(token)
+
+
+def current_runtime_principal() -> str | None:
+    """The durable actor bound to the request this execution worker is running."""
+    return _runtime_principal.get()
 
 
 def secret_matches(candidate: str | None, expected: str | None) -> bool:
@@ -142,7 +152,8 @@ class CoreAuthentication:
             credentials is None
             or credentials.scheme.lower() != "bearer"
             or not self.secrets_equal(credentials.credentials, self.token)
-            or (_runtime_principal.get() or "").startswith("device:")
+            # Only the operator, never a device or storage source principal.
+            or _runtime_principal.get() not in (None, "operator")
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -156,6 +167,12 @@ class CoreAuthentication:
         request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     ) -> str:
+        if parse_storage_source_actor(_runtime_principal.get()) is not None:
+            # A storage source authenticates only its own reports.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="a storage source can only submit storage reports",
+            )
         if self.allow_unauthenticated:
             return "unauthenticated-local-mode"
         if (

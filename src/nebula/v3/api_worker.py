@@ -16,10 +16,13 @@ from pathlib import Path
 import re
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
+from fastapi.encoders import jsonable_encoder
 from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import ValidationError
 from starlette.responses import JSONResponse, StreamingResponse
 
 from .authentication import CoreAuthentication
+from .database import RuntimeCommandRow
 from .authentication_api import AuthenticationApi
 from .deployments import DeploymentCoordinator
 from .domain import ChatTurn
@@ -51,6 +54,23 @@ from .runtime_view_leases import (
     ViewLeaseRefused,
 )
 from .storage import NebulaStore, NotFoundError
+from .storage_sender import (
+    MAX_EVENT_BYTES,
+    STORAGE_ACK_WAIT_SECONDS,
+    STORAGE_EVENTS_PATH,
+    STORAGE_INVENTORY_PATH,
+    STORAGE_SENDER_SLOTS,
+    STORAGE_TEST_PATH,
+    authenticate_storage_source,
+    sender_transport_allowed,
+    storage_report_key,
+    storage_source_actor,
+    validate_storage_report,
+)
+
+# How many failed or interrupted runs of one report a sender request skips
+# before it asks the sender to retry later.
+STORAGE_REPORT_RUNS = 8
 
 
 class _Forward(Response):
@@ -106,6 +126,7 @@ def create_api_worker(
     upstream_for: Callable[[dict], Awaitable[HttpUpstream]],
     chat_acceptance_for: Callable[[str], Awaitable[bool]] | None = None,
     chat_resume_for: Callable[[str], Awaitable[bool]] | None = None,
+    storage_reports_for: Callable[[str], Awaitable[bool]] | None = None,
     static_dir: Path | None = None,
     maximum_waiting_views: int = 32,
     maximum_control_views: int = 8,
@@ -235,18 +256,29 @@ def create_api_worker(
         )
 
     async def response_view(
-        actor, command_id, *, after=0, slots=work_slots, receipt=None
+        actor,
+        command_id,
+        *,
+        after=0,
+        slots=work_slots,
+        receipt=None,
+        pending=None,
+        unsettled=None,
+        start_timeout=None,
     ):
+        pending = pending or receipt_response
         if slots.locked():
             if receipt is None:
                 raise HTTPException(
                     429, "Viewer capacity is busy; reconnect using the saved request ID"
                 )
-            return receipt_response(receipt)
+            return pending(receipt)
         await slots.acquire()
         handed_off = False
         try:
-            deadline = asyncio.get_running_loop().time() + command_start_timeout
+            deadline = asyncio.get_running_loop().time() + (
+                command_start_timeout if start_timeout is None else start_timeout
+            )
             while True:
                 page = await delivery.page(actor, command_id, limit=1)
                 binding = await delivery.chat_binding(actor, command_id)
@@ -279,6 +311,8 @@ def create_api_worker(
                     metadata = json.loads(head.content)
                     break
                 if page.state in {"uncertain", "failed"}:
+                    if unsettled is not None:
+                        return unsettled(command_id)
                     return JSONResponse(
                         {
                             "detail": "The saved request needs reconciliation. It has not been retried.",
@@ -293,7 +327,7 @@ def create_api_worker(
                     )
                 if asyncio.get_running_loop().time() >= deadline:
                     if receipt is not None:
-                        return receipt_response(receipt)
+                        return pending(receipt)
                     return JSONResponse(
                         {"state": page.state, "command_id": command_id},
                         status_code=202,
@@ -461,6 +495,139 @@ def create_api_worker(
     ):
         await view_leases.release(actor, project_id, lease_id)
         return Response(status_code=204)
+
+    def storage_report_saved(receipt):
+        # The sender contract acknowledges a durably saved report; whether it
+        # is a duplicate or current is known once the project's worker runs it.
+        return JSONResponse(
+            {
+                "accepted": True,
+                "queued": True,
+                "duplicate": None,
+                "current": None,
+                "command_id": receipt.command_id,
+                "detail": "Saved; Core records it when the project's worker runs",
+            },
+            status_code=202,
+            headers={"X-Nebula-Command-Id": receipt.command_id},
+        )
+
+    def storage_report_retry(command_id=None):
+        # 409 tells a sender its event ID changed content, which it must not
+        # retry. Anything temporary on Core's side is a retryable 503.
+        return JSONResponse(
+            {
+                "detail": "Core could not record the storage report yet; retry the same report",
+                **({"command_id": command_id} if command_id else {}),
+            },
+            status_code=503,
+            headers={"Retry-After": "5"},
+        )
+
+    # Sender reports wait in their own small pool: a source token never takes
+    # the operator's viewer capacity, and a full pool acknowledges at once.
+    sender_slots = asyncio.Semaphore(min(STORAGE_SENDER_SLOTS, maximum_waiting_views))
+    storage_wait = min(command_start_timeout, STORAGE_ACK_WAIT_SECONDS)
+
+    async def storage_report_needs_new_run(command_id: str) -> bool:
+        """A failed or interrupted run of this report must not be replayed.
+
+        Recording a report is idempotent by event ID, so a sender's retry after
+        a Core-side failure (5xx), an interruption, or a source check that has
+        since passed again (401/403) runs the report again.
+        """
+        async with store.database.session() as session:
+            row = await session.get(RuntimeCommandRow, command_id)
+        if row is None:
+            return False
+        status = (row.result or {}).get("http_status")
+        return row.state == "uncertain" or (
+            row.state == "failed"
+            and (status is None or status in {401, 403} or status >= 500)
+        )
+
+    @app.post(STORAGE_TEST_PATH)
+    @app.post(STORAGE_EVENTS_PATH)
+    @app.post(STORAGE_INVENTORY_PATH)
+    async def storage_sender(request: Request):
+        """A storage sender authenticates with its source token, not the operator's.
+
+        The token never enters the durable command: this worker checks it and
+        the sender's transport, validates the report, then saves it for the
+        source's project under a principal that names the source and the token
+        digest it used.
+        """
+        # The matched route's own path, never the request URL: an encoded or
+        # dot-segment spelling of a sender path is the same endpoint, and the
+        # durable command always names the canonical route.
+        path = request.scope["route"].path
+        client = request.client.host if request.client else ""
+        if not sender_transport_allowed(request.url.scheme, client):
+            raise HTTPException(403, "remote storage senders require HTTPS")
+        source = await authenticate_storage_source(
+            store,
+            request.headers.get("authorization"),
+            allow_disabled=path == STORAGE_TEST_PATH,
+        )
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_EVENT_BYTES:
+                raise HTTPException(413, "storage request exceeds 64 KiB")
+        try:
+            validate_storage_report(path, bytes(body))
+        except ValidationError as error:
+            raise HTTPException(
+                # The rejected input is not echoed: it may be undecodable bytes.
+                422,
+                jsonable_encoder(error.errors(include_url=False, include_input=False)),
+            ) from None
+        if path == STORAGE_TEST_PATH:
+            return {"valid": True, "source_id": source.id}
+        if storage_reports_for is not None and not await storage_reports_for(
+            source.engagement_id
+        ):
+            # The project's worker is from a release that cannot run a storage
+            # report; saving one would strand it. Retry after the update.
+            return storage_report_retry()
+        intent = HttpIntent.capture(
+            "POST",
+            path,
+            b"",
+            [(b"content-type", b"application/json")],
+            bytes(body),
+        )
+        actor = storage_source_actor(source)
+        base_key = storage_report_key(source, path, bytes(body))
+        key = base_key
+        try:
+            for _ in range(STORAGE_REPORT_RUNS):
+                receipt = await delivery.accept(
+                    intent,
+                    project_id=source.engagement_id,
+                    actor_id=actor,
+                    idempotency_key=key,
+                    lane=command_lane(path),
+                )
+                if not await storage_report_needs_new_run(receipt.command_id):
+                    break
+                # Chain from the failed run so every retry of this report
+                # finds the same next run.
+                key = f"{base_key}-after-{receipt.command_id}"
+            else:
+                return storage_report_retry()
+        except CoordinationConflict:  # diagnostic-expected: a closing or draining owner is temporary; the sender retries
+            # 409 means a changed duplicate to senders, which they must not retry.
+            return storage_report_retry()
+        return await response_view(
+            actor,
+            receipt.command_id,
+            receipt=receipt,
+            slots=sender_slots,
+            pending=storage_report_saved,
+            unsettled=storage_report_retry,
+            start_timeout=storage_wait,
+        )
 
     @app.api_route(
         "/api/v1/{path:path}",
