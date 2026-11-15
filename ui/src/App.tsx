@@ -5,6 +5,7 @@ import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRout
 import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
 import { isNebulaShell } from "./hooks/useCompactLayout";
+import { ShellButlerRoute, ShellProjectsPage, shellButlerPath } from "./components/ShellProjects";
 import { MemoryBudgetSettings } from "./components/MemoryBudgetSettings";
 import { RuntimeContinuityNotice } from "./components/RuntimeContinuityNotice";
 import { NavigationContinuity } from "./state/NavigationContinuityBoundary";
@@ -40,7 +41,7 @@ function CanonicalProjectBoundary() {
     // project they were using, or any active one.
     const rememberedId = rememberedProjectId(continuityScope);
     const escape = engagement ?? engagements.find((item) => item.id === rememberedId) ?? engagements[0];
-    return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={isNebulaShell() ? `${projectSurface(escape.id, "workbench")}?view=chat` : projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
+    return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={isNebulaShell() ? shellButlerPath(escape.id) : projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
   }
   if (engagement?.id !== requested.id) return <div className="route-loading" role="status">Switching project…</div>;
   // Reconnecting the current project refreshes authoritative data in place.
@@ -123,23 +124,23 @@ function WorkbenchRoute() {
 
 function AssistantShellLanding() {
   const { continuityScope, engagement, engagements, resourceStatus, workspaceState } = useWorkspace();
-  const location = useLocation();
-  if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening chats…</div>;
+  if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening Butler…</div>;
   const selected = engagement ?? engagements.find(item => item.id === rememberedProjectId(continuityScope)) ?? engagements[0];
-  if (selected) {
-    const params = new URLSearchParams({ view: "chat" });
-    const requestedSession = new URLSearchParams(location.search).get("session");
-    if (requestedSession) params.set("session", requestedSession);
-    return <Navigate to={`${projectSurface(selected.id, "workbench")}?${params}`} replace />;
-  }
+  if (selected) return <Navigate to={shellButlerPath(selected.id)} replace />;
   if (resourceStatus.projects.state !== "empty") return null;
-  return <section className="page assistant-shell-empty"><h1>No projects yet</h1><p>Set up a project and an agent in full Nebula, then return here to chat.</p><a className="button secondary" href="nebula://settings">App connection</a></section>;
+  return <section className="page assistant-shell-empty"><h1>No projects yet</h1><p>Set up a project in full Nebula, then return here to talk to Butler.</p><a className="button secondary" href="nebula://settings">App connection</a></section>;
+}
+
+/** The iPhone app has no project pages; project links open that project's Butler. */
+function ShellProjectRedirect() {
+  const { projectId = "" } = useParams();
+  return <Navigate to={shellButlerPath(projectId)} replace />;
 }
 
 function AssistantShellHandoff() {
   const location = useLocation();
   const url = `${window.location.origin}${location.pathname}${location.search}`;
-  return <section className="page assistant-shell-empty"><h1>Open in full Nebula</h1><p>This page is outside the iPhone assistant. Your chats are still available here.</p><label>Page link<input readOnly value={url} onFocus={event => event.currentTarget.select()} /></label><Link className="button primary" to="/">Back to chats</Link></section>;
+  return <section className="page assistant-shell-empty"><h1>Open in full Nebula</h1><p>This page is outside the iPhone app, which has only Butler and Projects.</p><label>Page link<input readOnly value={url} onFocus={event => event.currentTarget.select()} /></label><Link className="button primary" to="/">Back to Butler</Link></section>;
 }
 
 export function App() {
@@ -158,8 +159,11 @@ export function App() {
 
 function ApplicationRoutes() {
   if (isNebulaShell()) return <Routes><Route element={<AppShell />}>
+    <Route path="projects" element={<ShellProjectsPage />} />
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
-      <Route path="workbench" element={route(<WorkbenchRoute />)} />
+      <Route path="butler" element={<ShellButlerRoute />} />
+      <Route index element={<ShellProjectRedirect />} />
+      <Route path="*" element={<ShellProjectRedirect />} />
     </Route>
     <Route index element={<AssistantShellLanding />} />
     <Route path="*" element={<AssistantShellHandoff />} />

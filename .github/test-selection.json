@@ -1,45 +1,40 @@
 {
-  "reviewed_by": "Claude butler-client-surface implementer (workflow Track B); root cause independently validated on origin/main by a separate Claude agent before the fix; an independent review requested changes (older-Core 422, harness direct names) which this revision addresses; a re-review is still required before merge",
-  "reason": "Butler handoff actions (notes, settings/theme/navigation, downloads, credentials, devices, diagnostics, etc.) return pending_browser_apply and change nothing until the requesting web app applies them, but Core could not tell a terminal turn from a browser turn, so Butler offered them in nebula-chat and the terminal printed 'Tool finished'. ChatCompletionRequest gains optional client_surface ('browser' default for existing web clients, 'terminal' from nebula-chat and the terminal Assistant); it is saved in the provider turn request_snapshot and harness turn metadata, passed to ButlerCapabilities on direct, queued, resumed and retried turns, and adds a terminal note to Butler's instructions. On the terminal surface ButlerCapabilities.invoke refuses any result in the pending_browser_apply state (decided from the action's result, not a name list, so a new handoff is covered and notes create/update stop being refused once they save in Core) with fixed browser_only guidance; the terminal labels an older Core's handoff receipt as needing the Nebula web app. Python: test_butler_client_surface.py (new: real handoffs incl. notes.delete refused on terminal and unchanged on browser, a synthetic future handoff action refused by result for read and change routes, Core-saving change still works, request/surface validation, provider API turn end to end with snapshot and instructions, harness turn metadata/prompt/capabilities; all 7 fail on origin/main), terminal shell and chat CLI tests for the sent field and the handoff notice (5 fail on main), the product-help search test for the new docs (fails on main) plus the index digest/sync tests, and existing Butler capability, settings browser-intent, harness Butler gateway and queued Butler follow-up tests around the changed paths. Review follow-up: a Core older than client_surface rejects the field with a validation 422 (extra_forbidden) before its chat handler runs, saving no message or turn, so nebula-chat and the terminal Assistant resend that turn once without the field under a new Idempotency-Key and remember that Core; other 422s are reported, not resent (3 chat CLI + 2 terminal shell tests, failing at the previous head 4a1d79d). Harness Butler's legacy direct nebula.settings.*/nebula.navigate.open dispatch now applies the same browser_only refusal via refuse_browser_handoff (2 parametrized tests in test_butler_client_surface.py, failing at 4a1d79d). Docs and a product-help test cover the older-Core behavior.",
-  "exclusions": "No UI, native or Playwright changes: the web app omits client_surface and keeps today's behavior, and ui/src/settingsCatalog.ts is unchanged because no setting changed. Run locally but not selected because they already fail on origin/main with identical results (this diff does not touch them): test_butler_capabilities.py::test_global_chat_settings_read_runs_outside_event_loop, test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets and ::test_provider_tools_are_bounded_to_catalog_and_project, test_harnesses.py::test_assistant_settings_keep_chat_history_and_replace_frozen_runtime[model|profile|mcp], test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. The rest of test_butler_capabilities.py, test_tool_failures.py, test_settings_assistant_tools.py, test_butler_memory.py, test_butler_notes.py, test_product_knowledge.py, test_chat_cli.py, test_terminal_shell.py and test_terminal_transport.py passed locally (84+ tests) and are not selected to keep the run focused.",
+  "change_digest": "aff688d967dcb91e609f7d9c278a5fed4cc002d52aadcd17b52f99d953d1cf3e",
+  "reviewed_by": "Claude (ios-butler-projects); selection reviewed against the diff by the implementing agent, independent diff review still required before merge",
+  "reason": "The NebulaShell (installed iPhone app) UI is reduced to two routes: Butler docked full screen with a project switcher and an app tab bar, and a read-only Projects snapshot of status=active projects holding at least one ordinary chat (new ShellProjects component + projectSnapshots builder). App.tsx shell routes, AppShell docked flag and NebulaControlAssistant docked mode change; the Butler workflow registry links the three new read-only calls to chat.start_and_read and approval.review. Frontend: the new snapshot builder test plus the NebulaControlAssistant and CompactSettingsList suites that exercise NebulaShell. Playwright: area:ios-assistant-only, whose test is rewritten for the new contract. Python: the workflow registry checks. Build 6 of the iOS shell bundles this UI and serves it on a loopback origin (LocalUIServer) that tunnels only /api/* to Core; its pure rewrite rules (ProxyRewrite.swift) are covered by ios/Tests/main.swift (43 checks) run with xcrun swiftc on the research Mac, and the app built unsigned for iphoneos with Xcode 27. A failed per-project read now keeps the project's card (Playwright step added). The area's real-Core entry moves to ui/tests/ios-shell-real-core.spec.ts (real-core.spec.ts is above the commit guard's per-file limit; its old iPhone journey asserts the retired shell and is no longer selected), and ui/tests/fixtures/approval_core.py now awaits Core's async _active_gateway_turn.",
+  "exclusions": "tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fails identically on origin/main (useProjectViewLease holdProjectView/releaseProjectView are unreviewed there); this change links all three of its own new calls. src/App.test.tsx has 9 failures on origin/main unrelated to the shell (desktop navigation/provider settings) and does not cover NebulaShell, so it is not selected. No backend, native (ios/ Swift unchanged; docs only) or Rust changes. No setting or operator feature reachable from the settings assistant was added, so the settings catalog is unchanged. CI has no Swift/Xcode job; the iOS checks and build ran on the research Mac and are reported in the PR.",
   "python_browser": false,
-  "python_node": false,
+  "python_node": true,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 30,
-    "frontend": 0,
+    "python": 23,
+    "frontend": 81,
     "native": 0,
-    "playwright": 0
+    "playwright": 12
   },
   "python": [
-    "tests/v3/test_butler_client_surface.py",
-    "tests/v3/test_butler_capabilities.py::test_butler_browser_action_is_not_reported_as_saved_state",
-    "tests/v3/test_butler_capabilities.py::test_butler_pre_dispatch_errors_name_the_repair",
-    "tests/v3/test_butler_capabilities.py::test_butler_unlisted_operation_receipt_gives_exact_recovery",
-    "tests/v3/test_settings_assistant_tools.py::test_browser_actions_are_bounded_intents_until_the_requesting_device_applies_them",
-    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session",
-    "tests/v3/test_chat_queue.py::test_queued_butler_follow_up_dispatches_after_worker_reconnect",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_butler_browser_actions_in_the_terminal",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_chat_cli.py::test_chat_resumes_saved_session_streams_and_sends_only_the_new_message",
-    "tests/v3/test_chat_cli.py::test_browser_handoff_is_reported_as_needing_the_web_app",
-    "tests/test_terminal_shell.py::test_browser_handoff_receipt_is_not_reported_as_finished",
-    "tests/test_terminal_shell.py::test_browser_handoff_notice_reads_provider_and_harness_receipts",
-    "tests/test_terminal_shell.py::test_provider_body_uses_saved_settings_and_excludes_harness_fields",
-    "tests/test_terminal_shell.py::test_stream_reports_acceptance_and_tool_progress_before_answer",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_a_terminal_newer_than_core",
-    "tests/v3/test_chat_cli.py::test_older_core_gets_the_turn_without_the_client_surface",
-    "tests/v3/test_chat_cli.py::test_older_supervisor_core_refusal_after_a_receipt_is_sent_once_more",
-    "tests/v3/test_chat_cli.py::test_other_validation_errors_are_reported_not_resent",
-    "tests/test_terminal_shell.py::test_older_core_gets_the_assistant_turn_without_the_client_surface",
-    "tests/test_terminal_shell.py::test_other_validation_errors_are_not_resent_without_the_surface"
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_new_ui_api_call_without_review",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_unsupported_action_marked_supported",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_operation_missing_from_core_catalog",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_handoff_to_unknown_destination",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_mutation_disguised_as_open_handoff",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_browser_opening_marked_as_saved_mutation",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_collector_tracks_client_declarations_through_aliases",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_protocol_claiming_model_authority",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_protocol_without_a_reviewed_parent_workflow",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_ordinary_record_mutation_hidden_as_ui_projection",
+    "tests/v3/test_butler_workflow_registry.py::test_registry_rejects_ui_protocol_relabelled_as_supported"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/projectSnapshots.test.ts",
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
-  "checks": [],
-  "change_digest": "362462215a1111de4443fc08328ef1e94f6ac5f11cf87f05afa498f35ba711ad"
+  "playwright": [
+    "area:ios-assistant-only"
+  ],
+  "checks": []
 }

@@ -15721,7 +15721,8 @@ reloadTest("assistant popup Butler long history keeps the composer and jump to l
   expect(accessibility.violations).toEqual([]);
 });
 
-reloadTest("iPhone assistant shell keeps chat and pending actions reachable without work tools", async ({page}, testInfo) => {
+reloadTest("iPhone assistant shell has only docked Butler and a Projects snapshot of active projects with chats", async ({page}, testInfo) => {
+  reloadTest.slow(); // One long journey: Butler layout, keyboard, Projects, failure and recovery.
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
   });
@@ -15748,13 +15749,21 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
       requested_at: "2026-07-14T12:00:00Z",
     }]});
   });
-  await page.goto("/?view=terminal");
-  await expect(page).toHaveURL(/\/projects\/scratch-project\/workbench\?view=chat/);
-  await expect(page.getByRole("button", {name: "Open conversations"})).toBeVisible({timeout: 30_000});
-  await expect(page.getByRole("button", {name: "Start new chat"})).toBeVisible();
-  await page.getByRole("button", {name: "Open Butler"}).click();
+  let sessionsFail = false;
+  await page.route(/\/api\/v1\/chat-sessions\?engagement_id=scratch-project&/, route => sessionsFail ? route.fulfill({status: 503, json: {detail: "Synthetic read failure"}}) : route.fulfill({json: [
+    {...entity, id: "chat-pending", engagement_id: "scratch-project", title: "Review request", backend: "provider", metadata: {}},
+    {...entity, id: "chat-running", engagement_id: "scratch-project", title: "Recon sweep", backend: "provider", metadata: {}},
+    {...entity, id: "iphone-butler", engagement_id: "scratch-project", title: "Butler", backend: "harness", metadata: {control_assistant: true}},
+  ]}));
+  await page.route(/\/api\/v1\/chat\/session-activity\?engagement_id=scratch-project$/, route => route.fulfill({json: [{session_id: "chat-running", state: "working", turn_id: "turn-1"}]}));
+  await page.goto("/projects/scratch-project/workbench?view=terminal");
+  await expect(page).toHaveURL(/\/projects\/scratch-project\/butler$/, {timeout: 30_000});
   const controlAssistant = page.getByRole("dialog", {name: "Butler"});
-  await expect(controlAssistant).toBeVisible();
+  await expect(controlAssistant).toBeVisible({timeout: 30_000});
+  await expect(controlAssistant.getByRole("button", {name: "Close Butler"})).toBeHidden();
+  await expect(controlAssistant.getByRole("combobox", {name: "Butler project"})).toHaveValue("scratch-project");
+  const appTabs = controlAssistant.getByRole("navigation", {name: "Nebula app"});
+  await expect(appTabs.getByRole("link", {name: "Butler"})).toHaveAttribute("aria-current", "page");
   const tables = controlAssistant.getByRole("region", {name: "Butler response table"});
   await expect(tables).toHaveCount(2);
   const table = tables.first();
@@ -15831,83 +15840,45 @@ reloadTest("iPhone assistant shell keeps chat and pending actions reachable with
     })).toBeLessThanOrEqual(1);
     await page.setViewportSize(originalViewport);
   }
-  await controlAssistant.getByRole("button", {name: "Close Butler"}).click();
-  expect(await page.locator(".assistant-only-shell").evaluate(shell => (shell as HTMLElement).inert)).toBe(false);
-  await page.getByRole("button", {name: "Start new chat"}).click();
-  const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
-  await expect(composer).toBeVisible();
-  const withSideTab = new URL(page.url());
-  withSideTab.searchParams.append("panel", "terminal:1:shell-probe");
-  withSideTab.searchParams.set("panelTab", "shell-probe");
-  await page.goto(withSideTab.toString());
-  await expect(page.locator("#side-tool-panel")).toHaveCount(0);
-  await page.getByRole("button", {name: "Start new chat"}).click();
-  await expect(composer).toBeVisible();
-  await setTheme(page, "quiet-lens");
-  if (page.viewportSize()!.width <= 760) {
-    const menuTrigger = page.getByRole("button", {name: "Conversation actions", exact: true});
-    await menuTrigger.focus();
-    await menuTrigger.press("Enter");
-    const actionsMenu = page.getByRole("menu", {name: "Conversation actions"});
-    await expect(actionsMenu).toBeVisible();
-    const menuBounds = await actionsMenu.evaluate(element => {
-      const rect = element.getBoundingClientRect();
-      const viewport = window.visualViewport;
-      return {left: rect.left, right: rect.right, viewportLeft: viewport?.offsetLeft ?? 0, viewportRight: (viewport?.offsetLeft ?? 0) + (viewport?.width ?? innerWidth)};
-    });
-    expect(menuBounds.left).toBeGreaterThanOrEqual(menuBounds.viewportLeft + 8);
-    expect(menuBounds.right).toBeLessThanOrEqual(menuBounds.viewportRight - 8);
-    await page.keyboard.press("Escape");
-    await expect(actionsMenu).toHaveCount(0);
-    const geometry = await page.locator(".assistant-only-page").evaluate(root => {
-      const header = root.querySelector(".mobile-conversation-header")!;
-      const title = header.querySelector(".mobile-conversation-title")!;
-      const newChat = header.querySelector(".mobile-new-chat")!;
-      const input = root.querySelector(".chat-composer")!;
-      const scroll = root.querySelector(".chat-scroll")!;
-      const titleRect = title.getBoundingClientRect();
-      const newChatRect = newChat.getBoundingClientRect();
-      const inputRect = input.getBoundingClientRect();
-      const scrollStyle = getComputedStyle(scroll);
-      return {
-        viewportCenter: innerWidth / 2,
-        titleCenter: titleRect.left + titleRect.width / 2,
-        inputCenter: inputRect.left + inputRect.width / 2,
-        titleTop: titleRect.top,
-        newChatTop: newChatRect.top,
-        scrollLeft: parseFloat(scrollStyle.paddingLeft),
-        scrollRight: parseFloat(scrollStyle.paddingRight),
-      };
-    });
-    expect(Math.abs(geometry.titleCenter - geometry.viewportCenter)).toBeLessThanOrEqual(1);
-    expect(Math.abs(geometry.inputCenter - geometry.viewportCenter)).toBeLessThanOrEqual(1);
-    expect(Math.abs(geometry.newChatTop - geometry.titleTop)).toBeLessThanOrEqual(4);
-    expect(geometry.scrollLeft).toBe(geometry.scrollRight);
-  }
-  const send = page.getByRole("button", {name: "Send message"});
-  await expect(send).toBeVisible();
-  const sendBounds = await send.evaluate(element => {
-    const rect = element.getBoundingClientRect();
-    const viewport = window.visualViewport;
-    return {left: rect.left, right: rect.right, width: viewport?.width ?? innerWidth, offsetLeft: viewport?.offsetLeft ?? 0};
-  });
-  expect(sendBounds.left).toBeGreaterThanOrEqual(sendBounds.offsetLeft);
-  expect(sendBounds.right).toBeLessThanOrEqual(sendBounds.offsetLeft + sendBounds.width);
-  await expect(page.getByRole("navigation", {name: "Mobile operator navigation"})).toHaveCount(0);
+  await butlerComposer.blur();
+  await expect(appTabs).toBeVisible();
+  await expect(page.getByRole("button", {name: "Start new chat"})).toHaveCount(0);
   await expect(page.locator(".persistent-terminal, .persistent-code-editor, .persistent-browser")).toHaveCount(0);
-  await expect(page.getByRole("button", {name: /Needs you, 1 pending/})).toBeVisible();
-  await page.getByRole("button", {name: /Needs you, 1 pending/}).click();
-  const inbox = page.getByRole("dialog", {name: "Needs you"});
-  await expect(inbox.getByRole("button", {name: /Approval needed.*Review request.*Scratch Project/})).toBeVisible();
+  await appTabs.getByRole("link", {name: "Projects"}).click();
+  await expect(page).toHaveURL(/\/projects$/);
+  await expect(controlAssistant).toBeHidden();
+  expect(await page.locator(".assistant-only-shell").evaluate(shell => (shell as HTMLElement).inert)).toBe(false);
+  const projects = page.getByRole("region", {name: "Projects"});
+  const card = projects.getByRole("listitem").filter({hasText: "Scratch Project"});
+  await expect(card).toBeVisible();
+  await expect(projects.getByRole("listitem")).toHaveCount(1);
+  await expect(card).toContainText("2 chats");
+  await expect(card).toContainText("1 need you");
+  await expect(card).toContainText("1 running");
+  await card.locator("summary").click();
+  const recent = card.getByRole("list", {name: "Recent chats in Scratch Project"});
+  await expect(recent.getByRole("listitem")).toHaveCount(2);
+  await expect(recent).not.toContainText("Butler");
+  await page.screenshot({path: testInfo.outputPath("iphone-projects-snapshot.png")});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({page}).include("section[aria-labelledby='shell-projects-title']").analyze()).violations).toEqual([]);
+  // Axe opens a helper page; WebKit can leave this one backgrounded (paused frames, hidden polls).
+  await page.bringToFront();
   attentionFail = true;
-  await inbox.getByRole("button", {name: "Close Needs you"}).click();
-  await page.getByRole("button", {name: /Needs you/}).click();
-  await expect(inbox.getByRole("alert")).toContainText("Could not load pending actions");
+  await projects.getByRole("button", {name: "Refresh projects"}).click();
+  await expect(projects.getByRole("alert")).toContainText("Pending actions could not be loaded", {timeout: 15_000});
   attentionFail = false;
-  await inbox.getByRole("button", {name: "Retry"}).click();
-  await expect(inbox.getByRole("button", {name: /Approval needed/})).toBeVisible();
-  await page.screenshot({path: testInfo.outputPath("iphone-assistant-shell.png")});
-  const size = await page.locator(".assistant-only-page").evaluate(element => ({scroll: element.scrollWidth, width: element.clientWidth}));
-  expect(size.scroll).toBeLessThanOrEqual(size.width + 1);
-  expect((await new AxeBuilder({page}).include(".mobile-attention-inbox").analyze()).violations).toEqual([]);
+  await projects.getByRole("button", {name: "Refresh projects"}).click();
+  await expect(projects.getByRole("alert")).toHaveCount(0, {timeout: 15_000});
+  sessionsFail = true;
+  await projects.getByRole("button", {name: "Refresh projects"}).click();
+  await expect(projects.getByRole("alert")).toContainText("1 project could not be read", {timeout: 15_000});
+  await expect(card).toContainText("2 chats");
+  await expect(projects.getByText("No active projects with chats")).toHaveCount(0);
+  sessionsFail = false;
+  await projects.getByRole("button", {name: "Refresh projects"}).click();
+  await expect(projects.getByRole("alert")).toHaveCount(0, {timeout: 15_000});
+  await card.getByRole("button", {name: "Ask Butler about Scratch Project"}).click();
+  await expect(page).toHaveURL(/\/projects\/scratch-project\/butler$/);
+  await expect(controlAssistant).toBeVisible();
 });

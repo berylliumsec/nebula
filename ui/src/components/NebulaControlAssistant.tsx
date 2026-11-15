@@ -98,14 +98,18 @@ const ButlerTranscript = memo(function ButlerTranscript({ messages, api, project
   } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>)}</div>;
 });
 
-export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, onCloseSetting, onSavedSetting }: {
+export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, onCloseSetting, onSavedSetting, docked = false, dockFooter }: {
   children?: ReactNode;
+  /** iPhone app: Butler fills the screen and cannot be hidden or closed. */
+  docked?: boolean;
+  /** Rendered under the composer while docked. */
+  dockFooter?: ReactNode;
   onOpenSetting: (entry: SettingCatalogEntry) => void;
   onNavigate: (path: string) => void;
   onCloseSetting?: () => void;
   onSavedSetting?: (entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => void;
 }) {
-  const { api, coreState, engagement, providers, harnesses, createEngagement, renameEngagementAtRevision, refreshProjectLifecycle, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, adoptConfirmedReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
+  const { api, coreState, engagement, engagements, providers, harnesses, createEngagement, renameEngagementAtRevision, refreshProjectLifecycle, setEngagementArchived, deleteArchivedEngagement, createReport, updateReport, adoptConfirmedReport, deleteReport, ingestLibraryItem, retryResource } = useWorkspace();
   const nativeShell = isNebulaShell();
   const context = useOptionalWorkbenchDrafts();
   const butlerDrafts = context?.butlerDrafts ?? [];
@@ -651,6 +655,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       window.visualViewport?.removeEventListener("scroll", clamp);
     };
   }, [open, hidden, nativeShell]);
+
+  useEffect(() => {
+    if (docked) { setOpen(true); setHidden(false); }
+    else if (nativeShell) setHidden(true);
+  }, [docked, nativeShell]);
 
   useEffect(() => {
     if (!nativeShell || !open || hidden) return;
@@ -2519,10 +2528,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
   const panelContent = open ? <>
     {!nativeShell && <button className={styles.backdrop} type="button" aria-label="Dismiss Butler panel" title="Dismiss Butler panel" hidden={hidden} onClick={() => setHidden(true)} />}
-    <div ref={panel} id="nebula-assistant-panel" className={`${styles.panel}${nativeShell ? ` ${styles.shellPanel}` : ""}`} role="dialog" aria-label="Butler" aria-modal={nativeShell ? true : undefined} tabIndex={nativeShell ? -1 : undefined} data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
+    <div ref={panel} id="nebula-assistant-panel" className={`${styles.panel}${nativeShell ? ` ${styles.shellPanel}` : ""}${docked ? ` ${styles.dockedPanel}` : ""}`} role="dialog" aria-label="Butler" aria-modal={nativeShell ? true : undefined} tabIndex={nativeShell ? -1 : undefined} data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
     <div className={styles.header}>
       <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Butler" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
-      <div className={styles.identity}><strong>Butler</strong><small>{engagement?.name ?? "Choose a project"}</small></div>
+      <div className={styles.identity}><strong>Butler</strong>{docked && engagements.length > 0
+        ? <select className={styles.projectSelect} aria-label="Butler project" value={engagement?.id ?? ""} onChange={(event) => onNavigate(`/projects/${encodeURIComponent(event.target.value)}/butler`)}>{!engagement && <option value="" disabled>Choose a project</option>}{engagements.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+        : <small>{engagement?.name ?? "Choose a project"}</small>}</div>
       <button className={`icon-button subtle ${styles.voiceButton}`} type="button" aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} aria-hidden="true" /></button>
       <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen && view === "more"} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
       <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Butler" title="Hide Butler" onClick={() => setHidden(true)}><Minimize2 size={18} aria-hidden="true" /></button>
@@ -2746,6 +2757,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Message Butler…" disabled={activeBusy || loadingHistory || !pendingReady} />
       {activeBusy && canStopActive ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" title="Stop Butler’s response" onClick={() => void stop()}><Square size={18} /></button> : activeBusy ? null : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage || !pendingReady}><Send size={18} /></button>}
     </form>
+    {docked && dockFooter}
     </div>
   </> : null;
 

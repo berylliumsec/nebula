@@ -29,9 +29,31 @@ or temporary network failure returns to that address. The recent-server chips an
 last-connected time update only after a page loads successfully.
 
 With native build 4 or later, the web view runs edge to edge with no native bar.
-The installed app opens the Core-backed assistant: project conversations, the composer, saved
-results, and pending chat approvals or agent questions. Terminal, Missions,
-Activity, and other Workbench tools stay in full Nebula on desktop or mobile web.
+Build 6 bundles the web UI inside the app. `LocalUIServer` serves it on
+`http://127.0.0.1:48173` (this device only, checked Host header) and tunnels only
+`/api/*` — HTTP and WebSocket — to the selected server, rewriting Host, Origin and
+Referer so Core sees its own origin. Core cookies bind to the loopback origin (the
+`Secure`/`Domain` attributes are dropped because the hop is on-device); an existing
+pairing is copied over once, so a paired phone does not pair again. Build the UI
+from the Core commit the phone talks to, then bundle it before `xcodegen`:
+
+```sh
+(cd ../ui && npm ci && npm run build) && ./bundle-web-ui.sh ../ui/dist
+```
+
+If the bundle is missing or the port cannot be opened, the app loads the server's
+own UI as before.
+
+The installed app has exactly two tabs:
+
+- **Butler** — the project's Butler conversation, full screen, with a project
+  switcher in its header (`/projects/<id>/butler`).
+- **Projects** — a read-only snapshot of projects Core marks active that hold at
+  least one ordinary chat: chat count, last activity, running/waiting chats,
+  pending actions, and the five most recent chats (`/projects`).
+
+Project chats, Terminal, Missions, Activity, and other Workbench tools stay in full
+Nebula on desktop or mobile web; ask Butler to act on them from the phone.
 Build 5 adds the microphone permission description for Nebula Voice. The Core UI
 also exposes the Nebula assistant and Voice from this shell. Voice needs a trusted
 HTTPS server address; HTTP LAN addresses continue to support text chat and show
@@ -49,7 +71,7 @@ The page is told it runs in the shell only through the user-agent token
 ## Verification
 
 ```sh
-xcrun swiftc Nebula/ServerAddress.swift Tests/main.swift -o /tmp/nebula-address-tests
+xcrun swiftc Nebula/ServerAddress.swift Nebula/ProxyRewrite.swift Tests/main.swift -o /tmp/nebula-address-tests
 /tmp/nebula-address-tests
 xcodebuild -project Nebula.xcodeproj -scheme Nebula -configuration Release \
   -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO build

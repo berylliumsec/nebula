@@ -1020,10 +1020,12 @@
         "ui/src/pages/SessionsPage.tsx::getChatSession",
         "ui/src/pages/SessionsPage.tsx::listChatSessions",
         "ui/src/pages/SessionsPage.tsx::listChatSessionsPage",
+        "ui/src/components/ShellProjects.tsx::listChatSessionsPage",
         "ui/src/pages/SessionsPage.tsx::listChatSessionActivityIfChanged",
         "ui/src/pages/useSessionState.ts::requestIfChanged",
         "ui/src/pages/WorkPage.tsx::listChatSessions",
         "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
+        "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
         "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
         "ui/src/pages/ChildProjectConversations.tsx::listChatSessionActivity",
         "ui/src/pages/ChildProjectConversations.tsx::listChatSessions"
@@ -1188,6 +1190,7 @@
       "entry_point": "Attention inbox or chat approval: inspect and decide one exact pending request after operator instruction",
       "ui_calls": [
         "ui/src/components/MobileAttentionInbox.tsx::listChatAttention",
+        "ui/src/components/ShellProjects.tsx::listChatAttention",
         "ui/src/components/chat-subagents/ChatSubagentPane.tsx::decideApproval",
         "ui/src/pages/SessionsPage.tsx::getApproval",
         "ui/src/state/WorkspaceContext.tsx::listApprovals",
@@ -4758,6 +4761,18 @@
     },
     {
       "key": "ui/src/components/SecurityDashboard.tsx::stopSecurityBrowserAutomation",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ShellProjects.tsx::listChatAttention",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ShellProjects.tsx::listChatSessionsPage",
       "count": 1
     },
     {

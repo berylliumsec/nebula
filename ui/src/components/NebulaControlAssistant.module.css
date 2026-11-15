@@ -172,3 +172,11 @@
     font-size: .72rem;
   }
 }
+/* iPhone app: Butler is a permanent tab; the app tab bar sits under the composer. */
+.dockedPanel .header { grid-template-columns: minmax(0, 1fr) repeat(2, 44px); }
+.dockedPanel .header .closeButton { display: none; }
+.dockedPanel .identity { align-items: stretch; }
+.projectSelect { max-width: 100%; min-height: 28px; margin: 0; padding: 0 4px 0 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .78rem; text-overflow: ellipsis; }
+.dockedPanel:has(textarea:focus) > nav[aria-label="Nebula app"] { display: none; }
+.dockedPanel { padding-bottom: 0; }
+.dockedPanel:has(textarea:focus) { padding-bottom: env(safe-area-inset-bottom); }
