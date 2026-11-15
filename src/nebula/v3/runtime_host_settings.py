@@ -417,8 +417,7 @@ class HostSettings:
 
         @app.post("/api/v1/harnesses/{profile_id}/health", dependencies=auth)
         async def harness_health(profile_id: str):
-            from .diagnostic_guidance import reason_code_for
-            from .harnesses import HarnessConfigurationError, HarnessRuntimeService
+            from .harnesses import HarnessRuntimeService
 
             profile = await self.store.get(HarnessProfile, profile_id)
             adapter = (
@@ -427,40 +426,8 @@ class HostSettings:
                 else HarnessRuntimeService._default_adapter(profile.kind)
             )
             result = await adapter.probe(profile, self.credentials)
-            capabilities = result.capabilities.model_copy(
-                update={
-                    "checked_at": result.checked_at,
-                    "detail": result.detail,
-                    "harness_version": result.harness_version,
-                    "authentication_state": result.authentication_state
-                    if result.healthy
-                    else "failed"
-                    if reason_code_for(
-                        HarnessConfigurationError(result.detail or ""),
-                        feature="harnesses",
-                    )
-                    == "authentication_failed"
-                    else "unverified",
-                    "session_state": profile.capabilities.session_state,
-                    "turn_state": profile.capabilities.turn_state,
-                    "last_successful_turn_at": profile.capabilities.last_successful_turn_at,
-                    "last_turn_failure_reason": profile.capabilities.last_turn_failure_reason,
-                    "exercised_capabilities": profile.capabilities.exercised_capabilities,
-                }
-            )
-            changes = {"capabilities": capabilities}
-            if capabilities.models and profile.default_model not in capabilities.models:
-                changes["default_model"] = capabilities.models[0]
-            await self.store.update(
-                HarnessProfile, profile.id, changes, expected_revision=profile.revision
-            )
-            return result.model_copy(
-                update={
-                    "authentication_state": capabilities.authentication_state,
-                    "session_state": capabilities.session_state,
-                    "turn_state": capabilities.turn_state,
-                    "last_successful_turn_at": capabilities.last_successful_turn_at,
-                }
+            return await HarnessRuntimeService.record_probe(
+                self.store, profile.id, result
             )
 
         @app.post("/api/v1/harnesses/{profile_id}/test-turn", dependencies=auth)
