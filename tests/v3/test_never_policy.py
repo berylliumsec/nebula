@@ -233,7 +233,11 @@ async def test_runtime_platform_broker_obeys_never_and_policy_revocation(
 
     await store.create(
         ChatSession(
-            id="chat", engagement_id="project", title="Fixture", model="fixture"
+            id="chat",
+            engagement_id="project",
+            title="Fixture",
+            model="fixture",
+            provider_profile_id="fixture-provider",
         )
     )
     await store.create(
