@@ -31,7 +31,11 @@ const { workspace, saved, live } = vi.hoisted(() => {
     if (path.endsWith("/work") && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       const projectId = path.split("/")[1];
-      const item = { ...saved.item, ...body, id: "tracked-item", engagement_id: projectId, last_update_at: null };
+      // Like Core, a request ID keeps returning its first item, whatever its status.
+      const existing = body.request_id && saved.items.find((candidate) => candidate.engagement_id === projectId && candidate.request_id === body.request_id);
+      if (existing) return existing;
+      const tracked = saved.items.filter((candidate) => String(candidate.id).startsWith("tracked-item")).length;
+      const item = { ...saved.item, ...body, id: tracked ? `tracked-item-${tracked + 1}` : "tracked-item", engagement_id: projectId, last_update_at: null };
       saved.items = [item, ...saved.items];
       return item;
     }
@@ -163,6 +167,35 @@ describe("Work operator journey", () => {
     render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     await user.click(await screen.findByRole("button", { name: "1 Working now" }));
     expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/tracked-item");
+  });
+
+  it("tracks a conversation again after its tracked item is Done without duplicating the open item", async () => {
+    const user = userEvent.setup();
+    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    saved.items.push({ ...saved.item, id: "finished-item", title: "First review", status: "done", assignee_session_id: "session-2", source_id: "session-2", request_id: "track:session-2" });
+    const first = render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByText("Review documentation");
+    await user.click(screen.getByRole("button", { name: "Track work" }));
+    let dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    await user.clear(within(dialog).getByRole("textbox", { name: "Title" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Second review");
+    await user.click(within(dialog).getByRole("button", { name: "Create and link" }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work", expect.objectContaining({ method: "POST", body: expect.stringContaining('"request_id":"track:session-2:after:finished-item"') }));
+    await user.click(await screen.findByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/tracked-item");
+    expect(saved.items.find((item) => item.id === "tracked-item")).toMatchObject({ title: "Second review", status: "in_progress", assignee_session_id: "session-2" });
+
+    // Another client tracked the conversation while this page still showed it untracked: the same open item comes back.
+    first.unmount();
+    saved.items.find((item) => item.id === "tracked-item")!.status = "done";
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "Track work" }));
+    dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    saved.items.unshift({ ...saved.item, id: "other-client-item", title: "Third review", status: "in_progress", assignee_session_id: "session-2", source_id: "session-2", request_id: "track:session-2:after:tracked-item" });
+    await user.click(within(dialog).getByRole("button", { name: "Create and link" }));
+    await user.click(await screen.findByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/other-client-item");
+    expect(saved.items.filter((item) => item.assignee_session_id === "session-2" && item.status !== "done").map((item) => item.id)).toEqual(["other-client-item"]);
   });
 
   it("links an existing open item and reports a stale assignment without replacing it", async () => {

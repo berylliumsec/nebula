@@ -39,6 +39,7 @@ const time = (value: string | null | undefined) => value ? new Intl.DateTimeForm
 const errorText = (value: unknown) => value instanceof Error ? value.message : "Core could not load Work. Try again.";
 const workPageSize = 500;
 const visibleProjectLimit = 80;
+const trackRequestLimit = 50;
 
 function WorkUpdateDetails({ update, projectId }: { update: WorkUpdate; projectId: string }) {
   return <>
@@ -331,9 +332,19 @@ export function WorkPage() {
           method: "PATCH", body: JSON.stringify({ assignee_session_id: trackingAgent.sessionId }),
         });
       } else {
-        await api.request<WorkItem>(target, {
-          method: "POST", body: JSON.stringify({ title: trackTitle.trim(), status: "in_progress", source_kind: "chat", source_id: trackingAgent.sessionId, assignee_session_id: trackingAgent.sessionId, request_id: `track:${trackingAgent.sessionId}` }),
-        });
+        // Core returns a request ID's first item even after it is Done, so each Done item names the next request.
+        // Repeated clicks and other clients reach the same open item; a finished item is never reused.
+        let requestId = `track:${trackingAgent.sessionId}`;
+        let tracked: WorkItem | undefined;
+        for (let step = 0; step < trackRequestLimit && (!tracked || tracked.status === "done"); step += 1) {
+          if (tracked) requestId = `track:${trackingAgent.sessionId}:after:${tracked.id}`;
+          tracked = await api.request<WorkItem>(target, {
+            method: "POST", body: JSON.stringify({ title: trackTitle.trim(), status: "in_progress", source_kind: "chat", source_id: trackingAgent.sessionId, assignee_session_id: trackingAgent.sessionId, request_id: requestId }),
+          });
+        }
+        if (!tracked || tracked.status === "done") {
+          throw new Error("This conversation has too many finished items to track another. Link an existing item instead.");
+        }
       }
       await refresh();
       setTrackingAgent(null);
