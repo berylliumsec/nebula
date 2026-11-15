@@ -1,8 +1,8 @@
 {
-  "change_digest": "4bdcb08bfa4b459b914d2d5ec1d4f2ada5deed299117ca95be47f1381ec4a136",
+  "change_digest": "dae81b9d766820fe6ca21f29b12db29d3de9255cbcc6525984b0a2fab1428875",
   "reviewed_by": "Codex; documentation-only installation receipt reviewed against the diff",
-  "reason": "Record the signed build 6 installation, device version readback, launch, and pending physical on-screen checks in ios/QUALITY.md. No product source or tests change.",
-  "exclusions": "No Python, frontend, native, or Playwright tests apply to this documentation-only receipt. Physical iPhone acceptance is separately pending operator observation.",
+  "reason": "Record signed build 6 installation, version readback, launch, operator visual report, and the Core-dependent acceptance limitation in ios/QUALITY.md. No product source or tests change.",
+  "exclusions": "No Python, frontend, native, or Playwright tests apply to this documentation-only receipt. Core unavailability prevented end-to-end physical iPhone acceptance checks.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,

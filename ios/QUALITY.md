@@ -27,9 +27,11 @@ verification is recorded at deployment.
 version 0.1.0 (6),
 and launched the bundle ID successfully. The live Core release was read back as
 `2f1d195981cc751e8f31fc6260f28a338d2d0cb4`, matching the bundled UI base.
-On-screen Butler, Projects, pairing, messaging, background/resume, and offline
-recovery checks remain pending operator observation; installation and launch
-alone do not establish those results.
+The operator reported that the app appears to work on the phone. Core was
+unavailable at the time, so Butler messaging, Projects data, background/resume,
+and offline recovery were not confirmed end to end. Installation, launch, and
+the operator's general visual impression are the physical evidence for this
+build; the individual UI checks are not recorded as passed.
 
 ## Assistant-only app contract (2026-10-14)
 
