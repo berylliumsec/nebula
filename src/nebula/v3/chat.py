@@ -16023,8 +16023,37 @@ class ChatService:
         before_message_id: str,
         expected_revision: int | None = None,
     ) -> tuple[ChatSession, list[ChatMessage], list[ChatMessage]]:
-        """Retract an operator message and its replies so it can be resent here."""
+        """Retract an operator message and its replies so it can be resent here.
 
+        With the operator's ``expected_revision`` the edit applies only to that
+        revision. Without one, Core's own bookkeeping on the conversation,
+        such as first-turn naming or a saved compaction, may land while the
+        edit is planned; the whole edit is then planned again on the newest
+        conversation. Its unit of work rolls back on a conflict, so nothing is
+        retracted twice.
+        """
+
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            try:
+                return await self._rewind_session_once(
+                    session_id,
+                    before_message_id=before_message_id,
+                    expected_revision=expected_revision,
+                )
+            except RevisionConflict:
+                # diagnostic-expected: only an edit without the operator's
+                # revision is planned again; the last loss reaches the caller.
+                if expected_revision is not None or attempt == REVISE_ATTEMPTS:
+                    raise
+        raise ChatHistoryConflict("conversation kept changing; retry the edit")
+
+    async def _rewind_session_once(
+        self,
+        session_id: str,
+        *,
+        before_message_id: str,
+        expected_revision: int | None,
+    ) -> tuple[ChatSession, list[ChatMessage], list[ChatMessage]]:
         session = await self.store.get(ChatSession, session_id)
         if expected_revision is not None and session.revision != expected_revision:
             raise ChatHistoryConflict(

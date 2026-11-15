@@ -10620,25 +10620,35 @@ class HarnessRuntimeService:
         previous_session_id: str,
         reason: str = "parallel_work",
     ) -> ChatSession:
-        metadata = dict(chat.metadata)
-        rollovers = [
-            item
-            for item in metadata.get("harness_session_rollovers", [])
-            if isinstance(item, dict)
-        ][-31:]
-        rollovers.append(
-            {
-                "from_session_id": previous_session_id,
-                "to_session_id": session.id,
-                "at": utc_now().isoformat(),
-                "reason": reason,
-            }
-        )
-        metadata["harness_session_rollovers"] = rollovers
-        rebound = await self.store.update(
-            ChatSession,
-            chat.id,
-            {
+        rollover = {
+            "from_session_id": previous_session_id,
+            "to_session_id": session.id,
+            "at": utc_now().isoformat(),
+            "reason": reason,
+        }
+
+        def rebind(latest: ChatSession) -> dict[str, Any]:
+            # Peer messages, naming and turn bookkeeping save the conversation
+            # while a send is prepared; the rebind is merged onto the newest
+            # copy. A different vendor binding saved meanwhile is a competing
+            # rebind, and this one is refused rather than overwriting it.
+            if (
+                latest.backend != chat.backend
+                or latest.harness_session_id != chat.harness_session_id
+            ):
+                raise ConflictError(
+                    "conversation runtime changed while this message was prepared; send it again"
+                )
+            metadata = dict(latest.metadata)
+            metadata["harness_session_rollovers"] = [
+                *[
+                    item
+                    for item in metadata.get("harness_session_rollovers", [])
+                    if isinstance(item, dict)
+                ][-31:],
+                rollover,
+            ]
+            return {
                 "backend": ChatBackend.HARNESS,
                 "provider_profile_id": None,
                 "harness_profile_id": session.harness_profile_id,
@@ -10650,9 +10660,9 @@ class HarnessRuntimeService:
                         "runtime_options", {}
                     ),
                 },
-            },
-            expected_revision=chat.revision,
-        )
+            }
+
+        rebound = await revise_latest(self.store, ChatSession, chat.id, rebind)
         if previous_session_id and previous_session_id != session.id:
             self._close_superseded_session(previous_session_id)
         return rebound
@@ -11577,11 +11587,18 @@ class HarnessRuntimeService:
             ):
                 pending_provider_subagent = saved_subagent
         if chat.metadata.get("planning_enabled", False) != planning_enabled:
-            chat = await self.store.update(
+            # Merged onto the newest conversation: a peer message or naming
+            # may save it while this send is prepared.
+            chat = await revise_latest(
+                self.store,
                 ChatSession,
                 chat.id,
-                {"metadata": {**chat.metadata, "planning_enabled": planning_enabled}},
-                expected_revision=chat.revision,
+                lambda latest: {
+                    "metadata": {
+                        **latest.metadata,
+                        "planning_enabled": planning_enabled,
+                    }
+                },
             )
         # Core checks the subagent model itself: the composer may still be
         # loading the verification a saved or newly chosen model already has.
@@ -11594,21 +11611,28 @@ class HarnessRuntimeService:
         handoff_context = settings_handoff
         if chat.metadata.get("harness_context_handoff_pending") is True:
             handoff_context = await self._chat_handoff_context(chat)
-            chat = await self.store.update(
-                ChatSession,
-                chat.id,
-                {
+
+            def consume_handoff(latest: ChatSession) -> dict[str, Any]:
+                # Another send that consumed the handoff first owns it; this
+                # one must not carry the same context a second time.
+                if latest.metadata.get("harness_context_handoff_pending") is not True:
+                    raise ConflictError(
+                        "conversation changed while this message was prepared; send it again"
+                    )
+                return {
                     "metadata": {
-                        **chat.metadata,
+                        **latest.metadata,
                         "harness_context_handoff_pending": False,
                         "harness_context_handoff_applied": True,
                         "harness_context_handoff_provenance": {
-                            "parent_session_id": chat.parent_session_id,
-                            "through_message_id": chat.forked_from_message_id,
+                            "parent_session_id": latest.parent_session_id,
+                            "through_message_id": latest.forked_from_message_id,
                         },
                     }
-                },
-                expected_revision=chat.revision,
+                }
+
+            chat = await revise_latest(
+                self.store, ChatSession, chat.id, consume_handoff
             )
         current_execution_mode = await self._project_execution_mode(
             session.engagement_id
@@ -12118,40 +12142,41 @@ class HarnessRuntimeService:
                     )
                 )
             )
-        latest_chat = await self.store.get(ChatSession, chat.id)
-        chat = await self.store.update(
+        # The turn and the operator's message are committed above. These
+        # selections are merged onto the newest conversation and vendor
+        # session: a peer message, naming or the turn's own bookkeeping may
+        # save them meanwhile, and a stale revision here must not fail a turn
+        # that is already saved, which would leave it active until Stop.
+        chat_tool_selection = {
+            "hook_ids": selected_hooks,
+            "core_tool_selection": {
+                "allowed_tool_names": allowed_tool_names,
+                "allow_mcp_catalog": allow_mcp_catalog,
+                "ssh_environment_ids": [item.id for item in ssh_hosts],
+                "skill_selections": skill_selections or [],
+            },
+        }
+        chat = await revise_latest(
+            self.store,
             ChatSession,
             chat.id,
-            {
-                "metadata": {
-                    **latest_chat.metadata,
-                    "hook_ids": selected_hooks,
-                    "core_tool_selection": {
-                        "allowed_tool_names": allowed_tool_names,
-                        "allow_mcp_catalog": allow_mcp_catalog,
-                        "ssh_environment_ids": [item.id for item in ssh_hosts],
-                        "skill_selections": skill_selections or [],
-                    },
-                }
-            },
-            expected_revision=latest_chat.revision,
+            lambda latest: {"metadata": {**latest.metadata, **chat_tool_selection}},
         )
         guarded_commands = allowed_tool_names is not None or any(
             {"tool.before", "tool.after"}.intersection(item.manifest.events)
             for item in hook_snapshots
         )
-        latest_session = await self.store.get(HarnessSession, session.id)
         (
-            await self.store.update(
+            await revise_latest(
+                self.store,
                 HarnessSession,
                 session.id,
-                {
+                lambda latest: {
                     "metadata": {
-                        **latest_session.metadata,
+                        **latest.metadata,
                         "core_guarded_tools": guarded_commands,
                     }
                 },
-                expected_revision=latest_session.revision,
             )
         )
         return chat, chat_turn, harness_turn
