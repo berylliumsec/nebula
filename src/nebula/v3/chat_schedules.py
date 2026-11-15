@@ -20,7 +20,7 @@ from .domain import (
     ProviderProfile,
     utc_now,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, revise_latest
 
 ARCHIVED_SKIP_REASON = "Conversation is archived; unarchive it to resume the schedule."
 
@@ -256,33 +256,38 @@ class ChatScheduleService:
         ]
 
     async def skip(self, schedule: ChatSchedule, reason: str) -> ChatSchedule:
-        return await self.store.update(
-            ChatSchedule,
-            schedule.id,
-            {
+        def plan(latest: ChatSchedule) -> dict[str, Any]:
+            return {
                 "skip_reason": reason,
                 "last_status": "skipped",
                 "last_run_at": utc_now(),
-                "next_run_at": utc_now() + timedelta(seconds=schedule.interval_seconds),
-            },
-            expected_revision=schedule.revision,
-        )
+                "next_run_at": utc_now() + timedelta(seconds=latest.interval_seconds),
+            }
+
+        return await revise_latest(self.store, ChatSchedule, schedule.id, plan)
 
     async def record_run(
         self, schedule: ChatSchedule, *, turn_id: str, status: str
     ) -> ChatSchedule:
-        return await self.store.update(
-            ChatSchedule,
-            schedule.id,
-            {
+        """Record the occurrence that just started on the schedule's newest revision.
+
+        The turn has already started. The previous occurrence's outcome, or
+        an operator edit, can save the schedule after the tick read it, and
+        the start must still be recorded: otherwise the schedule stays due
+        and the new turn's outcome is never attached. Only this bookkeeping
+        is planned again; the turn is never started twice.
+        """
+
+        def plan(latest: ChatSchedule) -> dict[str, Any]:
+            return {
                 "last_turn_id": turn_id,
                 "last_status": status,
                 "last_run_at": utc_now(),
                 "skip_reason": None,
-                "next_run_at": utc_now() + timedelta(seconds=schedule.interval_seconds),
-            },
-            expected_revision=schedule.revision,
-        )
+                "next_run_at": utc_now() + timedelta(seconds=latest.interval_seconds),
+            }
+
+        return await revise_latest(self.store, ChatSchedule, schedule.id, plan)
 
     async def record_outcome(
         self, schedule_id: str, *, turn_id: str, status: str

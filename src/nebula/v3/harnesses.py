@@ -17633,7 +17633,7 @@ class HarnessRuntimeService:
     ) -> dict[str, Any]:
         """Block only the Core goal that owns this active harness chat turn."""
 
-        from .chat_goals import ChatGoalService, GoalWrite
+        from .chat_goals import ChatGoalService
 
         if not turn.chat_turn_id or not turn.chat_session_id:
             raise HarnessConfigurationError("Only a goal chat turn can block its goal")
@@ -17671,15 +17671,22 @@ class HarnessRuntimeService:
         )
         call = await self.store.reserve_tool_call(call)
         (await self._attach_gateway_tool_call(turn, call.id))
+
+        def still_owned(latest: ChatGoal) -> None:
+            if (
+                latest.id != goal.id
+                or latest.status != ChatGoalStatus.RUNNING
+                or latest.execution_claim_id != chat_turn.id
+            ):
+                raise ConflictError("This turn no longer owns a running Core goal")
+
         try:
+            # The goal's provider subagents keep charging usage to it while
+            # this call is recorded, so the block is decided on the goal's
+            # newest revision, after checking again that this turn owns it.
             (
-                await goals.write(
-                    turn.chat_session_id,
-                    GoalWrite(
-                        expected_revision=goal.revision,
-                        action="block",
-                        reason=reason,
-                    ),
+                await goals.write_latest(
+                    turn.chat_session_id, "block", reason=reason, check=still_owned
                 )
             )
             saved = await goals.get(turn.chat_session_id)

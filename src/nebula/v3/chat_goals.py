@@ -49,7 +49,14 @@ from .chat_snapshot_parts import (
     split_skill_snapshots,
     stage_snapshot_parts,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
+from .storage import (
+    REVISE_ATTEMPTS,
+    ConflictError,
+    NebulaStore,
+    NotFoundError,
+    RevisionConflict,
+    StoreTransaction,
+)
 from .skill_catalog import SkillSelection, SkillSnapshot
 
 
@@ -935,20 +942,74 @@ class ChatGoalService:
         # it, after the parent's guarded update: a revision conflict on either
         # side rolls the whole stop back instead of leaving children changed
         # under an unchanged parent.
-        children = (
-            (await self.list_children(session_id)) if propagate is not None else []
-        )
-        async with self.store.transaction() as transaction:
-            updated = await transaction.update(
-                ChatGoal, goal.id, changes, expected_revision=goal.revision
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            children = (
+                (await self.list_children(session_id)) if propagate is not None else []
             )
-            if propagate is not None:
-                (
-                    await self._propagate_parent_stop(
-                        transaction, children, propagate, now
+            try:
+                async with self.store.transaction() as transaction:
+                    updated = await transaction.update(
+                        ChatGoal, goal.id, changes, expected_revision=goal.revision
                     )
+                    if propagate is not None:
+                        (
+                            await self._propagate_parent_stop(
+                                transaction, children, propagate, now
+                            )
+                        )
+                return updated
+            except RevisionConflict:
+                # diagnostic-expected: a running child charged its own usage
+                # after the children were read. The operator named only this
+                # goal's revision, so a child's own bookkeeping is read again
+                # and stopped on its newest revision. A change to this goal
+                # itself still fails the operator's request.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+                if (await self.store.get(ChatGoal, goal.id)).revision != goal.revision:
+                    raise
+        raise ConflictError("goal children kept changing; retry the request")
+
+    async def write_latest(
+        self,
+        session_id: str,
+        action: Literal["start", "pause", "resume", "cancel", "complete", "block"],
+        *,
+        reason: str | None = None,
+        allow_pending_recovery: bool = False,
+        check: Callable[[ChatGoal], None] | None = None,
+    ) -> ChatGoal:
+        """Apply a Core-initiated goal action on the goal's newest revision.
+
+        For actions Core takes on its own, without an operator revision, such
+        as restart recovery resuming a goal or the goal's own turn blocking
+        it. Usage charges from the goal's turns and subagents keep bumping
+        its revision, so a stale revision is read again and the action is
+        decided again on the newest goal, never replayed blindly: ``check``
+        and the action's own status rules run on each fresh read. A conflict
+        that is not about a moved revision reaches the caller unchanged.
+        """
+
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            goal = await self.get(session_id)
+            if check is not None:
+                check(goal)
+            try:
+                return await self.write(
+                    session_id,
+                    GoalWrite(
+                        expected_revision=goal.revision, action=action, reason=reason
+                    ),
+                    allow_pending_recovery=allow_pending_recovery,
                 )
-        return updated
+            except ConflictError:
+                # diagnostic-expected: only a moved revision is retried; every
+                # other refusal, and the last loss, reaches the caller.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+                if (await self.get(session_id)).revision == goal.revision:
+                    raise
+        raise ConflictError("goal kept changing; retry the request")
 
     async def update(self, session_id: str, body: GoalUpdate) -> ChatGoal:
         goal = await self.get(session_id)
@@ -1033,6 +1094,26 @@ class ChatGoalService:
         )
 
     async def start_child(self, session_id: str, body: GoalCreate) -> ChatGoal:
+        """Start a draft child goal, reserving it on the parent's newest revision.
+
+        The parent is a running goal whose turns and subagents keep charging
+        usage to it, so a parent revision that moves while the child is being
+        prepared is read again and the child is planned again from it. The
+        whole unit of work rolls back on a conflict, so no child is left half
+        created.
+        """
+
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            try:
+                return await self._start_child_once(session_id, body)
+            except RevisionConflict:
+                # diagnostic-expected: the parent changed after it was read;
+                # plan the child again on its newest revision.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+        raise ConflictError("goal kept changing; retry the request")
+
+    async def _start_child_once(self, session_id: str, body: GoalCreate) -> ChatGoal:
         parent = await self.get(session_id)
         if parent.status != ChatGoalStatus.RUNNING or parent.child_budget is None:
             raise ConflictError(
