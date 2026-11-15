@@ -11885,6 +11885,14 @@ def create_execution_kernel(
         workspace_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)]
     )
 
+    from .linked_project_chats import linked_project_chats_router
+
+    app.include_router(
+        linked_project_chats_router(store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
     @app.get(
         f"{API_PREFIX}/chat/session-activity",
         response_model=list[ChatSessionActivity],
