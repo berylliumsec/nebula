@@ -209,3 +209,117 @@ async def test_ownerless_project_chat_search_excludes_other_projects_and_private
         headers=AUTH,
     )
     assert wrong_project.status_code == 404
+
+
+async def test_linked_project_chats_page_active_first_and_skip_empty_projects(
+    project_reads,
+):
+    store = project_reads.store
+    parent = await store.create(Engagement(name="Program"))
+    for index in range(40):
+        await store.create(
+            Engagement(name=f"Empty {index:02d}", parent_engagement_id=parent.id)
+        )
+    busy = await store.create(
+        Engagement(name="Busy child", parent_engagement_id=parent.id)
+    )
+    waiting_child = await store.create(
+        Engagement(name="Approvals child", parent_engagement_id=parent.id)
+    )
+    grandchild = await store.create(
+        Engagement(name="Grandchild", parent_engagement_id=busy.id)
+    )
+    other = await store.create(Engagement(name="Unrelated"))
+
+    async def chat(project, title, **metadata):
+        return await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id="provider",
+                model="model",
+                metadata=metadata,
+            )
+        )
+
+    # The oldest chat waits for an approval; it must still lead page one.
+    needs_you = await chat(waiting_child, "Needs approval")
+    running = await chat(busy, "Running chat")
+    for session, status in (
+        (needs_you, ChatTurnStatus.WAITING_APPROVAL),
+        (running, ChatTurnStatus.QUEUED),
+    ):
+        await store.create(
+            ChatTurn(
+                engagement_id=session.engagement_id,
+                session_id=session.id,
+                provider_profile_id="provider",
+                model="model",
+                status=status,
+            )
+        )
+    idle = [await chat(busy, f"Idle chat {index:02d}") for index in range(12)]
+    await chat(busy, "Hidden side chat", side_chat=True)
+    await chat(parent, "Parent-owned chat")
+    await chat(grandchild, "Grandchild chat")
+    await chat(other, "Unrelated chat")
+
+    seen = []
+    offset = 0
+    pages = 0
+    while offset is not None:
+        answer = await project_reads.client.get(
+            f"/api/v1/chat/projects/{parent.id}/linked-chats",
+            params={"offset": offset, "limit": 5},
+            headers=AUTH,
+        )
+        assert answer.status_code == 200, answer.text
+        body = answer.json()
+        seen.extend(body["items"])
+        offset = body["next_offset"]
+        pages += 1
+    assert pages == 3
+    assert [(item["session"]["id"], item["state"]) for item in seen[:2]] == [
+        (needs_you.id, "waiting"),
+        (running.id, "working"),
+    ]
+    assert seen[0]["project"] == {"id": waiting_child.id, "name": "Approvals child"}
+    assert seen[0]["turn_id"]
+    assert [item["session"]["id"] for item in seen[2:]] == [
+        session.id for session in reversed(idle)
+    ]
+    assert {item["state"] for item in seen[2:]} == {"idle"}
+
+    for query, expected in (
+        ("idle chat 03", [idle[3].id]),
+        ("approvals", [needs_you.id]),
+        ("side chat", []),
+    ):
+        found = await project_reads.client.get(
+            f"/api/v1/chat/projects/{parent.id}/linked-chats",
+            params={"q": query},
+            headers=AUTH,
+        )
+        assert found.status_code == 200, found.text
+        assert [item["session"]["id"] for item in found.json()["items"]] == expected
+
+    first = await project_reads.client.get(
+        f"/api/v1/chat/projects/{parent.id}/linked-chats", headers=AUTH
+    )
+    assert first.headers["etag"]
+    unchanged = await project_reads.client.get(
+        f"/api/v1/chat/projects/{parent.id}/linked-chats",
+        headers={**AUTH, "If-None-Match": first.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+
+    empty = await project_reads.client.get(
+        f"/api/v1/chat/projects/{other.id}/linked-chats", headers=AUTH
+    )
+    assert empty.json() == {"items": [], "next_offset": None}
+
+    async with project_reads.database.session() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
+            == 0
+        )

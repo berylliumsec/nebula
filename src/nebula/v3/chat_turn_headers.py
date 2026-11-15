@@ -277,6 +277,27 @@ async def pending_engagement_turn_headers(
     Cold activity polls must not hydrate every historical turn while execution
     fencing prevents the worker heartbeat from renewing its lease.
     """
+    return await _pending_turn_headers(
+        database, EntityRow.engagement_id == engagement_id, statuses=statuses
+    )
+
+
+async def pending_turn_headers_in_projects(
+    database: AsyncSession, engagement_ids: Any, *, statuses: Sequence[str]
+) -> list[ChatTurnHeader]:
+    """Pending turns of every project selected by ``engagement_ids``.
+
+    ``engagement_ids`` is a SQL subquery, so a parent with thousands of linked
+    projects never binds one parameter per project.
+    """
+    return await _pending_turn_headers(
+        database, EntityRow.engagement_id.in_(engagement_ids), statuses=statuses
+    )
+
+
+async def _pending_turn_headers(
+    database: AsyncSession, projects: Any, *, statuses: Sequence[str]
+) -> list[ChatTurnHeader]:
     conversation = aliased(EntityRow)
     versions = [
         (row.id, row.revision, row.created_at)
@@ -285,9 +306,9 @@ async def pending_engagement_turn_headers(
             .join(conversation, conversation.id == EntityRow.chat_session_id)
             .where(
                 EntityRow.kind == ChatTurn.entity_kind,
-                EntityRow.engagement_id == engagement_id,
+                projects,
                 conversation.kind == ChatSession.entity_kind,
-                conversation.engagement_id == engagement_id,
+                conversation.engagement_id == EntityRow.engagement_id,
                 or_(
                     EntityRow.chat_turn_status.is_(None),
                     and_(
