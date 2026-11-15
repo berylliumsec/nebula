@@ -777,3 +777,134 @@ def test_rollback_waits_for_inflight_promotion_operation(host: Host, action):
         deployer.rollback()
     assert len(host.dispatched) == before
     assert deployer.state()["runtime_deployment"]["action"] == "promote"
+
+
+def _replace_verified_target(host):
+    """A cleanly retired verified target is followed by a fresh same-release grant."""
+    host.lists_processes = True
+    host.verify_handoffs = False
+    assert deployer.promote()["status"] == "waiting_for_handoffs"
+    host.verify_handoffs = True
+    host.status()
+    host.verify_handoffs = False
+    assert deployer.promote()["status"] == "waiting_for_handoffs"
+    host.verify_handoffs = True
+    record = deployer.state()
+    journal = record["runtime_deployment"]
+    project_id = "project-1"
+    original_target = journal["target_runtime_by_project"][project_id]
+    source = journal["source_runtime_by_project"][project_id]
+    assert host.processes[source]["state"] == "retired"
+    host.processes[original_target]["state"] = "retired"
+    successor = "same-release-successor"
+    host.processes[successor] = {
+        "version": NEW,
+        "role": "execution",
+        "state": "ready",
+        "ready_verified": True,
+    }
+    host.projects[project_id]["runtime_id"] = successor
+    host.projects[project_id]["fencing_token"] += 1
+    return project_id, original_target, source, successor, record
+
+
+def test_verified_successor_resumes_without_retargeting_or_replaying_handoff(host):
+    project_id, original_target, source, successor, record = _replace_verified_target(
+        host
+    )
+    original_steps = json.loads(json.dumps(record["runtime_deployment"]["steps"]))
+    promote_until_converged(host)
+    after = deployer.state()["runtime_deployment"]
+    assert after["target_runtime_by_project"][project_id] == original_target
+    assert host.projects[project_id]["runtime_id"] == successor
+    assert after["reconciled_successors"][project_id]["runtime_id"] == successor
+    for step, value in original_steps.items():
+        assert after["steps"][step] == value
+    calls = list(host.dispatched)
+    assert deployer.promote()["status"] == "no_pending_candidate"
+    assert host.dispatched == calls
+    handoffs = [
+        parameters
+        for _, action, parameters in calls
+        if action == "handoff" and parameters["project_id"] == project_id
+    ]
+    assert len(handoffs) == 1 and handoffs[0]["target_runtime_id"] == original_target
+    assert host.processes[source]["state"] == "retired"
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "inventory",
+        "handoff",
+        "source_retirement",
+        "stale_fence",
+        "target_alive",
+        "source_owned",
+        "not_ready",
+        "wrong_release",
+        "wrong_role",
+        "unverified",
+        "held",
+        "blockers",
+    ],
+)
+def test_successor_with_incomplete_proof_keeps_the_deployment_held(host, missing):
+    project_id, original_target, source, successor, record = _replace_verified_target(
+        host
+    )
+    if missing == "inventory":
+        host.lists_processes = False
+    elif missing in {"handoff", "source_retirement"}:
+        for key, step in list(record["runtime_deployment"]["steps"].items()):
+            parameters = step.get("parameters") or {}
+            if (
+                missing == "handoff"
+                and step["action"] == "handoff"
+                and parameters.get("project_id") == project_id
+            ) or (
+                missing == "source_retirement"
+                and step["action"] == "retire"
+                and parameters.get("runtime_id") == source
+            ):
+                del record["runtime_deployment"]["steps"][key]
+        deployer.atomic_json(deployer.STATE, record)
+    elif missing == "stale_fence":
+        host.projects[project_id]["fencing_token"] = (
+            record["runtime_deployment"]["source_fencing_by_project"][project_id] + 1
+        )
+    elif missing == "target_alive":
+        host.processes[original_target]["state"] = "ready"
+    elif missing == "source_owned":
+        host.projects["another-project"] = {"runtime_id": source, "fencing_token": 1}
+    elif missing == "not_ready":
+        host.processes[successor]["ready_verified"] = False
+    elif missing == "wrong_release":
+        host.processes[successor]["version"] = OLD
+    elif missing == "wrong_role":
+        host.processes[successor]["role"] = "api"
+    elif missing == "unverified":
+        host.handoffs[project_id]["phase"] = "transferred"
+    else:
+        original_status = host.status
+
+        def changed_status():
+            value = original_status()
+            row = next(
+                row for row in value["projects"] if row["project_id"] == project_id
+            )
+            row["admission_held"] = missing == "held"
+            row["blockers"] = (
+                ["Synthetic unresolved blocker"] if missing == "blockers" else []
+            )
+            return value
+
+        host.status = changed_status
+    calls = list(host.dispatched)
+    result = deployer.promote()
+    assert result["status"] == "waiting_for_handoffs"
+    assert host.dispatched == calls
+    assert (
+        deployer.state()["runtime_deployment"]["target_runtime_by_project"][project_id]
+        == original_target
+    )
