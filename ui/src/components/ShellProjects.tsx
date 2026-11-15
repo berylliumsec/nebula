@@ -53,7 +53,10 @@ export function ShellProjectsPage() {
       intervalMs: 30_000,
       read: async signal => {
         const ids = activeKey ? activeKey.split(",") : [];
-        const attention = api.listChatAttention(signal).catch(() => undefined);
+        const attention = api.listChatAttention(signal).catch((caught: unknown) => {
+          if (!signal.aborted) void logCaughtDiagnostic("interface.shell_projects.attention_failed", "Pending chat actions could not be loaded for the Projects snapshot.", caught, "shell-projects");
+          return undefined;
+        });
         const results = await Promise.allSettled(ids.map(async id => {
           const [page, activity] = await Promise.all([api.listChatSessionsPage(id, 0, signal), api.listChatSessionActivity(id, signal)]);
           return { id, sessions: page.items, activity };

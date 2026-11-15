@@ -103,7 +103,7 @@ class InertConnection(HarnessConnection):
         self.request, self.runtime = request, runtime
 
     async def request_decision(self, ordinal):
-        turn = self.runtime._active_gateway_turn(self.request.session.id)
+        turn = await self.runtime._active_gateway_turn(self.request.session.id)
         store = self.runtime.store
         call = await store.create(
             ToolCall(
@@ -207,7 +207,7 @@ class InertConnection(HarnessConnection):
             yield HarnessEvent(type="completed", message="PLANNED_READ_COMPLETE")
             return
         if self.runtime.scenario == "goal_capacity":
-            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            turn = await self.runtime._active_gateway_turn(self.request.session.id)
             marker = self.runtime.fixture_root / f"capacity-{turn.chat_session_id}"
             if "CAPACITY_ONCE" in prompt:
                 marker.write_text("once")
@@ -237,7 +237,7 @@ class InertConnection(HarnessConnection):
             yield HarnessEvent(type="completed", message=answer)
             return
         if self.runtime.scenario == "goal":
-            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            turn = await self.runtime._active_gateway_turn(self.request.session.id)
             failure_marker = self.runtime.fixture_root / "goal-failed-once"
             if "FAIL_ONCE" in prompt and not failure_marker.exists():
                 failure_marker.write_text(turn.id)
@@ -287,7 +287,7 @@ class InertConnection(HarnessConnection):
             yield HarnessEvent(type="completed", message=answer)
             return
         if self.runtime.scenario == "agent_messaging":
-            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            turn = await self.runtime._active_gateway_turn(self.request.session.id)
             user_prompt = turn.metadata.get("user_prompt")
             catalog = {
                 item["name"]
@@ -391,7 +391,7 @@ class InertConnection(HarnessConnection):
         if self.runtime.scenario == "crash_after_progress":
             # The runtime reads ahead while coalescing deltas. A yielded fragment
             # is not committed progress yet; crash only after the named boundary.
-            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            turn = await self.runtime._active_gateway_turn(self.request.session.id)
             continuations = [
                 approval.continuation
                 for approval in (await self.runtime.store.list_entities(Approval))

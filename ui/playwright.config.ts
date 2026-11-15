@@ -82,7 +82,7 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
         {name: `assistant-real-chromium-${width}`, use: {...devices["Pixel 5"], viewport: {width, height: 844}}},
         {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
       ]),
-    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts", "**/mcp-project-scope.spec.ts", "**/butler-notes.spec.ts"], grep: /browser harness|assistant upgrade|assistant planning|project removal|project execution mode|Butler project lifecycle|mcp import|project MCP catalog|ssh environments|work hub|runtime usage|notebook real Core/})),
+    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts", "**/mcp-project-scope.spec.ts", "**/butler-notes.spec.ts", "**/ios-shell-real-core.spec.ts"], grep: /browser harness|assistant upgrade|assistant planning|project removal|project execution mode|Butler project lifecycle|mcp import|project MCP catalog|ssh environments|work hub|runtime usage|notebook real Core/})),
     ...[
       { name: "browser-chromium-landscape", device: "Pixel 5" },
       { name: "browser-webkit-landscape", device: "iPhone 13" },
@@ -92,17 +92,17 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
     })),
     {
       name: "desktop",
-      testIgnore: ["**/real-core.spec.ts", "**/usage/**"],
+      testIgnore: ["**/real-core.spec.ts", "**/ios-shell-real-core.spec.ts", "**/usage/**"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     {
       name: "compact",
-      testIgnore: ["**/real-core.spec.ts", "**/usage/**"],
+      testIgnore: ["**/real-core.spec.ts", "**/ios-shell-real-core.spec.ts", "**/usage/**"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 700 } },
     },
     {
       name: "narrow",
-      testIgnore: ["**/real-core.spec.ts", "**/usage/**"],
+      testIgnore: ["**/real-core.spec.ts", "**/ios-shell-real-core.spec.ts", "**/usage/**"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } },
     },
     {
