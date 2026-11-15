@@ -418,6 +418,45 @@ async def test_butler_notes_create_and_update_save_in_core_without_a_browser(
     assert (await store.get(Observation, saved.id)).revision == current.revision
 
 
+async def test_butler_notes_cannot_change_an_archived_project(tmp_path):
+    """An archived project is read-only to Butler: no note create, edit or delete."""
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Selected"))
+    note = await store.create(
+        Observation(engagement_id=project.id, observation_type="note", title="Keep")
+    )
+    capabilities = await ButlerCapabilities.create(
+        store, ArtifactStore(tmp_path / "artifacts"), project.id
+    )
+    await store.update(
+        Engagement,
+        project.id,
+        {"status": "archived"},
+        expected_revision=project.revision,
+    )
+    attempts = {
+        "create": {"title": "No write", "request_id": "archived-0001"},
+        "update": {
+            "note_id": note.id,
+            "expected_revision": note.revision,
+            "body": "No write",
+        },
+        "delete": {"note_id": note.id, "expected_revision": note.revision},
+    }
+    for operation, arguments in attempts.items():
+        with pytest.raises(ValueError, match="restore the selected project"):
+            await capabilities.invoke(
+                {"operation": f"nebula.notes.{operation}", "arguments": arguments},
+                change=True,
+            )
+    notes = await store.find_entities(
+        Observation, {"observation_type": ["note"]}, engagement_id=project.id
+    )
+    assert [(row.id, row.title, row.body, row.revision) for row in notes] == [
+        (note.id, "Keep", note.body, note.revision)
+    ]
+
+
 async def test_butler_note_delete_says_it_waits_for_web_app_confirmation(tmp_path):
     """Deletion stays operator-confirmed and never reads as done in a terminal."""
     store = NebulaStore(tmp_path / "core.db")
