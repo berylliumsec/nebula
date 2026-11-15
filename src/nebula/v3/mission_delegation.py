@@ -32,7 +32,13 @@ from .domain import (
 from .harnesses import HarnessRuntimeService
 from .missions import MissionConfigurationError
 from .providers import provider_from_profile, usage_cost_usd
-from .storage import NebulaStore, NotFoundError
+from .storage import (
+    REVISE_ATTEMPTS,
+    NebulaStore,
+    NotFoundError,
+    RevisionConflict,
+    revise_latest,
+)
 
 _TERMINAL_TURNS = {
     ChatTurnStatus.COMPLETE,
@@ -742,9 +748,35 @@ class DelegatedMissionService:
     async def stop(
         self, run_id: str, *, reason: str, status: RunStatus = RunStatus.CANCELLED
     ) -> AgentRun:
-        run = await self.store.get(AgentRun, run_id)
+        """Stop the Mission's children and supervisor turn, then finish the run.
+
+        The first stop request is saved on the run before any work is
+        stopped. The run's watcher notices the stopped supervisor turn and
+        stops the run too; it adopts that saved request, so the operator's
+        reason and status are the ones recorded, not "response stopped".
+        The watcher's own bookkeeping may save the run and its tasks while
+        this stop syncs them; the sync and finish are then decided again on
+        the newest records. Children and turns are never stopped twice.
+        """
+
+        def request_stop(latest: AgentRun) -> dict[str, Any] | None:
+            if latest.status in _TERMINAL_RUNS or isinstance(
+                latest.metadata.get("stop_request"), dict
+            ):
+                return None
+            return {
+                "metadata": {
+                    **latest.metadata,
+                    "stop_request": {"reason": reason, "status": status.value},
+                }
+            }
+
+        run = await revise_latest(self.store, AgentRun, run_id, request_stop)
         if run.status in _TERMINAL_RUNS:
             return run
+        requested = run.metadata["stop_request"]
+        reason = str(requested.get("reason") or reason)
+        status = RunStatus(requested.get("status") or status.value)
         for child, _ in reversed(
             (await self._children(str(run.metadata["supervisor_chat_session_id"])))
         ):
@@ -758,5 +790,16 @@ class DelegatedMissionService:
                 await self.harness.cancel_turn(turn.harness_turn_id, reason=reason)
             else:
                 await self.chat.stop_provider_turn(turn.id)
-        (await self._sync((await self.store.get(AgentRun, run_id))))
-        return await self._finish(run, status, reason)
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            latest = await self.store.get(AgentRun, run_id)
+            if latest.status in _TERMINAL_RUNS:
+                return latest
+            try:
+                (await self._sync(latest))
+                return await self._finish(latest, status, reason)
+            except RevisionConflict:
+                # diagnostic-expected: the watcher saved the run or a task
+                # first; sync and finish again on the newest records.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+        raise RevisionConflict("Mission kept changing while it was stopped")
