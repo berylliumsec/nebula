@@ -230,7 +230,11 @@ async def test_older_release_idle_worker_skip_is_recorded_once(mixed, monkeypatc
     def capture(*args, **fields):
         recorded.append((args, fields))
 
-    monkeypatch.setattr(runtime_auto_admission, "record_diagnostic", capture)
+    # raising=False: a release without the skip diagnostic must fail on the
+    # missing record below, not on the patch itself.
+    monkeypatch.setattr(
+        runtime_auto_admission, "record_diagnostic", capture, raising=False
+    )
     await owned_project(mixed, "chatless", "older-chatless", "older")
     await owned_project(mixed, "archived", "older-archived", "older", chat="archived")
     retired = []
