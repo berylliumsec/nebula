@@ -64,6 +64,17 @@ def prepare(path: Path) -> bytes:
 TIMEOUT_SECONDS = 30
 
 
+def retry_after(value: str | None) -> float | None:
+    """Seconds from a Retry-After header in seconds, bounded to one minute."""
+    try:
+        seconds = float(value) if value is not None else None
+    except ValueError:
+        return None
+    if seconds is None or seconds != seconds or seconds < 0:
+        return None
+    return min(seconds, 60.0)
+
+
 def send(url: str, token: str, payload: bytes, *, attempts: int = 6) -> dict:
     for attempt in range(attempts):
         request = Request(url, data=payload, headers={
@@ -83,12 +94,18 @@ def send(url: str, token: str, payload: bytes, *, attempts: int = 6) -> dict:
             if exc.code not in {429, 500, 502, 503, 504}:
                 raise
             last_error = exc
+            # 429 (too many reports waiting) and 503 say when to try again.
+            delay = retry_after(exc.headers.get("Retry-After"))
         except (URLError, TimeoutError) as exc:
             # A read timeout is not a URLError. Resending the identical body is
             # safe: Core dedupes it by event ID.
             last_error = exc
+            delay = None
         if attempt + 1 < attempts:
-            time.sleep(min(30, 2 ** attempt) + random.random())
+            time.sleep(
+                (delay if delay is not None else min(30, 2 ** attempt))
+                + random.random()
+            )
     raise RuntimeError(f"delivery failed after {attempts} attempts: {last_error}")
 
 

@@ -28,7 +28,11 @@ from .database import (
 from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
 from .diagnostics import record_caught_exception, record_diagnostic
 from .domain import Engagement
-from .runtime_coordination import CoordinationConflict, project_worker_commands
+from .runtime_coordination import (
+    CoordinationConflict,
+    pending_storage_dispatches,
+    project_worker_commands,
+)
 from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
 
@@ -230,6 +234,11 @@ class RuntimeAutoAdmission:
                 active_work = project_worker_commands(
                     ProjectOwnershipRow.project_id, ("queued", "running")
                 )
+                # A recorded storage alert opens its incident chat from the
+                # project's worker; keep or start one until it has.
+                storage_alert = pending_storage_dispatches(
+                    ProjectOwnershipRow.project_id
+                )
                 now = asyncio.get_running_loop().time()
                 # Projects waiting out a retry delay must not fill the batch
                 # and starve projects that could be admitted now.
@@ -258,6 +267,7 @@ class RuntimeAutoAdmission:
                             legacy_chat_start,
                             queued_work,
                             viewed,
+                            storage_alert,
                         ),
                     )
                 )
@@ -293,6 +303,7 @@ class RuntimeAutoAdmission:
                     ~active_work,
                     # An open project view keeps its worker like an open chat.
                     ~viewed,
+                    ~storage_alert,
                 ]
                 if self.idle_grace_ms and not short_of_capacity:
                     idle.append(
@@ -955,7 +966,15 @@ class RuntimeAutoAdmission:
             query = select(ProjectOwnershipRow, project_work).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
                 ProjectOwnershipRow.lease_expires_at_ms <= now,
-                or_(open_chat, pending_chat_start, legacy_chat_start, project_work),
+                or_(
+                    open_chat,
+                    pending_chat_start,
+                    legacy_chat_start,
+                    project_work,
+                    # A storage alert recorded before the owner died opens its
+                    # incident chat only from a recovered worker.
+                    pending_storage_dispatches(ProjectOwnershipRow.project_id),
+                ),
             )
             if self._recovery_cursor is not None:
                 query = query.where(
