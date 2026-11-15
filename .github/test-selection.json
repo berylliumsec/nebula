@@ -1,6 +1,6 @@
 {
-  "reviewed_by": "Claude butler-client-surface implementer (workflow Track B); root cause independently validated on origin/main by a separate Claude agent before the fix; an independent diff review is still required before merge",
-  "reason": "Butler handoff actions (notes, settings/theme/navigation, downloads, credentials, devices, diagnostics, etc.) return pending_browser_apply and change nothing until the requesting web app applies them, but Core could not tell a terminal turn from a browser turn, so Butler offered them in nebula-chat and the terminal printed 'Tool finished'. ChatCompletionRequest gains optional client_surface ('browser' default for existing web clients, 'terminal' from nebula-chat and the terminal Assistant); it is saved in the provider turn request_snapshot and harness turn metadata, passed to ButlerCapabilities on direct, queued, resumed and retried turns, and adds a terminal note to Butler's instructions. On the terminal surface ButlerCapabilities.invoke refuses any result in the pending_browser_apply state (decided from the action's result, not a name list, so a new handoff is covered and notes create/update stop being refused once they save in Core) with fixed browser_only guidance; the terminal labels an older Core's handoff receipt as needing the Nebula web app. Python: test_butler_client_surface.py (new: real handoffs incl. notes.delete refused on terminal and unchanged on browser, a synthetic future handoff action refused by result for read and change routes, Core-saving change still works, request/surface validation, provider API turn end to end with snapshot and instructions, harness turn metadata/prompt/capabilities; all 7 fail on origin/main), terminal shell and chat CLI tests for the sent field and the handoff notice (5 fail on main), the product-help search test for the new docs (fails on main) plus the index digest/sync tests, and existing Butler capability, settings browser-intent, harness Butler gateway and queued Butler follow-up tests around the changed paths.",
+  "reviewed_by": "Claude butler-client-surface implementer (workflow Track B); root cause independently validated on origin/main by a separate Claude agent before the fix; an independent review requested changes (older-Core 422, harness direct names) which this revision addresses; a re-review is still required before merge",
+  "reason": "Butler handoff actions (notes, settings/theme/navigation, downloads, credentials, devices, diagnostics, etc.) return pending_browser_apply and change nothing until the requesting web app applies them, but Core could not tell a terminal turn from a browser turn, so Butler offered them in nebula-chat and the terminal printed 'Tool finished'. ChatCompletionRequest gains optional client_surface ('browser' default for existing web clients, 'terminal' from nebula-chat and the terminal Assistant); it is saved in the provider turn request_snapshot and harness turn metadata, passed to ButlerCapabilities on direct, queued, resumed and retried turns, and adds a terminal note to Butler's instructions. On the terminal surface ButlerCapabilities.invoke refuses any result in the pending_browser_apply state (decided from the action's result, not a name list, so a new handoff is covered and notes create/update stop being refused once they save in Core) with fixed browser_only guidance; the terminal labels an older Core's handoff receipt as needing the Nebula web app. Python: test_butler_client_surface.py (new: real handoffs incl. notes.delete refused on terminal and unchanged on browser, a synthetic future handoff action refused by result for read and change routes, Core-saving change still works, request/surface validation, provider API turn end to end with snapshot and instructions, harness turn metadata/prompt/capabilities; all 7 fail on origin/main), terminal shell and chat CLI tests for the sent field and the handoff notice (5 fail on main), the product-help search test for the new docs (fails on main) plus the index digest/sync tests, and existing Butler capability, settings browser-intent, harness Butler gateway and queued Butler follow-up tests around the changed paths. Review follow-up: a Core older than client_surface rejects the field with a validation 422 (extra_forbidden) before its chat handler runs, saving no message or turn, so nebula-chat and the terminal Assistant resend that turn once without the field under a new Idempotency-Key and remember that Core; other 422s are reported, not resent (3 chat CLI + 2 terminal shell tests, failing at the previous head 4a1d79d). Harness Butler's legacy direct nebula.settings.*/nebula.navigate.open dispatch now applies the same browser_only refusal via refuse_browser_handoff (2 parametrized tests in test_butler_client_surface.py, failing at 4a1d79d). Docs and a product-help test cover the older-Core behavior.",
   "exclusions": "No UI, native or Playwright changes: the web app omits client_surface and keeps today's behavior, and ui/src/settingsCatalog.ts is unchanged because no setting changed. Run locally but not selected because they already fail on origin/main with identical results (this diff does not touch them): test_butler_capabilities.py::test_global_chat_settings_read_runs_outside_event_loop, test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets and ::test_provider_tools_are_bounded_to_catalog_and_project, test_harnesses.py::test_assistant_settings_keep_chat_history_and_replace_frozen_runtime[model|profile|mcp], test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. The rest of test_butler_capabilities.py, test_tool_failures.py, test_settings_assistant_tools.py, test_butler_memory.py, test_butler_notes.py, test_product_knowledge.py, test_chat_cli.py, test_terminal_shell.py and test_terminal_transport.py passed locally (84+ tests) and are not selected to keep the run focused.",
   "python_browser": false,
   "python_node": false,
@@ -8,7 +8,7 @@
     "3.12"
   ],
   "expected_tests": {
-    "python": 22,
+    "python": 30,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -29,11 +29,17 @@
     "tests/test_terminal_shell.py::test_browser_handoff_receipt_is_not_reported_as_finished",
     "tests/test_terminal_shell.py::test_browser_handoff_notice_reads_provider_and_harness_receipts",
     "tests/test_terminal_shell.py::test_provider_body_uses_saved_settings_and_excludes_harness_fields",
-    "tests/test_terminal_shell.py::test_stream_reports_acceptance_and_tool_progress_before_answer"
+    "tests/test_terminal_shell.py::test_stream_reports_acceptance_and_tool_progress_before_answer",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_a_terminal_newer_than_core",
+    "tests/v3/test_chat_cli.py::test_older_core_gets_the_turn_without_the_client_surface",
+    "tests/v3/test_chat_cli.py::test_older_supervisor_core_refusal_after_a_receipt_is_sent_once_more",
+    "tests/v3/test_chat_cli.py::test_other_validation_errors_are_reported_not_resent",
+    "tests/test_terminal_shell.py::test_older_core_gets_the_assistant_turn_without_the_client_surface",
+    "tests/test_terminal_shell.py::test_other_validation_errors_are_not_resent_without_the_surface"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "007deb59397d1551f0c5c1b681753b07e3836105c32a577bcde04fc57c9fcc7c"
+  "change_digest": "1840da5e42d4bb52278e0e6db7e010f1e10f83b508b25dcf53d46359f79a6f4b"
 }
