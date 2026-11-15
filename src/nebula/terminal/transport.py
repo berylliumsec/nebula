@@ -117,6 +117,62 @@ def terminal_text(value: Any) -> str:
     return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text)
 
 
+CLIENT_SURFACE = "terminal"
+
+
+def _tool_receipt(value: Any, depth: int = 0) -> dict[str, Any] | None:
+    """Find a tool result object in a provider receipt or harness payload."""
+    if depth > 3:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            # diagnostic-expected: plain tool text is not a structured receipt.
+            return None
+    if isinstance(value, list):
+        for item in value:
+            found = _tool_receipt(
+                item.get("text") if isinstance(item, dict) else item, depth + 1
+            )
+            if found is not None:
+                return found
+        return None
+    if not isinstance(value, dict):
+        return None
+    if "state" in value:
+        return value
+    for key in ("receipt", "result", "payload", "structuredContent", "content"):
+        if key in value:
+            found = _tool_receipt(value[key], depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def browser_handoff_notice(payload: dict[str, Any]) -> str | None:
+    """Say plainly when a finished tool only asked a web browser to act.
+
+    Core refuses these handoffs for terminal turns; this keeps an older Core's
+    receipt from reading as finished work.
+    """
+    receipt = _tool_receipt(payload)
+    if receipt is None or receipt.get("state") != "pending_browser_apply":
+        return None
+    operation = (
+        receipt.get("butler_operation")
+        or payload.get("display_name")
+        or payload.get("capability")
+        or payload.get("tool_name")
+        or payload.get("title")
+        or "This action"
+    )
+    return terminal_text(
+        f"{operation} needs the Nebula web app. The terminal cannot apply it, "
+        "so nothing changed; open the project in the Nebula web app to finish it."
+    )
+
+
 def origin(value: str) -> str:
     try:
         parsed = urlsplit(value.strip())

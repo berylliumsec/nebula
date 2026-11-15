@@ -17,7 +17,9 @@ import httpx
 import typer
 
 from .terminal.transport import (
+    CLIENT_SURFACE,
     RECEIPT_WAIT_SECONDS,
+    browser_handoff_notice,
     _retry_after,
     accepted_receipt,
 )
@@ -451,6 +453,10 @@ def stream(
                     )
                     finished = True
                     break
+                elif event == "tool_completed" and (
+                    notice := browser_handoff_notice(payload)
+                ):
+                    typer.echo(f"\n{notice}")
                 elif event in {
                     "approval_required",
                     "input_required",
@@ -521,6 +527,7 @@ def turn_body(
         "session_id": session["id"],
         "messages": [{"role": "user", "content": text}],
         "stream": True,
+        "client_surface": CLIENT_SURFACE,
     }
 
 

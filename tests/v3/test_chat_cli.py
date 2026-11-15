@@ -332,9 +332,47 @@ def test_chat_resumes_saved_session_streams_and_sends_only_the_new_message(
     assert "Hello terminal" in result.output
     assert len(submitted) == 1
     assert submitted[0]["control_assistant"] is True
+    assert submitted[0]["client_surface"] == "terminal"
     assert submitted[0]["session_id"] == "butler-1"
     assert submitted[0]["messages"] == [{"role": "user", "content": "new question"}]
     assert "harness_cyber_access_program" not in submitted[0]
+
+
+def test_browser_handoff_is_reported_as_needing_the_web_app(config, transport):
+    receipt = {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "device_theme", "theme": "light"},
+        "butler_operation": "nebula.settings.set_device_theme",
+    }
+
+    def handler(req):
+        if req.url.path.endswith("/completions"):
+            frames = [
+                ("started", {"turn_id": "turn-1"}),
+                (
+                    "tool_completed",
+                    {
+                        "turn_id": "turn-1",
+                        "capability": "nebula.capabilities.change",
+                        "status": "completed",
+                        "receipt": receipt,
+                    },
+                ),
+                ("done", {"message": {"content": "Asked."}}),
+            ]
+            return httpx.Response(
+                200,
+                text="".join(
+                    f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+                    for event, payload in frames
+                ),
+            )
+        return chat_handler(req)
+
+    transport(handler)
+    result = invoke(config, "chat", "--project", "Project", text="light theme\n/quit\n")
+    assert result.exit_code == 0, result.output
+    assert "nebula.settings.set_device_theme needs the Nebula web app" in result.output
 
 
 def test_disconnected_stream_is_not_reported_complete_or_replayed(config, transport):
