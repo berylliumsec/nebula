@@ -46,6 +46,7 @@
     "tests/test_simulation_host_restart.py",
     "tests/test_staged_deployer.py",
     "tests/test_thread_leak_guard.py",
+    "tests/v3/test_api_candidate_retirement.py",
     "tests/v3/test_bookkeeping_atomic.py",
     "tests/v3/test_chat.py::test_restart_adopts_late_receipt_into_the_ledger_the_provider_replays",
     "tests/v3/test_chat.py::test_restart_projects_late_recorded_tool_result_once",
@@ -105,6 +106,7 @@
     "tests/v3/test_runtime_processes.py::test_two_failed_real_starts_do_not_prevent_a_later_version",
     "tests/v3/test_runtime_work_observer.py",
     "tests/v3/test_setup.py",
+    "tests/v3/test_supervisor.py::test_one_listener_routes_static_builds_through_api_promotion_and_code_rollback",
     "tests/v3/test_turn_lifecycle_races.py",
     "tests/v3/test_turn_tool_bookkeeping.py",
     "tests/v3/test_worker_read_quiescence.py"
@@ -127,7 +129,7 @@
     "frontend-audit"
   ],
   "reviewed_by": "Codex release integration with independent source causal reviews and root integration review",
-  "reason": "Unique union of reviewed turn bookkeeping, deployment recovery, retirement, test infrastructure and Work re-track source selections. Add exact worker read quiescence cases to prove LeaseLost reconnect safety coexists with typed RevisionConflict diagnostics; add both expired-owner project-work recovery decisions to cover idle retirement versus chatless demand; include all15 Work observer protocol cases for compact versioned cursor compatibility. Source deltas are individually pinned in integration provenance. Collection:589 Python cases,15 frontend cases,11 browser cases across7catalog entries; no full-suite CI approval.",
+  "reason": "Unique union of reviewed turn bookkeeping, deployment recovery, retirement, test infrastructure and Work re-track source selections. Add exact worker read quiescence cases to prove LeaseLost reconnect safety coexists with typed RevisionConflict diagnostics; add both expired-owner project-work recovery decisions to cover idle retirement versus chatless demand; include all15 Work observer protocol cases for compact versioned cursor compatibility. Source deltas are individually pinned in integration provenance. Collection:617 Python cases,15 frontend cases,11 browser cases across7catalog entries; no full-suite CI approval. Add only26 API candidate retirement SQL guards and the exact managed listener promotion/rollback two-dialect case after independently reviewed same-version roll-forward repair; retain source Work import selectors after81-root overflow and pairing navigation fixture repair.",
   "exclusions": "No native changes; native test selection empty. No production or deployment actions. Final immutable candidate startup, legacy retirement and candidate upgrade/rollback rehearsal remain separate acceptance gates. Physical devices unavailable; browser coverage uses permanent desktop Chromium and emulated Android Chromium/iPhone WebKit projects. Full local approval remains separate and does not activate full CI.",
   "python_versions": [
     "3.11",
@@ -136,10 +138,10 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 589,
+    "python": 617,
     "frontend": 15,
     "native": 0,
     "playwright": 11
   },
-  "change_digest": "ec1b7e559f03e8f5d2de4dfaa2f6380f7ddb2a74ed54bf102645672c93bf8c1b"
+  "change_digest": "48c3694eadf3341f2d999e575bfa77747c66450059bc6f0cd7746c123b3882cc"
 }
