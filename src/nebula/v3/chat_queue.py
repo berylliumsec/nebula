@@ -191,10 +191,17 @@ def _authorization_unchanged(
 
 
 async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
-    """Called inside the same transaction that persists the new turn."""
+    """Called inside the same transaction that persists the new turn.
+
+    The queue is read again here and the claimed item is checked on that
+    read: still claiming, queue not paused, runtime authorization and device
+    unchanged. The write is guarded by that read's revision, not the claim's,
+    so an operator enqueueing another follow-up meanwhile does not send this
+    one to review.
+    """
     if claim is None:
         return
-    queue_id, revision, item_id = claim
+    queue_id, _claimed_revision, item_id = claim
     from .domain import ChatQueue
 
     row = await transaction.session.get(EntityRow, queue_id)
@@ -242,7 +249,7 @@ async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
     item.update(status="sending", turn_id=turn_id, harness_turn_id=harness_turn_id)
     (
         await transaction.update(
-            ChatQueue, queue_id, {"items": items}, expected_revision=revision
+            ChatQueue, queue_id, {"items": items}, expected_revision=row.revision
         )
     )
 

@@ -103,7 +103,13 @@ from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .native_hooks import discover_native_hooks
 from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
 from .skill_catalog import SkillSelection, discover_skills, native_skill_roots
-from .storage import ConflictError, NotFoundError, StoreTransaction
+from .storage import (
+    REVISE_ATTEMPTS,
+    ConflictError,
+    NotFoundError,
+    RevisionConflict,
+    StoreTransaction,
+)
 from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
 from .tools import (
     BudgetExhausted,
@@ -4775,49 +4781,64 @@ class SubagentService:
         usage: ChatTokenUsage | None = None,
         updates: MaybeAsync[[Any], object],
     ) -> None:
-        session = await self.store.get(ChatSession, record.parent_session_id)
-        messages = await self.chat.session_messages(session.id)
-        sequence = (
-            max(
-                [item.sequence for item in messages]
-                + [int(session.metadata.get("last_sequence") or 0)]
-            )
-            + 1
-        )
-        message = ChatMessage(
-            id=message_id,
-            engagement_id=record.engagement_id,
-            session_id=session.id,
-            sequence=sequence,
-            role=ChatRole.ASSISTANT,
-            content=content,
-            provider_profile_id=session.provider_profile_id,
-            model=session.model,
-            usage=usage or ChatTokenUsage(),
-            metadata={
-                "subagent_id": record.id,
-                "subagent_name": record.name,
-                "child_session_id": record.child_session_id,
-                **metadata,
-            },
-        )
-        async with self.store.transaction() as transaction:
-            (
-                await transaction.update(
-                    ChatSession,
-                    session.id,
-                    {
-                        "metadata": {
-                            **session.metadata,
-                            "message_count": sequence,
-                            "last_sequence": sequence,
-                        }
-                    },
-                    expected_revision=session.revision,
+        # Compaction, naming and turn bookkeeping save the parent conversation
+        # while a report is prepared. The report is placed again on the
+        # conversation's newest revision, so it is posted now rather than
+        # left for recovery; its fixed message id keeps it posted once.
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            session = await self.store.get(ChatSession, record.parent_session_id)
+            messages = await self.chat.session_messages(session.id)
+            sequence = (
+                max(
+                    [item.sequence for item in messages]
+                    + [int(session.metadata.get("last_sequence") or 0)]
                 )
+                + 1
             )
-            (await transaction.add(message))
-            await call_async(updates, transaction)
+            message = ChatMessage(
+                id=message_id,
+                engagement_id=record.engagement_id,
+                session_id=session.id,
+                sequence=sequence,
+                role=ChatRole.ASSISTANT,
+                content=content,
+                provider_profile_id=session.provider_profile_id,
+                model=session.model,
+                usage=usage or ChatTokenUsage(),
+                metadata={
+                    "subagent_id": record.id,
+                    "subagent_name": record.name,
+                    "child_session_id": record.child_session_id,
+                    **metadata,
+                },
+            )
+            try:
+                async with self.store.transaction() as transaction:
+                    (
+                        await transaction.update(
+                            ChatSession,
+                            session.id,
+                            {
+                                "metadata": {
+                                    **session.metadata,
+                                    "message_count": sequence,
+                                    "last_sequence": sequence,
+                                }
+                            },
+                            expected_revision=session.revision,
+                        )
+                    )
+                    (await transaction.add(message))
+                    await call_async(updates, transaction)
+                return
+            except RevisionConflict:
+                # diagnostic-expected: only a moved conversation is retried;
+                # a conflict on another record, or the last loss, is raised.
+                if attempt == REVISE_ATTEMPTS or (
+                    (await self.store.get(ChatSession, session.id)).revision
+                    == session.revision
+                ):
+                    raise
 
     async def _post_result(self, record: ChatSubagent) -> None:
         marker = self._restart_recovery_marker(record)

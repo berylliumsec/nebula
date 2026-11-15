@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .domain import ChatBackend, ChatSession, Engagement, HarnessSession, utc_now
-from .storage import NotFoundError
+from .storage import NotFoundError, revise_latest
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,19 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         chat = await store.get(ChatSession, session_id)
         if not is_temporary_chat(chat):
             raise HTTPException(409, "Only temporary conversations can be renewed here")
-        (await store.update(ChatSession, chat.id, {"metadata": chat.metadata}))
+        # Renewal only needs a fresh write time. It is saved on the newest
+        # revision so a turn's saved bookkeeping or naming that lands meanwhile
+        # is kept, never written back to the copy read above.
+        (
+            await revise_latest(
+                store,
+                ChatSession,
+                chat.id,
+                lambda latest: (
+                    {"metadata": latest.metadata} if is_temporary_chat(latest) else None
+                ),
+            )
+        )
         return Response(status_code=204)
 
     @router.delete("/chat/temporary-sessions/{session_id}", status_code=204)
