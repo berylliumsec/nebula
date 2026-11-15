@@ -2,6 +2,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/client";
 import { WorkPage } from "./WorkPage";
 import { startingProject } from "../test/projectRuntimeStarting";
 
@@ -12,9 +13,12 @@ const { workspace, saved, live } = vi.hoisted(() => {
     agents: [] as Array<{ session_id: string; engagement_id: string; title: string; state: "working" | "waiting"; turn_id: string }>,
     sessions: [{ id: "session-1", title: "Search implementation" }],
     sessionActivity: [{ sessionId: "session-1", state: "working" }],
-    item: { id: "item-1", engagement_id: project.id, title: "Build the search page", description: "Add filters", status: "in_progress", priority: "normal", assignee_session_id: "session-1", source_kind: "chat", source_id: "session-1", created_at: "2026-01-01T12:00:00Z", updated_at: "2026-01-01T12:00:00Z", last_update_at: null } as Record<string, unknown>,
+    item: { id: "item-1", engagement_id: project.id, title: "Build the search page", description: "Add filters", status: "in_progress", priority: "normal", assignee_session_id: "session-1", source_kind: "chat", source_id: "session-1", created_at: "2026-01-01T12:00:00Z", updated_at: "2026-01-01T12:00:00Z", last_update_at: null, revision: 1 } as Record<string, unknown>,
     items: [] as Array<Record<string, unknown>>,
     updates: [] as Array<Record<string, unknown>>,
+    // Hooks set by a test: a change another client makes just before this PATCH lands, and Core's 409 for a stale revision.
+    beforePatch: undefined as undefined | ((item: Record<string, unknown>) => void),
+    conflict: (() => new Error("conflict")) as () => Error,
   };
   const live = {
     onChange: undefined as undefined | ((kind: "work" | "projects") => void),
@@ -42,13 +46,21 @@ const { workspace, saved, live } = vi.hoisted(() => {
     }
     if (/\/work\/[^/]+$/.test(path)) {
       const item = saved.items.find((candidate) => candidate.id === path.split("/").at(-1));
-      if (init?.method === "PATCH" && item) Object.assign(item, JSON.parse(String(init.body)));
+      if (init?.method === "PATCH" && item) {
+        saved.beforePatch?.(item);
+        const { expected_revision: expected, ...changes } = JSON.parse(String(init.body));
+        // Like Core: a stated revision must match; without one the write applies to the latest item.
+        if (expected !== undefined && expected !== item.revision) throw saved.conflict();
+        Object.assign(item, changes, { revision: Number(item.revision) + 1 });
+      }
       return item;
     }
     if (path.endsWith("/work/item-1/updates") && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
-      const update = { id: "update-1", engagement_id: project.id, item_id: "item-1", summary: body.summary, next_step: body.next_step, blocker: body.blocker, status: body.status, actor_kind: "operator", actor_id: "operator", source_session_id: null, source_turn_id: null, source_run_id: null, created_at: "2026-01-01T13:00:00Z" };
-      saved.updates = [update]; saved.item.status = body.status; saved.item.last_update_at = update.created_at;
+      // Like Core: a blocker saves Blocked, and a check-in without a status keeps the item's current one.
+      const status = body.blocker ? "blocked" : body.status ?? saved.item.status;
+      const update = { id: "update-1", engagement_id: project.id, item_id: "item-1", summary: body.summary, next_step: body.next_step, blocker: body.blocker, status, actor_kind: "operator", actor_id: "operator", source_session_id: null, source_turn_id: null, source_run_id: null, created_at: "2026-01-01T13:00:00Z" };
+      saved.updates = [update]; saved.item.status = status; saved.item.last_update_at = update.created_at;
       return update;
     }
     if (path.endsWith("/work/item-1/updates")) return saved.updates;
@@ -80,6 +92,8 @@ describe("Work operator journey", () => {
     saved.item.source_kind = "chat"; saved.item.source_id = "session-1"; saved.item.assignee_session_id = "session-1"; saved.item.description = "Add filters";
     live.onChange = undefined; live.onReady = undefined;
     saved.items = [saved.item]; workspace.engagements = [workspace.engagement];
+    saved.item.revision = 1; saved.beforePatch = undefined;
+    saved.conflict = () => new ApiError("work item changed; read its current revision", 409);
     vi.clearAllMocks();
   });
 
@@ -138,6 +152,29 @@ describe("Work operator journey", () => {
     } finally {
       workspace.api.request.mockImplementation(original);
     }
+  });
+
+  it("shows that a check-in with a blocker is saved as Blocked and restores the chosen status without one", async () => {
+    const user = userEvent.setup();
+    openItem();
+    const form = (await screen.findByRole("heading", { name: "Post an update" })).closest("form")!;
+    const status = within(form).getByRole("combobox", { name: "Status" });
+    await user.selectOptions(status, "review");
+    await user.type(within(form).getByRole("textbox", { name: "Blocker" }), "Waiting for API keys");
+    expect(status).toHaveValue("blocked");
+    expect(status).toBeDisabled();
+    expect(status).toHaveAccessibleDescription("A blocker saves this update as Blocked.");
+    await user.clear(within(form).getByRole("textbox", { name: "Blocker" }));
+    expect(status).toHaveValue("review");
+    expect(status).toBeEnabled();
+    expect(status).not.toHaveAccessibleDescription();
+    await user.type(within(form).getByRole("textbox", { name: "Blocker" }), "Waiting for API keys");
+    await user.type(within(form).getByRole("textbox", { name: "Progress" }), "Filters need the search API");
+    await user.click(within(form).getByRole("button", { name: "Save update" }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work/item-1/updates", expect.objectContaining({ method: "POST", body: expect.stringContaining('"blocker":"Waiting for API keys","status":"blocked"') }));
+    expect(await screen.findByText("Blocked: Waiting for API keys")).toBeVisible();
+    expect(status).toHaveValue("blocked");
+    expect(status).toBeEnabled();
   });
 
   it("starts with agent tools on and keeps saved Work when they are disabled", async () => {
@@ -257,10 +294,85 @@ describe("Work operator journey", () => {
     expect(workspace.api.request).not.toHaveBeenCalledWith("engagements/project-1/work/available-item", expect.objectContaining({ method: "PATCH" }));
     saved.items.find((item) => item.id === "available-item")!.assignee_session_id = null;
     await user.click(within(dialog).getByRole("button", { name: "Link item" }));
-    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work/available-item", expect.objectContaining({ method: "PATCH", body: '{"assignee_session_id":"session-2"}' }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work/available-item", expect.objectContaining({ method: "PATCH", body: '{"assignee_session_id":"session-2","expected_revision":1}' }));
     expect(await screen.findByRole("button", { name: "1 Working now" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "1 Working now" }));
     expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/available-item");
+  });
+
+  it("links an item only at the revision it read, so a concurrent claim is not overwritten", async () => {
+    const user = userEvent.setup();
+    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    saved.items.push({ ...saved.item, id: "available-item", title: "Finish documentation", status: "ready", assignee_session_id: null, source_kind: "manual", source_id: null, revision: 3 });
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByText("Review documentation");
+    await user.click(screen.getByRole("button", { name: "Track work" }));
+    const dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Work item" }), "available-item");
+    // Another conversation claims the item after this page read it and before its write lands.
+    saved.beforePatch = (item) => {
+      saved.beforePatch = undefined;
+      Object.assign(item, { assignee_session_id: "another-session", revision: Number(item.revision) + 1 });
+    };
+    await user.click(within(dialog).getByRole("button", { name: "Link item" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This item was assigned to another conversation. Refresh Work and choose another item.");
+    expect(saved.items.find((item) => item.id === "available-item")).toMatchObject({ assignee_session_id: "another-session", revision: 4 });
+
+    // A change that leaves the item unassigned (an edit elsewhere) is read again and the link goes through at the new revision.
+    Object.assign(saved.items.find((item) => item.id === "available-item")!, { assignee_session_id: null });
+    saved.beforePatch = (item) => {
+      saved.beforePatch = undefined;
+      Object.assign(item, { title: "Finish the documentation", revision: Number(item.revision) + 1 });
+    };
+    await user.click(within(dialog).getByRole("button", { name: "Link item" }));
+    await user.click(await screen.findByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/available-item");
+    expect(saved.items.find((item) => item.id === "available-item")).toMatchObject({ assignee_session_id: "session-2", title: "Finish the documentation", revision: 6 });
+  });
+
+  it("does not link an item that was marked Done after the list loaded", async () => {
+    const user = userEvent.setup();
+    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    saved.items.push({ ...saved.item, id: "available-item", title: "Finish documentation", status: "ready", assignee_session_id: null, source_kind: "manual", source_id: null, revision: 3 });
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByText("Review documentation");
+    await user.click(screen.getByRole("button", { name: "Track work" }));
+    const dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Work item" }), "available-item");
+    // Another client finishes the item while the dialog is open.
+    Object.assign(saved.items.find((item) => item.id === "available-item")!, { status: "done", revision: 4 });
+    await user.click(within(dialog).getByRole("button", { name: "Link item" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This item was marked Done. Choose another item.");
+    expect(vi.mocked(workspace.api.request).mock.calls.some(([path, init]) => path.endsWith("/available-item") && init?.method === "PATCH")).toBe(false);
+    expect(saved.items.find((item) => item.id === "available-item")).toMatchObject({ assignee_session_id: null, status: "done", revision: 4 });
+  });
+
+  it("keeps the status the operator picked when a live update changes the item, and leaves an untouched status to Core", async () => {
+    const user = userEvent.setup();
+    openItem();
+    const form = (await screen.findByRole("heading", { name: "Post an update" })).closest("form")!;
+    const status = within(form).getByRole("combobox", { name: "Status" });
+    expect(status).toHaveValue("in_progress");
+    // An agent moves the item to Review; an operator who has not touched Status sees it, and a check-in does not move it back.
+    saved.item = { ...saved.item, status: "review", revision: 2 }; saved.items = [saved.item];
+    await act(async () => live.onChange?.("work"));
+    expect(status).toHaveValue("review");
+    await user.type(within(form).getByRole("textbox", { name: "Progress" }), "Docs are drafted");
+    await user.click(within(form).getByRole("button", { name: "Save update" }));
+    expect(await screen.findByText("Docs are drafted")).toBeVisible();
+    expect(JSON.parse(String(vi.mocked(workspace.api.request).mock.calls.find(([path, init]) => path.endsWith("/updates") && init?.method === "POST")![1]!.body))).not.toHaveProperty("status");
+    expect(saved.item.status).toBe("review");
+
+    // The operator picks Done; an agent then moves the item to Blocked while they are still writing.
+    await user.selectOptions(status, "done");
+    saved.item = { ...saved.item, status: "blocked", revision: 4 }; saved.items = [saved.item];
+    await act(async () => live.onChange?.("work"));
+    expect(status).toHaveValue("done");
+    await user.type(within(form).getByRole("textbox", { name: "Progress" }), "Published");
+    await user.click(within(form).getByRole("button", { name: "Save update" }));
+    expect(await screen.findByText("Published")).toBeVisible();
+    expect(saved.item.status).toBe("done");
+    expect(status).toHaveValue("done");
   });
 
   it("waits for the operator to refresh instead of polling", async () => {
