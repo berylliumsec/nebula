@@ -1,25 +1,26 @@
 {
-  "reviewed_by": "Codex terminal gate follow-up, independent causal validation by terminal_regression_cause",
-  "reason": "Test-only repairs for the two independently diagnosed terminal failures: child-session open requires the valid catch-up response in its MockTransport fixture, and markdown/F10 assertions must await the rendered navigation and footer regions rather than sampling a partially consumed PTY redraw. Both existing test nodes retain their assertions and exercise only those repaired contracts.",
-  "exclusions": "No production behavior changes; no real Core/API/provider or operator data. The baseline-common Idle/WORKING PTY failure is deferred and untouched. No frontend, native, Playwright, browser, Node, PostgreSQL, LAN, or full-suite coverage applies to these Python MockTransport and subprocess PTY test-only repairs.",
+  "reviewed_by": "Codex terminal gate follow-up, independent causal validation by terminal_regression_cause and baseline_websocket_hang_cause",
+  "reason": "Test-only repairs for the two independently diagnosed terminal failures: child-session open requires the valid catch-up response in its MockTransport fixture, and markdown/F10 assertions must await the rendered navigation and footer regions rather than sampling a partially consumed PTY redraw. Both existing test nodes retain their assertions and exercise only those repaired contracts. Also repair the independently diagnosed reconnect fixture hang: await both output injections, enqueue the coroutine thread-safely from a worker thread, and yield the event loop while observing detach; retain auth, replay sequence, and same-process assertions.",
+  "exclusions": "No production behavior changes; no real Core/API/provider or operator data. The baseline-common Idle/WORKING PTY failure is deferred and untouched. No frontend, native, Playwright, browser, Node, PostgreSQL, LAN, or full-suite coverage applies to these Python MockTransport, subprocess PTY, and in-memory ASGI/stub-process reconnect test-only repairs (isolated SQLite, no actual Core process or Docker).",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 2,
+    "python": 3,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
     "tests/test_terminal_agents.py::test_subagent_chat_opens_instead_of_being_refused",
-    "tests/test_terminal_pty.py::test_full_screen_renders_markdown_and_toggles_original_source"
+    "tests/test_terminal_pty.py::test_full_screen_renders_markdown_and_toggles_original_source",
+    "tests/v3/test_container_terminal.py::test_container_terminal_websocket_reconnects_to_the_same_process"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "6234b151771a388a937f38fadbfa8a200368640b76ad707be2e97cf0752be177"
+  "change_digest": "b2da40e83e58bc014800b3a188ed44bfe96cb2178fba85b0a5acebb396ae0511"
 }
