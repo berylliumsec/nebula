@@ -45,7 +45,7 @@ from .domain import (
     CompanionAction,
 )
 from .artifacts import ArtifactStore
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, revise_latest
 from .credentials import CredentialStore, CredentialCreateRequest
 from .runtime_browser_bridge import BRIDGE_UNAVAILABLE, CurrentVisibleAdapter
 
@@ -282,40 +282,62 @@ class BrowserCompanion:
             source="browser-upload",
             metadata={"browser_session_id": session.id, "sensitive": True},
         )
-        entries[uuid4().hex] = {
+        entry = {
             "artifact_id": artifact.id,
             "filename": artifact.filename,
             "size": artifact.size,
             "media_type": artifact.media_type,
         }
-        async with self.store.transaction() as transaction:
-            (await transaction.add(artifact))
-            (
-                await transaction.update(
-                    BrowserSession,
-                    session_id,
-                    {"metadata": {**session.metadata, "browser_files": entries}},
-                    expected_revision=session.revision,
+        alias = uuid4().hex
+        # The tab poll and other companion writers save the session while the
+        # file is stored. The attachment is added to the session as stored
+        # now, with the artifact in the same unit of work.
+        attempts = SESSION_WRITE_ATTEMPTS
+        while True:
+            entries = dict(session.metadata.get("browser_files", {}))
+            if len(entries) >= 8:
+                raise ValueError(
+                    "Attach at most eight files with ordinary filenames. Remove a file before adding another."
                 )
-            )
+            entries[alias] = entry
+            attempts -= 1
+            try:
+                async with self.store.transaction() as transaction:
+                    (await transaction.add(artifact))
+                    (
+                        await transaction.update(
+                            BrowserSession,
+                            session_id,
+                            {
+                                "metadata": {
+                                    **session.metadata,
+                                    "browser_files": entries,
+                                }
+                            },
+                            expected_revision=session.revision,
+                        )
+                    )
+                break
+            except ConflictError:
+                # diagnostic-expected: another writer saved the session first;
+                # attach again to that row, or report when spent.
+                if not attempts:
+                    raise
+                session = await self.session(session_id)
         return await self.file_catalog(session_id)
 
     async def remove_file(
         self, session_id: str, reference: str
     ) -> list[dict[str, Any]]:
         (await self.invalidate_pending_actions(session_id))
-        session = await self.session(session_id)
-        entries = dict(session.metadata.get("browser_files", {}))
-        if entries.pop(reference, None) is None:
-            raise ValueError("This file is no longer attached to the browser.")
-        (
-            await self.store.update(
-                BrowserSession,
-                session_id,
-                {"metadata": {**session.metadata, "browser_files": entries}},
-                expected_revision=session.revision,
-            )
-        )
+
+        def detach(session: BrowserSession) -> dict[str, Any]:
+            entries = dict(session.metadata.get("browser_files", {}))
+            if entries.pop(reference, None) is None:
+                raise ValueError("This file is no longer attached to the browser.")
+            return {"metadata": {**session.metadata, "browser_files": entries}}
+
+        (await self._change_session(session_id, detach))
         return await self.file_catalog(session_id)
 
     async def file_payload(
@@ -363,33 +385,37 @@ class BrowserCompanion:
     async def save_credential(
         self, session_id: str, request: CompanionCredentialCreate
     ) -> list[dict[str, Any]]:
-        session = await self.session(session_id)
-        entries = dict(session.metadata.get("browser_credentials", {}))
-        if any(
-            entry["label"].strip().casefold() == request.label.strip().casefold()
-            for entry in entries.values()
-        ):
-            raise ValueError(
-                "A protected value with this label already exists. Remove it before saving a replacement."
-            )
-        if len(entries) >= 16 or len(request.secret.get_secret_value()) > 4000:
-            raise ValueError(
-                "Use at most 16 browser credentials, each at most 4000 characters."
-            )
-        credential = self.credentials.create(request)
-        entries[uuid4().hex] = {
-            "label": request.label,
-            "reference": credential.reference,
-        }
-        try:
-            (
-                await self.store.update(
-                    BrowserSession,
-                    session_id,
-                    {"metadata": {**session.metadata, "browser_credentials": entries}},
-                    expected_revision=session.revision,
+        def checked(session: BrowserSession) -> dict[str, Any]:
+            entries = dict(session.metadata.get("browser_credentials", {}))
+            if any(
+                entry["label"].strip().casefold() == request.label.strip().casefold()
+                for entry in entries.values()
+            ):
+                raise ValueError(
+                    "A protected value with this label already exists. Remove it before saving a replacement."
                 )
-            )
+            if len(entries) >= 16 or len(request.secret.get_secret_value()) > 4000:
+                raise ValueError(
+                    "Use at most 16 browser credentials, each at most 4000 characters."
+                )
+            return entries
+
+        checked(await self.session(session_id))
+        credential = self.credentials.create(request)
+        alias = uuid4().hex
+
+        def associate(session: BrowserSession) -> dict[str, Any]:
+            # Checked again on the session as stored now: the tab poll and
+            # other companion writers save it while the secret is created.
+            entries = checked(session)
+            entries[alias] = {
+                "label": request.label,
+                "reference": credential.reference,
+            }
+            return {"metadata": {**session.metadata, "browser_credentials": entries}}
+
+        try:
+            (await self._change_session(session_id, associate))
         except Exception:
             # diagnostic-expected: roll back the secret if its association was not saved.
             self.credentials.delete(credential.reference)
@@ -400,19 +426,18 @@ class BrowserCompanion:
         self, session_id: str, reference: str
     ) -> list[dict[str, Any]]:
         (await self.invalidate_pending_actions(session_id))
-        session = await self.session(session_id)
-        entries = dict(session.metadata.get("browser_credentials", {}))
-        removed = entries.pop(reference, None)
-        if removed is None:
-            raise ValueError("This credential is not attached to this browser.")
-        (
-            await self.store.update(
-                BrowserSession,
-                session_id,
-                {"metadata": {**session.metadata, "browser_credentials": entries}},
-                expected_revision=session.revision,
-            )
-        )
+        removed: dict[str, Any] = {}
+
+        def detach(session: BrowserSession) -> dict[str, Any]:
+            entries = dict(session.metadata.get("browser_credentials", {}))
+            entry = entries.pop(reference, None)
+            if entry is None:
+                raise ValueError("This credential is not attached to this browser.")
+            removed.clear()
+            removed.update(entry)
+            return {"metadata": {**session.metadata, "browser_credentials": entries}}
+
+        (await self._change_session(session_id, detach))
         self.credentials.delete(removed["reference"])
         return await self.credential_catalog(session_id)
 
@@ -1047,7 +1072,7 @@ class BrowserCompanion:
                 if latest.status == "revoked":
                     return latest
                 raise
-        running = await self.store.update(
+        await self.store.update(
             CompanionAction,
             action.id,
             {"status": "running"},
@@ -1065,17 +1090,26 @@ class BrowserCompanion:
             # diagnostic-expected: cancellation of the chat turn must leave a
             # terminal state too; the exception is re-raised unchanged.
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     CompanionAction,
                     action.id,
-                    {"status": "failed"},
-                    expected_revision=running.revision,
+                    lambda latest: (
+                        {"status": "failed"} if latest.status == "running" else None
+                    ),
                 )
             )
             raise
-        return await self.store.update(
+        # Stopping assistant control while the browser performs the action
+        # can mark this running row failed as stale. The browser did perform
+        # it, so its result is recorded on the newest row and is never lost.
+        return await revise_latest(
+            self.store,
             CompanionAction,
             action.id,
-            {"status": "complete", "result": result},
-            expected_revision=running.revision,
+            lambda latest: (
+                {"status": "complete", "result": result}
+                if latest.status in {"running", "failed"}
+                else None
+            ),
         )
