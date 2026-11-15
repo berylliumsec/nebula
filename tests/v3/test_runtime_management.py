@@ -271,5 +271,11 @@ async def test_owned_project_refuses_real_shutdown_without_notifying_launcher(re
         },
     }
     response = await recovery.client.post(PATH, headers=AUTH, json=body)
-    assert response.status_code == 200 and response.json()["state"] == "uncertain"
+    # Since aedf0c7 (#1019) the migrate-before-shutdown refusal is raised
+    # before anything is held, as a no-effect ShutdownBlocked that names the
+    # project, so the receipt is "failed" rather than "uncertain".
+    assert response.status_code == 200 and response.json()["state"] == "failed"
+    result = response.json()["result"]
+    assert result["error_type"] == "ShutdownBlocked"
+    assert "admitted-project" in result["detail"]
     assert observed == [] and same_process(owner.pid, owner.process_birth)

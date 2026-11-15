@@ -57,6 +57,11 @@ npm --prefix ui test -- src/api/runtimeDefaults.test.ts
 npm --prefix ui run test:e2e -- tests/interface.spec.ts --project=mobile-webkit --grep 'configured harness default'
 ```
 
+For selected setup tests, invoke pytest through
+`python scripts/run_pytest_thread_guard.py -- <selected pytest arguments>`.
+The opt-in setup thread check reports newly leaked non-daemon threads; the
+wrapper bounds interpreter shutdown after that report and preserves failure.
+
 Pytest and the npm entry points reject unscoped runs; Playwright's configuration also guards
 direct `npx playwright test`. Real-Core no longer implicitly runs other projects.
 These guards prevent accidents, not a determined actor editing/bypassing the tools.

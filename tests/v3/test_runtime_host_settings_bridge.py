@@ -267,8 +267,14 @@ async def test_host_image_refusal_reports_audited_memory_block_before_daemon_wor
 ):
     from nebula.v3.database import MemoryJobRow
     from nebula.v3.domain import RunnerProfile
-    from nebula.v3.sandbox import ContainerImagePreparer
+    from nebula.v3.sandbox import ContainerImagePreparer, ContainerSandboxRunner
 
+    # Since c8b91c8 the host's setup service re-verifies configured runners, so
+    # the inert profile must report available to stay enabled and verified.
+    async def available(_runner):
+        return True, "Synthetic verified runner"
+
+    monkeypatch.setattr(ContainerSandboxRunner, "available", available)
     await settings.store.create(
         RunnerProfile(
             id="local",

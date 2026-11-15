@@ -444,7 +444,9 @@ async def test_api_peers_and_expired_execution_peers_cannot_call_host_memory(sha
     api = await shared.managed.host.spawn("v1", "api")
     forbidden = await peer(shared.managed, api)
     shared.clients.append(forbidden.client)
-    with execution_context(shared.lease), pytest.raises(RuntimeIpcError, match="401"):
+    # Since fa88f37 an API peer authenticates to a server that registers only
+    # the Work-batch capability, so host memory is not an operation it can call.
+    with execution_context(shared.lease), pytest.raises(RuntimeIpcError, match="404"):
         await forbidden.list("admitted-project")
     async with shared.managed.database.session() as session:
         runtime = await session.get(RuntimeInstanceRow, shared.identity.runtime_id)

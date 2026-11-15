@@ -13,6 +13,7 @@ from nebula.v3.chat import ChatService
 from nebula.v3.database import Database
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.storage import NebulaStore
+from nebula.v3.setup import SetupService
 from nebula.v3.async_utils import drain_callback_tasks, finish_cleanup
 
 
@@ -37,6 +38,7 @@ async def close_database_handles(monkeypatch, anyio_backend):
     original_chat = ChatService.__init__
     original_harness = HarnessRuntimeService.__init__
     original_store = NebulaStore.__init__
+    original_setup = SetupService.__init__
 
     def database(self, *args, **kwargs):
         original_database(self, *args, **kwargs)
@@ -54,6 +56,11 @@ async def close_database_handles(monkeypatch, anyio_backend):
         original_store(self, *args, **kwargs)
         stores.append(self)
 
+    def setup(self, *args, **kwargs):
+        original_setup(self, *args, **kwargs)
+        services.append(self)
+
+    monkeypatch.setattr(SetupService, "__init__", setup)
     monkeypatch.setattr(AsyncTestClient, "__init__", client)
     monkeypatch.setattr(Database, "__init__", database)
     monkeypatch.setattr(ChatService, "__init__", chat)

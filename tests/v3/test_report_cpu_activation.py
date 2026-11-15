@@ -16,13 +16,16 @@ import pytest
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.cpu_workers import CpuWorkerBusy, CpuWorkerPool
-from nebula.v3.domain import Engagement, Observation, Report, ReportRender
+from nebula.v3.domain import Artifact, Engagement, Observation, Report, ReportRender
+from nebula.v3.memory_policy import MemoryEnforcementUnavailable
 from nebula.v3.report_cpu_executor import ReportCpuExecutor
+from nebula.v3.reporting import ReportRenderError
 from nebula.v3.storage import NebulaStore
 from tests.v3.cpu_worker_fixtures import hold, identify
 from tests.v3.test_cpu_workers import until
 
 HEADERS = {"Authorization": "Bearer synthetic-cpu-activation"}
+MEMORY_HOLD = "PDF computation requires a memory-managed CPU runner"
 
 
 async def fixture(root):
@@ -62,14 +65,14 @@ def make_app(root, store, artifacts):
     )
 
 
-def status(client):
-    response = client.get("/api/v1/host-cpu-budget", headers=HEADERS)
+async def status(client):
+    response = await client.get("/api/v1/host-cpu-budget", headers=HEADERS)
     assert response.status_code == 200, response.text
     return response.json()
 
 
-def save(client, value, enabled, cpus=1):
-    return client.put(
+async def save(client, value, enabled, cpus=1):
+    return await client.put(
         "/api/v1/host-cpu-budget",
         headers=HEADERS,
         json={
@@ -81,14 +84,14 @@ def save(client, value, enabled, cpus=1):
     )
 
 
-def observed(client, expected):
+async def observed(client, expected):
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        value = status(client)
+        value = await status(client)
         if value["executor_state"] == expected:
             return value
         assert value["apply_state"] != "failed", value
-        time.sleep(0.02)
+        await asyncio.sleep(0.02)
     raise AssertionError(f"Worker state did not reach {expected}: {value}")
 
 
@@ -102,14 +105,14 @@ async def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
     store, artifacts, app = await fixture(tmp_path)
     try:
         async with TestClient(app) as client:
-            initial = observed(client, "disabled")
+            initial = await observed(client, "disabled")
             assert initial["enabled"] is False and initial["worker_count"] == 0
             assert (
                 initial["activation_supported"]
                 and initial["executor_scope"] == "report-pdfs"
             )
-            assert save(client, initial, True).status_code == 200
-            running = observed(client, "running")
+            assert (await save(client, initial, True)).status_code == 200
+            running = await observed(client, "running")
             assert (
                 running["apply_state"] == "applied"
                 and running["applied_cpu_limit"] == 1
@@ -131,18 +134,30 @@ async def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
                 render = await store.get(ReportRender, render_id)
                 if render.status.value not in {"queued", "rendering"}:
                     break
-                time.sleep(0.02)
-            assert render.status.value == "completed", render.error_detail
+                await asyncio.sleep(0.02)
+            # Since 64e0379 PDF computation is held until a memory-managed CPU
+            # runner exists: the render is refused before dispatch, its hold is
+            # recorded, and the activated affinity-only workers stay unused.
+            assert render.status.value == "failed", render.error_detail
+            assert MEMORY_HOLD in render.error_detail
+            assert render.pdf_artifact_id is None
             service = app.state.report_render_service
-            artifact, path = service.pdf(render_id)
-            assert artifacts.verify(artifact) and path.read_bytes().startswith(b"%PDF-")
-            prepared = service._prepare_render("report", 1)
-            expected, _ = service._build_pdf(prepared.snapshot)
-            assert path.read_bytes() == expected
+            with pytest.raises(ReportRenderError, match="not ready"):
+                await service.pdf(render_id)
+            assert not [
+                item
+                for item in await store.list_entities(Artifact)
+                if item.media_type == "application/pdf"
+            ]
+            jobs = await app.state.memory_compute.service.list_jobs()
+            assert [
+                (job.state, job.resource_kind, job.resource_id, job.reserved_bytes)
+                for job in jobs
+            ] == [("blocked", "report_pdf", render_id, 0)]
             pool = app.state.report_cpu_executor.pool
-            assert pool.snapshot()["completed"] == 1
-            assert save(client, running, False).status_code == 200
-            disabled = observed(client, "disabled")
+            assert pool.snapshot()["accepted"] == pool.snapshot()["completed"] == 0
+            assert (await save(client, running, False)).status_code == 200
+            disabled = await observed(client, "disabled")
             assert disabled["enabled"] is False and disabled["worker_count"] == 0
             assert_stopped(running["worker_pids"])
     finally:
@@ -155,13 +170,13 @@ async def test_restart_restores_enabled_policy_and_omitted_enabled_preserves_it(
     store, artifacts, app = await fixture(tmp_path)
     try:
         async with TestClient(app) as client:
-            initial = observed(client, "disabled")
-            assert save(client, initial, True).status_code == 200
-            first = observed(client, "running")
+            initial = await observed(client, "disabled")
+            assert (await save(client, initial, True)).status_code == 200
+            first = await observed(client, "running")
         assert_stopped(first["worker_pids"])
         restarted = make_app(tmp_path, store, artifacts)
         async with TestClient(restarted) as client:
-            current = observed(client, "running")
+            current = await observed(client, "running")
             assert current["enabled"] and current["host_id"] == first["host_id"]
             assert not set(current["worker_pids"]) & set(first["worker_pids"])
             response = await client.put(
@@ -174,8 +189,8 @@ async def test_restart_restores_enabled_policy_and_omitted_enabled_preserves_it(
                 },
             )
             assert response.status_code == 200 and response.json()["enabled"] is True
-            assert save(client, first, False).status_code == 409
-            assert status(client)["enabled"] is True
+            assert (await save(client, first, False)).status_code == 409
+            assert (await status(client))["enabled"] is True
         assert_stopped(current["worker_pids"])
     finally:
         (await store.database.dispose())
@@ -189,16 +204,23 @@ async def test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery(
     work = []
     try:
         async with TestClient(app) as client:
-            assert save(client, status(client), True).status_code == 200
-            running = observed(client, "running")
+            assert (await save(client, (await status(client)), True)).status_code == 200
+            running = await observed(client, "running")
             executor = app.state.report_cpu_executor
 
             async def start_jobs():
+                # Since 64e0379 the executor holds PDF computation until a
+                # memory-managed CPU runner exists, so the live job counts are
+                # produced by occupying the activated workers through their pool.
+                with pytest.raises(MemoryEnforcementUnavailable, match=MEMORY_HOLD):
+                    await executor.run(identify, "held")
                 work.append(
-                    asyncio.create_task(executor.run(hold, str(release), str(started)))
+                    asyncio.create_task(
+                        executor.pool.run(hold, str(release), str(started))
+                    )
                 )
                 await until(started.exists)
-                work.append(asyncio.create_task(executor.run(identify, "queued")))
+                work.append(asyncio.create_task(executor.pool.run(identify, "queued")))
                 await until(lambda: executor.pool.snapshot()["queued"] == 1)
 
             async def finish_jobs():
@@ -213,10 +235,10 @@ async def test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery(
                 return original(pid)
 
             try:
-                client.portal.call(start_jobs)
+                await start_jobs()
                 with monkeypatch.context() as patch:
                     patch.setattr(os, "sched_getaffinity", failed_affinity)
-                    unavailable = status(client)
+                    unavailable = await status(client)
                     assert unavailable["apply_state"] == "unavailable"
                     for field in (
                         "applied_cpu_limit",
@@ -230,16 +252,16 @@ async def test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery(
                     actual = executor.pool.snapshot()
                     assert actual["active"] == actual["queued"] == 1
                     assert actual["workers"][0]["alive"]
-                recovered = status(client)
+                recovered = await status(client)
                 assert recovered["worker_pids"] == running["worker_pids"]
                 assert [
                     recovered[field]
                     for field in ("worker_count", "active_jobs", "queued_jobs")
                 ] == [1, 1, 1]
             finally:
-                client.portal.call(finish_jobs)
-            assert save(client, recovered, False).status_code == 200
-            assert observed(client, "disabled")["worker_count"] == 0
+                await finish_jobs()
+            assert (await save(client, recovered, False)).status_code == 200
+            assert (await observed(client, "disabled"))["worker_count"] == 0
             assert_stopped(running["worker_pids"])
     finally:
         release.touch()
@@ -373,22 +395,22 @@ async def test_failed_start_keeps_saved_enabled_state_and_retry_starts_workers(
     executor.pool_factory = fail
     try:
         async with TestClient(app) as client:
-            initial = observed(client, "disabled")
-            assert save(client, initial, True).status_code == 200
+            initial = await observed(client, "disabled")
+            assert (await save(client, initial, True)).status_code == 200
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                failed = status(client)
+                failed = await status(client)
                 if failed["apply_state"] == "failed":
                     break
-                time.sleep(0.01)
+                await asyncio.sleep(0.01)
             assert (
                 failed["enabled"]
                 and failed["apply_state"] == "failed"
                 and not failed["worker_pids"]
             )
             executor.pool_factory = CpuWorkerPool
-            assert save(client, failed, True).status_code == 200
-            assert observed(client, "running")["applied_cpu_limit"] == 1
+            assert (await save(client, failed, True)).status_code == 200
+            assert (await observed(client, "running"))["applied_cpu_limit"] == 1
     finally:
         (await store.database.dispose())
 
@@ -399,18 +421,18 @@ async def test_unsupported_activation_and_sub_cpu_limits_do_not_change_policy(
     store, _, app = await fixture(tmp_path)
     try:
         async with TestClient(app) as client:
-            initial = observed(client, "disabled")
-            assert save(client, initial, True, 0.5).status_code == 422
-            assert status(client)["revision"] == initial["revision"]
+            initial = await observed(client, "disabled")
+            assert (await save(client, initial, True, 0.5)).status_code == 422
+            assert (await status(client))["revision"] == initial["revision"]
             monkeypatch.setattr(
                 ReportCpuExecutor,
                 "support_reason",
                 staticmethod(lambda: "Synthetic unsupported host"),
             )
-            unsupported = status(client)
+            unsupported = await status(client)
             assert not unsupported["activation_supported"]
-            assert save(client, unsupported, True).status_code == 422
-            assert status(client)["revision"] == initial["revision"]
+            assert (await save(client, unsupported, True)).status_code == 422
+            assert (await status(client))["revision"] == initial["revision"]
     finally:
         (await store.database.dispose())
 
@@ -419,7 +441,7 @@ async def test_legacy_policy_migrates_to_disabled_without_starting_workers(tmp_p
     store, artifacts, app = await fixture(tmp_path)
     try:
         async with TestClient(app) as client:
-            initial = observed(client, "disabled")
+            initial = await observed(client, "disabled")
         path = tmp_path / "host" / "host-cpu-budget.json"
         import json
 
@@ -427,7 +449,7 @@ async def test_legacy_policy_migrates_to_disabled_without_starting_workers(tmp_p
         policy.pop("enabled")
         path.write_text(json.dumps(policy))
         async with TestClient(make_app(tmp_path, store, artifacts)) as client:
-            value = observed(client, "disabled")
+            value = await observed(client, "disabled")
             assert (
                 value["enabled"] is False and value["revision"] == initial["revision"]
             )

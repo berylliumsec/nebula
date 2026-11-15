@@ -31,6 +31,7 @@ from nebula.v3.knowledge_index import (
     KnowledgeIndexStatus,
 )
 from nebula.v3.runtime_delivery import HttpIntent, MAX_REQUEST_BYTES, _json
+from nebula.v3.runtime_global_api import RuntimeGlobalApi
 from nebula.v3.runtime_host_services import HostSharedServices
 from nebula.v3.runtime_ipc import RuntimeIpcError
 from nebula.v3.runtime_vault import MAX_CONTENT_BYTES
@@ -135,6 +136,19 @@ async def upload(
     )
 
 
+async def global_read(library, path):
+    # Library item reads are served by the API worker's global SQL API
+    # (runtime_global_api.py), not by the supervisor this fixture runs alone,
+    # so read them through that same handler over the host's database.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=RuntimeGlobalApi(library.managed.database)),
+        base_url="https://fixture",
+    ) as client:
+        response = await client.get(path)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 async def wait_for_index(library):
     async with asyncio.timeout(5):
         while not library.index.entered.is_set():
@@ -161,9 +175,7 @@ async def test_global_library_lifecycle_replays_and_retains_original_artifact(li
     assert (await library.client.get("/api/v1/knowledge/index-status")).json()[
         "model"
     ] == "inert"
-    assert (
-        await library.client.get(f"/api/v1/library/items/{item['id']}")
-    ).json() == item
+    assert await global_read(library, f"/api/v1/library/items/{item['id']}") == item
     reindexed = await library.client.post(
         f"/api/v1/library/items/{item['id']}/reindex",
         params={"expected_revision": item["revision"]},
@@ -186,7 +198,7 @@ async def test_global_library_lifecycle_replays_and_retains_original_artifact(li
         headers={"Idempotency-Key": "delete"},
     )
     assert removed.status_code == 204
-    assert (await library.client.get("/api/v1/library/items")).json() == []
+    assert await global_read(library, "/api/v1/library/items") == []
     retained = await library.client.get(
         f"/api/v1/artifacts/{item['artifact_id']}/content"
     )
@@ -508,6 +520,9 @@ async def test_library_download_checks_provenance_device_revocation_and_integrit
     await library.store.create(foreign)
     assert not await library.host.library.owns_artifact(foreign.id)
     blob = library.host.library.artifacts.path_for(artifact)
+    # Content-addressed blobs are read-only (0o400); corrupt it as an outside
+    # writer that first makes it writable.
+    blob.chmod(0o600)
     blob.write_bytes(b"corrupted")
     failed = await library.client.get(path)
     assert failed.status_code == 409 and b"corrupted" not in failed.content

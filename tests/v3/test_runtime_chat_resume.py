@@ -13,7 +13,8 @@ from nebula.v3.execution_scope import execution_context
 from nebula.v3.runtime_chat_acceptance import CHAT_RESUME_COMMAND, bind_chat_command
 from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_coordination import CoordinationConflict
-from nebula.v3.runtime_delivery import HttpIntent
+from nebula.v3.deployments import DeploymentCoordinator
+from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_execution_worker import runtime as runtime
 from tests.v3.test_runtime_coordination import location as location
@@ -89,9 +90,14 @@ async def view(runtime, receipt, *, after=0):
             pool_settings=PoolSettings(5, 12, 3, 5),
         )
     )
+    # The API worker's global receipts share its store's transaction owner, as
+    # runtime_worker provides in production (17ec988).
+    delivery = RuntimeDelivery(
+        DeploymentCoordinator(store.database).coordination, runtime.delivery.vault
+    )
     app = create_api_worker(
         store,
-        runtime.delivery,
+        delivery,
         operator_token="fixture-token",
         project_for=forbidden,
         upstream_for=forbidden,

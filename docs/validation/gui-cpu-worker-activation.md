@@ -79,16 +79,21 @@ Local evidence:
   Screenshots were inspected at 1440 and 320. The five cases passed in 1.8 minutes.
   Three permanent WebKit iPhone profiles are selected in CI; physical devices
   were unavailable.
-- The source CLI smoke passed enable, PDF, resize 1→2, restart restoring two
-  workers, and disable to zero. It removes its temporary data and records the
-  controlled SIGINT exit code 130. The frozen-binary smoke remains a separate
-  required CI result; source CLI success is not substituted for it.
+- The CLI/frozen smoke records the executor capability Core advertises.
+  The current supervisor has no protected PDF executor: the smoke checks the
+  activation refusal, CPU policy save/readback/restart, and the saved PDF hold.
+  Dedicated in-process tests cover affinity-worker activation, resize and
+  shutdown when an executor is supplied. Successful PDF computation is not
+  claimed. Frozen-binary validation remains separate from source CLI validation.
+
 
 Commands:
 
 ```sh
 PYTHONPATH=src:. .venv/bin/python scripts/benchmarks/core_worker_activation_smoke.py \
-  --binary .venv/bin/nebula-core --output /tmp/cpu-activation-source-cli.json
+  --binary .venv/bin/nebula-core \
+  --runtime-bundle ui/src-tauri/resources/nebula-runtime \
+  --output /tmp/cpu-activation-source-cli.json
 ```
 
 The browser invocation uses `tests/host-cpu-budget.spec.ts` with exactly
