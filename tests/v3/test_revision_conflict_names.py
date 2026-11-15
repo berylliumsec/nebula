@@ -53,7 +53,7 @@ def _ref(project_id: str, kind: ResourceKind, entity, revision=None) -> Resource
 def test_message_keeps_the_words_clients_match_and_the_error_type():
     error = revision_conflict("chat_sessions", "chat-1", 17, 18)
 
-    assert type(error) is ConflictError
+    assert isinstance(error, ConflictError)
     assert str(error) == (
         "revision conflict on chat_sessions chat-1: expected 17, found 18"
     )

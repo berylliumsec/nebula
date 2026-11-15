@@ -36,6 +36,7 @@ from .domain import (
     ToolCallStatus,
 )
 from .research_results import ResearchResultService
+from .storage import revise_latest
 from .runtime_platform import (
     RuntimeToolComponents,
     conversation_search_components,
@@ -358,44 +359,44 @@ async def call_core_tool(
                     error=str(exc)[:1000],
                 )
             raise
+    # The tool has run. Its record on the chat turn is merged into the newest
+    # turn, which the harness's own tools record on concurrently: only this
+    # record is planned again on a conflict, never the tool.
     if (
         name == "goal.complete"
         and isinstance(value, dict)
         and value.get("accepted") is True
     ):
-        chat_turn = await runtime.store.get(ChatTurn, turn.chat_turn_id)
         (
-            await runtime.store.update(
+            await revise_latest(
+                runtime.store,
                 ChatTurn,
-                chat_turn.id,
-                {
+                turn.chat_turn_id,
+                lambda latest: {
                     "request_snapshot": {
-                        **chat_turn.request_snapshot,
+                        **latest.request_snapshot,
                         "goal_completion_proposal": arguments,
                     }
                 },
-                expected_revision=chat_turn.revision,
             )
         )
     if name == "tool_catalog.load":
-        current = await runtime.store.get(ChatTurn, turn.chat_turn_id)
-        loaded = sorted(
-            set(current.request_snapshot.get("core_loaded_tools", []))
-            | set(arguments["names"])
-        )
-        (
-            await runtime.store.update(
-                ChatTurn,
-                current.id,
-                {
-                    "request_snapshot": {
-                        **current.request_snapshot,
-                        "core_loaded_tools": loaded,
-                    }
-                },
-                expected_revision=current.revision,
+
+        def load_plan(latest: ChatTurn) -> dict[str, Any] | None:
+            loaded = sorted(
+                set(latest.request_snapshot.get("core_loaded_tools", []))
+                | set(arguments["names"])
             )
-        )
+            if loaded == latest.request_snapshot.get("core_loaded_tools"):
+                return None
+            return {
+                "request_snapshot": {
+                    **latest.request_snapshot,
+                    "core_loaded_tools": loaded,
+                }
+            }
+
+        (await revise_latest(runtime.store, ChatTurn, turn.chat_turn_id, load_plan))
     encoded = serialize_model_result(value)
     return {
         "content": [{"type": "text", "text": encoded}],

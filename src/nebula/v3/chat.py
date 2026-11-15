@@ -283,7 +283,9 @@ from .storage import (
     CorruptRecordError,
     NebulaStore,
     NotFoundError,
+    RevisionConflict,
     StoreTransaction,
+    revise_latest,
 )
 from .tool_markup import frame_start as tool_frame_start
 from .tool_markup import is_frame as tool_frame_is_frame
@@ -2898,6 +2900,7 @@ class ChatService:
             turns = [turn for turn in turns if turn.id not in queued_ids]
         for turn in turns:
             try:
+                turn = await self._reconcile_tool_bookkeeping(turn)
                 for _ in range(3):
                     latest = await self.store.get(ChatTurn, turn.id)
                     if latest.status not in active_statuses:
@@ -4203,6 +4206,7 @@ class ChatService:
                 raise ChatHistoryConflict(
                     "chat goal ownership changed; stale worker output was discarded"
                 )
+        latest = await self._reconcile_tool_bookkeeping(latest)
         prepared.turn = latest
         return latest
 
@@ -4474,7 +4478,9 @@ class ChatService:
                 exc,
                 stage="provider-admission",
             )
-            runtime.error = exc
+            # Followers are told once the turn is settled. When settling a
+            # failed response fails too, they still get the response's failure.
+            runtime.error = runtime.error or exc
         finally:
 
             async def cleanup():
@@ -5408,10 +5414,6 @@ class ChatService:
                 # child's question closed while its parent was idle) and
                 # continue its goal; neither may queue behind this finished run.
                 await runtime.admission.release(turn.id)
-            if self.stream_journal is None:
-                async with runtime.condition:
-                    runtime.done = True
-                    runtime.condition.notify_all()
             if turn is not None and (stopped or runtime.error is not None):
                 latest = await self.store.get(ChatTurn, turn.id)
                 if (
@@ -5471,10 +5473,12 @@ class ChatService:
                 )
             if turn is not None:
                 await self._close_provider_journal(turn.id, runtime)
-                if self.stream_journal is not None:
-                    async with runtime.condition:
-                        runtime.done = True
-                        runtime.condition.notify_all()
+            # Followers stop here and their callers read the turn and its goal
+            # next, so both are saved as ended before anyone is told.
+            async with runtime.condition:
+                runtime.done = True
+                runtime.condition.notify_all()
+            if turn is not None:
                 try:
                     await self.subagents.turn_settled(turn.id)
                 except Exception as exc:
@@ -6183,14 +6187,23 @@ class ChatService:
         if session is not None and (
             session.provider_profile_id != profile.id or session.model != selected_model
         ):
-            switch = await self.runtime_switch_preflight(
-                session.id,
+            # This request read the conversation before provider verification
+            # and tool ranking. Core's own naming and precompaction save it in
+            # the meantime, which is not the operator's concern; a runtime
+            # someone selected since then is, and still stops the switch.
+            current = await self.store.get(ChatSession, session.id)
+            if self._runtime_selection(current) != self._runtime_selection(session):
+                raise ChatHistoryConflict(
+                    "conversation changed; reload it before changing provider or model"
+                )
+            switch = await self._review_runtime_switch(
+                current,
                 ChatRuntimeSwitchPreflightRequest(
                     provider_id=profile.id,
                     model=selected_model,
                     tools_enabled=switch_tools_enabled,
                     max_output_tokens=request.max_output_tokens,
-                    expected_session_revision=session.revision,
+                    expected_session_revision=current.revision,
                 ),
             )
             if not switch.compatible:
@@ -12741,7 +12754,9 @@ class ChatService:
         return web_search_enabled(scope)
 
     async def _refresh_turn(self, turn: ChatTurn) -> ChatTurn:
-        return await self.store.get(ChatTurn, turn.id)
+        return await self._reconcile_tool_bookkeeping(
+            await self.store.get(ChatTurn, turn.id)
+        )
 
     async def _add_usage(
         self, turn: ChatTurn, response: ModelResponse, *, content_delta: str = ""
@@ -12995,39 +13010,8 @@ class ChatService:
     ) -> ChatTurn:
         (await self.turn_ledger.import_legacy(turn))
         sequence = await self.turn_ledger.append(turn.id, entry)
-        changes: dict[str, Any] = {
-            "status": status,
-            "next_step": turn.next_step + 1,
-            "execution_tool_calls": turn.execution_tool_calls
-            + (
-                1
-                if entry.get("name") != GOAL_COMPLETE_TOOL_NAME
-                and entry.get("budget_class")
-                not in {"artifact_query", "delivery", _REFUSED_BUDGET_CLASS}
-                else 0
-            ),
-            "artifact_queries": turn.artifact_queries
-            + (1 if entry.get("budget_class") == "artifact_query" else 0),
-            "ledger_sequence": sequence,
-            "approval_id": approval_id,
-        }
-        if turn.queued_at is None:
-            # Expansion-release compatibility for a legacy nonterminal turn.
-            # New turns never start this projection and stay compact.
-            changes.update(
-                {
-                    "tool_call_ids": [
-                        *turn.tool_call_ids,
-                        str(entry["tool_call_id"]),
-                    ],
-                    "tool_history": [*turn.tool_history, entry],
-                }
-            )
-        return await self.store.update(
-            ChatTurn,
-            turn.id,
-            changes,
-            expected_revision=turn.revision,
+        return await self._project_tool_bookkeeping(
+            turn, sequence, status=status, approval_id=approval_id
         )
 
     async def _update_tool_step(
@@ -13040,18 +13024,117 @@ class ChatService:
     ) -> ChatTurn:
         (await self.turn_ledger.import_legacy(turn))
         sequence = await self.turn_ledger.append(turn.id, entry)
-        changes: dict[str, Any] = {
-            "status": status,
-            "ledger_sequence": sequence,
-            "approval_id": approval_id,
+        return await self._project_tool_bookkeeping(
+            turn, sequence, status=status, approval_id=approval_id
+        )
+
+    async def _project_tool_bookkeeping(
+        self,
+        turn: ChatTurn,
+        sequence: int,
+        *,
+        status: ChatTurnStatus,
+        approval_id: str | None,
+        persist: bool = False,
+        update_status: bool = True,
+    ) -> ChatTurn:
+        """Project an already committed step without repeating its effect.
+
+        A terminal state or a newer ledger transition wins over this writer.
+        Counter recovery uses the durable ledger, so even exhaustion of the
+        bounded projection retries cannot erase a completed tool result.
+        """
+
+        history_sequence, history = await self.turn_ledger.history_snapshot(turn)
+        step_count = max((int(item.get("step", 0)) + 1 for item in history), default=0)
+        execution_count = sum(
+            item.get("name") != GOAL_COMPLETE_TOOL_NAME
+            and item.get("budget_class")
+            not in {"artifact_query", "delivery", _REFUSED_BUDGET_CLASS}
+            for item in history
+        )
+        artifact_count = sum(
+            item.get("budget_class") == "artifact_query" for item in history
+        )
+        terminal = {
+            ChatTurnStatus.COMPLETE,
+            ChatTurnStatus.FAILED,
+            ChatTurnStatus.CANCELLED,
+            ChatTurnStatus.INTERRUPTED,
         }
-        if turn.queued_at is None:
-            changes["tool_history"] = [*turn.tool_history[:-1], entry]
-        return await self.store.update(
-            ChatTurn,
-            turn.id,
-            changes,
-            expected_revision=turn.revision,
+
+        def plan(latest: ChatTurn) -> dict[str, Any]:
+            changes: dict[str, Any] = {
+                "next_step": max(latest.next_step, step_count),
+                "execution_tool_calls": max(
+                    latest.execution_tool_calls, execution_count
+                ),
+                "artifact_queries": max(latest.artifact_queries, artifact_count),
+                "ledger_sequence": max(latest.ledger_sequence, history_sequence),
+            }
+            if (
+                update_status
+                and latest.status not in terminal
+                and latest.ledger_sequence < sequence
+            ):
+                changes.update(status=status, approval_id=approval_id)
+            if latest.queued_at is None:
+                # Legacy clients still read the JSON projection. Merge by step
+                # instead of replacing the last entry, which may be another tool.
+                merged = {
+                    int(item.get("step", 0)): item for item in latest.tool_history
+                }
+                for item in history:
+                    number = int(item.get("step", 0))
+                    if (
+                        latest.ledger_sequence <= history_sequence
+                        or number not in merged
+                    ):
+                        merged[number] = item
+                changes["tool_history"] = [merged[key] for key in sorted(merged)]
+                changes["tool_call_ids"] = list(
+                    dict.fromkeys(
+                        [*latest.tool_call_ids]
+                        + [
+                            str(item["tool_call_id"])
+                            for item in history
+                            if item.get("tool_call_id")
+                        ]
+                    )
+                )
+            return changes
+
+        try:
+            return await revise_latest(
+                self.store, ChatTurn, turn.id, plan, locked_fallback=persist
+            )
+        except RevisionConflict as exc:
+            record_caught_exception(
+                "chat",
+                "chat.tool_bookkeeping_deferred",
+                "A saved tool result is retained in the turn ledger while its projection is busy.",
+                exc,
+                stage="turn-bookkeeping",
+                metadata={"entity_id": turn.id, "ledger_sequence": sequence},
+            )
+            # Keep the running producer's counters correct; its next projection
+            # re-reads the ledger. No tool or ledger append is retried here.
+            latest = await self.store.get(ChatTurn, turn.id)
+            return latest.model_copy(update=plan(latest))
+
+    async def _reconcile_tool_bookkeeping(self, turn: ChatTurn) -> ChatTurn:
+        """Recover a missed turn projection using only saved step events."""
+
+        sequence = await self.turn_ledger.latest_sequence(turn.id)
+        if sequence <= turn.ledger_sequence:
+            return turn
+        return await self._project_tool_bookkeeping(
+            turn,
+            sequence,
+            status=turn.status,
+            approval_id=turn.approval_id,
+            persist=True,
+            update_status=False,
         )
 
     @staticmethod
@@ -14680,6 +14763,7 @@ class ChatService:
     async def reconcile_recorded_effects(self, turn_id: str) -> ChatTurn:
         """Repair interrupted turn projections from durable tool and hook facts."""
 
+        await self._reconcile_tool_bookkeeping(await self.store.get(ChatTurn, turn_id))
         (await self._reconcile_recorded_tool_results(turn_id))
         return await self._reconcile_recorded_hook_outcomes(turn_id)
 
@@ -16178,6 +16262,39 @@ class ChatService:
             raise ChatHistoryConflict(
                 "conversation changed; reload it before changing provider or model"
             )
+        return await self._review_runtime_switch(
+            session, request, _confirmation_revision=_confirmation_revision
+        )
+
+    @staticmethod
+    def _runtime_selection(session: ChatSession) -> tuple[Any, ...]:
+        """What a provider or model switch replaces, and only that.
+
+        Core saves a conversation on its own (its name, its compacted context,
+        its message count), and each save moves the revision. These are the
+        fields an operator or Butler selects; they tell such a save from a
+        runtime someone else chose.
+        """
+
+        return (
+            session.backend,
+            session.provider_profile_id,
+            session.harness_profile_id,
+            session.harness_session_id,
+            session.model,
+            session.metadata.get("assistant_config"),
+            session.metadata.get("pending_runtime_switch"),
+        )
+
+    async def _review_runtime_switch(
+        self,
+        session: ChatSession,
+        request: ChatRuntimeSwitchPreflightRequest,
+        *,
+        _confirmation_revision: int | None = None,
+    ) -> ChatRuntimeSwitchPreflight:
+        """Review a switch against ``session``, which the caller has just read."""
+
         # Provider turns carry their own runtime. A harness turn can still
         # reattach its vendor session, so a backend change needs an idle chat.
         profile = await self.store.get(ProviderProfile, request.provider_id)

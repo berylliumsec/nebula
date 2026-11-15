@@ -31,6 +31,7 @@ from nebula.v3.domain import (
     ScopePolicy,
 )
 from nebula.v3.policy import PolicyDecision, PolicyEffect
+from nebula.v3.provider_scheduler import ProviderSchedulerConfig
 from nebula.v3.providers import (
     ModelCapabilities,
     ModelMessage,
@@ -112,14 +113,21 @@ class OverlappingBroker(RecordingBroker):
         super().__init__()
         self.active = 0
         self.peak = 0
+        self.overlap = asyncio.Event()
 
     async def execute(self, invocation, scope, *, approval=None):
         del scope, approval
         self.calls.append(invocation)
         self.active += 1
         self.peak = max(self.peak, self.active)
-        await asyncio.sleep(0.02)
-        self.active -= 1
+        if self.active == 2:
+            self.overlap.set()
+        try:
+            # Prove both calls were admitted together, without depending on
+            # the loaded test host scheduling them inside a 20ms interval.
+            await asyncio.wait_for(self.overlap.wait(), 10)
+        finally:
+            self.active -= 1
         return ToolExecutionResult(output={"value": invocation.arguments["value"]})
 
 
@@ -393,7 +401,7 @@ async def test_routing_prose_stays_visible_and_separate_from_reasoning(
         assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
         [stored] = [
             item
-            for item in service.session_messages("session")
+            for item in await service.session_messages("session")
             if item.role == ChatRole.ASSISTANT
         ]
         assert stored.content == visible
@@ -545,7 +553,7 @@ async def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_
             calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
         )
         store, service, prepared, _ = await _prepared(tmp_path, [routing], broker)
-        service.start_provider_turn(prepared)
+        await service.start_provider_turn(prepared)
         await asyncio.wait_for(broker.started.wait(), 2)
 
         stopped = await service.stop_provider_turn("turn")
@@ -575,6 +583,10 @@ async def test_batched_safe_reads_overlap_and_commit_in_provider_order(tmp_path)
     store, service, prepared, provider = await _prepared(
         tmp_path, responses, broker, parallel_safe=True
     )
+    service.provider_scheduler.config = ProviderSchedulerConfig(
+        per_turn_tool_limit=2, global_tool_limit=2
+    )
+    service._global_tool_slots = asyncio.Semaphore(2)
 
     (await service.complete(prepared))
 
@@ -783,7 +795,7 @@ async def test_routing_thoughts_reach_the_transcript(tmp_path):
     assert streamed == episode
     stored = [
         item
-        for item in service.session_messages("session")
+        for item in await service.session_messages("session")
         if item.role == ChatRole.ASSISTANT
     ]
     assert stored[-1].reasoning == episode
@@ -1115,7 +1127,7 @@ async def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
     # A reload reads the same name, without re-deriving it from the digest.
     stored = [
         item
-        for item in service.session_messages("session")
+        for item in await service.session_messages("session")
         if item.role == ChatRole.ASSISTANT
     ]
     [result] = stored[-1].metadata["tool_results"]
