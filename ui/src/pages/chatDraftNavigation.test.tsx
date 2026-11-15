@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter, useLocation } from "react-router-dom";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { DialogProvider } from "../components/DialogSystem";
 import { ThemeProvider } from "../state/ThemeContext";
@@ -34,6 +34,13 @@ function unmatchedCoreResponse(input: RequestInfo | URL) {
   return new Response("[]", { status: 200 });
 }
 
+// App lazy-loads the Workbench page. On a busy host Vite's on-demand transform of
+// that module graph alone can exceed the 5 s tab wait below, so load it once
+// before the test starts; the test still waits for the real render.
+beforeAll(async () => {
+  await import("./SessionsPage");
+}, 60_000);
+
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
@@ -44,8 +51,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// A full App render, the lazy Workbench and typed input take 3-5 s under load,
-// against vitest's 5 s default (CI passes --testTimeout=15000).
+// A full App render and typed input take 3-6 s under load, against vitest's
+// 5 s default (CI passes --testTimeout=15000).
 it("restores an unsent new-chat draft after visiting a saved conversation", async () => {
   const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
   const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
