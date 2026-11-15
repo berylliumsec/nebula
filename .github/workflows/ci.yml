@@ -284,10 +284,11 @@ jobs:
             test -n "$NEBULA_TEST_POSTGRES_URL" || { echo 'Selected PostgreSQL coverage requires its owned database runtime.' >&2; exit 1; }
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
-          poetry run pytest --collect-only -q "${targets[@]}"
           if jq -e 'index("tests/v3/test_checkpoint_heartbeat.py") != null' <<<"$SELECTED_TESTS" >/dev/null; then
-            timeout 300s poetry run -- python scripts/run_pytest_thread_guard.py -- -vv -o faulthandler_timeout=45 -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+            timeout -k 5s 60s poetry run pytest --collect-only -vv -o faulthandler_timeout=30 "${targets[@]}"
+            timeout -k 5s 300s poetry run pytest -vv -o faulthandler_timeout=45 -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
           else
+            poetry run pytest --collect-only -q "${targets[@]}"
             poetry run -- python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
           fi
       - name: Lint Nebula 3
