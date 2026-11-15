@@ -28,6 +28,7 @@ from .automation_runtime import AutomationRuntimeManager, ContainerRuntimeSessio
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import AutomationProjectPolicy, ChatSession, Engagement, NotebookRun
 from .notebook_file_index import FileIndexUnavailable, list_indexed_notebooks
+from .project_reads import active_notebook_runs
 from .storage import ConflictError, NebulaStore
 
 
@@ -563,12 +564,7 @@ class NotebookService:
                 )
 
     async def active_runs(self, engagement_id: str) -> list[NotebookRun]:
-        (await self.store.get(Engagement, engagement_id))
-        return await self.store.find_entities(
-            NotebookRun,
-            {"engagement_id": engagement_id, "status": ["queued", "running"]},
-            limit=None,
-        )
+        return await active_notebook_runs(self.store, engagement_id)
 
     @asynccontextmanager
     async def guard_workspace_relink(self, engagement_id: str) -> AsyncIterator[None]:

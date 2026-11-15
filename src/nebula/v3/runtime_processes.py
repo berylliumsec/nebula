@@ -29,6 +29,7 @@ from .database import (
 )
 from .async_utils import finish_cleanup
 from .database_pool import PoolSettings
+from .deployment_recovery import checkpoint as operation_checkpoint
 from .deployment_protocol import IPC_PROTOCOL, ReleaseManifest, WorkerIdentity
 from .deployments import DeploymentCoordinator
 from .domain import NebulaModel
@@ -532,6 +533,9 @@ class RuntimeProcessHost:
                 expected_schema=plan["schema"],
                 expected_head=plan["current_head"],
             )
+            await operation_checkpoint(
+                phase="migration_spawn_intent", version=version, manifest_sha256=digest
+            )
             child = await asyncio.create_subprocess_exec(
                 str(bundle / manifest.core_executable),
                 "runtime-migrate",
@@ -543,12 +547,41 @@ class RuntimeProcessHost:
                 env=detached_worker_environment(bundle),
             )
 
+            try:
+                birth = process_birth(child.pid)
+                if birth is None:
+                    await child.wait()
+                    raise CoordinationConflict(
+                        "migration exited before effect admission"
+                    )
+                await operation_checkpoint(
+                    phase="migration_spawned",
+                    children=[
+                        {
+                            "pid": child.pid,
+                            "birth": birth,
+                            "kind": "migration",
+                            "process_origin": process_origin(),
+                        }
+                    ],
+                )
+                await operation_checkpoint(phase="migration_admitted")
+
+            except BaseException:
+                # Bootstrap was not sent: the child cannot migrate. Close its
+                # private input and join it before releasing the operation.
+                if child.stdin is not None:
+                    child.stdin.close()
+                await finish_cleanup(child.wait())
+                raise
+
             # A cancelled request does not interrupt a migration halfway. The
             # operation ledger records uncertainty until authoritative readback.
             async def complete():
                 output, _errors = await child.communicate(
                     bootstrap.model_dump_json().encode() + b"\n"
                 )
+                await operation_checkpoint(phase="migration_exited")
                 if child.returncode or len(output) > 64 * 1024:
                     raise CoordinationConflict(
                         "The accepted migration did not confirm completion; inspect current schema before retrying"
@@ -620,6 +653,12 @@ class RuntimeProcessHost:
             child = None
             identity = None
             try:
+                await operation_checkpoint(
+                    phase="worker_spawn_intent",
+                    runtime_id=runtime_id,
+                    version=version,
+                    role=role,
+                )
                 self.credentials.create(reference=reference)
                 descriptor = os.open(
                     self.root / (runtime_id + ".log"),
@@ -669,6 +708,19 @@ class RuntimeProcessHost:
                     operator_token=SecretStr(self.operator_token)
                     if self.operator_token is not None
                     else None,
+                )
+                await operation_checkpoint(
+                    phase="worker_spawned",
+                    children=[
+                        {
+                            "pid": identity.pid,
+                            "birth": identity.process_birth,
+                            "kind": "worker",
+                            "process_origin": process_origin(),
+                        }
+                    ],
+                    runtime_id=runtime_id,
+                    endpoint=identity.endpoint,
                 )
                 assert child.stdin is not None
                 async with asyncio.timeout(timeout):
@@ -741,6 +793,16 @@ class RuntimeProcessHost:
 
                 aborted = await finish_cleanup(failed_start())
                 error = sys.exc_info()[1]
+                if (
+                    not aborted
+                    and isinstance(error, Exception)
+                    and identity is not None
+                    and await self._committed_ready(identity)
+                ):
+                    # Readiness committed before the failure (a deadline that
+                    # expired while the probe closed, or a lost commit reply).
+                    # The worker is started; report it rather than an unknown.
+                    return identity
                 if aborted and isinstance(error, Exception):
                     # The process is confirmed gone and its reservation
                     # retired, so this start had no effect and may be retried.
@@ -755,6 +817,35 @@ class RuntimeProcessHost:
                         f"{reason}; its start was aborted cleanly and nothing was started"
                     ) from error
                 raise
+
+    async def _committed_ready(self, identity: WorkerIdentity) -> bool:
+        """Whether SQL records this exact live incarnation as ready."""
+        try:
+            async with self.coordinator.database.session() as session:
+                row = await session.get(
+                    RuntimeProcessRow, identity.runtime_id, populate_existing=True
+                )
+                if row is None:
+                    return False
+                committed = (
+                    row.state,
+                    row.pid,
+                    row.process_birth,
+                    row.version,
+                    row.role,
+                    row.endpoint,
+                )
+        except Exception:
+            # diagnostic-expected: an unreadable row keeps the original failure; the start stays unconfirmed.
+            return False
+        return committed == (
+            "ready",
+            identity.pid,
+            identity.process_birth,
+            identity.version,
+            identity.role,
+            identity.endpoint,
+        ) and same_process(identity.pid, identity.process_birth)
 
     async def reconcile_idle_project_retirements(self, *, limit: int = 8) -> list[str]:
         """Finish bounded retirements of quiesced workers.
@@ -897,6 +988,26 @@ class RuntimeProcessHost:
             # runtime owner, resource, command, and capacity reservation.
             await self.retire(runtime_id)
             return True
+
+        # Hold admission only while this worker can quiesce. A handoff or
+        # recovery target stays prepared until the supervisor activates it, and
+        # a starting or failed worker would only refuse. Each refused hold
+        # fails the project's reads and chat admission until it is released.
+        client = await self.rpc(runtime_id)
+        try:
+            current = await client.call("execution.status/v1", {}, timeout=5)
+        except (httpx.HTTPError, OSError, RuntimeIpcError):
+            # diagnostic-expected: an unreachable worker keeps its project; idle retirement asks again on a later pass.
+            return False
+        finally:
+            await client.close()
+        if current.get("lease") != asdict(lease) or current.get("state") not in {
+            "ready",
+            # A quiescence already under way finishes under the same hold.
+            "quiescing",
+            "closed",
+        }:
+            return False
 
         if not await self.coordinator.request_project_retirement(lease):
             return False

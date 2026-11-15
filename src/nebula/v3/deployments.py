@@ -39,6 +39,7 @@ from .deployment_protocol import (
     DeploymentStatus,
     HandoffPhase,
     MAX_EXECUTION_VERSIONS,
+    ProcessDeploymentStatus,
     ProjectDeploymentStatus,
     ReleaseManifest,
     ResourceSnapshot,
@@ -190,9 +191,7 @@ class DeploymentCoordinator:
             await session.scalar(select(func.max(SchemaVersionRow.version))) or 0
         )
         if not manifest.schema_min <= schema <= manifest.schema_max:
-            raise CoordinationConflict(
-                "candidate does not support the current SQL schema"
-            )
+            raise OperationRejected("candidate does not support the current SQL schema")
         versions = set(
             await session.scalars(
                 select(RuntimeProcessRow.version).where(
@@ -205,7 +204,7 @@ class DeploymentCoordinator:
             if row is None or not manifest.compatible_with(
                 ReleaseManifest.model_validate(row.manifest), schema_version=schema
             ):
-                raise CoordinationConflict(
+                raise OperationRejected(
                     "candidate protocol/schema is incompatible with a resident runtime"
                 )
         if role == "execution":
@@ -226,7 +225,7 @@ class DeploymentCoordinator:
                     ReleaseManifest.model_validate(api_release.manifest).features
                 )
                 if not required <= provided:
-                    raise CoordinationConflict(
+                    raise OperationRejected(
                         "Promote an API with the execution candidate's required features first"
                     )
             execution_versions = set(
@@ -269,7 +268,7 @@ class DeploymentCoordinator:
             )
             missing = required - set(manifest.features)
             if missing:
-                raise CoordinationConflict(
+                raise OperationRejected(
                     "Candidate API lacks features required by resident or accepted work: "
                     + ", ".join(sorted(missing))
                 )
@@ -299,8 +298,10 @@ class DeploymentCoordinator:
             if not await self._compatible(
                 session, ReleaseManifest.model_validate(release.manifest), role=role
             ):
-                host.detail = "Two execution versions remain resident. The candidate is staged until the older version can retire."
-                host.revision += 1
+                detail = "Two execution versions remain resident. The candidate is staged until the older version can retire."
+                if host.detail != detail:
+                    host.detail = detail
+                    host.revision += 1
                 return None
             if self.runtime_admission is not None:
                 await self.runtime_admission(
@@ -465,7 +466,7 @@ class DeploymentCoordinator:
         async with self.coordination._write() as session:
             host = await self._host(session)
             if host.revision != expected_revision:
-                raise CoordinationConflict(
+                raise DeploymentChanged(
                     "deployment status changed; read it before promoting"
                 )
             process = await session.get(RuntimeProcessRow, runtime_id)
@@ -478,7 +479,7 @@ class DeploymentCoordinator:
                 or runtime is None
                 or runtime.lease_expires_at_ms <= now
             ):
-                raise CoordinationConflict("candidate API is not ready and healthy")
+                raise OperationRejected("candidate API is not ready and healthy")
             release = await session.get(RuntimeReleaseRow, process.version)
             assert release is not None
             await self._compatible(
@@ -560,7 +561,7 @@ class DeploymentCoordinator:
         async with self.coordination._write() as session:
             host = await self._host(session)
             if expected_revision is not None and host.revision != expected_revision:
-                raise CoordinationConflict("deployment changed before migration")
+                raise DeploymentChanged("deployment changed before migration")
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("stage the migration release first")
@@ -593,7 +594,7 @@ class DeploymentCoordinator:
         async with self.coordination._write() as session:
             host = await self._host(session)
             if host.revision != expected_revision:
-                raise CoordinationConflict("deployment changed before code rollback")
+                raise DeploymentChanged("deployment changed before code rollback")
             release = await session.get(RuntimeReleaseRow, version)
             if release is None:
                 raise CoordinationConflict("rollback code is not retained")
@@ -1031,17 +1032,25 @@ class DeploymentCoordinator:
     async def abort_project_retirement(
         self, lease: ProjectLease, *, worker_status: dict
     ) -> None:
-        """Release a hold only after the worker refuses before cleanup."""
+        """Release a hold only after the worker refuses before cleanup.
+
+        A worker refuses before stopping anything in every state short of
+        quiescence: ready, still starting or prepared after a handoff, or
+        already failed. Keeping the hold for those would fail the project's
+        reads and chat admission with nothing left to wait for.
+        """
         blockers = worker_status.get("quiesce_blockers")
         if (
             worker_status.get("runtime_id") != lease.runtime_id
-            or worker_status.get("state") != "ready"
+            or worker_status.get("state")
+            not in {"ready", "starting", "prepared", "failed"}
             or not isinstance(blockers, list)
             or not blockers
             or worker_status.get("quiesce_checkpoint") is not None
         ):
             raise CoordinationConflict(
-                "Only a signed ready-worker quiescence refusal can abort retirement"
+                "Only a signed quiescence refusal from a worker that has not "
+                "begun quiescing can abort retirement"
             )
         async with self.coordination._write() as session:
             owner = await session.get(
@@ -2488,4 +2497,21 @@ class DeploymentCoordinator:
                 projects=projects,
                 health="degraded" if degraded else "ready" if api else "starting",
                 detail=host.detail,
+                processes=[
+                    ProcessDeploymentStatus(
+                        runtime_id=row.runtime_id,
+                        version=row.version,
+                        role=row.role,
+                        state=row.state,
+                        ready_verified=(
+                            row.state == "ready"
+                            and row.runtime_id in live_runtimes
+                            and same_process(row.pid, row.process_birth)
+                        ),
+                    )
+                    for row in sorted(
+                        processes.values(), key=lambda row: row.runtime_id
+                    )
+                    if row.state in _RESIDENT
+                ],
             )

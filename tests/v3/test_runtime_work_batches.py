@@ -79,7 +79,12 @@ def anyio_backend():
 async def runtime(value, identity, *, supported=True):
     version = "supported" if supported else "older"
     await value.coordinator.stage(
-        manifest(version, features=[WORK_BATCH_FEATURE] if supported else []),
+        manifest(
+            version,
+            features=[WORK_BATCH_FEATURE, "project.idle-retirement/v1"]
+            if supported
+            else [],
+        ),
         Path("/synthetic/releases") / version,
         "a" * 64,
     )

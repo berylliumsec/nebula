@@ -635,11 +635,14 @@ class RuntimeSupervisor:
 
     async def prepare_api(self, version: str) -> WorkerIdentity:
         async with self._operations:
-            self._active()
+            try:
+                self._active()
+            except CoordinationConflict as error:
+                raise OperationRejected(str(error)) from error
             async with self.coordinator.database.session() as session:
                 release = await session.get(RuntimeReleaseRow, version)
                 if release is None:
-                    raise CoordinationConflict(
+                    raise OperationRejected(
                         "Stage and verify this release before preparing it"
                     )
                 manifest = ReleaseManifest.model_validate(release.manifest)
@@ -693,6 +696,29 @@ class RuntimeSupervisor:
                         "Candidate identity differs from its committed incarnation"
                     )
                 return identity
+            # Validate admission before retiring old viewers: refusals here
+            # have no effect and can be retried after their cause is resolved.
+            if any(process.version == version for process in processes):
+                raise OperationRejected(
+                    "An earlier candidate incarnation still needs recovery"
+                )
+            if (
+                len([process for process in processes if process.state != "draining"])
+                >= 2
+            ):
+                raise OperationRejected(
+                    "Two API processes remain resident; reconcile the inactive candidate"
+                )
+            if self.worker_admission is None:
+                raise OperationRejected(
+                    "Host worker memory reserve must be configured before candidate startup"
+                )
+            try:
+                await self.worker_admission(manifest, "api")
+            except (CoordinationConflict, MemoryBudgetError) as error:
+                if isinstance(error, OperationRejected):
+                    raise
+                raise OperationRejected(str(error)) from error
             # Inactive APIs own only viewers. A graceful retirement may detach
             # them; their accepted commands and delivery remain in SQL.
             for process in list(processes):
@@ -700,19 +726,6 @@ class RuntimeSupervisor:
                     await self.host.retire(process.runtime_id)
                     await self.proxy.discard_endpoint(process.endpoint)
                     processes.remove(process)
-            if any(process.version == version for process in processes):
-                raise CoordinationConflict(
-                    "An earlier candidate incarnation still needs recovery"
-                )
-            if len(processes) >= 2:
-                raise CoordinationConflict(
-                    "Two API processes remain resident; reconcile the inactive candidate"
-                )
-            if self.worker_admission is None:
-                raise CoordinationConflict(
-                    "Host worker memory reserve must be configured before candidate startup"
-                )
-            await self.worker_admission(manifest, "api")
             spawned = await self.host.spawn(version, "api")
             if spawned is None:
                 raise CoordinationConflict("The candidate remains staged")
@@ -743,7 +756,7 @@ class RuntimeSupervisor:
                 raise OperationRejected(str(error)) from error
             spawned = await self.host.spawn(version, "execution")
             if spawned is None:
-                raise CoordinationConflict("The execution candidate remains staged")
+                raise OperationRejected("The execution candidate remains staged")
             return spawned
 
     async def attach_execution(
@@ -942,9 +955,14 @@ class RuntimeSupervisor:
             await self.coordinator.rollback_code(
                 version, expected_revision=expected_revision
             )
-        identity = await self.prepare_api(version)
-        status = await self.coordinator.status()
-        await self.promote_api(identity.runtime_id, expected_revision=status.revision)
+        try:
+            identity = await self.prepare_api(version)
+            status = await self.coordinator.status()
+            await self.promote_api(
+                identity.runtime_id, expected_revision=status.revision
+            )
+        except OperationRejected as error:
+            raise CoordinationConflict(str(error)) from error
 
     async def shutdown(self, *, expected_revision: int):
         async with self._operations:

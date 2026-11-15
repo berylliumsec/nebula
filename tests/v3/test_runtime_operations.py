@@ -259,3 +259,263 @@ async def test_uncertain_operation_is_never_asked_again(host):
     assert (await DeploymentOperations(host[0]).execute(**args))["state"] == "uncertain"
     assert (await DeploymentOperations(host[0]).execute(**args))["state"] == "uncertain"
     assert calls == ["prepare_execution"]
+
+
+async def test_stale_deployment_revisions_are_failed_before_any_effect(host):
+    from nebula.v3.runtime_coordination import DeploymentChanged
+
+    coordinator = host[0]
+    revision = (await coordinator.status()).revision
+    stale = revision - 1
+    with pytest.raises(DeploymentChanged):
+        await coordinator.promote_api("absent-api", expected_revision=stale)
+    with pytest.raises(DeploymentChanged):
+        await coordinator.rollback_code("v1", expected_revision=stale)
+    with pytest.raises(DeploymentChanged):
+        await coordinator.migration_preflight("v2", expected_revision=stale)
+    assert (await coordinator.status()).revision == revision
+
+
+async def test_execution_prepare_without_reservation_is_a_failed_receipt():
+    from types import SimpleNamespace
+    from nebula.v3.supervisor import RuntimeSupervisor
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, *args):
+            from tests.v3.test_deployment_lifecycle import manifest
+
+            return SimpleNamespace(manifest=manifest("v2").model_dump(mode="json"))
+
+    async def admit(*args):
+        pass
+
+    async def spawn(*args):
+        return None
+
+    root = RuntimeSupervisor.__new__(RuntimeSupervisor)
+    root.started, root.closed, root._shutdown_committed = True, False, False
+    root._operations = asyncio.Lock()
+    root.coordinator = SimpleNamespace(database=SimpleNamespace(session=Session))
+    root.worker_admission = admit
+    root.host = SimpleNamespace(spawn=spawn)
+    with pytest.raises(OperationRejected, match="remains staged"):
+        await root.prepare_execution("v2")
+
+
+async def test_code_rollback_partial_effect_is_not_a_definite_refusal():
+    from types import SimpleNamespace
+    from nebula.v3.supervisor import RuntimeSupervisor
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    changed = []
+
+    async def change_target(*args, **kwargs):
+        changed.append("target")
+
+    async def refuse(*args):
+        raise OperationRejected("candidate refused")
+
+    root = RuntimeSupervisor.__new__(RuntimeSupervisor)
+    root.started, root.closed, root._shutdown_committed = True, False, False
+    root._operations = asyncio.Lock()
+    root.coordinator = SimpleNamespace(rollback_code=change_target)
+    root.prepare_api = refuse
+    with pytest.raises(CoordinationConflict) as error:
+        await root.rollback_code("v1", expected_revision=1)
+    assert not isinstance(error.value, OperationRejected)
+    assert changed == ["target"]
+
+
+async def test_process_inventory_distinguishes_missing_protocol_support(host):
+    from nebula.v3.deployment_protocol import DeploymentStatus
+
+    result = (await host[0].status()).model_dump(mode="json")
+    assert result["processes"] == []
+    del result["processes"]
+    assert DeploymentStatus.model_validate(result).processes is None
+
+
+async def test_incompatible_manifest_is_a_definite_refusal_without_revision_change(
+    host,
+):
+    from types import SimpleNamespace
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    coordinator = host[0]
+    revision = (await coordinator.status()).revision
+    async with coordinator.database.session() as session:
+        with pytest.raises(OperationRejected, match="SQL schema"):
+            await coordinator._compatible(
+                session, SimpleNamespace(schema_min=999), role="api"
+            )
+    assert (await coordinator.status()).revision == revision
+
+
+async def test_reconciliation_rejects_active_invocation_and_preserves_original_effect(
+    host,
+):
+    ledger = DeploymentOperations(host[0])
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def dispatch(_action, _parameters):
+        entered.set()
+        await release.wait()
+        raise OSError("synthetic uncertain completion")
+
+    task = asyncio.create_task(
+        ledger.execute(
+            operation_id="active-prepare",
+            actor_id="operator",
+            action="prepare_execution",
+            parameters={"version": "v2"},
+            dispatch=dispatch,
+        )
+    )
+    await entered.wait()
+    with pytest.raises(CoordinationConflict, match="still active"):
+        await ledger.reconcile("active-prepare", actor_id="operator")
+    release.set()
+    assert (await task)["state"] == "uncertain"
+    assert (await ledger.reconcile("active-prepare", actor_id="operator"))[
+        "state"
+    ] == "failed"
+
+
+async def test_reconciliation_keeps_legacy_unknown_and_live_migration_child(host):
+    import os
+    from nebula.v3.deployment_recovery import checkpoint
+    from nebula.v3.process_identity import process_birth, process_origin
+
+    ledger = DeploymentOperations(host[0])
+
+    async def dispatch(_action, _parameters):
+        await checkpoint(
+            phase="migration_admitted",
+            children=[
+                {
+                    "kind": "migration",
+                    "pid": os.getpid(),
+                    "birth": process_birth(os.getpid()),
+                    "process_origin": process_origin(),
+                }
+            ],
+        )
+        raise OSError("synthetic migration uncertainty")
+
+    await ledger.execute(
+        operation_id="migration-child",
+        actor_id="operator",
+        action="migrate",
+        parameters={"version": "v2"},
+        dispatch=dispatch,
+    )
+    with pytest.raises(CoordinationConflict, match="still running"):
+        await ledger.reconcile("migration-child", actor_id="operator")
+    async with host[0].coordination._write() as session:
+        row = await session.get(DeploymentOperationRow, "migration-child")
+        row.result = {"detail": "legacy unknown"}
+    with pytest.raises(CoordinationConflict, match="Legacy"):
+        await ledger.reconcile("migration-child", actor_id="operator")
+
+
+async def test_reconciliation_requires_exact_linked_ready_worker(host):
+    from nebula.v3.deployment_recovery import checkpoint
+    from tests.v3.test_deployment_lifecycle import worker
+
+    # worker() spawns only an inert OS sleep process, requested separately by
+    # process-level selection; it establishes kernel identity for this guard.
+    identity = await worker(host, "v2", role="api")
+    ledger = DeploymentOperations(host[0])
+
+    async def dispatch(_action, _parameters):
+        async with host[0].database.session() as session:
+            from nebula.v3.database import RuntimeProcessRow
+
+            process = await session.get(RuntimeProcessRow, identity)
+            from nebula.v3.process_identity import process_origin
+
+            child = {
+                "kind": "worker",
+                "pid": process.pid,
+                "birth": process.process_birth,
+                "process_origin": process_origin(),
+            }
+        await checkpoint(
+            phase="worker_spawned",
+            runtime_id=identity,
+            children=[child],
+            endpoint=process.endpoint,
+        )
+        raise OSError("lost worker receipt")
+
+    await ledger.execute(
+        operation_id="linked",
+        actor_id="operator",
+        action="prepare_api",
+        parameters={"version": "v2"},
+        dispatch=dispatch,
+    )
+    result = await ledger.reconcile("linked", actor_id="operator")
+    assert result["state"] == "succeeded"
+    assert result["result"]["runtime_id"] == identity
+    assert "recovery" not in result["result"]
+    assert await ledger.reconcile("linked", actor_id="operator") == result
+
+
+async def test_dead_owner_before_bootstrap_can_reconcile_without_replaying(
+    host, monkeypatch
+):
+    from nebula.v3.deployment_recovery import checkpoint
+    import nebula.v3.runtime_operations as operations
+
+    old = DeploymentOperations(host[0], owner_id="old-host")
+
+    async def dispatch(_action, _parameters):
+        await checkpoint(phase="migration_spawn_intent", version="v2")
+        raise OSError("synthetic owner exit before bootstrap")
+
+    await old.execute(
+        operation_id="prebootstrap",
+        actor_id="operator",
+        action="migrate",
+        parameters={"version": "v2"},
+        dispatch=dispatch,
+    )
+    fresh = DeploymentOperations(host[0], owner_id="new-host")
+    monkeypatch.setattr(operations, "same_process", lambda *args: False)
+    result = await fresh.reconcile("prebootstrap", actor_id="operator")
+    assert result["state"] == "failed"
+    assert result["result"]["reconciled"] is True
+
+
+async def test_reconcile_holds_foreign_same_boot_namespace(host, monkeypatch):
+    from nebula.v3.deployment_recovery import checkpoint
+    import nebula.v3.runtime_operations as operations
+
+    ledger = DeploymentOperations(host[0])
+
+    async def dispatch(_action, _parameters):
+        await checkpoint(phase="migration_spawn_intent")
+        raise OSError("inert prebootstrap uncertainty")
+
+    await ledger.execute(
+        operation_id="foreign",
+        actor_id="operator",
+        action="migrate",
+        parameters={"version": "v2"},
+        dispatch=dispatch,
+    )
+    recorded = operations.process_origin()
+    assert recorded is not None
+    foreign = recorded.rsplit(":", 1)[0] + ":999999999"
+    monkeypatch.setattr(operations, "process_origin", lambda: foreign)
+    monkeypatch.setattr(operations, "same_process", lambda *args: False)
+    with pytest.raises(CoordinationConflict, match="namespace"):
+        await ledger.reconcile("foreign", actor_id="operator")

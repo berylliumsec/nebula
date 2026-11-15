@@ -26,7 +26,7 @@ from .database import (
     RuntimeWorkBatchProjectRow,
 )
 from .database_pool import PoolSettings
-from .deployment_protocol import ReleaseManifest
+from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
 from .deployments import DeploymentCoordinator
 from .diagnostics import record_caught_exception, record_diagnostic
 from .release_store import ReleaseStore
@@ -274,6 +274,7 @@ async def run_worker(
             "project.handoff/v1",
             "project.participants/v1",
             "project.quiesce/v1",
+            IDLE_RETIREMENT_FEATURE,
             PROVIDER_TOOLS_FEATURE,
             PROVIDER_TOOLS_OWNERSHIP_FEATURE,
             STANDING_INSTRUCTIONS_FEATURE,
