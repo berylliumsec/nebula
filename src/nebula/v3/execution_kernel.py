@@ -588,7 +588,13 @@ from .writing_ai import (
     WritingTransformRequest,
     WritingTransformResponse,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError, revision_conflict
+from .storage import (
+    ConflictError,
+    NebulaStore,
+    NotFoundError,
+    RevisionConflict,
+    revision_conflict,
+)
 from .runtime_coordination import LeaseLost
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
@@ -2881,6 +2887,10 @@ def create_execution_kernel(
             r"[a-z][a-z0-9._-]{2,159}", supplied
         ):
             return supplied
+        # Internal bookkeeping distinguishes revision contention; clients keep
+        # the established conflict code and strict revision semantics.
+        if isinstance(exc, RevisionConflict):
+            return f"{feature}.conflict_error"
         name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(exc).__name__).lower()
         return f"{feature}.{name}"
 

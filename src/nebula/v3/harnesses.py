@@ -62,7 +62,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextlib import AsyncExitStack, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -197,7 +197,9 @@ from .storage import (
     CorruptRecordError,
     NebulaStore,
     NotFoundError,
+    RevisionConflict,
     StoreTransaction,
+    revise_latest,
 )
 from .mcp import (
     GATEWAY_TOOL_TIMEOUT_SECONDS,
@@ -327,6 +329,33 @@ GATEWAY_DEADLINE_MARGIN_SECONDS = 30.0
 GATEWAY_CANCEL_GRACE_SECONDS = 10.0
 # How often a superseded session's closer rechecks a turn still running on it.
 SUPERSEDED_SESSION_RECHECK_SECONDS = 1.0
+# Owners a late tool or approval write must leave as they are.
+_ENDED_CHAT_TURN_STATUSES = frozenset(
+    {
+        ChatTurnStatus.COMPLETE,
+        ChatTurnStatus.CANCELLED,
+        ChatTurnStatus.FAILED,
+        ChatTurnStatus.INTERRUPTED,
+    }
+)
+_ENDED_HARNESS_TURN_STATUSES = frozenset(
+    {
+        HarnessTurnStatus.COMPLETE,
+        HarnessTurnStatus.CANCELLED,
+        HarnessTurnStatus.FAILED,
+        HarnessTurnStatus.INTERRUPTED,
+    }
+)
+_ENDED_RUN_STATUSES = frozenset(
+    {
+        RunStatus.COMPLETE,
+        RunStatus.CANCELLED,
+        RunStatus.FAILED,
+        RunStatus.INTERRUPTED,
+    }
+)
+# Writes that settle a chat turn's outcome, retried on a newer revision.
+_SETTLE_WRITE_ATTEMPTS = 5
 _CODEX_MANAGED_VENDOR_FEATURES = (
     "shell_tool",
     "unified_exec",
@@ -9308,6 +9337,8 @@ class HarnessRuntimeService:
     async def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
         """Settle one harness turn whose producer died with the previous Core."""
 
+        await self._reconcile_turn_tool_calls(turn.id)
+        turn = await self.store.get(HarnessTurn, turn.id)
         if turn.status == HarnessTurnStatus.QUEUED:
             # A queued chat or analysis turn's producer died with the
             # previous process, before or while it connected; nothing will
@@ -12143,22 +12174,24 @@ class HarnessRuntimeService:
         if pending is None or not connection.external_session_id:
             return
         standing, digest = pending
-        latest = await self.store.get(HarnessSession, session_id)
-        await self.store.update(
+        external_session_id = connection.external_session_id
+        # The stream records this while approvals and gateway tools save the
+        # same session, so it is merged into the newest session record.
+        await revise_latest(
+            self.store,
             HarnessSession,
             session_id,
-            {
-                "external_session_id": connection.external_session_id,
+            lambda latest: {
+                "external_session_id": external_session_id,
                 "metadata": {
                     **latest.metadata,
                     "standing_instructions": standing,
                     "instruction_channel": {
                         "sha256": digest,
-                        "external_session_id": connection.external_session_id,
+                        "external_session_id": external_session_id,
                     },
                 },
             },
-            expected_revision=latest.revision,
         )
         connection._nebula_instruction_channel = None
 
@@ -12203,14 +12236,16 @@ class HarnessRuntimeService:
         chat keeps it too.
         """
 
-        chat = await self.store.get(ChatSession, chat.id)
-        if setting is None or chat.metadata.get("provider_subagent") == setting:
-            return chat
-        return await self.store.update(
+        return await revise_latest(
+            self.store,
             ChatSession,
             chat.id,
-            {"metadata": {**chat.metadata, "provider_subagent": setting}},
-            expected_revision=chat.revision,
+            lambda latest: (
+                None
+                if setting is None
+                or latest.metadata.get("provider_subagent") == setting
+                else {"metadata": {**latest.metadata, "provider_subagent": setting}}
+            ),
         )
 
     async def _bind_session_agent_messaging(
@@ -13787,17 +13822,19 @@ class HarnessRuntimeService:
                         ),
                     )
                 )
-                session = await self.store.get(HarnessSession, session.id)
-                if connection.external_session_id != session.external_session_id:
-                    session = await self.store.update(
-                        HarnessSession,
-                        session.id,
-                        {
+                session = await revise_latest(
+                    self.store,
+                    HarnessSession,
+                    session.id,
+                    lambda latest: (
+                        None
+                        if connection.external_session_id == latest.external_session_id
+                        else {
                             "external_session_id": connection.external_session_id,
                             "last_activity_at": utc_now(),
-                        },
-                        expected_revision=session.revision,
-                    )
+                        }
+                    ),
+                )
                 turn = await self.store.get(HarnessTurn, turn.id)
                 # Followers use the harness turn's terminal status as the signal
                 # that all durable chat state is ready to reload. Complete the
@@ -13830,29 +13867,42 @@ class HarnessRuntimeService:
                             ),
                         )
                     )
-                turn = await self.store.get(HarnessTurn, turn.id)
-                turn = await self.store.update(
+                # A late gateway call can still record its tool or citations
+                # on the turn; completion is saved on its newest revision.
+                completed_changes = {
+                    "status": HarnessTurnStatus.COMPLETE,
+                    "response": _bounded(final_message, limit=MAX_NORMALIZED_TEXT),
+                    "usage": usage,
+                    "external_turn_id": external_turn_id,
+                    "completed_at": utc_now(),
+                }
+                turn = await revise_latest(
+                    self.store,
                     HarnessTurn,
                     turn.id,
-                    {
-                        "status": HarnessTurnStatus.COMPLETE,
-                        "response": _bounded(final_message, limit=MAX_NORMALIZED_TEXT),
-                        "usage": usage,
-                        "external_turn_id": external_turn_id,
-                        "completed_at": utc_now(),
-                    },
-                    expected_revision=turn.revision,
+                    lambda latest: (
+                        None
+                        if latest.status in _ENDED_HARNESS_TURN_STATUSES
+                        else completed_changes
+                    ),
                 )
-                session = await self.store.get(HarnessSession, session.id)
                 (
-                    await self.store.update(
+                    await revise_latest(
+                        self.store,
                         HarnessSession,
                         session.id,
-                        {
-                            "status": HarnessSessionStatus.IDLE,
-                            "last_activity_at": utc_now(),
-                        },
-                        expected_revision=session.revision,
+                        lambda latest: (
+                            {
+                                "status": HarnessSessionStatus.IDLE,
+                                "last_activity_at": utc_now(),
+                            }
+                            if latest.status
+                            in {
+                                HarnessSessionStatus.RUNNING,
+                                HarnessSessionStatus.WAITING_APPROVAL,
+                            }
+                            else None
+                        ),
                     )
                 )
                 try:
@@ -15078,16 +15128,23 @@ class HarnessRuntimeService:
             HarnessTurnStatus.WAITING_APPROVAL,
         }:
             return
-        turn = await self.store.update(
+        turn = await revise_latest(
+            self.store,
             HarnessTurn,
             turn.id,
-            {
-                "status": HarnessTurnStatus.INTERRUPTED,
-                "completed_at": utc_now(),
-                "error": detail,
-            },
-            expected_revision=turn.revision,
+            lambda latest: (
+                {
+                    "status": HarnessTurnStatus.INTERRUPTED,
+                    "completed_at": utc_now(),
+                    "error": detail,
+                }
+                if latest.status
+                in {HarnessTurnStatus.RUNNING, HarnessTurnStatus.WAITING_APPROVAL}
+                else None
+            ),
         )
+        if turn.status != HarnessTurnStatus.INTERRUPTED or turn.error != detail:
+            return
         (await self._interrupt_owner(turn))
         session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status in {
@@ -15227,28 +15284,34 @@ class HarnessRuntimeService:
         if pending_input:
             (await self._waiting_owner(turn))
             return
-        if latest.status == HarnessTurnStatus.WAITING_APPROVAL:
-            (
-                await self.store.update(
-                    HarnessTurn,
-                    latest.id,
-                    {"status": HarnessTurnStatus.RUNNING},
-                    expected_revision=latest.revision,
-                )
+        # Tool recorders saved the turn while it waited: resume the newest.
+        (
+            await revise_latest(
+                self.store,
+                HarnessTurn,
+                latest.id,
+                lambda current: (
+                    {"status": HarnessTurnStatus.RUNNING}
+                    if current.status == HarnessTurnStatus.WAITING_APPROVAL
+                    else None
+                ),
             )
-        session = await self.store.get(HarnessSession, turn.harness_session_id)
-        if session.status == HarnessSessionStatus.WAITING_APPROVAL:
-            (
-                await self.store.update(
-                    HarnessSession,
-                    session.id,
+        )
+        (
+            await revise_latest(
+                self.store,
+                HarnessSession,
+                turn.harness_session_id,
+                lambda current: (
                     {
                         "status": HarnessSessionStatus.RUNNING,
                         "last_activity_at": utc_now(),
-                    },
-                    expected_revision=session.revision,
-                )
+                    }
+                    if current.status == HarnessSessionStatus.WAITING_APPROVAL
+                    else None
+                ),
             )
+        )
         (await self._start_owner(turn))
 
     async def _retry_stale_write(
@@ -18037,42 +18100,110 @@ class HarnessRuntimeService:
     ) -> ToolCall:
         call = await self.store.get(ToolCall, call_id)
         if call.metadata.get("harness_turn_id") != turn.id:
-            call = await self.store.update(
+            # The ledger row's link to the turn is saved first: it is what the
+            # turn's bookkeeping is reconciled from if that cannot be saved.
+            call = await revise_latest(
+                self.store,
                 ToolCall,
                 call.id,
-                {"metadata": {**call.metadata, "harness_turn_id": turn.id}},
-                expected_revision=call.revision,
+                lambda latest: (
+                    None
+                    if latest.metadata.get("harness_turn_id") == turn.id
+                    else {"metadata": {**latest.metadata, "harness_turn_id": turn.id}}
+                ),
             )
-        latest_turn = await self.store.get(HarnessTurn, turn.id)
-        if call.id not in latest_turn.tool_call_ids:
-            (
-                await self.store.update(
-                    HarnessTurn,
-                    latest_turn.id,
-                    {"tool_call_ids": [*latest_turn.tool_call_ids, call.id]},
-                    expected_revision=latest_turn.revision,
-                )
-            )
-        if turn.chat_turn_id:
-            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
-            if call.id not in chat_turn.tool_call_ids:
-                artifact_query = call.metadata.get("budget_class") == "artifact_query"
-                (
-                    await self.store.update(
-                        ChatTurn,
-                        chat_turn.id,
-                        {
-                            "next_step": chat_turn.next_step + 1,
-                            "execution_tool_calls": chat_turn.execution_tool_calls
-                            + (0 if artifact_query else 1),
-                            "artifact_queries": chat_turn.artifact_queries
-                            + (1 if artifact_query else 0),
-                            "tool_call_ids": [*chat_turn.tool_call_ids, call.id],
-                        },
-                        expected_revision=chat_turn.revision,
-                    )
-                )
+        (await self._record_turn_tool_calls(turn, [call]))
         return call
+
+    async def _record_turn_tool_calls(
+        self, turn: HarnessTurn, calls: Sequence[ToolCall]
+    ) -> None:
+        """Count tool calls on a running turn and the chat turn it mirrors.
+
+        The event stream (native commands), the gateway (Core tools) and
+        approval requests record calls on the same two records at nearly the
+        same time. Each record's ids and counters are planned on its newest
+        revision, so another recorder's calls are kept and none is counted
+        twice. The tools have already run or are running: a record that still
+        cannot be saved never fails the turn. Its calls stay linked to the turn
+        in the ToolCall ledger, and the turn merges them as it ends.
+        """
+
+        calls = list({call.id: call for call in calls}.values())
+
+        def harness_plan(latest: HarnessTurn) -> dict[str, Any] | None:
+            missing = [call.id for call in calls if call.id not in latest.tool_call_ids]
+            if not missing:
+                return None
+            return {"tool_call_ids": [*latest.tool_call_ids, *missing]}
+
+        def chat_plan(latest: ChatTurn) -> dict[str, Any] | None:
+            missing = [call for call in calls if call.id not in latest.tool_call_ids]
+            if not missing:
+                return None
+            queries = sum(
+                1
+                for call in missing
+                if call.metadata.get("budget_class") == "artifact_query"
+            )
+            return {
+                "next_step": latest.next_step + len(missing),
+                "execution_tool_calls": latest.execution_tool_calls
+                + len(missing)
+                - queries,
+                "artifact_queries": latest.artifact_queries + queries,
+                "tool_call_ids": [
+                    *latest.tool_call_ids,
+                    *(call.id for call in missing),
+                ],
+            }
+
+        records: list[tuple[type[HarnessTurn] | type[ChatTurn], str, Any]] = [
+            (HarnessTurn, turn.id, harness_plan)
+        ]
+        if turn.chat_turn_id:
+            records.append((ChatTurn, turn.chat_turn_id, chat_plan))
+        for model, record_id, plan in records:
+            try:
+                (await revise_latest(self.store, model, record_id, plan))
+            except RevisionConflict as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.turn_tool_bookkeeping_deferred",
+                    "A tool call's turn bookkeeping kept losing to other writers; "
+                    "the turn merges it from the tool ledger as it ends.",
+                    exc,
+                    stage="turn-bookkeeping",
+                    metadata={
+                        "entity_type": model.entity_kind,
+                        "entity_id": record_id,
+                        "harness_turn_id": turn.id,
+                    },
+                )
+
+    async def _reconcile_turn_tool_calls(self, turn_id: str) -> None:
+        """Merge deferred tool bookkeeping from the ToolCall ledger.
+
+        Only calls whose saved ledger row still links them to this turn are
+        merged; the tools themselves never run again.
+        """
+
+        try:
+            turn = await self.store.get(HarnessTurn, turn_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: a removed turn has no bookkeeping to merge
+            return
+        # The ledger, rather than an in-memory retry list, survives a worker
+        # restart between the effect and the turn projection. Filter in SQL so
+        # calls beyond the first storage page are reconciled too.
+        calls = await self.store.find_entities(
+            ToolCall,
+            {"metadata.harness_turn_id": turn.id},
+            engagement_id=turn.engagement_id,
+        )
+        if calls:
+            (await self._record_turn_tool_calls(turn, calls))
 
     async def _wait_for_broker_approval(
         self, turn: HarnessTurn, approval: Approval
@@ -18085,28 +18216,11 @@ class HarnessRuntimeService:
         )
         self._approval_futures[approval.id] = future
         self._broker_approval_ids.add(approval.id)
-        latest_turn = await self.store.get(HarnessTurn, turn.id)
         (
-            await self.store.update(
-                HarnessTurn,
-                latest_turn.id,
-                {"status": HarnessTurnStatus.WAITING_APPROVAL},
-                expected_revision=latest_turn.revision,
+            await self._show_waiting_approval(
+                turn, turn.harness_session_id, approval_id=approval.id
             )
         )
-        session = await self.store.get(HarnessSession, turn.harness_session_id)
-        (
-            await self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "status": HarnessSessionStatus.WAITING_APPROVAL,
-                    "last_activity_at": utc_now(),
-                },
-                expected_revision=session.revision,
-            )
-        )
-        (await self._waiting_owner(turn, approval_id=approval.id))
 
         future.add_done_callback(
             async_done_callback(lambda done: self._restore_approval_wait(turn, done))
@@ -18552,50 +18666,48 @@ class HarnessRuntimeService:
         (``_answer_citations``); a later search ranking it higher cites it.
         """
 
-        latest_turn = await self.store.get(HarnessTurn, turn_id)
-        stored_citations = [
-            item
-            for item in latest_turn.metadata.get("citations", [])
-            if isinstance(item, dict)
-        ]
-        cited = {
-            (item.get("source_id"), item.get("chunk_id")) for item in stored_citations
-        }
-        weak = {
-            (item.get("source_id"), item.get("chunk_id")): item
-            for item in latest_turn.metadata.get("searched_weak_citations", [])
-            if isinstance(item, dict)
-        }
-        changed = False
-        for match in matches:
-            key = (match.citation.source_id, match.citation.chunk_id)
-            if key in cited:
-                continue
-            citation = match.citation.model_dump(mode="json")
-            if getattr(match, "relevance", None) == "weak":
-                if key not in weak:
-                    weak[key] = citation
-                    changed = True
-                continue
-            weak.pop(key, None)
-            stored_citations.append(citation)
-            cited.add(key)
-            changed = True
-        if changed:
-            (
-                await self.store.update(
-                    HarnessTurn,
-                    latest_turn.id,
-                    {
-                        "metadata": {
-                            **latest_turn.metadata,
-                            "citations": stored_citations,
-                            "searched_weak_citations": list(weak.values()),
-                        }
-                    },
-                    expected_revision=latest_turn.revision,
-                )
-            )
+        def plan(latest_turn: HarnessTurn) -> dict[str, Any] | None:
+            # Merged into the newest turn: tool recorders save it concurrently.
+            stored_citations = [
+                item
+                for item in latest_turn.metadata.get("citations", [])
+                if isinstance(item, dict)
+            ]
+            cited = {
+                (item.get("source_id"), item.get("chunk_id"))
+                for item in stored_citations
+            }
+            weak = {
+                (item.get("source_id"), item.get("chunk_id")): item
+                for item in latest_turn.metadata.get("searched_weak_citations", [])
+                if isinstance(item, dict)
+            }
+            changed = False
+            for match in matches:
+                key = (match.citation.source_id, match.citation.chunk_id)
+                if key in cited:
+                    continue
+                citation = match.citation.model_dump(mode="json")
+                if getattr(match, "relevance", None) == "weak":
+                    if key not in weak:
+                        weak[key] = citation
+                        changed = True
+                    continue
+                weak.pop(key, None)
+                stored_citations.append(citation)
+                cited.add(key)
+                changed = True
+            if not changed:
+                return None
+            return {
+                "metadata": {
+                    **latest_turn.metadata,
+                    "citations": stored_citations,
+                    "searched_weak_citations": list(weak.values()),
+                }
+            }
+
+        (await revise_latest(self.store, HarnessTurn, turn_id, plan))
 
     @staticmethod
     def _answer_citations(turn: HarnessTurn, answer: str) -> list[ChatCitation]:
@@ -19314,28 +19426,8 @@ class HarnessRuntimeService:
                 )
             )
         self._approval_futures[approval.id] = future
-        latest_turn = await self.store.get(HarnessTurn, turn.id)
-        (
-            await self.store.update(
-                HarnessTurn,
-                latest_turn.id,
-                {"status": HarnessTurnStatus.WAITING_APPROVAL},
-                expected_revision=latest_turn.revision,
-            )
-        )
+        (await self._show_waiting_approval(turn, session.id, approval_id=approval.id))
         session = await self.store.get(HarnessSession, session.id)
-        (
-            await self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "status": HarnessSessionStatus.WAITING_APPROVAL,
-                    "last_activity_at": utc_now(),
-                },
-                expected_revision=session.revision,
-            )
-        )
-        (await self._waiting_owner(turn, approval_id=approval.id))
 
         future.add_done_callback(
             async_done_callback(lambda done: self._restore_approval_wait(turn, done))
@@ -19418,53 +19510,36 @@ class HarnessRuntimeService:
             asyncio.get_running_loop().create_future()
         )
         self._interaction_futures[interaction.id] = future
-        latest_turn = await self.store.get(HarnessTurn, turn.id)
-        (
-            await self.store.update(
-                HarnessTurn,
-                latest_turn.id,
-                {"status": HarnessTurnStatus.WAITING_APPROVAL},
-                expected_revision=latest_turn.revision,
-            )
-        )
-        latest_session = await self.store.get(HarnessSession, session.id)
-        (
-            await self.store.update(
-                HarnessSession,
-                latest_session.id,
-                {
-                    "status": HarnessSessionStatus.WAITING_APPROVAL,
-                    "last_activity_at": utc_now(),
-                },
-                expected_revision=latest_session.revision,
-            )
-        )
-        (await self._waiting_owner(turn))
+        (await self._show_waiting_approval(turn, session.id))
 
         async def restore(_: asyncio.Future[dict[str, Any]]) -> None:
-            current_turn = await self.store.get(HarnessTurn, turn.id)
-            if current_turn.status == HarnessTurnStatus.WAITING_APPROVAL:
-                (
-                    await self.store.update(
-                        HarnessTurn,
-                        current_turn.id,
-                        {"status": HarnessTurnStatus.RUNNING},
-                        expected_revision=current_turn.revision,
-                    )
+            (
+                await revise_latest(
+                    self.store,
+                    HarnessTurn,
+                    turn.id,
+                    lambda latest: (
+                        {"status": HarnessTurnStatus.RUNNING}
+                        if latest.status == HarnessTurnStatus.WAITING_APPROVAL
+                        else None
+                    ),
                 )
-            current_session = await self.store.get(HarnessSession, session.id)
-            if current_session.status == HarnessSessionStatus.WAITING_APPROVAL:
-                (
-                    await self.store.update(
-                        HarnessSession,
-                        current_session.id,
+            )
+            (
+                await revise_latest(
+                    self.store,
+                    HarnessSession,
+                    session.id,
+                    lambda latest: (
                         {
                             "status": HarnessSessionStatus.RUNNING,
                             "last_activity_at": utc_now(),
-                        },
-                        expected_revision=current_session.revision,
-                    )
+                        }
+                        if latest.status == HarnessSessionStatus.WAITING_APPROVAL
+                        else None
+                    ),
                 )
+            )
             (await self._start_owner(turn))
 
         future.add_done_callback(async_done_callback(restore))
@@ -20333,48 +20408,48 @@ class HarnessRuntimeService:
         detailed = event.detailed_usage
         if detailed is None or detailed.cost_usd is None or not turn.run_id:
             return None
-        run = await self.store.get(AgentRun, turn.run_id)
-        raw_usage = run.metadata.get("harness_turn_usage")
-        turn_usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
-        turn_usage[turn.id] = {
-            "input_tokens": detailed.input_tokens,
-            "output_tokens": detailed.output_tokens,
-            "total_tokens": detailed.total_tokens,
-            "cost_usd": detailed.cost_usd,
-        }
-        entries = [item for item in turn_usage.values() if isinstance(item, dict)]
-        spent_usd = sum(
-            float(item.get("cost_usd", 0))
-            for item in entries
-            if isinstance(item.get("cost_usd"), (int, float))
-        )
-        input_tokens = sum(
-            int(item.get("input_tokens", 0))
-            for item in entries
-            if isinstance(item.get("input_tokens"), (int, float))
-        )
-        output_tokens = sum(
-            int(item.get("output_tokens", 0))
-            for item in entries
-            if isinstance(item.get("output_tokens"), (int, float))
-        )
-        (
-            await self.store.update(
-                AgentRun,
-                run.id,
-                {
-                    "metadata": {
-                        **run.metadata,
-                        "harness_turn_usage": turn_usage,
-                        "spent_usd": spent_usd,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                    }
-                },
-                expected_revision=run.revision,
+        spent: list[float] = []
+
+        def plan(run: AgentRun) -> dict[str, Any]:
+            # Planned on the newest run: approvals and Core tools save it
+            # while the turn streams, and another turn's usage is kept.
+            raw_usage = run.metadata.get("harness_turn_usage")
+            turn_usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
+            turn_usage[turn.id] = {
+                "input_tokens": detailed.input_tokens,
+                "output_tokens": detailed.output_tokens,
+                "total_tokens": detailed.total_tokens,
+                "cost_usd": detailed.cost_usd,
+            }
+            entries = [item for item in turn_usage.values() if isinstance(item, dict)]
+            spent_usd = sum(
+                float(item.get("cost_usd", 0))
+                for item in entries
+                if isinstance(item.get("cost_usd"), (int, float))
             )
-        )
-        return spent_usd
+            input_tokens = sum(
+                int(item.get("input_tokens", 0))
+                for item in entries
+                if isinstance(item.get("input_tokens"), (int, float))
+            )
+            output_tokens = sum(
+                int(item.get("output_tokens", 0))
+                for item in entries
+                if isinstance(item.get("output_tokens"), (int, float))
+            )
+            spent[:] = [spent_usd]
+            return {
+                "metadata": {
+                    **run.metadata,
+                    "harness_turn_usage": turn_usage,
+                    "spent_usd": spent_usd,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                }
+            }
+
+        (await revise_latest(self.store, AgentRun, turn.run_id, plan))
+        return spent[0]
 
     async def activity_events(
         self, turn_id: str, *, after_sequence: int = 0, limit: int = 1_000
@@ -20564,34 +20639,128 @@ class HarnessRuntimeService:
     async def _waiting_owner(
         self, turn: HarnessTurn, *, approval_id: str | None = None
     ) -> None:
+        # Tool recorders save the same owner record concurrently; the status is
+        # planned on its newest revision, and an owner that ended stays ended.
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
-            chat_owner = await self.store.get(ChatTurn, turn.chat_turn_id)
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     ChatTurn,
-                    chat_owner.id,
-                    {
-                        "status": ChatTurnStatus.WAITING_APPROVAL,
-                        "approval_id": approval_id,
-                    },
-                    expected_revision=chat_owner.revision,
+                    turn.chat_turn_id,
+                    lambda latest: (
+                        None
+                        if latest.status in _ENDED_CHAT_TURN_STATUSES
+                        else {
+                            "status": ChatTurnStatus.WAITING_APPROVAL,
+                            "approval_id": approval_id,
+                        }
+                    ),
                 )
             )
         elif turn.run_id:
-            run_owner = await self.store.get(AgentRun, turn.run_id)
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     AgentRun,
-                    run_owner.id,
-                    {"status": RunStatus.WAITING_APPROVAL},
-                    expected_revision=run_owner.revision,
+                    turn.run_id,
+                    lambda latest: (
+                        None
+                        if latest.status in _ENDED_RUN_STATUSES
+                        else {"status": RunStatus.WAITING_APPROVAL}
+                    ),
                 )
             )
+
+    async def _show_waiting_approval(
+        self,
+        turn: HarnessTurn,
+        session_id: str,
+        *,
+        approval_id: str | None = None,
+    ) -> None:
+        """Show a live turn, its session and owner as waiting for the operator.
+
+        Each record is planned on its newest revision, so a tool recorder that
+        saved the turn first keeps its write, and a turn that has already ended
+        is not reopened.
+        """
+
+        latest = await revise_latest(
+            self.store,
+            HarnessTurn,
+            turn.id,
+            lambda current: (
+                None
+                if current.status
+                in {
+                    HarnessTurnStatus.WAITING_APPROVAL,
+                    HarnessTurnStatus.COMPLETE,
+                    HarnessTurnStatus.CANCELLED,
+                    HarnessTurnStatus.FAILED,
+                    HarnessTurnStatus.INTERRUPTED,
+                }
+                else {"status": HarnessTurnStatus.WAITING_APPROVAL}
+            ),
+        )
+        if latest.status != HarnessTurnStatus.WAITING_APPROVAL:
+            return
+        (
+            await revise_latest(
+                self.store,
+                HarnessSession,
+                session_id,
+                lambda current: (
+                    {
+                        "status": HarnessSessionStatus.WAITING_APPROVAL,
+                        "last_activity_at": utc_now(),
+                    }
+                    if current.status
+                    in {
+                        HarnessSessionStatus.RUNNING,
+                        HarnessSessionStatus.WAITING_APPROVAL,
+                    }
+                    else None
+                ),
+            )
+        )
+        (await self._waiting_owner(turn, approval_id=approval_id))
 
     async def _account_terminal_chat_usage(
         self, turn: HarnessTurn, usage: ChatTokenUsage, *, usage_reported: bool
     ) -> None:
-        """Debit consumed tokens even when a completion guard rejects an answer."""
+        """Debit consumed tokens even when a completion guard rejects an answer.
+
+        Every turn ends here, so tool bookkeeping deferred while it ran is
+        merged first. The debit is one unit planned on the newest turn, owner
+        and goal; a tool or goal writer that saves one of them first makes it
+        plan again, and an accounted turn is never debited twice.
+        """
+
+        (await self._reconcile_turn_tool_calls(turn.id))
+        for attempt in range(1, _SETTLE_WRITE_ATTEMPTS + 1):
+            try:
+                return await self._account_terminal_chat_usage_once(
+                    turn, usage, usage_reported=usage_reported
+                )
+            except RevisionConflict:  # diagnostic-expected: another writer saved the turn, owner or goal first; account on its revision, the last loss reaches the caller
+                if attempt == _SETTLE_WRITE_ATTEMPTS:
+                    async with self._locked_chat_settlement(turn) as transaction:
+                        return await self._account_terminal_chat_usage_once(
+                            turn,
+                            usage,
+                            usage_reported=usage_reported,
+                            transaction=transaction,
+                        )
+                await asyncio.sleep(0)
+
+    async def _account_terminal_chat_usage_once(
+        self,
+        turn: HarnessTurn,
+        usage: ChatTokenUsage,
+        *,
+        usage_reported: bool,
+        transaction: StoreTransaction | None = None,
+    ) -> None:
         if not turn.chat_turn_id:
             return
         owner = await self.store.get(ChatTurn, turn.chat_turn_id)
@@ -20606,7 +20775,7 @@ class HarnessRuntimeService:
             HarnessTurnStatus.INTERRUPTED,
         }:
             return
-        async with self.store.transaction() as transaction:
+        async with self._settlement_transaction(transaction) as transaction:
             (
                 await transaction.update(
                     HarnessTurn,
@@ -20673,6 +20842,72 @@ class HarnessRuntimeService:
         *,
         usage_reported: bool = False,
     ) -> None:
+        """Save a finished turn's answer on its owner.
+
+        A chat owner's answer, turn and goal commit in one unit planned on
+        their newest revisions: a late tool recorder or goal charge that saves
+        first makes the unit plan again instead of failing the turn. Tool
+        bookkeeping deferred while the turn ran is merged first.
+        """
+
+        (await self._reconcile_turn_tool_calls(turn.id))
+        for attempt in range(1, _SETTLE_WRITE_ATTEMPTS + 1):
+            try:
+                return await self._complete_owner_once(
+                    turn, final_message, usage, usage_reported=usage_reported
+                )
+            except RevisionConflict:  # diagnostic-expected: a concurrent writer saved the chat turn or goal first; the unit rolled back and plans again, the last loss reaches the caller
+                # A mission owner's stages are separate writes, so only a chat
+                # owner's single unit is planned again.
+                if turn.origin != HarnessTurnOrigin.CHAT:
+                    raise
+                if attempt == _SETTLE_WRITE_ATTEMPTS:
+                    async with self._locked_chat_settlement(turn) as transaction:
+                        return await self._complete_owner_once(
+                            turn,
+                            final_message,
+                            usage,
+                            usage_reported=usage_reported,
+                            transaction=transaction,
+                        )
+                await asyncio.sleep(0)
+
+    @asynccontextmanager
+    async def _settlement_transaction(self, transaction: StoreTransaction | None):
+        if transaction is not None:
+            yield transaction
+        else:
+            async with self.store.transaction() as created:
+                yield created
+
+    @asynccontextmanager
+    async def _locked_chat_settlement(self, turn: HarnessTurn):
+        """Serialize only final persisted bookkeeping, never vendor execution."""
+
+        async with self.store.transaction(immediate=True) as transaction:
+            await transaction.lock_shared_rows()
+            owner = await self.store.get(ChatTurn, turn.chat_turn_id or "")
+            ids = sorted(
+                {turn.id, owner.id, *([owner.goal_id] if owner.goal_id else [])}
+            )
+            await transaction.session.scalars(
+                select(EntityRow)
+                .where(EntityRow.id.in_(ids))
+                .order_by(EntityRow.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            yield transaction
+
+    async def _complete_owner_once(
+        self,
+        turn: HarnessTurn,
+        final_message: str,
+        usage: ChatTokenUsage,
+        *,
+        usage_reported: bool = False,
+        transaction: StoreTransaction | None = None,
+    ) -> None:
         # Gateway reads can add citations while the vendor turn is running.
         # Reload before persisting the final chat message so those citations
         # are not lost through the stream loop's older turn snapshot.
@@ -20683,7 +20918,7 @@ class HarnessRuntimeService:
             and turn.chat_session_id
         ):
             chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
-            if chat_turn.status == ChatTurnStatus.COMPLETE:
+            if chat_turn.status in _ENDED_CHAT_TURN_STATUSES:
                 return
             existing = await self._chat_messages(
                 turn.engagement_id, turn.chat_session_id, include_replaced=True
@@ -20707,7 +20942,7 @@ class HarnessRuntimeService:
                 citations=self._answer_citations(turn, final_message),
                 metadata={"harness_turn_id": turn.id},
             )
-            async with self.store.transaction() as transaction:
+            async with self._settlement_transaction(transaction) as transaction:
                 (await transaction.add(message))
                 (
                     await transaction.update(
@@ -20812,26 +21047,26 @@ class HarnessRuntimeService:
                         )
                     )
         elif turn.run_id:
-            run = await self.store.get(AgentRun, turn.run_id)
-            if run.status not in {RunStatus.CANCELLED, RunStatus.INTERRUPTED}:
-                final_summary = (
-                    final_message.strip()
-                    or "Harness mission completed without a text response."
-                )[:20_000]
-                stage_index = turn.metadata.get("mission_stage_index")
-                stage_count = turn.metadata.get("mission_stage_count")
-                if (
-                    isinstance(stage_index, int)
-                    and isinstance(stage_count, int)
-                    and stage_count > 1
-                    and stage_index < stage_count - 1
-                ):
-                    prior_summaries = run.metadata.get("stage_summaries")
-                    summaries = (
-                        list(prior_summaries)
-                        if isinstance(prior_summaries, list)
-                        else []
-                    )
+            final_summary = (
+                final_message.strip()
+                or "Harness mission completed without a text response."
+            )[:20_000]
+            stage_index = turn.metadata.get("mission_stage_index")
+            stage_count = turn.metadata.get("mission_stage_count")
+            intermediate = (
+                isinstance(stage_index, int)
+                and isinstance(stage_count, int)
+                and stage_count > 1
+                and stage_index < stage_count - 1
+            )
+
+            def plan(run: AgentRun):
+                if run.status in _ENDED_RUN_STATUSES:
+                    return None
+                if intermediate:
+                    assert isinstance(stage_index, int)
+                    prior = run.metadata.get("stage_summaries")
+                    summaries = list(prior) if isinstance(prior, list) else []
                     summaries.append(
                         {
                             "title": turn.metadata.get(
@@ -20841,70 +21076,61 @@ class HarnessRuntimeService:
                             "harness_turn_id": turn.id,
                         }
                     )
-                    (
-                        await self.store.update_with_event(
-                            AgentRun,
-                            run.id,
-                            {
-                                "status": RunStatus.RUNNING,
-                                "metadata": {
-                                    **run.metadata,
-                                    "stage_summaries": summaries,
-                                    "completed_tasks": stage_index + 1,
-                                    "harness_turn_id": turn.id,
-                                },
-                            },
-                            expected_revision=run.revision,
-                            run_id=run.id,
-                            event_type="stage.completed",
-                            event_payload={
-                                "summary": final_summary,
-                                "stage_index": stage_index,
-                                "stage_count": stage_count,
-                                "stage_title": turn.metadata.get("mission_stage_title"),
-                                "harness_turn_id": turn.id,
-                            },
-                            idempotency_key=f"run:stage:{stage_index}:completed",
-                        )
-                    )
-                    return
-                run, _ = await self.store.update_with_event(
-                    AgentRun,
-                    run.id,
-                    {
-                        "status": RunStatus.COMPLETE,
-                        "completed_at": utc_now(),
+                    return {
+                        "status": RunStatus.RUNNING,
                         "metadata": {
                             **run.metadata,
-                            "final_summary": final_summary,
+                            "stage_summaries": summaries,
+                            "completed_tasks": stage_index + 1,
                             "harness_turn_id": turn.id,
-                            "completed_tasks": (
-                                stage_count if isinstance(stage_count, int) else 1
-                            ),
                         },
-                    },
-                    expected_revision=run.revision,
-                    run_id=run.id,
-                    event_type="run.completed",
-                    event_payload={
+                    }, {
                         "summary": final_summary,
+                        "stage_index": stage_index,
+                        "stage_count": stage_count,
+                        "stage_title": turn.metadata.get("mission_stage_title"),
                         "harness_turn_id": turn.id,
-                        "usage": usage.model_dump(mode="json"),
-                        "input_tokens": run.metadata.get("input_tokens", 0),
-                        "output_tokens": run.metadata.get("output_tokens", 0),
-                        "cost_usd": run.metadata.get("spent_usd", 0.0),
+                    }
+                return {
+                    "status": RunStatus.COMPLETE,
+                    "completed_at": utc_now(),
+                    "metadata": {
+                        **run.metadata,
+                        "final_summary": final_summary,
+                        "harness_turn_id": turn.id,
+                        "completed_tasks": stage_count
+                        if isinstance(stage_count, int)
+                        else 1,
                     },
-                    idempotency_key="run:completed",
-                )
+                }, {
+                    "summary": final_summary,
+                    "harness_turn_id": turn.id,
+                    "usage": usage.model_dump(mode="json"),
+                    "input_tokens": run.metadata.get("input_tokens", 0),
+                    "output_tokens": run.metadata.get("output_tokens", 0),
+                    "cost_usd": run.metadata.get("spent_usd", 0.0),
+                }
+
+            run, _created = await self.store.revise_run_with_event(
+                turn.run_id,
+                plan,
+                event_type="stage.completed" if intermediate else "run.completed",
+                idempotency_key=f"run:stage:{stage_index}:completed"
+                if intermediate
+                else "run:completed",
+            )
+            if not intermediate and run.status == RunStatus.COMPLETE:
+                # A retry after the event committed may still owe this saved
+                # message. Its durable identity prevents duplicate delivery.
+                saved_summary = str(run.metadata.get("final_summary") or final_summary)
                 for chat in await self._attached_chats(turn.harness_session_id):
-                    (
-                        await self._append_chat_handoff(
-                            chat,
-                            role=ChatRole.ASSISTANT,
-                            content=final_summary,
-                            run_id=run.id,
-                            usage=usage,
-                        )
+                    await self._append_chat_handoff(
+                        chat,
+                        role=ChatRole.ASSISTANT,
+                        content=saved_summary,
+                        run_id=run.id,
+                        usage=usage,
+                        message_id=f"mission-completed:{run.id}:{chat.id}",
                     )
 
     async def _keep_stopped_answer(
@@ -20927,11 +21153,13 @@ class HarnessRuntimeService:
                 # The vendor ended the turn itself (Codex interrupted/cancelled,
                 # ACP stopReason cancelled). Viewers settle it as stopped, unlike
                 # a turn Core had to abandon with an uncertain outcome.
-                turn = await self.store.update(
+                turn = await revise_latest(
+                    self.store,
                     HarnessTurn,
                     turn.id,
-                    {"metadata": {**turn.metadata, "stopped_by_harness": True}},
-                    expected_revision=turn.revision,
+                    lambda latest: {
+                        "metadata": {**latest.metadata, "stopped_by_harness": True}
+                    },
                 )
             if (
                 not text.strip()
@@ -20993,37 +21221,34 @@ class HarnessRuntimeService:
 
     async def _interrupt_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
-            chat_owner = await self.store.get(ChatTurn, turn.chat_turn_id)
-            if chat_owner.status not in {
-                ChatTurnStatus.COMPLETE,
-                ChatTurnStatus.CANCELLED,
-                ChatTurnStatus.FAILED,
-                ChatTurnStatus.INTERRUPTED,
-            }:
-                (
-                    await self.store.update(
-                        ChatTurn,
-                        chat_owner.id,
-                        {"status": ChatTurnStatus.INTERRUPTED, "error": turn.error},
-                        expected_revision=chat_owner.revision,
-                    )
+            (
+                await revise_latest(
+                    self.store,
+                    ChatTurn,
+                    turn.chat_turn_id,
+                    lambda latest: (
+                        None
+                        if latest.status in _ENDED_CHAT_TURN_STATUSES
+                        else {"status": ChatTurnStatus.INTERRUPTED, "error": turn.error}
+                    ),
                 )
+            )
         elif turn.run_id:
-            run_owner = await self.store.get(AgentRun, turn.run_id)
-            if run_owner.status not in {
-                RunStatus.COMPLETE,
-                RunStatus.CANCELLED,
-                RunStatus.FAILED,
-                RunStatus.INTERRUPTED,
-            }:
-                (
-                    await self.store.update(
-                        AgentRun,
-                        run_owner.id,
-                        {"status": RunStatus.INTERRUPTED, "completed_at": utc_now()},
-                        expected_revision=run_owner.revision,
-                    )
+            (
+                await revise_latest(
+                    self.store,
+                    AgentRun,
+                    turn.run_id,
+                    lambda latest: (
+                        None
+                        if latest.status in _ENDED_RUN_STATUSES
+                        else {
+                            "status": RunStatus.INTERRUPTED,
+                            "completed_at": utc_now(),
+                        }
+                    ),
                 )
+            )
 
     async def _fail_turn_with_event(
         self,
@@ -21061,38 +21286,41 @@ class HarnessRuntimeService:
         *,
         diagnostic: Mapping[str, Any] | None = None,
     ) -> None:
-        turn = await self.store.get(HarnessTurn, turn_id)
-        if turn.status not in {
-            HarnessTurnStatus.COMPLETE,
-            HarnessTurnStatus.CANCELLED,
-            HarnessTurnStatus.FAILED,
-            HarnessTurnStatus.INTERRUPTED,
-        }:
-            turn = await self.store.update(
-                HarnessTurn,
-                turn.id,
-                {
-                    "status": status,
-                    "error": error,
-                    "completed_at": utc_now(),
-                    "metadata": {
-                        **turn.metadata,
-                        **(
-                            {
-                                "diagnostic": dict(diagnostic),
-                                "diagnostic_error_id": diagnostic.get("error_id"),
-                                "diagnostic_reason_code": diagnostic.get("reason_code"),
-                                "diagnostic_remediation_id": diagnostic.get(
-                                    "remediation_id"
-                                ),
-                            }
-                            if diagnostic
-                            else {}
-                        ),
-                    },
+        def plan(latest: HarnessTurn) -> dict[str, Any] | None:
+            # Tool recorders may still be saving the turn: end the newest one.
+            if latest.status in {
+                HarnessTurnStatus.COMPLETE,
+                HarnessTurnStatus.CANCELLED,
+                HarnessTurnStatus.FAILED,
+                HarnessTurnStatus.INTERRUPTED,
+            }:
+                return None
+            return {
+                "status": status,
+                "error": error,
+                "completed_at": utc_now(),
+                "metadata": {
+                    **latest.metadata,
+                    **(
+                        {
+                            "diagnostic": dict(diagnostic),
+                            "diagnostic_error_id": diagnostic.get("error_id"),
+                            "diagnostic_reason_code": diagnostic.get("reason_code"),
+                            "diagnostic_remediation_id": diagnostic.get(
+                                "remediation_id"
+                            ),
+                        }
+                        if diagnostic
+                        else {}
+                    ),
                 },
-                expected_revision=turn.revision,
-            )
+            }
+
+        turn = await revise_latest(self.store, HarnessTurn, turn_id, plan)
+        if turn.status != status or turn.error != error:
+            # Another terminal outcome won. Its owner and session must not
+            # inherit this losing callback's failure after the turn settled.
+            return
         (await self._interrupt_owner(turn))
         session = await self.store.get(HarnessSession, turn.harness_session_id)
         reason = diagnostic.get("reason_code") if diagnostic else None
@@ -21161,23 +21389,39 @@ class HarnessRuntimeService:
         content: str,
         run_id: str,
         usage: ChatTokenUsage | None,
+        message_id: str | None = None,
     ) -> ChatMessage:
         messages = await self._chat_messages(
             chat.engagement_id, chat.id, include_replaced=True
         )
-        return await self.store.create(
-            ChatMessage(
-                id=str(uuid4()),
-                engagement_id=chat.engagement_id,
-                session_id=chat.id,
-                sequence=max((message.sequence for message in messages), default=0) + 1,
-                role=role,
-                content=content,
-                model=chat.model,
-                usage=usage,
-                metadata={"run_id": run_id, "handoff": "chat_mission_shared_session"},
-            )
+        message = ChatMessage(
+            id=message_id or str(uuid4()),
+            engagement_id=chat.engagement_id,
+            session_id=chat.id,
+            sequence=max((message.sequence for message in messages), default=0) + 1,
+            role=role,
+            content=content,
+            model=chat.model,
+            usage=usage,
+            metadata={"run_id": run_id, "handoff": "chat_mission_shared_session"},
         )
+        try:
+            return await self.store.create(message)
+        except ConflictError:
+            # diagnostic-expected: replay or another reconciler saved this
+            # same handoff first; never suppress a different write refusal.
+            if message_id is None:
+                raise
+            saved = await self.store.get(ChatMessage, message_id)
+            if (
+                saved.session_id != chat.id
+                or saved.engagement_id != chat.engagement_id
+                or saved.role != role
+                or saved.metadata != message.metadata
+                or saved.content != content
+            ):
+                raise
+            return saved
 
 
 def _claude_server_name(value: str) -> str:

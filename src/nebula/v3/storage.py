@@ -192,6 +192,14 @@ class ConflictError(StorageError):
     pass
 
 
+class RevisionConflict(ConflictError):
+    """The record changed after the writer read the revision it expected.
+
+    Rereading the record and planning the change again can resolve it, as
+    ``revise_latest`` does for bookkeeping; any other conflict cannot.
+    """
+
+
 def revision_conflict(
     kind: str, record_id: str, expected: int | None, found: int | None
 ) -> ConflictError:
@@ -203,13 +211,80 @@ def revision_conflict(
     found M" part are what clients recognize.
     """
 
-    return ConflictError(
+    return RevisionConflict(
         f"revision conflict on {kind} {record_id}: expected {expected}, found {found}"
     )
 
 
 class CorruptRecordError(StorageError):
     pass
+
+
+# Bookkeeping writers on one busy record, such as a running turn's tool
+# recorders, rarely collide more than once in a row.
+REVISE_ATTEMPTS = 5
+
+
+async def revise_latest(
+    store: Any,
+    model: type[EntityT],
+    entity_id: str,
+    plan: Callable[[EntityT], Mapping[str, Any] | None],
+    *,
+    attempts: int = REVISE_ATTEMPTS,
+    locked_fallback: bool = True,
+) -> EntityT:
+    """Save ``plan(latest)`` on the newest revision of one record.
+
+    For bookkeeping that several writers add to one record at nearly the same
+    time, such as a running turn's tool ids and counters. ``plan`` receives
+    the newest saved record and returns the changes to save, derived from
+    that record (append, increment, merge) and never from an older read, or
+    ``None`` when nothing needs saving. A write that loses to another writer
+    reads the record again and plans again, so the other writer's fields are
+    kept. Only the plan is repeated, never the work it records. The revision
+    check stays. After ``attempts`` losses, a short transaction locks the
+    current record and plans once more. Only bookkeeping runs under that lock,
+    never the external effect. Callers may disable that final locked attempt.
+    Returns the saved, or unchanged, record.
+    """
+
+    for attempt in range(1, attempts + 1):
+        current = await store.get(model, entity_id)
+        changes = plan(current)
+        if not changes:
+            return current
+        try:
+            return await store.update(
+                model, entity_id, dict(changes), expected_revision=current.revision
+            )
+        except RevisionConflict:  # diagnostic-expected: another writer saved first; plan again on its revision, the last loss reaches the caller
+            if attempt == attempts:
+                if not locked_fallback:
+                    raise
+                break
+            await asyncio.sleep(0)
+    if attempts < 1:
+        raise ValueError("revise_latest needs at least one attempt")
+    async with store.transaction(immediate=True) as transaction:
+        # Preserve execution-worker lock ordering: shared authority before
+        # entity row locks. Project-local normal writes never take this path.
+        await transaction.lock_shared_rows()
+        row = await transaction.session.scalar(
+            select(EntityRow)
+            .where(EntityRow.id == entity_id, EntityRow.kind == model.entity_kind)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
+        current = _row_to_entity(row, model)
+        changes = plan(current)
+        if not changes:
+            return current
+        return await transaction.update(
+            model, entity_id, dict(changes), expected_revision=current.revision
+        )
 
 
 class RunBudgetExceededError(StorageError):
@@ -747,7 +822,7 @@ class StoreTransaction:
             )
         )
         if result.rowcount != 1:
-            raise ConflictError(
+            raise RevisionConflict(
                 f"{model.entity_kind} entity {entity_id} changed while the update "
                 f"was in progress (expected revision {read_revision})"
             )
@@ -2621,6 +2696,77 @@ class NebulaStore:
             raise
         finally:
             (await connection.close())
+
+    async def revise_run_with_event(
+        self,
+        run_id: str,
+        plan: Callable[[AgentRun], tuple[dict[str, Any], dict[str, Any]] | None],
+        *,
+        event_type: str,
+        idempotency_key: str,
+    ) -> tuple[AgentRun, bool]:
+        """Commit internal run bookkeeping and its event from one locked read.
+
+        The planner is synchronous and must not execute a tool or replay work.
+        Client-facing updates retain their strict expected-revision checks.
+        """
+
+        async with self.transaction(immediate=True) as transaction:
+            # AgentRun rows are project-owned. Preserve the existing run-event
+            # order (execution authority, run stream, entity row) without
+            # introducing a global-row lock ahead of the stream lock.
+            if self.database.engine.dialect.name == "postgresql":
+                await transaction.session.execute(
+                    text(f"SELECT pg_advisory_xact_lock({per_id_key('run_id')})"),
+                    {"run_id": run_id},
+                )
+            row = await transaction.session.scalar(
+                select(EntityRow)
+                .where(EntityRow.id == run_id, EntityRow.kind == AgentRun.entity_kind)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise NotFoundError(f"runs entity not found: {run_id}")
+            run = _row_to_entity(row, AgentRun)
+            existing = await transaction.session.scalar(
+                select(RunEventRow).where(
+                    RunEventRow.run_id == run_id,
+                    RunEventRow.idempotency_key == idempotency_key,
+                )
+            )
+            if existing is not None:
+                if existing.event_type != event_type:
+                    raise ConflictError("idempotency key belongs to another run event")
+                return run, False
+            planned = plan(run)
+            if planned is None:
+                return run, False
+            changes, payload = planned
+            updated = await transaction.update(
+                AgentRun, run.id, changes, expected_revision=run.revision
+            )
+            sequence = (
+                int(
+                    await transaction.session.scalar(
+                        select(func.coalesce(func.max(RunEventRow.sequence), 0)).where(
+                            RunEventRow.run_id == run_id
+                        )
+                    )
+                    or 0
+                )
+                + 1
+            )
+            event = RunEvent(
+                run_id=run_id,
+                sequence=sequence,
+                event_type=event_type,
+                payload=payload,
+                idempotency_key=idempotency_key,
+            )
+            transaction.session.add(RunEventRow(**event.model_dump(mode="python")))
+            await transaction.session.flush()
+            return updated, True
 
     async def update_with_operation_event(
         self,
