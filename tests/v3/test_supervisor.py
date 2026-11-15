@@ -88,7 +88,41 @@ async def test_one_listener_routes_static_builds_through_api_promotion_and_code_
             assert (
                 await fixture.store.get(Engagement, "synthetic-project")
             ).name == "Committed while v2 was active"
-            assert supervised.admitted == [("v1", "api"), ("v2", "api"), ("v1", "api")]
+            roll_forward = await root.prepare_api("v2")
+            assert roll_forward.runtime_id != second.runtime_id
+            assert not same_process(second.pid, second.process_birth)
+            status = await root.coordinator.status()
+            await root.promote_api(
+                roll_forward.runtime_id, expected_revision=status.revision
+            )
+            assert (await client.get("/")).headers["x-nebula-api-version"] == "v2"
+            assert (
+                await fixture.store.get(Engagement, "synthetic-project")
+            ).name == "Committed while v2 was active"
+            from sqlalchemy import select
+            from nebula.v3.database import DeploymentReceiptRow, RuntimeProcessRow
+
+            async with fixture.database.session() as session:
+                assert (
+                    await session.get(RuntimeProcessRow, second.runtime_id)
+                ).state == "retired"
+                receipt = await session.scalar(
+                    select(DeploymentReceiptRow).where(
+                        DeploymentReceiptRow.action == "worker.retired",
+                        DeploymentReceiptRow.result["runtime_id"].as_string()
+                        == second.runtime_id,
+                    )
+                )
+                assert receipt is not None
+                assert receipt.result["pid"] == second.pid
+                assert receipt.result["process_birth"] == second.process_birth
+                assert receipt.result["endpoint"] == second.endpoint
+            assert supervised.admitted == [
+                ("v1", "api"),
+                ("v2", "api"),
+                ("v1", "api"),
+                ("v2", "api"),
+            ]
 
 
 async def test_supervisor_close_leaves_ready_api_alive_and_new_host_rediscovers_it(

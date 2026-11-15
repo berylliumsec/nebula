@@ -698,7 +698,13 @@ class RuntimeSupervisor:
                 return identity
             # Validate admission before retiring old viewers: refusals here
             # have no effect and can be retried after their cause is resolved.
-            if any(process.version == version for process in processes):
+            # A previously promoted API can remain draining after rollback.
+            # Admit capacity first, then retire it through the same guarded
+            # path as other inactive viewers before spawning a fresh runtime.
+            if any(
+                process.version == version and process.state != "draining"
+                for process in processes
+            ):
                 raise OperationRejected(
                     "An earlier candidate incarnation still needs recovery"
                 )
