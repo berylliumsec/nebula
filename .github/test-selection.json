@@ -1,30 +1,26 @@
 {
-  "reviewed_by": "Claude #1097 parity implementer; defects independently validated by a separate Claude validator (issues/parity/validation.md, Core's own subagent events through the real ApiClient and reducer); an independent diff review is still required before merge",
-  "reason": "GUI parity for #1097. (1) Stop subagent was gated on status === 'running', but Core marks a Claude task stoppable while queued, running or streaming (harnesses.py _claude_task_event) and every TaskProgressMessage turns a task into 'streaming', so Stop vanished at the first progress update and never showed for a queued task. The gate is now subagentStoppable(item): an active Core status and Core's stoppable flag not false; the status check matters because Core's stop record carries only task_id and the reducer merges payloads, leaving a stale stoppable=true on a cancelled task. (2) The artifact inspector never sent Core's continuation cursors: search offered only a 'More matches are available with the continuation cursor' note, and read mapped only continuation.starting_line, so a page that stopped inside a long line (>~8 KiB) had no next control. readToolOutput now accepts and maps continuation_cursor; the inspector offers More matches (appending pages for the query that produced them) and Continue line N / Read next lines. Selected: vitest for the stoppable rule over Core-shaped events through ApiClient + reducer, the client cursor mapping and paging helpers, and the existing harnessActivity reducer tests; Playwright: the activity-ledger area (whose entry actions host both controls), extended with the two new 'GUI parity' journeys, on desktop, 320 px Chromium and 390 px WebKit.",
-  "exclusions": "No Core or Python source changes; Core's stop route, stoppable flag and tool-output read/search cursors are unchanged and covered by tests/v3/test_automation_runtime.py and the harness tests, which this diff does not touch. ChatResults' one-page excerpt and the terminal are unchanged. checkpoint_rewind stays disabled and untouched. The butler-workflow-registry.json change only updates the UI API call inventory count. No native changes. Other Playwright areas that list SessionsPage.tsx do not exercise subagent controls or the artifact inspector; compact/wide/other mobile profiles are excluded to keep CI narrow.",
+  "reviewed_by": "Claude #1094 implementer; the defect was independently reproduced with real supervisor and API worker processes by a separate Claude validator (issues/private-channel/validation.md) before any fix; an independent diff review is still required before merge",
+  "reason": "Backend fix for #1094. The stable listener signs every public request onto the private runtime channel before the API worker authenticates its caller, and each one spent a nonce from a bounded per-lane replay set (256 control / 4096 read and work per 30 s), so anonymous traffic made the operator's Stop and approval decision return 429; anonymous unfinished uploads also held the 16 control (or 64 shared read/work) forwarding connections so operator requests got 503. Senders now number nonces per receiver key, lane and transport inside a random epoch and receivers check a sliding window per epoch, so volume is never refused; requests that present no recognised credential travel in their own connection pool and never on the control lane. Python: the private-channel gate and proxy file (numbering, replay and stale refusal, legacy nonce sets), the stable-listener file (credential classification, recognised-device cache, and a real supervisor + API worker process test of a 300-request anonymous burst and 20 control + 70 work-path unfinished uploads while operator Stop, decision and read stay answered), and the routing file whose control-lane assertion changed.",
+  "exclusions": "No UI, frontend, native or Playwright changes: the operator-visible result (Stop and approval answered instead of 429/503) is proven by the real-process supervisor test and a scratch real-Core probe recorded in the PR. Execution-worker and project-worker private channels use the same gate but only receive already-authenticated traffic; test_runtime_processes.py, test_execution_worker_process.py and test_runtime_worker_features.py exercise those senders unchanged and are excluded as process-heavy suites outside the changed admission logic. Python 3.12 only.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 0,
-    "frontend": 26,
+    "python": 69,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/subagentStop.test.ts",
-    "ui/src/pages/artifactPaging.test.ts",
-    "ui/src/pages/harnessActivity.test.ts"
+  "python": [
+    "tests/v3/test_runtime_http.py",
+    "tests/v3/test_supervisor.py",
+    "tests/v3/test_runtime_routing.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "activity-ledger/desktop",
-    "activity-ledger/mobile-chromium-small",
-    "activity-ledger/mobile-webkit"
-  ],
+  "playwright": [],
   "checks": [],
-  "change_digest": "a066089ebad5f7cc3627739b0bd358f16830db4baeacdd2d6cb9c0b9d075d270"
+  "change_digest": "72bc55f1fb759d1d80c33c1086b796ea0f66e8d9b0ebf5474a9abe94a5a486c6"
 }

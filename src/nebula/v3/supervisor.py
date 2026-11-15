@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from builtins import BaseExceptionGroup
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import hashlib
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket
 import httpx
 from sqlalchemy import and_, or_, select
+from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 
 from .async_utils import cancel_and_join, finish_cleanup
@@ -33,7 +36,7 @@ from .release_store import ReleaseStore
 from .memory_policy import MemoryBudgetError
 from .runtime_coordination import CoordinationConflict, OperationRejected, ProjectLease
 from .runtime_bootstrap import RuntimeBootstrap
-from .runtime_http import RuntimeHttpProxy
+from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_identity import mount_runtime_identity
 from .runtime_ipc import RuntimeIpcError
 from .runtime_processes import RuntimeProcessHost
@@ -42,6 +45,12 @@ from .runtime_memory import RuntimeMemoryAdmission
 from .runtime_host_services import HostSharedServices, create_host_knowledge_index
 from .runtime_management import RuntimeManagement
 from .storage import NebulaStore
+
+
+# Paired-device cookies the listener recognised recently, and for how long.
+# This only selects forwarding capacity, never authority.
+_RECOGNISED_DEVICES = 256
+_RECOGNISED_DEVICE_SECONDS = 30.0
 
 
 class _Forward(Response):
@@ -165,7 +174,7 @@ class RuntimeSupervisor:
         self.routing = RuntimeRouting(
             self.coordinator.coordination, host.credentials.directory
         )
-        self.proxy = RuntimeHttpProxy(self.routing.api_upstream)
+        self.proxy = RuntimeHttpProxy(self._api_upstream)
         self.bootstrap = RuntimeBootstrap(self.coordinator, self.routing)
         self._recovery_version = recovery_version
         self._shutdown_requested = shutdown_requested
@@ -185,6 +194,8 @@ class RuntimeSupervisor:
         self.answered: dict[asyncio.Task, float] = {}
         authentication = CoreAuthentication(self.store, operator_token)
         self.authentication = authentication
+        self._recognised_devices: OrderedDict[bytes, float] = OrderedDict()
+        self._credential_lookups = asyncio.Semaphore(4)
 
         @asynccontextmanager
         async def lifespan(_app):
@@ -285,6 +296,66 @@ class RuntimeSupervisor:
             await self.proxy(websocket.scope, websocket.receive, websocket.send)
 
         self.app = _Availability(api, self)
+
+    async def _api_upstream(self, scope: dict) -> HttpUpstream:
+        """Forward to the promoted API worker with capacity chosen by caller.
+
+        The listener relays every public request before the API worker
+        authenticates it. A request presenting no credential this listener
+        recognises therefore travels in its own connection pool, and never on
+        the reserved control lane, so callers the API worker will refuse (for
+        example with uploads that never finish) cannot hold the connections an
+        operator's Stop, decision, read or change needs. The choice authorizes
+        nothing: the API worker still authenticates every request in full.
+        """
+        upstream = await self.routing.api_upstream(scope)
+        if scope["type"] != "http" or await self._presents_credential(scope):
+            return upstream
+        return replace(
+            upstream,
+            lane="work" if upstream.lane == "control" else upstream.lane,
+            public=True,
+        )
+
+    async def _presents_credential(self, scope: dict) -> bool:
+        """Whether a request carries the operator token or a live paired-device
+        session; this selects forwarding capacity only."""
+        connection = HTTPConnection(scope)
+        if self.authentication.presents_operator_token(connection):
+            return True
+        cookie = connection.cookies.get("nebula_device")
+        if not cookie:
+            return False
+        # Browsers send the paired-device cookie with every request. A device
+        # recognised recently keeps operator capacity without a lookup per
+        # request; revocation still takes effect at the API worker at once.
+        digest = hashlib.sha256(cookie.encode("utf-8", "surrogateescape")).digest()
+        now = asyncio.get_running_loop().time()
+        recognised = self._recognised_devices.pop(digest, None)
+        if recognised is not None and recognised > now:
+            self._recognised_devices[digest] = recognised
+            return True
+        try:
+            # Bound the lookups any volume of unknown cookies can start.
+            async with self._credential_lookups:
+                device = await self.authentication.device_for_token(cookie)
+        except Exception as error:
+            # The API worker still authenticates the request; only its
+            # forwarding capacity falls back to the public pool.
+            record_caught_exception(
+                "api",
+                "api.runtime.credential_check_failed",
+                "A paired-device session could not be checked before forwarding.",
+                error,
+                stage="forward",
+            )
+            return False
+        if device is None:
+            return False
+        self._recognised_devices[digest] = now + _RECOGNISED_DEVICE_SECONDS
+        while len(self._recognised_devices) > _RECOGNISED_DEVICES:
+            self._recognised_devices.popitem(last=False)
+        return True
 
     async def start(self):
         async with self._operations:
