@@ -2615,7 +2615,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     {issuedStorageToken && issuedStorageToken.projectId === engagement?.id && <section className={`${styles.libraryHandoff} ${styles.storageToken}`} aria-label="New storage source token">
       <div><strong>Save {issuedStorageToken.name}'s new token now</strong><small>Shown once on this device. Update the sender before its next report.</small></div>
       <label>Webhook URL<input id="butler-storage-webhook" readOnly value={issuedStorageToken.webhookUrl} onFocus={(event) => event.target.select()} /></label>
-      <label>Source token<input id="butler-storage-token" readOnly value={issuedStorageToken.token} onFocus={(event) => event.target.select()} /></label>
+      <label>Source token<input id="butler-storage-token" readOnly data-nebula-sensitive value={issuedStorageToken.token} onFocus={(event) => event.target.select()} /></label>
       <div className={styles.libraryHandoffActions}>
         <button className="button quiet" type="button" onClick={() => void (async () => {
           try { await navigator.clipboard.writeText(issuedStorageToken.token); }

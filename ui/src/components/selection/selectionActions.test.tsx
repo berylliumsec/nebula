@@ -132,6 +132,31 @@ describe("selection actions", () => {
     sensitive.remove();
   });
 
+  it("rejects one-time codes and marked token fields but keeps ordinary read-only text", () => {
+    const code = document.createElement("input");
+    code.autocomplete = "one-time-code";
+    code.value = "123456";
+    const token = document.createElement("input");
+    token.readOnly = true;
+    token.dataset.nebulaSensitive = "";
+    token.value = "nst_SYNTHETIC1096_token";
+    const ordinary = document.createElement("input");
+    ordinary.readOnly = true;
+    ordinary.value = "http://core.test/api/v1/storage/events";
+    document.body.append(code, token, ordinary);
+    for (const control of [code, token, ordinary]) control.setSelectionRange(0, control.value.length);
+    expect(readTextControlSelection(code)).toBeUndefined();
+    expect(readTextControlSelection(token)).toBeUndefined();
+    expect(readTextControlSelection(ordinary)?.text).toBe(ordinary.value);
+
+    const pairing = document.createElement("div");
+    pairing.dataset.nebulaSensitive = "";
+    pairing.innerHTML = "<strong>Scan</strong><code>http://core.test/#pair=PAIRSECRET1096</code>";
+    document.body.append(pairing);
+    expect(readDomSelection(selectNodeText(pairing.querySelector("code")!.firstChild as Text))).toBeUndefined();
+    for (const element of [code, token, ordinary, pairing]) element.remove();
+  });
+
   it("opens draft-only Ask and Take note actions with source metadata", async () => {
     const user = userEvent.setup();
     const onAsk = vi.fn();
