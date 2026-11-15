@@ -546,6 +546,13 @@ class ChatTurnLedger:
         already read stays valid: each call reads only the rows after it.
         """
 
+        return (await self.history_snapshot(turn))[1]
+
+    async def history_snapshot(
+        self, turn: ChatTurn
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Return one consistent folded history and its committed watermark."""
+
         with self._folded_lock:
             cached = self._folded.get(turn.id)
             if cached is not None:
@@ -557,7 +564,7 @@ class ChatTurnLedger:
             )
         rows = await self._rows_after(turn.id, folded.through_sequence)
         if not rows and not folded.latest:
-            return [
+            return 0, [
                 _without_callback_key(dict(item))
                 for item in turn.tool_history
                 if isinstance(item, dict)
@@ -592,10 +599,23 @@ class ChatTurnLedger:
                     self._folded.move_to_end(turn.id)
                 while len(self._folded) > HISTORY_CACHE_TURNS:
                     self._folded.popitem(last=False)
-        return [
+        return folded.through_sequence, [
             _copied(entry)
             for _, entry in sorted(folded.latest.values(), key=lambda item: item[0])
         ]
+
+    async def latest_sequence(self, turn_id: str) -> int:
+        """The committed projection watermark, without trusting a turn snapshot."""
+
+        async with self.database.session() as session:
+            return int(
+                await session.scalar(
+                    select(
+                        func.coalesce(func.max(ChatTurnStepEventRow.sequence), 0)
+                    ).where(ChatTurnStepEventRow.turn_id == turn_id)
+                )
+                or 0
+            )
 
     async def _payload_at(self, turn_id: str, sequence: int) -> dict[str, Any] | None:
         async with self.database.session() as session:

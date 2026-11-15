@@ -5,12 +5,17 @@ from fastapi import FastAPI
 import httpx
 import pytest
 
-from nebula.v3.database import DeploymentHostRow, RuntimeProcessRow, RuntimeResourceRow
+from nebula.v3.database import (
+    DeploymentHostRow,
+    ProjectOwnershipRow,
+    RuntimeProcessRow,
+    RuntimeResourceRow,
+)
 from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import ChatSession
 from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS
 from nebula.v3.runtime_delivery import HttpIntent
-from nebula.v3.runtime_ipc import RuntimeIpcError
+from nebula.v3.runtime_ipc import ProjectRuntimeUnavailable, RuntimeIpcError
 from nebula.v3.runtime_http import PrivateRuntimeHttp, RuntimeHttpProxy
 from nebula.v3.runtime_routing import RuntimeRouting
 from tests.v3.test_runtime_coordination import cluster as cluster
@@ -128,8 +133,45 @@ async def test_viewer_routes_only_to_live_execution_owner_and_credential(
     assert target.endpoint == "unix:///tmp/synthetic-old.sock"
     assert target.credential == key and target.lane == "read"
     clock[0] += LEASE_MS + 1
-    with pytest.raises(RuntimeIpcError, match="no live"):
+    # An expired or retired owner is transient for a viewer: it may read again.
+    with pytest.raises(ProjectRuntimeUnavailable, match="no live"):
         await routing.upstream_for({"path": "/api/v1/chat/sessions/chat"})
+
+
+async def test_unavailable_project_reads_say_whether_core_is_bringing_a_worker(
+    cluster, tmp_path
+):
+    (first, _), stores, _clock = cluster
+    chat = dict(
+        engagement_id="project",
+        title="Synthetic routing chat",
+        model="synthetic-model",
+        provider_profile_id="synthetic-provider",
+    )
+    await stores[0].create(
+        ChatSession(
+            id="archived", metadata={"archived_at": "2026-11-14T12:00:00Z"}, **chat
+        )
+    )
+    routing = RuntimeRouting(first, tmp_path / "private")
+    read = {"path": "/api/v1/chat/sessions/archived", "method": "GET"}
+    # Every chat is archived and nothing is queued: reads never admit a
+    # worker, so the project stays idle until the operator resumes work.
+    with pytest.raises(ProjectRuntimeUnavailable) as idle:
+        await routing.upstream_for(read)
+    assert idle.value.reason == "idle"
+    # An unarchived chat is admission demand: Core is bringing a worker up.
+    await stores[0].create(ChatSession(id="open", **chat))
+    with pytest.raises(ProjectRuntimeUnavailable) as starting:
+        await routing.upstream_for(read)
+    assert starting.value.reason == "starting"
+    await registered(routing)
+    await first.claim_project("project", "old")
+    async with first.database.session() as session:
+        (await session.get(ProjectOwnershipRow, "project")).retirement_requested = True
+    with pytest.raises(ProjectRuntimeUnavailable) as closing:
+        await routing.upstream_for(read)
+    assert closing.value.reason == "closing"
 
 
 async def test_controller_reference_follows_resource_project_instead_of_global(

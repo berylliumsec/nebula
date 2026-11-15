@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from nebula.v3.api_worker import create_api_worker
 from nebula.v3.chat import ChatCompletionRequest, ChatHistoryConflict, ChatService
@@ -21,6 +22,7 @@ from nebula.v3.runtime_coordination import (
     LEASE_MS,
     LeaseLost,
     MAX_STREAM_BATCH,
+    RuntimeCoordination,
     STREAM_EPOCH,
 )
 from nebula.v3.runtime_delivery import RuntimeDelivery
@@ -124,6 +126,40 @@ async def test_cancellation_joins_publication_and_never_undoes_acknowledged_fram
     }
 
 
+async def test_batch_whose_commit_was_not_acknowledged_is_retried_once_by_key(
+    journal, monkeypatch
+):
+    """A response batch that loses its SQL connection while the worker can
+    still prove its lease is retried under the same key: a commit that landed
+    is found again instead of being appended twice, and the turn goes on."""
+    original = journal.coordination[0].append_stream_batch
+    keys = []
+
+    async def acknowledgement_lost(*args, **kwargs):
+        keys.append(kwargs["batch_key"])
+        result = await original(*args, **kwargs)
+        if len(keys) == 1:
+            raise OperationalError("COMMIT", {}, ConnectionResetError("reset"))
+        return result
+
+    monkeypatch.setattr(
+        journal.coordination[0], "append_stream_batch", acknowledgement_lost
+    )
+    journal.writer.outage_remaining = lambda: 10.0
+    published = await publish(journal, ("delta", {"delta": "exactly once"}))
+    assert len(keys) == 2 and keys[0] == keys[1]
+    replay = await journal.coordination[1].replay_stream("turn")
+    assert [(frame.sequence, frame.payload) for frame in replay] == [
+        (published[0].sequence, {"delta": "exactly once"})
+    ]
+    # Without a provable lease the lost connection fails the batch as before.
+    journal.writer.outage_remaining = None
+    keys.clear()
+    with pytest.raises(OperationalError):
+        await publish(journal, ("delta", {"delta": "not retried"}))
+    assert len(keys) == 1
+
+
 async def test_handoff_keeps_one_epoch_and_never_hides_the_next_segment(journal):
     original = await publish(journal, ("delta", {"delta": "old"}))
     with execution_context(journal.lease):
@@ -214,6 +250,7 @@ async def test_started_segment_seeds_legacy_prefix_once_and_default_follow_exclu
         inputs_persisted=True,
         provider_profile=SimpleNamespace(id="provider"),
         resolved_model="model-a",
+        source_request=None,
     )
 
     async def noop(*_args, **_kwargs):
@@ -261,7 +298,9 @@ async def test_new_segment_waits_until_the_prior_segment_end_commits(
     journal, monkeypatch
 ):
     service = ChatService(journal.stores[0], stream_journal=journal.writer)
-    prepared = SimpleNamespace(turn=journal.turn, inputs_persisted=False)
+    prepared = SimpleNamespace(
+        turn=journal.turn, inputs_persisted=False, source_request=None
+    )
     entered, release = asyncio.Event(), asyncio.Event()
     close = journal.writer.close
 
@@ -334,7 +373,9 @@ async def test_stop_before_first_producer_step_persists_cancelled_end_once(
     monkeypatch.setattr(service, "_run_provider_turn", forbidden)
     try:
         with execution_context(journal.lease):
-            await service.start_provider_turn(SimpleNamespace(turn=journal.turn))
+            await service.start_provider_turn(
+                SimpleNamespace(turn=journal.turn, source_request=None)
+            )
             stopped = await service.stop_provider_turn("turn")
             await service.stop_provider_turn("turn")
         assert entered == []
@@ -443,9 +484,11 @@ async def test_api_replacement_replays_sql_without_contacting_an_execution_proce
                 pool_settings=PoolSettings(5, 12, 2, 5),
             )
         )
-        delivery = RuntimeDelivery(
-            journal.coordination[0], RuntimeVault(tmp_path / "payloads")
-        )
+        # The API worker's global receipts share its store's transaction
+        # owner, as runtime_worker provides in production (17ec988).
+        coordination = RuntimeCoordination(api_store.database)
+        coordination._clock_ms = journal.coordination[0]._clock_ms
+        delivery = RuntimeDelivery(coordination, RuntimeVault(tmp_path / "payloads"))
         app = create_api_worker(
             api_store,
             delivery,

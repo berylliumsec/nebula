@@ -10,7 +10,7 @@ _CONTROL = re.compile(
     r"auth/devices/[^/]+|harness-interactions/[^/]+/decision|"
     r"harness-turns/[^/]+/steer|runs/[^/]+/steer|"
     r"memory-budgets/jobs/[^/]+/apply|"
-    r"browser-companion/[^/]+/actions/[^/]+|"
+    r"browser-companion/[^/]+/(?:control|actions/[^/]+)|"
     r"browser-actions/[^/]+/decision|browser-intercepts/[^/]+/decision|"
     r"chat/sessions/[^/]+/subagents(?:/[^/]+)?/stop|"
     r"harness-turns/[^/]+(?:/tasks/[^/]+)?/stop|"

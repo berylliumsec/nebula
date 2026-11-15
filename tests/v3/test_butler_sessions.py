@@ -117,7 +117,7 @@ async def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_p
     second = await store.create(Engagement(name="Second project"))
     profile = await store.create(_profile(local=True))
     app = create_app(store, auth_token="test-token")
-    browser_mcp = app.state.agent_security_tools.register_profile()
+    browser_mcp = await app.state.agent_security_tools.register_profile()
     client = TestClient(app)
     headers = {"Authorization": "Bearer test-token"}
     payload = {

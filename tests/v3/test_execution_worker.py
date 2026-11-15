@@ -12,6 +12,7 @@ import httpx
 from pydantic import SecretStr
 import pytest
 from sqlalchemy import event, update
+from sqlalchemy.exc import OperationalError
 
 from nebula.v3 import execution_worker
 from nebula.v3.database import Database, ProjectOwnershipRow, RuntimeInstanceRow
@@ -183,7 +184,13 @@ async def test_unassigned_worker_starts_no_controllers_and_holds_reads(runtime):
         transport=httpx.ASGITransport(app=runtime.execution.app),
         base_url="http://fixture",
     ) as client:
-        assert (await client.get("/api/v1/fixture")).status_code == 503
+        held = await client.get("/api/v1/fixture")
+    # A starting worker tells viewers to read again, not that work failed.
+    assert held.status_code == 503
+    assert held.headers["retry-after"] == "1"
+    assert held.json()["code"] == "project_runtime_unavailable"
+    assert held.json()["reason"] == "starting"
+    assert held.json()["retryable"] is True
     assert runtime.seen == []
 
 
@@ -332,10 +339,14 @@ async def test_idle_worker_makes_no_fenced_claims_and_still_picks_up_work(
     monkeypatch.setattr(execution_worker, "HEARTBEAT_SECONDS", 60.0)
     coordination = runtime.coordination.coordination
     original, claims, statements = coordination.claim_next, [], []
+    settled = []
 
     async def counted(lease, *, lane=None):
         claims.append(lane)
-        return await original(lease, lane=lane)
+        try:
+            return await original(lease, lane=lane)
+        finally:
+            settled.append(lane)
 
     def record(_connection, _cursor, statement, *_args):
         statements.append(statement)
@@ -345,7 +356,10 @@ async def test_idle_worker_makes_no_fenced_claims_and_still_picks_up_work(
     event.listen(engine, "before_cursor_execute", record)
     try:
         await attach(runtime)
-        await asyncio.sleep(0.3)
+        # A new owner claims every lane once, under the fence, right after it
+        # is ready. Those claims queue on the ownership row and can run past
+        # any fixed settle time on a busy host; measure only after they return.
+        await until(lambda: set(settled) >= set(execution_worker.COMMAND_LANES))
         claims.clear()
         statements.clear()
         await asyncio.sleep(2)
@@ -522,3 +536,43 @@ async def test_safety_claims_deliver_without_any_probe_hint(runtime, monkeypatch
     assert (await terminal(runtime, work)).state == "succeeded"
     control = await accept(runtime, "control-safety", lane="control", name="Control")
     assert (await terminal(runtime, control)).state == "succeeded"
+
+
+async def test_lease_watcher_keeps_a_provable_lease_through_an_sql_outage(
+    runtime, monkeypatch
+):
+    """A refused SQL connection says nothing about ownership. While the
+    worker's last renewal still proves its lease live, the watcher neither
+    fences nor stops the project; once that bound is spent it fences as before.
+    """
+    monkeypatch.setattr(execution_worker, "HEARTBEAT_SECONDS", 0.05)
+    bound = [30.0]
+    runtime.context.renewal = SimpleNamespace(remaining=lambda: bound[0])
+    coordination = runtime.coordination.coordination
+    original, down, refused = coordination.fenced, [False], []
+
+    @asynccontextmanager
+    async def unreachable_while_down(lease):
+        if down[0]:
+            refused.append(lease)
+            raise OperationalError(
+                "SELECT 1", {}, ConnectionRefusedError("synthetic refusal")
+            )
+        async with original(lease) as session:
+            yield session
+
+    monkeypatch.setattr(coordination, "fenced", unreachable_while_down)
+    await attach(runtime)
+    down[0] = True
+    await until(lambda: refused)
+    # Ten watcher intervals of refused rechecks.
+    await asyncio.sleep(0.5)
+    assert runtime.execution.state == "ready"
+    assert len(refused) >= 8
+    down[0] = False
+    receipt = await accept(runtime, "after-outage", name="Delivered after outage")
+    assert (await terminal(runtime, receipt)).state == "succeeded"
+    assert runtime.execution.state == "ready"
+    bound[0] = 0.0
+    down[0] = True
+    await until(lambda: runtime.execution.state == "fenced")

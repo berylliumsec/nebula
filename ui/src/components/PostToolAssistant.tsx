@@ -6,6 +6,8 @@ import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/project
 import type { GeneratedDraft, HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 
 interface Props {
   api: ApiClient;
@@ -80,10 +82,17 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     setCommand(latest?.content?.nextStep?.command ?? "");
   }, [api, engagementId]);
 
+  // While the project's worker is starting or away, wait for it and load
+  // again instead of showing an error the operator can do nothing about.
+  const [runtimeWait, setRuntimeWait] = useState(0);
+  const [reload, setReload] = useState(0);
+  useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); setReload((value) => value + 1); });
+  useEffect(() => { setRuntimeWait(0); }, [engagementId]);
   useEffect(() => { void refresh().catch((caught) => {
+    if (isProjectRuntimeUnavailable(caught)) { setRuntimeWait((value) => value || 1); return; }
     void logCaughtDiagnostic("interface.post_tool_assistant.load_failed", "Post-tool assistance could not be loaded.", caught, "post_tool_assistant");
     setFeedback({ kind: "error", title: "Tool assistance unavailable", message: caught instanceof Error ? caught.message : "Could not load tool assistance." });
-  }); }, [refresh]);
+  }); }, [refresh, reload]);
 
   useEffect(() => {
     const changed = (event: Event) => {
@@ -167,6 +176,8 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
         }
         if (active) await refresh();
       } catch (caught) {
+        // diagnostic-expected: the worker is starting or away; the next tick reads again.
+        if (isProjectRuntimeUnavailable(caught)) return;
         void logCaughtDiagnostic("interface.post_tool_assistant.analysis_failed", "Post-tool analysis failed.", caught, "post_tool_assistant");
         if (active) setFeedback({ kind: "error", title: "Tool analysis stopped", message: caught instanceof Error ? caught.message : "Post-tool analysis failed." });
       } finally { if (active) setBusy(false); }

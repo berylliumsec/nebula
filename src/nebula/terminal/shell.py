@@ -118,6 +118,10 @@ class Shell:
                 "bookmark",
                 "side",
                 "thinking",
+                "catchup",
+                "quote",
+                "evidence",
+                "turn",
                 "history",
                 "context",
                 "activity",
@@ -468,6 +472,9 @@ class Shell:
                 "ssh_environment_ids"
             )
             await self.history()
+            from .reading import catchup_on_open
+
+            await catchup_on_open(self)
             state = await self.status()
             if state.get("busy"):
                 self.ui.say("Use /follow to attach; new text queues a follow-up.")
@@ -1273,6 +1280,10 @@ class Shell:
                                 )
                             )
                         self.ui.say("Response complete.")
+                        if view is self.view:
+                            from .reading import mark_seen
+
+                            await mark_seen(self, view)
                         break
                     elif event == "cancelled":
                         finished = True
@@ -1610,7 +1621,7 @@ class Shell:
         elif name == "board":
             from .board import show_project_board
 
-            await show_project_board(self)
+            await show_project_board(self, args)
         elif name == "chats":
             await self.select_chat(" ".join(args) or None)
         elif name == "new":
@@ -1623,6 +1634,10 @@ class Shell:
             await self.history(bool(args and args[0] == "more"))
         elif name == "thinking":
             await self.toggle_thinking()
+        elif name in {"catchup", "quote", "evidence", "turn"}:
+            from . import reading
+
+            await getattr(reading, name)(self, args)
         elif name == "search":
             from .conversations import search
 

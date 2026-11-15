@@ -7,11 +7,8 @@ document is synthetic; this fixture performs no external URL requests.
 from typing import Any
 from urllib.parse import urlsplit
 
-from nebula.v3 import cli
+from nebula.v3.api import create_app as _create_app
 from nebula.v3.knowledge import FetchedUrlDocument, SourceFetchError
-
-
-_create_app = cli.create_app
 
 
 def fetch_document(url: str) -> FetchedUrlDocument:
@@ -36,5 +33,7 @@ def create_fixture_app(*args: Any, **kwargs: Any) -> Any:
 
 
 if __name__ == "__main__":
-    cli.create_app = create_fixture_app
-    cli.main()
+    # Run as a script, so the helper beside this file is importable by name.
+    from in_process_core import serve_fixture
+
+    serve_fixture(create_fixture_app)

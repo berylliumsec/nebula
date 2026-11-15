@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
 import type { AutomationProjectPolicy, EngagementScopePolicy, NotebookRun, ScopeToolCandidate, TypeSafeIntegration, VpnProfile, WebSearchRuntime } from "../api/types";
 import { ApiError } from "../api/client";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -122,6 +123,7 @@ export function EngagementPolicySettings() {
   const [validationError, setValidationError] = useState<string>();
   const [conflictingNotebookRuns, setConflictingNotebookRuns] = useState<NotebookRun[]>([]);
   const loadRevision = useRef(0);
+  const loadAbort = useRef<AbortController | undefined>(undefined);
   const policyReady = Boolean(engagement && scope?.engagementId === engagement.id && policy?.engagementId === engagement.id);
   // A pinned tool whose server was removed, disabled or re-probed stays listed
   // so that saving the form never drops the choice silently.
@@ -160,15 +162,21 @@ export function EngagementPolicySettings() {
   const load = useCallback(async () => {
     if (!api || coreState !== "online" || !engagement) return;
     const revision = ++loadRevision.current;
+    loadAbort.current?.abort();
+    const controller = new AbortController();
+    loadAbort.current = controller;
     setPolicy(undefined);
     setScope(undefined);
     setSaving(undefined);
     setError(undefined);
     setConflictingNotebookRuns([]);
     try {
+      // While the project's worker starts these read "Loading project policy…" and
+      // read again once it answers, instead of failing as "idle" or "not ready".
+      const projectId = engagement.id;
       const [nextScope, nextPolicy, nextVpnProfiles] = await Promise.all([
-        api.getEngagementScope(engagement.id),
-        api.getAutomationPolicy(engagement.id),
+        readWhenProjectReady(api.projectRuntime, () => api.getEngagementScope(projectId), controller.signal),
+        readWhenProjectReady(api.projectRuntime, () => api.getAutomationPolicy(projectId), controller.signal),
         api.listVpnProfiles().catch((vpnError) => {
           if (vpnError instanceof ApiError && (vpnError.status === 404 || vpnError.status === 501)) return [];
           void logCaughtDiagnostic("interface.engagement_policy.vpn_profiles_unavailable", "VPN profiles are unavailable in this Core build.", vpnError, "engagement_policy");
@@ -201,7 +209,7 @@ export function EngagementPolicySettings() {
     }
   }, [api, coreState, engagement?.id]);
 
-  useEffect(() => { void load(); return () => { loadRevision.current += 1; }; }, [load]);
+  useEffect(() => { void load(); return () => { loadRevision.current += 1; loadAbort.current?.abort(); }; }, [load]);
 
   useEffect(() => {
     const follow = (event: Event) => setTypesafe((event as CustomEvent<TypeSafeIntegration>).detail);
@@ -394,12 +402,12 @@ export function EngagementPolicySettings() {
           {executionMode === "host" && <label className="provider-consent"><input type="checkbox" checked={hostAcknowledged} onChange={(event) => setHostAcknowledged(event.target.checked)} /><span><strong>Allow host filesystem and network access</strong><small>Agents can access and modify other host folders and mounted devices permitted by the server's OS account. Docker isolation, scope-filtered networking and container VPN routing do not apply. Command approvals and timeouts still apply. External MCP services keep their configured location.</small></span></label>}
           {executionMode === "host" && <label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Allow notebook package downloads</strong><small>Search PyPI and install packages into this project's managed Python environment. Host notebook code follows the server's OS network permissions.</small></span></label>}
           <label>Approval policy<select aria-describedby="command-approval-scope" value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as AutomationProjectPolicy["approvalPolicy"])}><option value="on_boundary">On boundary · prompt once for project networking</option><option value="always">Always · prompt before every command</option><option value="never">Never · no tool prompts</option></select></label>
-          <p id="command-approval-scope" className="provider-dialog-note">Applies to provider and harness tool approvals for new sessions, including native, MCP and SSH tools. Scope and explicit deny rules still apply.</p>
-          {approvalPolicy === "never" && <InlineValidationNotice message="Provider and harness tools run without approval prompts; scope and deny rules still apply." />}
+          <p id="command-approval-scope" className="provider-dialog-note">Applies to all Core-managed tools, including provider, harness, MCP, SSH and browser tools. Never bypasses tool permissions, scope restrictions and explicit deny rules.</p>
+          {approvalPolicy === "never" && <InlineValidationNotice message="All enabled Core-managed tools run without permission checks or approval prompts. Authentication, execution limits and operating-system controls still apply." />}
           <label>Maximum command timeout (milliseconds)<input type="number" min={1000} max={86400000} value={maxTimeoutMs} onChange={(event) => setMaxTimeoutMs(event.target.value)} /></label>
           {executionMode === "docker" && <><label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Make project-scoped networking available</strong><small>The session receives the complete validated CIDR/domain/port policy. An approval never expands that scope.</small></span></label>
           <label>VPN route<select value={vpnProfileId} disabled={!networkEnabled} onChange={(event) => setVpnProfileId(event.target.value)}><option value="">Direct, scope-filtered egress</option>{vpnProfiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.available}>{profile.name} · {profile.protocol.toUpperCase()} {profile.remoteHost}</option>)}</select><small>{vpnProfileId ? "New command sessions must establish this tunnel before network access is released." : "Select a saved profile to route authorized container traffic through OpenVPN."}</small></label></>}
-          <footer><span>Existing sessions keep their frozen policy revision.</span><button className="button primary" type="submit" disabled={previewMode || !policy || saving === "runtime" || (executionMode === "host" && !hostAcknowledged)}><Save size={14} /> {saving === "runtime" ? "Saving…" : "Save runtime policy"}</button></footer>
+          <footer><span>Policy changes apply to the next turn or command.</span><button className="button primary" type="submit" disabled={previewMode || !policy || saving === "runtime" || (executionMode === "host" && !hostAcknowledged)}><Save size={14} /> {saving === "runtime" ? "Saving…" : "Save runtime policy"}</button></footer>
         </fieldset>
       </form>
       <form className="panel policy-form" onSubmit={(event) => void saveScope(event)}>

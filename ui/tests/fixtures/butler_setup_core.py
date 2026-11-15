@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from nebula.v3 import cli
 from nebula.v3.api import create_app as _create_app
 from nebula.v3.domain import Engagement, RunnerProfile
 from nebula.v3.runtime_platform import (
@@ -99,15 +98,17 @@ def configure_setup_io(store, platform, root: Path):
     return boundary
 
 
-def create_fixture_app(*args: Any, **kwargs: Any):
+async def create_fixture_app(*args: Any, **kwargs: Any):
     store = args[0] if args else kwargs["store"]
     platform = kwargs["tool_platform"]
-    store.create(Engagement(name="Setup controls fixture", status="active"))
-    store.create(Engagement(name="Other setup fixture", status="active"))
+    await store.create(Engagement(name="Setup controls fixture", status="active"))
+    await store.create(Engagement(name="Other setup fixture", status="active"))
     configure_setup_io(store, platform, Path(platform.workspace_root).parent)
     return _create_app(*args, **kwargs)
 
 
 if __name__ == "__main__":
-    cli.create_app = create_fixture_app
-    cli.main()
+    # Run as a script, so the helper beside this file is importable by name.
+    from in_process_core import serve_fixture
+
+    serve_fixture(create_fixture_app)

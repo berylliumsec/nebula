@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/client";
 import type { ChatSubagentView } from "../../api/types";
 import { useChatSubagents } from "./useChatSubagents";
+import { PROJECT_RUNTIME_UNAVAILABLE, ProjectRuntimeRecovery } from "../../api/projectRuntime";
 
 vi.mock("../../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
 
@@ -106,5 +107,32 @@ describe("subagent rail polling", () => {
     await advance(0);
     await advance(30_000);
     expect(listChatSubagents).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses without an error while the project's worker is away and resumes when it answers", async () => {
+    let away = true;
+    const recovery = new ProjectRuntimeRecovery(async () => ({ answered: !away }));
+    const list = vi.fn(async (session: string) => {
+      const path = `chat/sessions/${session}/subagents`;
+      if (away) {
+        recovery.unavailable(path);
+        throw Object.assign(new Error("idle"), { status: 503, code: PROJECT_RUNTIME_UNAVAILABLE });
+      }
+      recovery.answered(path);
+      return { items: [child("running")], etag: "\"one\"" };
+    });
+    const api = { listChatSubagentsIfChanged: list, projectRuntime: recovery } as unknown as ApiClient;
+    const { result } = renderHook(() => useChatSubagents(api, "parent"));
+    await advance(0);
+    await advance(10_000);
+    // One read, then the shared probe waits instead of three failures and a stopped poll.
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBeUndefined();
+    expect(recovery.state).toBe("reconnecting");
+    away = false;
+    await advance(6_000);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(result.current.active).toHaveLength(1);
+    expect(result.current.error).toBeUndefined();
   });
 });

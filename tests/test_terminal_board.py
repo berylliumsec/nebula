@@ -145,6 +145,8 @@ def test_board_search_selection_refresh_and_deleted_item(tmp_path):
                 return httpx.Response(200, json=rows)
             if request.url.path.endswith("/updates"):
                 return httpx.Response(200, json=[])
+            if request.url.path.endswith("/engagements/project-a"):
+                return httpx.Response(200, json={"id": "project-a", "revision": 1})
             return httpx.Response(
                 200,
                 json=next(

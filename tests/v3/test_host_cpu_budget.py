@@ -66,8 +66,8 @@ async def fixture(root: Path, *, active=True):
     return store, executor, service, app
 
 
-def update(client, status, value):
-    return client.put(
+async def update(client, status, value):
+    return await client.put(
         "/api/v1/host-cpu-budget",
         headers=HEADERS,
         json={
@@ -91,7 +91,7 @@ async def test_host_policy_is_shared_persistent_and_independent_between_hosts(tm
                 status["apply_state"] == "inactive"
                 and status["applied_cpu_limit"] is None
             )
-            response = update(client, status, 3)
+            response = await update(client, status, 3)
             assert response.status_code == 200
             saved = response.json()
             assert saved["cpu_limit"] == 3 and saved["revision"] == 2
@@ -131,7 +131,7 @@ async def test_custom_and_automatic_are_observed_and_reapplied_on_startup(tmp_pa
                 await client.get("/api/v1/host-cpu-budget", headers=HEADERS)
             ).json()
             assert status["apply_state"] == "applied" and executor.limit == 2
-            saved = update(client, status, 3).json()
+            saved = (await update(client, status, 3)).json()
             assert saved["apply_state"] == "applied" and saved["applied_cpu_limit"] == 3
         executor.limit = 1
         restored = HostCpuBudget(
@@ -167,7 +167,7 @@ async def test_invalid_limits_do_not_change_policy_or_executor(tmp_path, value):
             status = (
                 await client.get("/api/v1/host-cpu-budget", headers=HEADERS)
             ).json()
-            assert update(client, status, value).status_code == 422
+            assert (await update(client, status, value)).status_code == 422
             assert (
                 await client.get("/api/v1/host-cpu-budget", headers=HEADERS)
             ).json() == status
@@ -195,9 +195,9 @@ async def test_auth_host_identity_and_stale_revision_are_enforced(tmp_path):
                 )
             ).status_code == 401
             foreign = {**status, "host_id": "another-core-host"}
-            assert update(client, foreign, 3).status_code == 409
-            saved = update(client, status, 3).json()
-            assert update(client, status, 1).status_code == 409
+            assert (await update(client, foreign, 3)).status_code == 409
+            saved = (await update(client, status, 3)).json()
+            assert (await update(client, status, 1)).status_code == 409
             assert (
                 await client.get("/api/v1/host-cpu-budget", headers=HEADERS)
             ).json() == saved
@@ -244,7 +244,7 @@ async def test_failed_or_unobserved_application_is_not_called_applied(tmp_path):
                 await client.get("/api/v1/host-cpu-budget", headers=HEADERS)
             ).json()
             executor.fail = True
-            failed = update(client, status, 3).json()
+            failed = (await update(client, status, 3)).json()
             assert (
                 failed["cpu_limit"] == 3
                 and failed["apply_state"] == "failed"
@@ -252,13 +252,13 @@ async def test_failed_or_unobserved_application_is_not_called_applied(tmp_path):
             )
             executor.fail = False
             executor.ignore = True
-            pending = update(client, failed, 3).json()
+            pending = (await update(client, failed, 3)).json()
             assert (
                 pending["apply_state"] == "pending"
                 and pending["applied_cpu_limit"] == 2
             )
             executor.ignore = False
-            applied = update(client, pending, 3).json()
+            applied = (await update(client, pending, 3)).json()
             assert (
                 applied["apply_state"] == "applied"
                 and applied["applied_cpu_limit"] == 3

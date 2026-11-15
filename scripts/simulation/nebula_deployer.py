@@ -20,6 +20,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import socket
 import sqlite3
 import stat
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import zipfile
 from uuid import uuid4
@@ -75,6 +77,12 @@ CI_ARTIFACT_LIMIT = 1024 * 1024
 CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DEPLOYMENT_HISTORY_LIMIT = 32
+SUPERVISOR_STOP_GRACE_SECONDS = 30
+SUPERVISOR_EXIT_SECONDS = 30
+HOST_START_ATTEMPTS = 16
+HOST_RESTART_DELAY_SECONDS = 5
+HOST_QUIET_WAIT_SECONDS = 300
+HOST_QUIET_POLL_SECONDS = 5
 
 
 class _LegacyAttempt:
@@ -2391,7 +2399,7 @@ def api() -> CoreClient:
 
 
 def service(action: str) -> None:
-    if action not in {"start", "stop"}:
+    if action not in {"start", "stop", "reset-failed"}:
         raise ValueError("unsupported service action")
     run("systemctl", "--user", action, SERVICE, timeout=180)
 
@@ -2830,6 +2838,17 @@ def require_stage_migration_receipts(
             "Host activation requires the exact durable deployment journal"
         )
     stage, migrate = steps.get("stage"), steps.get("migrate")
+    migration_readback = (
+        (migrate.get("settled") or {}).get("result", {})
+        if isinstance(migrate, dict)
+        else {}
+    )
+    migration_confirmed = (
+        migration_readback.get("version") == version
+        and isinstance(migration_readback.get("target_head"), str)
+        and migration_readback.get("target_head")
+        == migration_readback.get("current_head")
+    )
     if (
         not isinstance(stage, dict)
         or stage.get("action") != "stage"
@@ -2845,7 +2864,10 @@ def require_stage_migration_receipts(
                 or not isinstance(migrate.get("parameters"), dict)
                 or migrate["parameters"].get("version") != version
                 or not isinstance(migrate.get("receipt"), dict)
-                or migrate["receipt"].get("state") != "succeeded"
+                or (
+                    migrate["receipt"].get("state") != "succeeded"
+                    and not migration_confirmed
+                )
             )
         )
     ):
@@ -2855,7 +2877,9 @@ def require_stage_migration_receipts(
     return {
         "deployment_id": journal.get("id"),
         "stage_operation_id": stage.get("operation_id"),
-        "migration_operation_id": migrate.get("operation_id"),
+        "migration_operation_id": migrate.get("operation_id")
+        if isinstance(migrate, dict)
+        else None,
     }
 
 
@@ -2906,14 +2930,28 @@ def wait_supervisor_host_ready(
     prior_status: dict[str, Any] | None,
     allow_degraded_workers: bool = False,
     degraded_baseline: bool = False,
+    restart_exited: bool = False,
     timeout: int = 480,
 ) -> dict[str, Any]:
     expected_package_version = runtime_package_version(version)
     deadline = time.monotonic() + timeout
     last_problem = "supervisor did not publish its accepted host identity"
+    starts = 1
     while time.monotonic() < deadline:
         try:
-            if unit_state(SERVICE) != "active":
+            unit = unit_state(SERVICE)
+            if unit != "active":
+                if restart_exited and unit in {"inactive", "failed"}:
+                    if starts >= HOST_START_ATTEMPTS:
+                        raise RuntimeError(
+                            f"Supervisor host {version} exited before readiness after {starts} starts"
+                        )
+                    time.sleep(HOST_RESTART_DELAY_SECONDS)
+                    if unit == "failed":
+                        service("reset-failed")
+                    service("start")
+                    starts += 1
+                    continue
                 last_problem = "supervisor service is not active"
                 time.sleep(2)
                 continue
@@ -2970,6 +3008,7 @@ def wait_supervisor_host_ready(
                 "retained_project_owners": continuity["retained"],
                 "runtime_pid": identity["pid"],
                 "runtime_process_birth": identity["process_birth"],
+                "host_starts": starts,
             }
         except (OSError, ValueError, HTTPError) as error:
             last_problem = str(error)[:300]
@@ -2995,6 +3034,146 @@ def _save_host_activation(record: dict[str, Any], journal: dict[str, Any]) -> No
     atomic_json(STATE, record)
 
 
+def chat_turns_at_restart_boundary(client: CoreClient) -> list[str]:
+    """Return projects with a chat turn queued, admitting or running."""
+    busy = []
+    for project in client.all_entities("engagements"):
+        project_id = project.get("id")
+        if not isinstance(project_id, str) or not project_id:
+            raise ValueError("Core returned a project without an ID")
+        activity = client.get("chat/session-activity", engagement_id=project_id)
+        if not isinstance(activity, list):
+            raise ValueError("Core chat activity has an invalid shape")
+        if any(
+            not isinstance(item, dict) or item.get("state") != "idle"
+            for item in activity
+        ):
+            busy.append(project_id)
+    return busy
+
+
+def wait_quiet_restart_boundary() -> dict[str, Any]:
+    """Wait, bounded, until no chat turn would cross the host restart.
+
+    Supervisor workers outlive the host, but a worker without #1023 fails a
+    turn that reads the host (admission pressure, credentials, the browser
+    bridge) while no host is running. The operator gate runs before staging
+    and migration; this repeats its chat check at the moment of the stop.
+    Reads fail closed. Nothing is stopped when chat work does not settle.
+    """
+    started = time.monotonic()
+    deadline = started + HOST_QUIET_WAIT_SECONDS
+    while True:
+        busy = chat_turns_at_restart_boundary(api())
+        if not busy:
+            return {"quiet_after_seconds": round(time.monotonic() - started, 1)}
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Chat turns stayed queued, admitting or running in {len(busy)} "
+                "project(s) at the host restart boundary, so the supervisor was "
+                "not stopped: " + ", ".join(busy[:10])
+            )
+        time.sleep(HOST_QUIET_POLL_SECONDS)
+
+
+def _process_alive(identity: dict[str, Any]) -> bool:
+    return linux_process_birth(identity["pid"]) == identity["process_birth"]
+
+
+def _kill_process(identity: dict[str, Any]) -> bool:
+    """SIGKILL exactly this process identity; False when it already exited."""
+    pidfd_open = getattr(os, "pidfd_open", None)
+    if pidfd_open is None or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError(
+            "Verified pidfd signaling is required to stop a hung supervisor"
+        )
+    try:
+        handle = pidfd_open(identity["pid"])
+    except ProcessLookupError:
+        return False
+    try:
+        # The descriptor pins the process: a reused PID cannot be signalled.
+        if linux_process_birth(identity["pid"]) != identity["process_birth"]:
+            return False
+        signal.pidfd_send_signal(handle, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return False
+    finally:
+        os.close(handle)
+
+
+def stop_supervisor_service(identity: dict[str, Any] | None) -> dict[str, Any]:
+    """Stop the foreground unit within a bound and prove its Core process exited.
+
+    ``identity`` is the supervisor process named by private runtime discovery
+    (a live pid with its birth), or None when none is running. After
+    SUPERVISOR_STOP_GRACE_SECONDS that exact process is killed. This bounds the
+    stop of releases that wait forever for open viewer streams, and it also
+    ends a supervisor that a KillMode=process stop timeout left running after
+    systemd killed only its onefile bootloader. Workers are never signalled. A
+    unit left failed by the forced exit is reset so the next start is clean.
+    """
+    started = time.monotonic()
+    outcome: dict[str, Any] = {
+        "process": (
+            {"pid": identity["pid"], "process_birth": identity["process_birth"]}
+            if identity is not None
+            else None
+        ),
+        "forced": False,
+    }
+    stopped = threading.Event()
+    stop_errors: list[Exception] = []
+
+    def enforce_grace() -> None:
+        if identity is None:
+            return
+        deadline = started + SUPERVISOR_STOP_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if not _process_alive(identity):
+                return
+            stopped.wait(0.2)
+        try:
+            if _kill_process(identity):
+                outcome["forced"] = True
+                outcome["forced_after_seconds"] = round(time.monotonic() - started, 1)
+        except Exception as error:
+            stop_errors.append(error)
+
+    watchdog = threading.Thread(
+        target=enforce_grace, name="nebula-supervisor-stop-grace", daemon=True
+    )
+    watchdog.start()
+    try:
+        if unit_state(SERVICE) not in {"inactive", "failed"}:
+            service("stop")
+    finally:
+        # The watchdog keeps its grace even after the unit stops: an orphaned
+        # supervisor must still exit before another one may start.
+        watchdog.join()
+    if stop_errors:
+        raise RuntimeError(
+            "The exact supervisor could not be stopped safely"
+        ) from stop_errors[0]
+    if identity is not None:
+        deadline = time.monotonic() + SUPERVISOR_EXIT_SECONDS
+        while _process_alive(identity):
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "The previous supervisor process did not exit after SIGKILL"
+                )
+            time.sleep(0.2)
+    unit = unit_state(SERVICE)
+    if unit == "failed":
+        # A forced stop, or a host that crashed, leaves the unit failed. That
+        # only records the past exit; the process proof above is what counts.
+        service("reset-failed")
+        outcome["reset_failed"] = True
+    outcome["seconds"] = round(time.monotonic() - started, 1)
+    return outcome
+
+
 def _switch_supervisor_host(
     version: str,
     *,
@@ -3015,8 +3194,8 @@ def _switch_supervisor_host(
 
     if release.parent != RELEASES or release.name != version or release.is_symlink():
         raise RuntimeError("Host activation target is not the exact immutable release")
-    if unit_state(SERVICE) != "inactive":
-        service("stop")
+    persist()
+    journal["service_stop"] = stop_supervisor_service(host_connection(allow_stale=True))
     require_stopped()
     if current_release_version() != version:
         switch_to(release)
@@ -3032,6 +3211,7 @@ def _switch_supervisor_host(
         prior_status=prior_status,
         allow_degraded_workers=allow_degraded_workers,
         degraded_baseline=prior_status.get("health") == "degraded",
+        restart_exited=True,
     )
     journal["state"] = "complete"
     journal["readback"] = readback
@@ -3108,7 +3288,17 @@ def activate_supervisor_host(
     deployment = record.get("runtime_deployment")
     action = deployment.get("action") if isinstance(deployment, dict) else None
     valid_pending = action == "promote" and record.get("pending") == version
-    valid_rollback = action == "rollback" and record.get("previous") == version
+    superseded = deployment.get("superseded") if action == "rollback" else None
+    valid_rollback = (
+        action == "rollback"
+        and deployment.get("version") == version
+        and (
+            record.get("previous") == version
+            or isinstance(superseded, dict)
+            and superseded.get("action") == "promote"
+            and superseded.get("previous") == version
+        )
+    )
     if not (valid_pending or valid_rollback) or not SHA.fullmatch(version):
         raise RuntimeError(
             "Host activation must target the exact pending candidate or recorded code rollback"
@@ -3164,9 +3354,41 @@ def activate_supervisor_host(
             prior = existing.get("prior_status")
             if not isinstance(prior, dict):
                 raise RuntimeError("Host activation lost its pre-restart readback")
-            wait_supervisor_host_ready(
+            # A completed activation may be replayed after this deployment's
+            # later API promotion. Accept that change only when its successful
+            # receipt identifies the API worker prepared for this release.
+            steps = deployment.get("steps", {})
+            prepared = steps.get("api", {})
+            promoted = steps.get("promote-api", {})
+            prepared_receipt = prepared.get("receipt") or {}
+            promoted_receipt = promoted.get("receipt") or {}
+            prepared_result = (
+                (prepared.get("settled") or {}).get("result")
+                or prepared_receipt.get("result")
+                or {}
+            )
+            prepared_runtime = prepared_result.get("runtime_id")
+            own_api_promoted = (
+                prepared.get("action") == "prepare_api"
+                and (prepared.get("parameters") or {}).get("version") == version
+                and (
+                    prepared_receipt.get("state") == "succeeded"
+                    or prepared.get("settled")
+                )
+                and isinstance(prepared_runtime, str)
+                and promoted.get("action") == "promote_api"
+                and (promoted.get("parameters") or {}).get("runtime_id")
+                == prepared_runtime
+                and (
+                    promoted_receipt.get("state") == "succeeded"
+                    or promoted.get("settled")
+                )
+            )
+            current = wait_supervisor_host_ready(
                 version,
-                expected_api_version=prior["api_version"],
+                expected_api_version=version
+                if own_api_promoted
+                else prior["api_version"],
                 prior_status=None,
                 allow_degraded_workers=allow_degraded_workers,
                 degraded_baseline=isinstance(prior, dict)
@@ -3186,6 +3408,7 @@ def activate_supervisor_host(
                 "version": version,
                 "previous_version": existing["previous_version"],
                 **readback,
+                "current_readback": current,
             }
         if existing.get("state") in {
             "prepared",
@@ -3313,6 +3536,7 @@ def activate_supervisor_host(
                     raise RuntimeError(
                         "Previous supervisor does not match the interrupted activation journal"
                     )
+            existing["restart_boundary"] = wait_quiet_restart_boundary()
             readback = _switch_supervisor_host(
                 version,
                 release=release,
@@ -3329,6 +3553,30 @@ def activate_supervisor_host(
                 "previous_version": previous,
                 **readback,
             }
+    if valid_rollback and current_release_version() == version:
+        # The rollback target is already the selected host: the promotion it
+        # replaces never activated its own host, or that activation restored
+        # this one. Verify the running host; nothing is restarted.
+        _health, status = read_supervisor_health()
+        current_api = status.get("api_version")
+        if not isinstance(current_api, str):
+            raise RuntimeError("A ready supervisor API status is required")
+        readback = wait_supervisor_host_ready(
+            version,
+            expected_api_version=current_api,
+            prior_status=None,
+            allow_degraded_workers=allow_degraded_workers,
+            degraded_baseline=status.get("health") == "degraded",
+        )
+        return {
+            "operation_id": requested_operation_id or uuid4().hex,
+            "status": "host_activated",
+            "version": version,
+            "previous_version": version,
+            "already_active": True,
+            **readback,
+        }
+    restart_boundary = wait_quiet_restart_boundary()
     service_identity = supervisor_service_identity()
     prior_host = host_connection()
     if prior_host is None:
@@ -3362,9 +3610,12 @@ def activate_supervisor_host(
         raise RuntimeError(
             "Deployer state differs from the current supervisor API version"
         )
-    if version not in status.get("staged_versions", []):
+    if version not in [
+        *status.get("staged_versions", []),
+        *status.get("resident_versions", []),
+    ]:
         raise RuntimeError("Pending host release has not been staged by the supervisor")
-    if prior_status["api_version"] == version:
+    if action == "promote" and prior_status["api_version"] == version:
         raise RuntimeError("Host activation must precede API promotion")
     if current_release_version() != previous_version:
         raise RuntimeError("Current release changed during host activation preflight")
@@ -3383,6 +3634,7 @@ def activate_supervisor_host(
         },
         "prior_service": service_identity,
         "operations": operations,
+        "restart_boundary": restart_boundary,
         "allow_degraded_workers": allow_degraded_workers,
         "degraded_baseline_reason": (
             "Accepted aggregate degraded status attributed by read-only diagnosis to stale old execution-worker leases; individual failed-worker equality is not asserted."
@@ -3407,7 +3659,9 @@ def activate_supervisor_host(
         _save_host_activation(record, journal)
         try:
             old_release, _ = runtime_release(previous_version)
-            current_identity = host_connection()
+            # A failed start leaves discovery pointing at the stopped host.
+            # Treat that stale identity as absent so restoration can proceed.
+            current_identity = host_connection(allow_stale=True)
             if (
                 current_release_version() == previous_version
                 and unit_state(SERVICE) == "active"
@@ -4198,6 +4452,81 @@ def runtime_release(sha: str) -> tuple[Path, str]:
     return release, digest
 
 
+def migration_status(version: str) -> dict[str, Any]:
+    """Read the exact installed SQL head, including before host activation."""
+    release, _digest = runtime_release(version)
+    manifest = json.loads((release / "nebula-runtime.json").read_text())
+    if manifest.get("version") != version or not isinstance(
+        manifest.get("migration_head"), str
+    ):
+        raise RuntimeError(
+            "Migration readback requires the exact accepted release manifest"
+        )
+    settings = configured_postgres(TOKEN_FILE)
+    if settings is not None:
+        environment = {
+            key: value for key, value in os.environ.items() if not key.startswith("PG")
+        }
+        if "PGPASSFILE" in os.environ:
+            environment["PGPASSFILE"] = os.environ["PGPASSFILE"]
+        result = subprocess.run(
+            [
+                "psql",
+                "--no-psqlrc",
+                "--tuples-only",
+                "--no-align",
+                "--set=ON_ERROR_STOP=1",
+                "--command",
+                "BEGIN READ ONLY; SELECT version_num FROM alembic_version; COMMIT;",
+            ],
+            env={**environment, **settings},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                "Migration head readback failed; inspect PostgreSQL access"
+            )
+        heads = [
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip() not in {"", "BEGIN", "COMMIT"}
+        ]
+    else:
+        database = DATA / "nebula.db"
+        with sqlite3.connect(
+            f"file:{database.resolve()}?mode=ro", uri=True
+        ) as connection:
+            heads = [
+                row[0]
+                for row in connection.execute("SELECT version_num FROM alembic_version")
+            ]
+    if len(heads) != 1:
+        raise RuntimeError("Migration readback requires one exact database head")
+    return {
+        "version": version,
+        "current_head": heads[0],
+        "target_head": manifest["migration_head"],
+    }
+
+
+def reconcile_operation(operation_id: str) -> dict[str, Any]:
+    try:
+        return deployment_post(
+            "deployment/operations/" + operation_id + "/reconcile", {}
+        )
+    except HTTPError as error:
+        if error.code not in {404, 405}:
+            raise
+        raise RuntimeError(
+            "The active host predates durable operation reconciliation; retain the "
+            "unknown receipt and wait for its original completion. Do not edit the journal"
+        ) from error
+
+
 def staged_deployer(record: dict) -> StagedDeployer:
     return StagedDeployer(
         record,
@@ -4206,6 +4535,8 @@ def staged_deployer(record: dict) -> StagedDeployer:
         save=lambda value: atomic_json(STATE, value),
         verify=runtime_release,
         activate_host=lambda version: activate_supervisor_host(record, version),
+        migration_status=migration_status,
+        reconcile_operation=reconcile_operation,
     )
 
 
@@ -4238,8 +4569,22 @@ def rollback(*, _legacy_attempt: _LegacyAttempt | None = None) -> dict[str, Any]
     record = state()
     if record.get("deployment_mode") != "supervisor":
         return offline_rollback(_legacy_attempt=_legacy_attempt)
-    previous = record.get("previous")
-    if not isinstance(previous, str):
+    journal = record.get("runtime_deployment")
+    running = (
+        journal
+        if isinstance(journal, dict) and journal.get("state") != "complete"
+        else None
+    )
+    # An unfinished promotion is rolled back to the release it started from;
+    # an unfinished rollback resumes toward its own target.
+    previous = (
+        running.get("previous")
+        if running is not None and running.get("action") == "promote"
+        else running.get("version")
+        if running is not None and running.get("action") == "rollback"
+        else record.get("previous")
+    )
+    if not isinstance(previous, str) or not SHA.fullmatch(previous):
         raise RuntimeError("No retained code rollback target is recorded")
     return staged_deployer(record).rollback(previous)
 

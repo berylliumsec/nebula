@@ -14,11 +14,15 @@ from nebula.v3.database import (
     ProjectOwnershipRow,
     RuntimeProcessRow,
 )
-from nebula.v3.domain import ChatSession
+from nebula.v3.domain import ChatSession, Engagement
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
-from nebula.v3.runtime_coordination import CoordinationConflict, ProjectLease
+from nebula.v3.runtime_coordination import (
+    CoordinationConflict,
+    OperationRejected,
+    ProjectLease,
+)
 from nebula.v3.supervisor import RuntimeSupervisor
-from tests.v3.test_deployment_lifecycle import host as host, manifest
+from tests.v3.test_deployment_lifecycle import host as host, manifest, worker
 from tests.v3.test_runtime_coordination import location as location
 
 pytestmark = pytest.mark.anyio
@@ -275,3 +279,63 @@ async def test_attach_keeps_polling_through_a_slow_status_read(admission):
         "runtime_id": "slow-worker",
         "fencing_token": 1,
     }
+
+
+async def test_refused_third_version_target_keeps_new_projects_admitted(
+    host, monkeypatch
+):
+    coordinator, store = host
+    await store.create(Engagement(id="three", name="Synthetic three"))
+    for project_id, version in (("two", "v1"), ("three", "v2")):
+        runtime_id = await worker(host, version)
+        await coordinator.coordination.claim_project(project_id, runtime_id)
+    api = await worker(host, "v2", "api")
+    status = await coordinator.status()
+    await coordinator.promote_api(api, expected_revision=status.revision)
+    await coordinator.target_execution("v2")
+    # v1 and v2 both own projects, so no v3 worker could start.
+    with pytest.raises(OperationRejected):
+        await coordinator.target_execution("v3")
+    prepared = []
+
+    async def prepare(version):
+        # Like RuntimeSupervisor.prepare_execution: a refused reservation
+        # leaves the candidate staged.
+        prepared.append(version)
+        runtime_id = await worker(host, version)
+        if runtime_id is None:
+            raise CoordinationConflict("The execution candidate remains staged")
+        return SimpleNamespace(runtime_id=runtime_id)
+
+    async def attach(project_id, runtime_id):
+        return await coordinator.coordination.claim_project(project_id, runtime_id)
+
+    diagnostics = []
+    monkeypatch.setattr(
+        runtime_auto_admission,
+        "record_caught_exception",
+        lambda *args, **kwargs: diagnostics.append(args),
+    )
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=coordinator,
+            store=store,
+            prepare_execution=prepare,
+            attach_execution=attach,
+        ),
+        default_version="v1",
+    )
+    await store.create(
+        ChatSession(
+            engagement_id="one",
+            title="New project chat",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    await automatic.reconcile()
+    assert prepared == ["v2"] and diagnostics == []
+    async with coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        process = await session.get(RuntimeProcessRow, owner.runtime_id)
+    assert process.version == "v2"

@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeDetail, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
   receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
   type RuntimeRequestStatus } from "./durableRequests";
@@ -1990,6 +1991,14 @@ interface WireScopeImport extends WireEntity {
   applied_scope_revision?: number | null;
 }
 
+export interface ProjectViewLease {
+  leaseId: string;
+  projectId: string;
+  expiresAt: string;
+  renewAfterSeconds: number;
+  runtime: { state: "ready" | "starting" | "held"; reason?: string };
+}
+
 export interface ApiClientOptions {
   baseUrl?: string;
   token?: string | (() => string | undefined);
@@ -2012,12 +2021,15 @@ export class ApiError extends Error {
   readonly remediationId?: string;
   readonly recoveryAction?: string;
   readonly recoveryDestination?: string;
+  /** How long Core asked the client to wait before repeating the request. */
+  readonly retryAfterMs?: number;
 
   constructor(
     message: string,
     status: number,
     requestId?: string,
     details?: unknown,
+    retryAfterMs?: number,
   ) {
     const envelope =
       details && typeof details === "object"
@@ -2044,6 +2056,7 @@ export class ApiError extends Error {
     this.remediationId = stringField(envelope?.remediation_id);
     this.recoveryAction = stringField(envelope?.recovery_action);
     this.recoveryDestination = stringField(envelope?.recovery_destination);
+    this.retryAfterMs = retryAfterMs;
     rememberDiagnosticErrorPresentation(reference, {
       retryable: this.retryable,
       code: this.code,
@@ -4978,6 +4991,7 @@ async function responseError(response: Response): Promise<ApiError> {
     response.status,
     response.headers.get("x-request-id") ?? undefined,
     details,
+    parseRetryAfter(response.headers.get("Retry-After")),
   );
 }
 
@@ -5061,11 +5075,62 @@ export class ApiClient {
   private continuityInitialization?: Promise<ContinuityScope>;
   private readonly continuityListeners = new Set<() => void>();
   private readonly responseAttempts = new WeakMap<Response, PendingRequest>();
+  /** Project reads waiting for a retired or starting project worker. */
+  readonly projectRuntime = new ProjectRuntimeRecovery((path, signal) => this.probeProjectRuntime(path, signal));
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.tokenSource = options.token;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  /**
+   * Hold (or renew) this view's project lease: an open project view is the
+   * demand that brings up an idle project's worker. Keyed by the view's own
+   * lease ID, so a replay is a renewal; it is not a saved request.
+   */
+  async holdProjectView(projectId: string, leaseId: string, signal?: AbortSignal): Promise<ProjectViewLease> {
+    const headers = this.authorizeHeaders(new Headers({ Accept: "application/json", "Content-Type": "application/json" }), "PUT");
+    const response = await this.fetchImpl(`${this.baseUrl}/engagements/${encodeURIComponent(projectId)}/view-leases/${encodeURIComponent(leaseId)}`, {
+      method: "PUT", headers, credentials: "same-origin", body: "{}", signal, cache: "no-store",
+    });
+    if (!response.ok) throw await responseError(response);
+    const value = await response.json() as { lease_id: string; project_id: string; expires_at: string; renew_after_seconds: number; runtime?: { state?: string; reason?: string } };
+    const state = value.runtime?.state;
+    return {
+      leaseId: value.lease_id,
+      projectId: value.project_id,
+      expiresAt: value.expires_at,
+      renewAfterSeconds: Number.isFinite(value.renew_after_seconds) ? value.renew_after_seconds : 30,
+      runtime: { state: state === "ready" || state === "held" ? state : "starting", reason: typeof value.runtime?.reason === "string" ? value.runtime.reason : undefined },
+    };
+  }
+
+  /** Release this view's project lease; expiry is the backstop when this cannot run. */
+  async releaseProjectView(projectId: string, leaseId: string): Promise<void> {
+    const headers = this.authorizeHeaders(new Headers({ Accept: "application/json" }), "DELETE");
+    const response = await this.fetchImpl(`${this.baseUrl}/engagements/${encodeURIComponent(projectId)}/view-leases/${encodeURIComponent(leaseId)}`, {
+      method: "DELETE", headers, credentials: "same-origin", keepalive: true,
+    });
+    if (!response.ok && response.status !== 404) throw await responseError(response);
+  }
+
+  /** Repeat one project read without reporting it; only whether its runtime answered matters. */
+  private async probeProjectRuntime(path: string, signal: AbortSignal): Promise<ProjectRuntimeProbeResult> {
+    const response = await this.fetchImpl(`${this.baseUrl}/${path.replace(/^\//, "")}`, {
+      headers: this.authorizeHeaders(new Headers({ Accept: "application/json" })),
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    });
+    if (response.status !== 503) {
+      await response.body?.cancel().catch(() => { /* diagnostic-expected: the probe needs only the status. */ });
+      return { answered: true };
+    }
+    const error = await responseError(response);
+    return isProjectRuntimeUnavailable(error)
+      ? { answered: false, retryAfterMs: error.retryAfterMs, reason: projectRuntimeReason(error), detail: projectRuntimeDetail(error) }
+      : { answered: true };
   }
 
   getContinuityScope(): ContinuityScope { return this.pendingStore.scope; }
@@ -5338,10 +5403,13 @@ export class ApiClient {
     if (!headers.has("X-Nebula-Operation-ID")) {
       headers.set("X-Nebula-Operation-ID", newOperationId());
     }
-    const pending = !["GET", "HEAD", "OPTIONS"].includes(method)
+    const write = !["GET", "HEAD", "OPTIONS"].includes(method);
+    const pending = write
       ? await this.prepareRequest(path, method, headers, init.body) : undefined;
 
     let response: Response;
+    // A write to a project whose worker is starting waits for it; the page says so.
+    if (write) this.projectRuntime.writeStarted();
     try {
       response = await this.fetchImpl(
         `${this.baseUrl}/${path.replace(/^\//, "")}`,
@@ -5373,16 +5441,26 @@ export class ApiClient {
         metadata: { method: init.method ?? "GET" },
       });
       throw error;
+    } finally {
+      if (write) this.projectRuntime.writeSettled();
     }
 
+    const read = method === "GET" || method === "HEAD";
+    // A write may be what readmits an idle project's worker.
+    if (!read) this.projectRuntime.nudge();
     if (!response.ok && !(acceptNotModified && response.status === 304)) {
       const rejected = await this.definitiveRejection(response);
       const error = await responseError(response);
       if (pending && rejected) {
         await this.completeRequest(pending);
       }
+      // An idle project's worker has retired, or a readmitted one is starting.
+      // The read is repeated when it is back; it is not an operation failure.
+      const runtimeAway = read && isProjectRuntimeUnavailable(error);
+      if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error), projectRuntimeDetail(error));
+      else if (read) this.projectRuntime.answered(path);
       void logDiagnostic({
-        level: response.status >= 500 ? "error" : "warning",
+        level: runtimeAway ? "warning" : response.status >= 500 ? "error" : "warning",
         eventCode: "interface.api.request_failed",
         message: "A user interface API action could not complete.",
         outcome: response.status >= 500 ? "failure" : "denied",
@@ -5403,6 +5481,7 @@ export class ApiClient {
       });
       throw error;
     }
+    if (read) this.projectRuntime.answered(path);
     if (pending) this.responseAttempts.set(response, pending);
     return response;
   }

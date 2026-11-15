@@ -139,8 +139,58 @@ async def project_sql_checkpoint(session, project_id):
     }
 
 
+async def snapshot_project_checkpoint(coordinator, project_id, *, lease=None):
+    """Scan without owning the heartbeat row; publication checks the generation.
+
+    Triggers advance the generation in the same commit as every checkpoint
+    input change, including writes from older workers. A change while scanning
+    invalidates the result rather than letting a mixed snapshot be restored.
+    The caller locks ownership, then validates this generation before using it.
+    """
+    from .runtime_checkpoint_generation import read_checkpoint_generation
+
+    async with coordinator.database.session() as session:
+        if lease is not None:
+            await coordinator.coordination._check(session, lease, lock=False)
+        generation = await read_checkpoint_generation(session, project_id)
+        checkpoint = await project_sql_checkpoint(session, project_id)
+        if await read_checkpoint_generation(session, project_id) != generation:
+            raise CoordinationConflict(
+                "Project changed during checkpoint scan; retry recovery"
+            )
+        if lease is not None:
+            await coordinator.coordination._check(session, lease, lock=False)
+    return checkpoint, generation
+
+
 async def restored_checkpoint(coordinator, lease):
+    from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+    # Recovery preparation does its own unlocked scan. Ordinary handoff must
+    # compare the accepted checkpoint as well, without pinning heartbeat SQL.
+    async with coordinator.database.session() as session:
+        await coordinator.coordination._check(session, lease, lock=False)
+        pending = await session.scalar(
+            select(RuntimeRecoveryRow.operation_id)
+            .where(
+                RuntimeRecoveryRow.project_id == lease.project_id,
+                RuntimeRecoveryRow.target_runtime_id == lease.runtime_id,
+                RuntimeRecoveryRow.target_fencing_token == lease.fencing_token,
+                RuntimeRecoveryRow.phase.in_(("held", "prepared")),
+            )
+            .limit(1)
+        )
+    if pending is not None:
+        return await coordinator.prepare_recovery(lease, operation_id=pending)
+    async with coordinator.database.session() as session:
+        handoff = await session.get(ProjectHandoffRow, lease.project_id)
+        if handoff is None or handoff.phase != "transferred":
+            return None
+    checkpoint, generation = await snapshot_project_checkpoint(
+        coordinator, lease.project_id, lease=lease
+    )
     async with coordinator.coordination.fenced(lease) as session:
+        await assert_checkpoint_generation(session, lease.project_id, generation)
         recovery = await session.scalar(
             select(RuntimeRecoveryRow)
             .where(
@@ -164,10 +214,7 @@ async def restored_checkpoint(coordinator, lease):
             raise CoordinationConflict(
                 "This runtime cannot restore the project's checkpoint"
             )
-        elif (
-            await project_sql_checkpoint(session, lease.project_id)
-            != handoff.checkpoint
-        ):
+        elif checkpoint != handoff.checkpoint:
             raise CoordinationConflict(
                 "Project state changed before restoration; keep queued work held for reconciliation"
             )
@@ -285,7 +332,13 @@ class ProjectHandoffAgent:
         callback_blockers = getattr(self.chat, "handoff_callback_blockers", None)
         if callback_blockers is not None:
             found.update(await callback_blockers())
-        async with self.coordinator.coordination.fenced(self.lease) as session:
+        async with self.coordinator.database.session() as session:
+            await self.coordinator.coordination._check(session, self.lease, lock=False)
+            from .runtime_checkpoint_generation import read_checkpoint_generation
+
+            inventory_generation = await read_checkpoint_generation(
+                session, self.lease.project_id
+            )
             rows = await session.execute(
                 select(
                     EntityRow.id,
@@ -366,6 +419,33 @@ class ProjectHandoffAgent:
                 raise CoordinationConflict(
                     "More than 100 resident resources require this project; retain its runtime and review the resource inventory"
                 )
+        checkpoint, generation = await snapshot_project_checkpoint(
+            self.coordinator, self.lease.project_id, lease=self.lease
+        )
+        if generation != inventory_generation:
+            raise CoordinationConflict(
+                "Project changed during handoff inventory; retry"
+            )
+        from .runtime_checkpoint_generation import assert_checkpoint_generation
+
+        async with self.coordinator.coordination.fenced(self.lease) as session:
+            await assert_checkpoint_generation(
+                session, self.lease.project_id, generation
+            )
+            current_jobs = set(
+                await session.scalars(
+                    select(MemoryJobRow.id)
+                    .where(
+                        MemoryJobRow.project_id == self.lease.project_id,
+                        MemoryJobRow.state.in_(_HELD),
+                    )
+                    .limit(257)
+                )
+            )
+            if current_jobs != set(jobs):
+                raise CoordinationConflict(
+                    "Compute jobs changed during handoff inventory; retry"
+                )
             now = await self.coordinator.coordination._clock_ms(session)
             current = {}
             for key, detail in found.items():
@@ -408,7 +488,6 @@ class ProjectHandoffAgent:
                         updated_at_ms=now,
                     )
                 )
-            checkpoint = await project_sql_checkpoint(session, self.lease.project_id)
         # Optional naming/compaction must finish its authoritative writes too.
         busy = any(not task.done() for task in self.chat._naming_tasks)
         busy = busy or any(
@@ -422,6 +501,15 @@ class ProjectHandoffAgent:
         # checkpointed revisions and transfer refuses the stale proof.
         if self.queue is not None and getattr(self.queue, "_inflight", None):
             blockers.append("A queued follow-up is being dispatched")
+        # A Butler action between its dispatching commit and its saved outcome
+        # keeps its only receipt in this process; a new owner could record it
+        # only as uncertain. Read after the checkpoint: a dispatch that ended
+        # before this read either ended before the checkpoint or changed the
+        # revisions that transfer re-checks, and one starting later is refused
+        # by that check or fenced before its action leaves planned.
+        butler = getattr(self.app.state, "butler_authority", None)
+        if butler is not None and getattr(butler, "_dispatching", None):
+            blockers.append("A Butler action is being dispatched")
         return await self.coordinator.checkpoint(
             self.lease, checkpoint=checkpoint, blockers=blockers
         )

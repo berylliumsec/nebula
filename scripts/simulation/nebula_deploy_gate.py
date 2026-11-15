@@ -8,13 +8,19 @@ import json
 import os
 from pathlib import Path
 import stat
+import time
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
 PAGE = 1_000
 MAX_ITEMS = 100_000
+# A retiring worker answers nothing for about a second before its project
+# becomes ownerless. Past this bound the read fails closed.
+OWNER_READ_ATTEMPTS = 3
+OWNER_READ_DELAY_SECONDS = 1.0
 ACTIVE_RUNS = {
     "queued",
     "planning",
@@ -75,6 +81,42 @@ class CoreClient:
                 return items
 
 
+def _has_execution_owner(core: CoreClient, project_id: str) -> bool:
+    status = core.get("deployment/status")
+    projects = status.get("projects") if isinstance(status, dict) else None
+    if not isinstance(projects, list):
+        raise ValueError("Core deployment status has an invalid shape")
+    return any(
+        isinstance(item, dict)
+        and item.get("project_id") == project_id
+        and item.get("runtime_id") is not None
+        for item in projects
+    )
+
+
+def _worker_workspace(core: CoreClient, project_id: str) -> dict[str, Any] | None:
+    """Read the project's live terminal and execution counts from its worker.
+
+    In supervisor mode reads never start a worker, so a project without an
+    execution owner answers 503. Its terminals lived only in a worker, which
+    could not quiesce while one was open, so there is none left to count. Its
+    saved executions are read separately from SQL.
+    """
+    encoded = quote(project_id, safe="")
+    for attempt in range(1, OWNER_READ_ATTEMPTS + 1):
+        try:
+            return core.get(f"engagements/{encoded}/workspace/reset-status")
+        except HTTPError as error:
+            if error.code != 503:
+                raise
+            if not _has_execution_owner(core, project_id):
+                return None
+            if attempt == OWNER_READ_ATTEMPTS:
+                raise
+        time.sleep(OWNER_READ_DELAY_SECONDS)
+    raise AssertionError("unreachable")
+
+
 def blockers(core: CoreClient) -> list[str]:
     """Return bounded reasons to retain a candidate; any failed read raises."""
 
@@ -99,15 +141,16 @@ def blockers(core: CoreClient) -> list[str]:
             for item in activity
         ):
             reasons.append(f"{project_id}: chat pending")
-        workspace = core.get(f"engagements/{encoded}/workspace/reset-status")
-        if not isinstance(workspace, dict):
-            raise ValueError("Core workspace status has an invalid shape")
-        for field in ("active_terminal_count", "active_execution_count"):
-            value = workspace.get(field)
-            if type(value) is not int or value < 0:
-                raise ValueError(f"Core workspace {field} has an invalid value")
-            if value:
-                reasons.append(f"{project_id}: {value} {field}")
+        workspace = _worker_workspace(core, project_id)
+        if workspace is not None:
+            if not isinstance(workspace, dict):
+                raise ValueError("Core workspace status has an invalid shape")
+            for field in ("active_terminal_count", "active_execution_count"):
+                value = workspace.get(field)
+                if type(value) is not int or value < 0:
+                    raise ValueError(f"Core workspace {field} has an invalid value")
+                if value:
+                    reasons.append(f"{project_id}: {value} {field}")
         notebooks = core.get(f"engagements/{encoded}/notebooks/runs/active")
         if not isinstance(notebooks, list):
             raise ValueError("Core notebook activity has an invalid shape")

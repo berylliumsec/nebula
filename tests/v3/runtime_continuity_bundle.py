@@ -67,6 +67,28 @@ def copy_runtime(destination: Path, dependencies: Path | None = None) -> None:
     shutil.copytree(packages, destination / "dependencies", ignore=_ignore)
 
 
+def bundle_features(source: Path) -> list[str]:
+    """Declare what a release build of ``source`` declares.
+
+    A release build takes every feature from the source's
+    ``runtime-compatibility.json``. Core gates behaviour on these features (for
+    example, only a release declaring ``project.idle-retirement/v1`` retires an
+    idle project's worker), so a closed allowlist here makes the fixture's
+    workers behave like an older release than the source they run.
+    """
+    features = ["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"]
+    # Sources from before the compatibility file declared their features.
+    worker_source = (source / "nebula/v3/runtime_worker.py").read_text()
+    for capability in ("project.participants/v1", "project.quiesce/v1"):
+        if capability in worker_source:
+            features.append(capability)
+    compatibility = source / "nebula/v3/runtime-compatibility.json"
+    if compatibility.is_file():
+        declared = json.loads(compatibility.read_text())["manifest"]["features"]
+        features.extend(name for name in declared if name not in features)
+    return features
+
+
 def build_bundle(
     directory: Path,
     *,
@@ -149,26 +171,6 @@ def build_bundle(
             sort_keys=True,
         ).encode()
     ).hexdigest()
-    features = ["chat.accept/v1", "chat.resume/v1", "project.handoff/v1"]
-    worker_source = (source / "nebula/v3/runtime_worker.py").read_text()
-    for capability in ("project.participants/v1", "project.quiesce/v1"):
-        if capability in worker_source:
-            features.append(capability)
-    compatibility = source / "nebula/v3/runtime-compatibility.json"
-    declared = (
-        json.loads(compatibility.read_text())["manifest"]["features"]
-        if compatibility.is_file()
-        else []
-    )
-    for capability in (
-        "provider.tools-context/v1",
-        "provider.tools-context-ownership/v1",
-        "project.work-batch/v1",
-        "harness.standing-instructions/v1",
-        "host.web-search-query/v1",
-    ):
-        if capability in declared:
-            features.append(capability)
     heads = sorted(
         path.stem for path in (source / "nebula/v3/migrations/versions").glob("*.py")
     )
@@ -182,7 +184,7 @@ def build_bundle(
         core_executable="bin/nebula-core",
         ui_directory="ui",
         files=files,
-        features=features,
+        features=bundle_features(source),
     )
     (directory / MANIFEST_NAME).write_text(manifest.model_dump_json())
     digest = sha256(directory / MANIFEST_NAME)

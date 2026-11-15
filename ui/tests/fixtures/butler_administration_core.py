@@ -3,7 +3,6 @@
 import subprocess
 from typing import Any
 
-from nebula.v3 import cli
 from nebula.v3.domain import ChatSession, Engagement, Observation
 
 if __package__:
@@ -13,14 +12,14 @@ else:
 
 
 async def create_fixture_app(*args: Any, **kwargs: Any):
-    app = _create(*args, **kwargs)
+    app = await _create(*args, **kwargs)
     store = app.state.store
     project = next(
         row
         for row in (await store.list_entities(Engagement, limit=100))
         if row.name == "Runtime administration fixture"
     )
-    workspace = kwargs["tool_platform"].workspace_for(project.id)
+    workspace = await kwargs["tool_platform"].workspace_for(project.id)
     (workspace / "fixture.txt").write_text("Saved fixture\n")
     for command in (
         ["git", "init", "--quiet", str(workspace)],
@@ -80,5 +79,7 @@ async def create_fixture_app(*args: Any, **kwargs: Any):
 
 
 if __name__ == "__main__":
-    cli.create_app = create_fixture_app
-    cli.main()
+    # Run as a script, so the helper beside this file is importable by name.
+    from in_process_core import serve_fixture
+
+    serve_fixture(create_fixture_app)

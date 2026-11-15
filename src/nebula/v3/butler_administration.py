@@ -262,17 +262,14 @@ class ButlerAdministration(ButlerData):
         )
         workspace = self.core_api.app.state.workspace_service
         for path, text, _mode in expected:
-
-            def read_template():
-                download = workspace.download(self.project_id, path)
-                try:
-                    return download.stream.read(len(text.encode("utf-8")) + 1).decode(
-                        "utf-8"
-                    )
-                finally:
-                    download.stream.close()
-
-            observed = await asyncio.to_thread(read_template)
+            download = await workspace.download(self.project_id, path)
+            try:
+                payload = await asyncio.to_thread(
+                    download.stream.read, len(text.encode("utf-8")) + 1
+                )
+            finally:
+                download.stream.close()
+            observed = payload.decode("utf-8", errors="replace")
             if observed != text:
                 raise ValueError(
                     "starter files were created but could not be verified; inspect Files"

@@ -68,11 +68,7 @@ from tests.v3.test_chat import (
 )
 from tests.v3.test_context import MemoryProvider, _message, _owner
 from tests.v3.test_context import _profile as _context_profile
-from tests.v3.test_scope_import import (
-    StructuredProvider,
-    _create_import,
-    _structured_profile,
-)
+from tests.v3.test_scope_import import StructuredProvider, _structured_profile
 
 KEY_ENV = "NEBULA_INFERENCE_TIMEOUT_TEST_KEY"
 DEEPSEEK = "deepseek/deepseek-v4.1-flash"
@@ -179,23 +175,25 @@ def _hello(model: str = "m", **update) -> ModelRequest:
 async def test_non_streamed_chat_completions_get_the_generation_timeout(
     monkeypatch, provider_type
 ):
-    def timeout_for(profile):
+    async def timeout_for(profile):
         recorder = _Recorder()
-        asyncio.run(_runtime(profile, recorder).complete(_hello()))
+        await _runtime(profile, recorder).complete(_hello())
         return recorder.timeouts[0]
 
     # A thinking model's whole answer arrives as one response; the 120 s
     # client default used to bound all of it.
-    default = timeout_for(_profile(provider_type))
+    default = await timeout_for(_profile(provider_type))
     assert default["read"] == 600
     assert default["connect"] == 10
 
-    configured = timeout_for(_profile(provider_type, request_timeout_seconds=1800))
+    configured = await timeout_for(
+        _profile(provider_type, request_timeout_seconds=1800)
+    )
     assert configured["read"] == 1800
     assert configured["connect"] == 10
 
     monkeypatch.setenv("NEBULA_PROVIDER_REQUEST_TIMEOUT_SECONDS", "900")
-    assert timeout_for(_profile(provider_type))["read"] == 900
+    assert (await timeout_for(_profile(provider_type)))["read"] == 900
     monkeypatch.delenv("NEBULA_PROVIDER_REQUEST_TIMEOUT_SECONDS")
 
     # A config built with its own timeout keeps it, with the short connect.
@@ -483,7 +481,7 @@ def _thinking_anthropic(request: httpx.Request) -> httpx.Response:
     )
 
 
-def _probe(store, profile, model, handler):
+async def _probe(store, profile, model, handler):
     sent: list[dict] = []
 
     def recording(request: httpx.Request) -> httpx.Response:
@@ -497,7 +495,7 @@ def _probe(store, profile, model, handler):
             transport=httpx.MockTransport(recording),
         )
 
-    result = asyncio.run(_verify_provider_capability(store, profile, model, factory))
+    result = await _verify_provider_capability(store, profile, model, factory)
     return result, sent
 
 
@@ -522,7 +520,7 @@ async def test_capability_probe_verifies_a_thinking_model(
         profile = await _anthropic_probe_profile(store, model)
         handler = _thinking_anthropic
 
-    result, sent = _probe(store, profile, model, handler)
+    result, sent = await _probe(store, profile, model, handler)
 
     assert result.verification.status == ProviderVerificationStatus.VERIFIED, (
         result.verification.failure_detail
@@ -548,7 +546,7 @@ async def test_capability_probe_asks_a_reasoning_route_to_skip_thinking(
     store = NebulaStore(tmp_path / "nebula.db")
     profile = await _openrouter_probe_profile(store, DEEPSEEK, parameters)
 
-    result, sent = _probe(store, profile, DEEPSEEK, _thinking_openrouter)
+    result, sent = await _probe(store, profile, DEEPSEEK, _thinking_openrouter)
 
     assert result.verification.status == ProviderVerificationStatus.VERIFIED
     assert sent[0].get("reasoning") == reasoning
@@ -722,7 +720,15 @@ async def test_scope_import_asks_for_no_reasoning(tmp_path):
         store=store, artifact_store=artifacts, provider_factory=lambda _: provider
     )
 
-    _create_import(service, engagement.id, profile.id, b"In scope: 192.0.2.7\n")
+    await service.create(
+        engagement_id=engagement.id,
+        provider_id=profile.id,
+        model="model-1",
+        filename="scope.txt",
+        data=b"In scope: 192.0.2.7\n",
+        media_type="text/plain",
+        cloud_confirmed=False,
+    )
 
     assert provider.requests
     assert {request.reasoning_effort for request in provider.requests} == {"none"}

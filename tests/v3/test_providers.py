@@ -2443,11 +2443,12 @@ def _sse_provider(provider_id: str, body: str, calls: list[int] | None = None):
     )
 
 
-def _collect_stream(provider, request: ModelRequest | None = None):
-    async def collect():
-        return [event async for event in provider.stream(request or _chat_request())]
+async def _collect_stream_async(provider, request: ModelRequest | None = None):
+    return [event async for event in provider.stream(request or _chat_request())]
 
-    return asyncio.run(collect())
+
+def _collect_stream(provider, request: ModelRequest | None = None):
+    return asyncio.run(_collect_stream_async(provider, request))
 
 
 def test_stream_frames_are_split_only_on_sse_line_endings():
@@ -2823,7 +2824,7 @@ async def test_usage_without_total_tokens_is_summed_from_its_parts():
         "data: [DONE]\n\n"
     )
 
-    events = _collect_stream(_sse_provider("stream-usage", body))
+    events = await _collect_stream_async(_sse_provider("stream-usage", body))
 
     assert events[-1].response.usage.total_tokens == 107
 
@@ -2951,7 +2952,7 @@ async def test_transport_failures_become_provider_errors_with_a_reason():
         "provider request timed out (ReadTimeout) after 3 attempts"
     )
 
-    events = _collect_stream(provider)
+    events = await _collect_stream_async(provider)
 
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
@@ -2996,7 +2997,7 @@ async def test_transport_failures_become_provider_errors_with_a_reason():
         _retrying_config("torn"), transport=httpx.MockTransport(tear)
     )
 
-    events = _collect_stream(provider)
+    events = await _collect_stream_async(provider)
 
     # After output a torn stream is named, never replayed.
     assert [event.type for event in events] == [

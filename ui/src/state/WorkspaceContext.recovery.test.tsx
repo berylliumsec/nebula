@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect, useRef } from "react";
 import { WorkspaceProvider, useWorkspace, useWorkspaceEvents, useWorkspaceMissions } from "./WorkspaceContext";
 import { rememberProject, rememberedNavigation } from "./navigationContinuity";
+import { PROJECT_RUNTIME_UNAVAILABLE, ProjectRuntimeRecovery } from "../api/projectRuntime";
 
 const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined, coreCommits: 0, errors: [] as string[] }));
 vi.mock("../api/runtime", () => ({ resolveApiRuntime: async () => ({ state: "ready", baseUrl: "http://core/api/v1" }) }));
@@ -471,5 +472,35 @@ describe("offline and stale-link safety", () => {
     vi.spyOn(Storage.prototype, "removeItem").mockImplementation(blocked);
     await mount();
     expect(state().engagement).toBe("project");
+  });
+
+  it("keeps project collections loading, not failed, while the project's worker is away, then loads them when it answers", async () => {
+    // An idle project's worker has retired: Core answers project reads 503 until it is readmitted.
+    let away = true;
+    const recovery = new ProjectRuntimeRecovery(async () => ({ answered: !away }));
+    const idle = (path: string) => {
+      recovery.unavailable(path);
+      return Object.assign(new Error("idle"), { status: 503, code: PROJECT_RUNTIME_UNAVAILABLE });
+    };
+    fixture.methods.projectRuntime = recovery as unknown as ReturnType<typeof vi.fn>;
+    fixture.methods.listAssets = vi.fn(async () => {
+      if (away) throw idle("assets");
+      recovery.answered("assets");
+      return { items: [{ id: "asset", engagementId: "project" }] };
+    });
+    fixture.methods.listRuns = vi.fn(async () => {
+      if (away) throw idle("runs");
+      return { items: [run()] };
+    });
+    await mount();
+    await waitFor(() => expect(state().status.assets.state).toBe("loading"));
+    expect(state().status.activity.state).toBe("loading");
+    // Nothing failed: no "could not be loaded" banner and no limited-features state.
+    expect(state().workspace).toBe("ready");
+    away = false;
+    await waitFor(() => expect(state().status.assets.state).toBe("ready"), { timeout: 5000 });
+    await waitFor(() => expect(state().status.activity.state).toBe("ready"));
+    expect(state().assets).toHaveLength(1);
+    expect(state().runs).toHaveLength(1);
   });
 });

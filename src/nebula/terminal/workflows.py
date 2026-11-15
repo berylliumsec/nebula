@@ -371,23 +371,15 @@ async def activity(shell: Shell, args: list[str]) -> None:
     )
     if pending:
         record(shell, pending)
+    from .inspect import harness_actions
+
+    await harness_actions(shell)
 
 
 async def results(shell: Shell, args: list[str]) -> None:
-    view = shell.current()
-    offset = 0
-    while True:
-        value = await shell.api.request(
-            "GET",
-            f"chat/sessions/{key(view.session_id)}/results",
-            params={"offset": offset, "limit": 40},
-        )
-        record(shell, value.get("items", []))
-        if value.get("next_offset") is None or not await shell.ui.confirm(
-            "Read more results?"
-        ):
-            break
-        offset = value["next_offset"]
+    from .inspect import results as browse_results
+
+    await browse_results(shell, args)
 
 
 GOAL_FIELDS = (

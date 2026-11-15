@@ -38,7 +38,7 @@ from .artifacts import ArtifactIntegrityError, ArtifactStore
 from .domain import Artifact, Engagement, KnowledgeSource, LibraryItem, utc_now
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .index_calls import index_call, index_digest
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, revision_conflict
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 MAX_EXTRACTED_CHARACTERS = 4 * 1024 * 1024
@@ -757,8 +757,8 @@ async def reindex_document(
     if engagement_id is not None and source.engagement_id != engagement_id:
         raise InvalidDocumentError("knowledge source is not in the selected project")
     if expected_revision is not None and source.revision != expected_revision:
-        raise ConflictError(
-            f"revision conflict: expected {expected_revision}, found {source.revision}"
+        raise revision_conflict(
+            KnowledgeSource.entity_kind, source.id, expected_revision, source.revision
         )
     if not source.artifact_id:
         raise InvalidDocumentError("knowledge source has no authoritative artifact")
@@ -905,8 +905,8 @@ async def reindex_library_item(
 
     item = await store.get(LibraryItem, item_id)
     if expected_revision is not None and item.revision != expected_revision:
-        raise ConflictError(
-            f"revision conflict: expected {expected_revision}, found {item.revision}"
+        raise revision_conflict(
+            LibraryItem.entity_kind, item.id, expected_revision, item.revision
         )
     if not item.artifact_id:
         raise InvalidDocumentError("Library item has no authoritative artifact")

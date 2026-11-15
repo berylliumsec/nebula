@@ -170,8 +170,8 @@ async def test_butler_cannot_grant_or_transfer_post_tool_cloud_consent(
 ):
     _, _, project, app, gateway = consent_settings
     service = app.state.execution_ai_service
-    service.set_config(project.id, PostToolAssistantConfig(**previous))
-    before = service.read_config(project.id)
+    await service.set_config(project.id, PostToolAssistantConfig(**previous))
+    before = await service.read_config(project.id)
     body = {**next_config, "expected_revision": before.revision}
     with pytest.raises(GuidedToolError) as refusal:
         (
@@ -184,7 +184,7 @@ async def test_butler_cannot_grant_or_transfer_post_tool_cloud_consent(
         )
     assert refusal.value.code == "post_tool_consent_required"
     assert "setting_id=follow-up" in refusal.value.next_action
-    assert service.read_config(project.id) == before
+    assert await service.read_config(project.id) == before
 
 
 @pytest.mark.parametrize("consent", [False, True])
@@ -196,8 +196,8 @@ async def test_butler_preserves_or_revokes_existing_post_tool_consent_at_observe
     config = PostToolAssistantConfig(
         cloud_confirmed=True, provider_id="first", model="fixture-model"
     )
-    service.set_config(project.id, config)
-    before = service.read_config(project.id)
+    await service.set_config(project.id, config)
+    before = await service.read_config(project.id)
     body = {
         **config.model_dump(mode="json"),
         "cloud_confirmed": consent,
@@ -244,7 +244,7 @@ async def test_core_post_tool_update_cannot_restore_consent_at_a_stale_revision(
     _, _, project, app, _ = consent_settings
     service = app.state.execution_ai_service
     config = PostToolAssistantConfig(provider_id="first", cloud_confirmed=True)
-    before = service.read_config(project.id)
+    before = await service.read_config(project.id)
     async with TestClient(app) as client:
         granted = await client.put(
             f"/api/v1/engagements/{project.id}/post-tool-assistant",
@@ -255,9 +255,9 @@ async def test_core_post_tool_update_cannot_restore_consent_at_a_stale_revision(
             headers={"Authorization": "Bearer fixture-token"},
         )
         assert granted.status_code == 200
-        assert service.get_config(project.id).cloud_confirmed is True
-        before = service.read_config(project.id)
-        service.set_config(
+        assert (await service.get_config(project.id)).cloud_confirmed is True
+        before = await service.read_config(project.id)
+        await service.set_config(
             project.id, config.model_copy(update={"cloud_confirmed": False})
         )
         response = await client.put(
@@ -269,7 +269,7 @@ async def test_core_post_tool_update_cannot_restore_consent_at_a_stale_revision(
             headers={"Authorization": "Bearer fixture-token"},
         )
     assert response.status_code == 409
-    assert service.get_config(project.id).cloud_confirmed is False
+    assert (await service.get_config(project.id)).cloud_confirmed is False
 
 
 async def test_direct_post_tool_preference_preserves_operator_consent_during_a_race(
@@ -280,12 +280,12 @@ async def test_direct_post_tool_preference_preserves_operator_consent_during_a_r
     config = PostToolAssistantConfig(
         provider_id="first", model="fixture-model", cloud_confirmed=True
     )
-    service.set_config(project.id, config)
+    await service.set_config(project.id, config)
     get_config = ExecutionAIService.get_config
 
     async def revoke_after_read(instance, identity):
         observed = await get_config(instance, identity)
-        service.set_config(
+        await service.set_config(
             identity, observed.model_copy(update={"cloud_confirmed": False})
         )
         return observed
@@ -297,7 +297,7 @@ async def test_direct_post_tool_preference_preserves_operator_consent_during_a_r
                 store, artifacts, project.id, {"setting": "take_notes", "enabled": True}
             )
         )
-    assert service.read_config(project.id).cloud_confirmed is False
+    assert (await service.read_config(project.id)).cloud_confirmed is False
 
 
 pytestmark = pytest.mark.anyio

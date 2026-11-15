@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
+import { PROJECT_RUNTIME_UNAVAILABLE, ProjectRuntimeRecovery } from "../api/projectRuntime";
 import { ChatCatchUp } from "./ChatCatchUp";
 vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
 const record = { initialized: true, revision: 2, through_at: "2026-09-09T12:00:00Z", items: [], pending: [], truncated: false };
@@ -66,4 +67,41 @@ it("leaves a message the transcript has not rendered unread while the viewer is 
   rendered.add("answer");
   await waitFor(() => { document.dispatchEvent(new Event("visibilitychange")); expect(acknowledged()).toBe(true); });
   expect(JSON.parse(request.mock.calls.find(call => call[0] === "chat/sessions/chat/read-cursor")![1].body).expected_revision).toBe(2);
+});
+
+function runtimeAway(path: string, recovery: ProjectRuntimeRecovery) {
+  recovery.unavailable(path);
+  // Shaped like the client's ApiError; diagnostics are mocked in this file.
+  return Object.assign(new Error("idle"), { status: 503, code: PROJECT_RUNTIME_UNAVAILABLE, retryable: true });
+}
+
+it("waits without an error while the project's worker is idle and syncs again when it answers", async () => {
+  // Answered only once the test readmits the worker.
+  let ready = false;
+  const recovery = new ProjectRuntimeRecovery(async () => ({ answered: ready }));
+  const request = vi.fn(async (path: string) => {
+    if (!ready) throw runtimeAway(path, recovery);
+    recovery.answered(path);
+    return record;
+  });
+  render(<ChatCatchUp {...props} api={{ request, projectRuntime: recovery } as unknown as ApiClient} />);
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(recovery.state).toBe("reconnecting"));
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reload catch-up" })).toBeNull();
+  ready = true;
+  // The shared probe reads again within its first one-second backoff.
+  await waitFor(() => expect(request.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+  await waitFor(() => expect(recovery.state).toBe("available"));
+  expect(screen.queryByText(/Read state could not sync/)).toBeNull();
+});
+
+it("clears a read-state failure once a later check succeeds", async () => {
+  const request = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(record);
+  render(<ChatCatchUp {...props} api={{ request } as unknown as ApiClient} />);
+  expect(await screen.findByText(/Read state could not sync/)).toBeVisible();
+  // Returning to the page checks again without the operator pressing refresh.
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitFor(() => expect(screen.queryByText(/Read state could not sync/)).toBeNull());
+  expect(request).toHaveBeenCalledTimes(2);
 });

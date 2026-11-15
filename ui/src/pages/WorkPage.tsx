@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import type { ChatSessionActivity } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { projectRoot, projectSurface, resourcePath } from "../resourceRoutes";
@@ -39,6 +40,7 @@ const time = (value: string | null | undefined) => value ? new Intl.DateTimeForm
 const errorText = (value: unknown) => value instanceof Error ? value.message : "Core could not load Work. Try again.";
 const workPageSize = 500;
 const visibleProjectLimit = 80;
+const trackRequestLimit = 50;
 
 function WorkUpdateDetails({ update, projectId }: { update: WorkUpdate; projectId: string }) {
   return <>
@@ -101,10 +103,12 @@ export function WorkPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!api) return;
+    // A project's board reads its worker: while it starts, stay loading and read again when it answers.
+    const projectRead = <T,>(read: () => Promise<T>) => readWhenProjectReady(api.projectRuntime, read, signal);
     try {
       let loaded: WorkItem[];
       if (projectId) {
-        loaded = await api.request<WorkItem[]>(`engagements/${encodeURIComponent(projectId)}/work`, { signal });
+        loaded = await projectRead(() => api.request<WorkItem[]>(`engagements/${encodeURIComponent(projectId)}/work`, { signal }));
       } else {
         loaded = [];
         for (let offset = 0; ; offset += workPageSize) {
@@ -116,16 +120,16 @@ export function WorkPage() {
       if (signal?.aborted) return;
       setItems(loaded);
       if (projectId && itemId) {
-        const updates = await api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`, { signal });
+        const updates = await projectRead(() => api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`, { signal }));
         if (signal?.aborted) return;
         setItemUpdates(updates);
       } else {
         setItemUpdates([]);
       }
       if (projectId) {
-        const [sessionPage, active] = await Promise.all([
+        const [sessionPage, active] = await projectRead(() => Promise.all([
           api.listChatSessions(projectId, signal), api.listChatSessionActivity(projectId, signal),
-        ]);
+        ]));
         if (signal?.aborted) return;
         setSessionTitles(Object.fromEntries(sessionPage.items.map((session) => [session.id, session.title])));
         setActivity(Object.fromEntries(active.map((session) => [session.sessionId, session.state])));
@@ -331,9 +335,19 @@ export function WorkPage() {
           method: "PATCH", body: JSON.stringify({ assignee_session_id: trackingAgent.sessionId }),
         });
       } else {
-        await api.request<WorkItem>(target, {
-          method: "POST", body: JSON.stringify({ title: trackTitle.trim(), status: "in_progress", source_kind: "chat", source_id: trackingAgent.sessionId, assignee_session_id: trackingAgent.sessionId, request_id: `track:${trackingAgent.sessionId}` }),
-        });
+        // Core returns a request ID's first item even after it is Done, so each Done item names the next request.
+        // Repeated clicks and other clients reach the same open item; a finished item is never reused.
+        let requestId = `track:${trackingAgent.sessionId}`;
+        let tracked: WorkItem | undefined;
+        for (let step = 0; step < trackRequestLimit && (!tracked || tracked.status === "done"); step += 1) {
+          if (tracked) requestId = `track:${trackingAgent.sessionId}:after:${tracked.id}`;
+          tracked = await api.request<WorkItem>(target, {
+            method: "POST", body: JSON.stringify({ title: trackTitle.trim(), status: "in_progress", source_kind: "chat", source_id: trackingAgent.sessionId, assignee_session_id: trackingAgent.sessionId, request_id: requestId }),
+          });
+        }
+        if (!tracked || tracked.status === "done") {
+          throw new Error("This conversation has too many finished items to track another. Link an existing item instead.");
+        }
       }
       await refresh();
       setTrackingAgent(null);
@@ -500,7 +514,7 @@ export function WorkPage() {
         {directChildren.length > 0 && <section className="work-panel work-subprojects" aria-labelledby="work-subprojects-title"><div className="work-panel-head"><h2 id="work-subprojects-title">Subprojects</h2><span>{directChildren.length}</span></div><div className="work-project-search"><input type="search" aria-label="Search subprojects" placeholder="Search subprojects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div><div className="work-project-list">{directChildren.filter((child) => child.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())).slice(0, visibleProjectLimit).map((child) => <div className="work-project-row" key={child.id}><span className="work-project-spacer" /><Link to={projectSurface(child.id, "work")}><span><strong>{child.name}</strong><small>{child.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><ArrowRight size={16} /></Link></div>)}</div>{directChildren.length > visibleProjectLimit && <p className="work-empty-inline">Showing up to {visibleProjectLimit} matches. Search to narrow the list.</p>}</section>}
       </>}
     </>}
-    {showCreate && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setShowCreate(false); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-create-title" onSubmit={(event) => void create(event)}><header><h2 id="work-create-title">New work item</h2><button className="work-dialog-close" type="button" aria-label="Close" disabled={busy} onClick={() => setShowCreate(false)}><X size={18} /></button></header>{!projectId && <label>Project<select required value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)}><option value="">Choose a project</option>{engagements.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label>Title<input autoFocus required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Description<textarea maxLength={20000} value={description} onChange={(event) => setDescription(event.target.value)} /></label><footer><button type="button" className="button quiet" disabled={busy} onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="button primary" disabled={busy || !title.trim()}><ListTodo size={16} /> Create item</button></footer></form></div>}
+    {showCreate && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setShowCreate(false); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-create-title" onSubmit={(event) => void create(event)}><header><h2 id="work-create-title">New work item</h2><button className="work-dialog-close" type="button" aria-label="Close" disabled={busy} onClick={() => setShowCreate(false)}><X size={18} /></button></header>{!projectId && <label>Project<select required value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)}><option value="">Choose a project</option>{engagements.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label>Title<input autoFocus required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Description<textarea maxLength={20000} value={description} onChange={(event) => setDescription(event.target.value)} /></label><footer><button type="button" className="button quiet" disabled={busy} onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="button primary" aria-busy={busy} disabled={busy || !title.trim()}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <ListTodo size={16} />} Create item</button></footer></form></div>}
     {trackingAgent && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setTrackingAgent(null); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-track-title" onSubmit={(event) => void trackWork(event)}><header><h2 id="work-track-title">Track conversation work</h2><button className="work-dialog-close" type="button" aria-label="Close" title="Close" disabled={busy} onClick={() => setTrackingAgent(null)}><X size={18} aria-hidden="true" /></button></header><p className="work-track-context">{projectName(trackingAgent.projectId)} · {trackingAgent.title}</p>
       {availableTrackItems.length > 0 && <><label>Find an existing item<input type="search" value={trackSearch} onChange={(event) => setTrackSearch(event.target.value)} placeholder="Search open items" /></label><label>Work item<select value={trackItemId} onChange={(event) => setTrackItemId(event.target.value)}><option value="">Create a new item</option>{visibleTrackItems.map((item) => <option key={item.id} value={item.id}>{item.title} · {label(item.status)}</option>)}</select></label></>}
       {!trackItemId && <label>Title<input autoFocus required maxLength={300} value={trackTitle} onChange={(event) => setTrackTitle(event.target.value)} /></label>}

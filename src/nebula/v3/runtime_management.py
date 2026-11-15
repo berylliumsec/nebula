@@ -13,7 +13,7 @@ from starlette.responses import JSONResponse
 
 from .deployment_protocol import RuntimeVersion
 from .domain import NebulaModel
-from .runtime_coordination import ProjectLease
+from .runtime_coordination import CoordinationConflict, ProjectLease
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")]
 Revision = Annotated[int, Field(ge=0, strict=True)]
@@ -193,6 +193,29 @@ class RuntimeManagement:
                     self.notify_shutdown, command.operation_id
                 )
             return response
+
+        @app.post("/api/v1/deployment/operations/{operation_id}/reconcile")
+        async def reconcile(operation_id: str, request: Request):
+            actor = await principal(request)
+            root = self.supervisor
+            root._active()
+            if root.host.lock.descriptor is None:
+                raise CoordinationConflict(
+                    "Active supervisor lock is required for reconciliation"
+                )
+            async with root._operations:
+                root._active()
+                if root.host.lock.descriptor is None:
+                    raise CoordinationConflict(
+                        "Active supervisor lock is required for reconciliation"
+                    )
+                # A crashed pre-bootstrap worker can leave only its reserved
+                # row. Existing process reconciliation verifies abort/exit
+                # before the operation is classified as having no effect.
+                await root.host.reconcile_processes()
+                async with root.host._launch:
+                    result = await self.ledger().reconcile(operation_id, actor_id=actor)
+            return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
         @app.get("/api/v1/deployment/operations/{operation_id}")
         async def status(operation_id: str, request: Request):

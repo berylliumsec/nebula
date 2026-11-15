@@ -388,7 +388,7 @@ async def test_a_streamed_answer_refusal_reaches_the_operator_as_a_refusal(tmp_p
     _store, drain = await _tool_free_stream(tmp_path, provider)
 
     with pytest.raises(ProviderRefusalError) as failure:
-        drain()
+        await drain()
 
     assert failure.value.reason.startswith("refusal (category: cyber)")
 
@@ -411,7 +411,7 @@ async def test_a_streamed_answer_on_spent_quota_is_a_quota_error(tmp_path):
     _store, drain = await _tool_free_stream(tmp_path, provider)
 
     with pytest.raises(ProviderQuotaError, match="exceeded your current quota"):
-        drain()
+        await drain()
 
 
 async def test_an_unclassified_streamed_answer_failure_is_still_a_chat_error(tmp_path):
@@ -426,7 +426,7 @@ async def test_an_unclassified_streamed_answer_failure_is_still_a_chat_error(tmp
     _store, drain = await _tool_free_stream(tmp_path, provider)
 
     with pytest.raises(ChatError, match="unsupported parameter"):
-        drain()
+        await drain()
 
 
 QUOTA_SPENT = {

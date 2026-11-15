@@ -197,7 +197,8 @@ def test_default_output_is_the_published_limit_within_the_window_share(
 
     assert limits.max_output_tokens == expected
     assert limits.input_capacity == window - expected
-    assert limits.target_input_tokens == (window - expected) * 3 // 4
+    # Context is compacted at 60% of the input capacity.
+    assert limits.target_input_tokens == (window - expected) * 3 // 5
 
 
 def test_unknown_window_keeps_the_2048_fallback_while_known_windows_size_it():
@@ -442,7 +443,8 @@ async def test_chat_turn_leaves_three_quarters_of_the_window_for_input(
     limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
     assert limits["max_output_tokens"] == 32_768
     assert limits["input_capacity"] == 98_304
-    assert limits["target_input_tokens"] == 73_728
+    # Compaction starts at 60% of that input.
+    assert limits["target_input_tokens"] == 58_982
     (await service.complete(prepared))
     answered = [
         request

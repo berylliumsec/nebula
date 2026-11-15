@@ -172,12 +172,14 @@ oninput="document.querySelector('output').textContent=this.value">
         app.router.routes.insert(0, app.router.routes.pop())
 
         @app.post("/fixture-site/prepare-viewer/{project_id}")
-        async def prepare_viewer(project_id: str):
+        async def prepare_viewer(project_id: str, draft_id: str | None = None):
             # Fixture-only setup: fixed local page, no target supplied by clients.
+            # ``draft_id`` names the draft conversation whose browser the viewer
+            # has on screen, so the page loads in that session, not a second one.
             from nebula.v3.browser_companion import CompanionRequest
 
             browser = app.state.browser_companion
-            session = await browser.open(project_id)
+            session = await browser.open(project_id, draft_id=draft_id)
             url = f"http://127.0.0.1:{int(os.environ.get('NEBULA_MODEL_TEST_PORT', '19420'))}/fixture-site/manual-input"
             await browser.request(
                 session["session_id"],

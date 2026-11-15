@@ -14,7 +14,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 import json
 
 import pytest
@@ -476,7 +475,7 @@ async def test_notes_write_replaces_the_conversation_notes(tmp_path):
     assert (await read_working_notes(store, "session-2")).content == "other"
     # Bytes, not characters, bound the notes.
     with pytest.raises(InvalidToolArguments, match="at most 8192 bytes"):
-        asyncio.run(tool.execute(_invocation("é" * 5_000), None))
+        await tool.execute(_invocation("é" * 5_000), None)
     with pytest.raises(ToolBrokerError):
         (await tool.execute(_invocation("x", session_id=None), None))
     assert (await read_working_notes(store, "session")).revision == 2

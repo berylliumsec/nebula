@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { chatRequestBody, type ApiClient } from "../api/client";
 import { sameJson, startVisiblePoll, type PollOutcome, type VisiblePoll } from "../api/visiblePoll";
 import type { ChatCompletionRequest } from "../api/types";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 
 export interface QueueItem {
   id: string; key: string; status: string; detail?: string; turn_id?: string;
@@ -26,7 +28,17 @@ function validateQueue(value: ChatQueue): ChatQueue {
 export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
   const [queue, setQueue] = useState<ChatQueue>();
   const current = useRef<ChatQueue | undefined>(undefined);
+  // A failed edit stays until the operator acts; a failed read clears when a later read succeeds.
   const [error, setError] = useState<string>();
+  const [readError, setReadErrorState] = useState<string>();
+  // Clearing an absent error on every idle poll would still re-render the page.
+  const readErrorRef = useRef<string | undefined>(undefined);
+  const setReadError = useCallback((value: string | undefined) => {
+    if (readErrorRef.current === value) return;
+    readErrorRef.current = value;
+    setReadErrorState(value);
+  }, []);
+  const [runtimeWait, setRuntimeWait] = useState(0);
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
   const pending = useRef<{content: string; key: string} | undefined>(undefined);
@@ -43,9 +55,10 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
     return saved;
   }, [api, sessionId, path]);
   const pollRef = useRef<VisiblePoll | undefined>(undefined);
+  useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); pollRef.current?.poke(); });
   useEffect(() => {
     let disposed = false; const controller = new AbortController();
-    current.current = undefined; setQueue(undefined); setError(undefined); pending.current = undefined;
+    current.current = undefined; setQueue(undefined); setError(undefined); setReadError(undefined); setRuntimeWait(0); pending.current = undefined;
     if (!api || !sessionId) return;
     // Core answers 304 while the queue is unchanged, and an unchanged queue
     // keeps its identity, so an idle poll re-renders nothing.
@@ -58,6 +71,7 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
         try {
           const answer = await api.requestIfChanged<ChatQueue>(path, etag, {signal});
           if (disposed) return "stop";
+          setReadError(undefined);
           if (!answer) return queueIsMoving(current.current) ? "active" : "idle";
           const saved = validateQueue(answer.value);
           // A mutation owns the queue while it runs; take its result instead.
@@ -67,8 +81,11 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
           if (changed) {current.current = saved; setQueue(saved);}
           return changed || queueIsMoving(saved) ? "active" : "idle";
         } catch (e) {
+          if (disposed) return "stop";
+          // diagnostic-expected: the client recorded this read; the queue backs off and reads again when the runtime answers.
+          if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return "idle"; }
           void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");
-          if (!disposed) setError(e instanceof Error ? e.message : "Queue could not be read. Reload to retry.");
+          setReadError(e instanceof Error ? e.message : "Queue could not be read. Reload to retry.");
           return "active";
         }
       },
@@ -96,5 +113,8 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
     if (accepted) pending.current = undefined;
     return accepted;
   };
-  return {queue, error, busy, mutate, enqueue, reload: async () => {try {await reload(); setError(undefined);} catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");setError(e instanceof Error ? e.message : "Queue reload failed");}}};
+  return {queue, error: error ?? readError, busy, mutate, enqueue, reload: async () => {try {await reload(); setError(undefined); setReadError(undefined);} catch (e) {
+    // diagnostic-expected: the client recorded this read; the shared reconnecting notice explains the wait.
+    if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return; }
+    void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");setError(e instanceof Error ? e.message : "Queue reload failed");}}};
 }

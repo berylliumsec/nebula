@@ -52,7 +52,7 @@ from .providers import (
     provider_from_profile,
 )
 from .redaction import redacted_display
-from .storage import ConflictError, NebulaStore
+from .storage import NebulaStore, revision_conflict
 
 PROMPT_VERSION = "post-tool-analysis/v1"
 SOURCE_LIMIT = 32 * 1024
@@ -524,8 +524,11 @@ class ExecutionAIService:
         if draft.status != GeneratedDraftStatus.READY or draft.content is None:
             raise ExecutionAIError("draft_state", "only a ready draft can be accepted")
         if draft.revision != request.expected_revision:
-            raise ConflictError(
-                f"revision conflict: expected {request.expected_revision}, found {draft.revision}"
+            raise revision_conflict(
+                GeneratedDraft.entity_kind,
+                draft.id,
+                request.expected_revision,
+                draft.revision,
             )
         (await self._validate_evidence(draft, draft.content))
         operator = await call_async(self.operator_id)

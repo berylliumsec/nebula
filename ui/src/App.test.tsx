@@ -1730,7 +1730,7 @@ describe("Nebula workspace", () => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
       if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Confirmed review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
-      if (url.pathname.endsWith("/findings/finding-confirmed") && init?.method === "PATCH") return new Response(JSON.stringify({ detail: "revision conflict: expected 4, found 5" }), { status: 409 });
+      if (url.pathname.endsWith("/findings/finding-confirmed") && init?.method === "PATCH") return new Response(JSON.stringify({ detail: "revision conflict on findings finding-confirmed: expected 4, found 5" }), { status: 409 });
       if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify([finding]), { status: 200 });
       if (url.pathname.endsWith("/evidence")) return new Response(JSON.stringify([evidence]), { status: 200 });
       return unmatchedCoreResponse(input);
@@ -1750,7 +1750,7 @@ describe("Nebula workspace", () => {
     await user.click(within(inspector).getByLabelText("proof.txt"));
     await user.type(within(inspector).getByLabelText("Description"), " Updated locally.");
     await user.click(within(inspector).getByRole("button", { name: "Save finding" }));
-    expect(await within(inspector).findByRole("alert")).toHaveTextContent("revision conflict: expected 4, found 5");
+    expect(await within(inspector).findByRole("alert")).toHaveTextContent("revision conflict on findings finding-confirmed: expected 4, found 5");
     expect(within(inspector).getByLabelText("Description")).toHaveValue("Evidence-backed issue Updated locally.");
   });
 

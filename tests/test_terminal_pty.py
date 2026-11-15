@@ -440,6 +440,8 @@ asyncio.run(main())
         read,
     ):
         read("Paused parent", rendered=True)
+        read("› Butler", rendered=True)
+        read("F10 Source", rendered=True)
         display = "\n".join(read.screen.display)
         assert "› Butler" in display
         assert "HEIF" in display and "Running" in display
@@ -447,6 +449,7 @@ asyncio.run(main())
         assert "/projects/project/workbench" not in display
         os.write(master, b"\x1b[21~")  # F10
         read("**Paused**", rendered=True)
+        read("F10 Render", rendered=True)
         assert "F10 Render" in "\n".join(read.screen.display)
 
 

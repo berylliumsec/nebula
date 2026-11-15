@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
 from typing import Any, Literal, ClassVar
 from weakref import WeakKeyDictionary, ref
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -30,6 +31,7 @@ from .domain import (
     Artifact,
     BrowserIdentity,
     BrowserSession,
+    BrowserTabState,
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
     Observation,
@@ -98,6 +100,12 @@ class CompanionRequestRefused(ValueError):
 STALE_RUNNING_ACTION_GRACE = timedelta(
     seconds=2 * BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS
 )
+
+# The viewer's poll, a reconnect and the operator's controls all save the same
+# session row. A save that loses to another one is applied again to the row as
+# it now stands. Every lost attempt means someone else's save went through, so
+# this many in a row is a writer that never stops, which is reported instead.
+SESSION_WRITE_ATTEMPTS = 20
 
 
 class BrowserCompanion:
@@ -480,6 +488,39 @@ class BrowserCompanion:
             )
         return session
 
+    async def _change_session(
+        self,
+        session_id: str,
+        change: Callable[[BrowserSession], dict[str, Any] | None],
+    ) -> BrowserSession:
+        """Save a change to the session as stored now, whoever else writes it.
+
+        ``change`` reads the current session and returns the fields to save,
+        or nothing when the row already holds them, which writes nothing. A
+        save that another writer beat is worked out again from the row that
+        writer left, so neither change is lost and neither caller is refused.
+        """
+
+        attempts = SESSION_WRITE_ATTEMPTS
+        while True:
+            session = await self.session(session_id)
+            changes = change(session)
+            if not changes:
+                return session
+            attempts -= 1
+            try:
+                return await self.store.update(
+                    BrowserSession,
+                    session_id,
+                    changes,
+                    expected_revision=session.revision,
+                )
+            except ConflictError:
+                # diagnostic-expected: another writer saved the row first; the
+                # change is applied again to that row, or reported when spent.
+                if not attempts:
+                    raise
+
     async def open(
         self,
         project_id: str,
@@ -586,26 +627,29 @@ class BrowserCompanion:
             )
             if page_state_reset:
                 (await self.takeover(session.id, True))
-                session = await self.session(session.id)
                 # Report the lost live page once. A reconnect must not replay the
                 # notice or pause control again after the operator resumes it.
-                session = await self.store.update(
-                    BrowserSession,
+                session = await self._change_session(
                     session.id,
-                    {
-                        "metadata": {
-                            **session.metadata,
-                            "browser_page_state_reset": False,
+                    lambda latest: (
+                        {
+                            "metadata": {
+                                **latest.metadata,
+                                "browser_page_state_reset": False,
+                            }
                         }
-                    },
-                    expected_revision=session.revision,
+                        if latest.metadata.get("browser_page_state_reset")
+                        else None
+                    ),
                 )
             if session.active_tab_id not in available and tabs["tabs"]:
-                session = await self.store.update(
-                    BrowserSession,
+                session = await self._change_session(
                     session.id,
-                    {"active_tab_id": tabs["tabs"][0]["id"]},
-                    expected_revision=session.revision,
+                    lambda latest: (
+                        None
+                        if latest.active_tab_id in available
+                        else {"active_tab_id": tabs["tabs"][0]["id"]}
+                    ),
                 )
             return {
                 "session_id": session.id,
@@ -619,14 +663,11 @@ class BrowserCompanion:
         tabs = await self.request(session_id, CompanionRequest(operation="tabs"))
         if not any(tab["id"] == tab_id for tab in tabs["tabs"]):
             raise ValueError("The selected browser tab is no longer available.")
-        session = await self.session(session_id)
-        (
-            await self.store.update(
-                BrowserSession,
-                session.id,
-                {"active_tab_id": tab_id},
-                expected_revision=session.revision,
-            )
+        await self._change_session(
+            session_id,
+            lambda latest: (
+                None if latest.active_tab_id == tab_id else {"active_tab_id": tab_id}
+            ),
         )
 
     async def bind(self, session_id: str, conversation_id: str | None) -> None:
@@ -639,14 +680,15 @@ class BrowserCompanion:
                 raise ValueError("The conversation belongs to another project.")
         if session.metadata.get("conversation_id"):
             (await self.takeover(session_id, True))
-            session = await self.session(session_id)
-        (
-            await self.store.update(
-                BrowserSession,
-                session.id,
-                {"metadata": {**session.metadata, "conversation_id": conversation_id}},
-                expected_revision=session.revision,
-            )
+        await self._change_session(
+            session_id,
+            lambda latest: (
+                None
+                if latest.metadata.get("conversation_id") == conversation_id
+                else {
+                    "metadata": {**latest.metadata, "conversation_id": conversation_id}
+                }
+            ),
         )
 
     async def request(
@@ -739,58 +781,69 @@ class BrowserCompanion:
             result["credentials"] = await self.credential_catalog(session_id)
             result["files"] = await self.file_catalog(session_id)
             if "tabs" in result:
-                latest = await self.session(session_id)
-                tab_ids = {tab["id"] for tab in result["tabs"]}
-                known_ids = {tab.id for tab in latest.tabs}
-                lost_tabs = (
-                    request.operation == "tabs"
-                    and bool(known_ids)
-                    and known_ids.isdisjoint(tab_ids)
-                )
-                metadata = dict(latest.metadata)
-                if lost_tabs:
-                    metadata["browser_page_state_reset"] = True
-                active_tab = result.get("active_tab_id") or latest.active_tab_id
-                if active_tab not in tab_ids:
-                    active_tab = result["tabs"][0]["id"] if result["tabs"] else None
-                (
-                    await self.store.update(
-                        BrowserSession,
-                        session_id,
-                        {
-                            "active_tab_id": active_tab,
-                            "metadata": metadata,
-                            "tabs": [
-                                {
-                                    "id": tab["id"],
-                                    "title": tab["title"],
-                                    "position": index,
-                                }
-                                for index, tab in enumerate(result["tabs"])
-                            ],
-                        },
-                        expected_revision=latest.revision,
-                    )
-                )
-                if lost_tabs:
+                if await self._record_tabs(session_id, request, result):
                     (await self.takeover(session_id, True))
             if request.operation == "navigate":
-                latest = await self.session(session_id)
-                if latest.metadata.get("browser_page_state_reset"):
-                    (
-                        await self.store.update(
-                            BrowserSession,
-                            latest.id,
-                            {
-                                "metadata": {
-                                    **latest.metadata,
-                                    "browser_page_state_reset": False,
-                                }
-                            },
-                            expected_revision=latest.revision,
-                        )
-                    )
+                await self._change_session(
+                    session_id,
+                    lambda latest: (
+                        {
+                            "metadata": {
+                                **latest.metadata,
+                                "browser_page_state_reset": False,
+                            }
+                        }
+                        if latest.metadata.get("browser_page_state_reset")
+                        else None
+                    ),
+                )
             return result
+
+    async def _record_tabs(
+        self, session_id: str, request: CompanionRequest, result: dict[str, Any]
+    ) -> bool:
+        """Save the browser's tab list when it differs; report lost live tabs.
+
+        The viewer asks for the tabs every few seconds. Saving an unchanged
+        list each time made every poll a competing write to the row that Stop
+        and Resume save the operator's control decision to.
+        """
+
+        tab_ids = {tab["id"] for tab in result["tabs"]}
+        tabs = [
+            {"id": tab["id"], "title": tab["title"], "position": index}
+            for index, tab in enumerate(result["tabs"])
+        ]
+        saved_tabs = [BrowserTabState.model_validate(tab) for tab in tabs]
+        lost_tabs = False
+
+        def change(latest: BrowserSession) -> dict[str, Any]:
+            nonlocal lost_tabs
+            known_ids = {tab.id for tab in latest.tabs}
+            # Kept across attempts: a poll that saw every known tab gone still
+            # pauses control when another poll recorded the new tabs first.
+            lost_tabs = lost_tabs or (
+                request.operation == "tabs"
+                and bool(known_ids)
+                and known_ids.isdisjoint(tab_ids)
+            )
+            active_tab = result.get("active_tab_id") or latest.active_tab_id
+            if active_tab not in tab_ids:
+                active_tab = result["tabs"][0]["id"] if result["tabs"] else None
+            changes: dict[str, Any] = {}
+            if active_tab != latest.active_tab_id:
+                changes["active_tab_id"] = active_tab
+            if lost_tabs and not latest.metadata.get("browser_page_state_reset"):
+                changes["metadata"] = {
+                    **latest.metadata,
+                    "browser_page_state_reset": True,
+                }
+            if saved_tabs != latest.tabs:
+                changes["tabs"] = tabs
+            return changes
+
+        await self._change_session(session_id, change)
+        return lost_tabs
 
     async def _require_in_scope(
         self, session: BrowserSession, target: str, action: str
@@ -893,16 +946,21 @@ class BrowserCompanion:
             )
 
     async def takeover(self, session_id: str, paused: bool) -> None:
-        session = await self.session(session_id)
-        if session.metadata.get("assistant_paused", True) != paused:
-            (
-                await self.store.update(
-                    BrowserSession,
-                    session_id,
-                    {"metadata": {**session.metadata, "assistant_paused": paused}},
-                    expected_revision=session.revision,
-                )
-            )
+        """Save the operator's Stop or Resume of assistant control.
+
+        The decision is saved against whatever the viewer's poll or a
+        reconnect wrote in the meantime, so Stop is never refused as stale.
+        Once Stop is saved, the Assistant's pending approvals are revoked.
+        """
+
+        await self._change_session(
+            session_id,
+            lambda latest: (
+                None
+                if latest.metadata.get("assistant_paused", True) == paused
+                else {"metadata": {**latest.metadata, "assistant_paused": paused}}
+            ),
+        )
         if paused:
             (await self.invalidate_pending_actions(session_id))
 
@@ -919,22 +977,33 @@ class BrowserCompanion:
             {"browser_session_id": session_id, "status": ["pending", "running"]},
             engagement_id=session.engagement_id,
         ):
-            if action.status == "pending":
-                status = "revoked"
-            elif action.status == "running" and (
-                await self._running_is_stale(action, now)
-            ):
-                status = "failed"
-            else:
-                continue
-            (
-                await self.store.update(
-                    CompanionAction,
-                    action.id,
-                    {"status": status},
-                    expected_revision=action.revision,
-                )
-            )
+            attempts = SESSION_WRITE_ATTEMPTS
+            while True:
+                if action.status == "pending":
+                    status = "revoked"
+                elif action.status == "running" and (
+                    await self._running_is_stale(action, now)
+                ):
+                    status = "failed"
+                else:
+                    break
+                attempts -= 1
+                try:
+                    (
+                        await self.store.update(
+                            CompanionAction,
+                            action.id,
+                            {"status": status},
+                            expected_revision=action.revision,
+                        )
+                    )
+                    break
+                except ConflictError:
+                    # diagnostic-expected: a decision moved this action first.
+                    # Judge it again as it now stands, then go on to the rest.
+                    if not attempts:
+                        raise
+                    action = await self.store.get(CompanionAction, action.id)
 
     async def _running_is_stale(self, action: CompanionAction, now: datetime) -> bool:
         if not (await self.turn_active(action.chat_turn_id)):

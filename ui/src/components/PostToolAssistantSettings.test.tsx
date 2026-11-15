@@ -5,6 +5,7 @@ import type { ApiClient } from "../api/client";
 import type { HarnessProfile, PostToolAssistantConfig } from "../api/types";
 import { PostToolAssistantSettings } from "./PostToolAssistantSettings";
 import {notifyProjectDataChanged} from "../api/projectDataEvents";
+import {startingProject} from "../test/projectRuntimeStarting";
 
 const harnessWithoutDiscoveredModel: HarnessProfile = {
   permissionMode: "managed",
@@ -34,6 +35,24 @@ const harnessWithoutDiscoveredModel: HarnessProfile = {
 };
 
 describe("PostToolAssistantSettings", () => {
+  it("waits for a starting project's worker instead of reporting the settings unavailable", async () => {
+    const {projectRuntime, unavailable} = startingProject();
+    const saved: PostToolAssistantConfig = {suggestNextSteps: false, takeNotes: false,
+      backendKind: "harness", harnessProfileId: "harness-1", model: "Saved model", cloudConfirmed: false, revision: 2};
+    const getPostToolAssistant = vi.fn()
+      .mockImplementationOnce(async () => { throw unavailable("engagements/project-1/post-tool-assistant"); })
+      .mockResolvedValue(saved);
+    const api = {getPostToolAssistant, listHarnesses: vi.fn().mockResolvedValue([harnessWithoutDiscoveredModel]), projectRuntime} as unknown as ApiClient;
+    render(<PostToolAssistantSettings api={api} engagementId="project-1" providers={[]} />);
+    await waitFor(() => expect(getPostToolAssistant).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Reload tool follow-up"})).toBeDisabled();
+    const model = screen.getByRole("combobox", {name: "Tool follow-up model"});
+    await waitFor(() => expect(model).toHaveValue("Saved model"), {timeout: 4_000});
+    expect(getPostToolAssistant).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("retains a draft and its observed revision until explicit reload after a scoped Core change", async () => {
     const initial: PostToolAssistantConfig = {suggestNextSteps: false, takeNotes: false,
       backendKind: "harness", harnessProfileId: "harness-1", model: "Original model", cloudConfirmed: false, revision: 4};

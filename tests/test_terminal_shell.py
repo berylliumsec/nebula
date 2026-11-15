@@ -1200,6 +1200,8 @@ def test_explicit_startup_chat_overrides_remembered_selection(
             return response([])
         if path.endswith("/state"):
             return response({"busy": False, "detail": "Ready"})
+        if path.endswith("/catch-up"):
+            return response({"initialized": True, "revision": 1, "items": []})
         pytest.fail(f"Unexpected startup request: {path}")
 
     async def run():

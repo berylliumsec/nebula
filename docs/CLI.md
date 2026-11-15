@@ -96,10 +96,21 @@ scrollable description and latest 200 check-ins, including blockers and next
 steps. Tab cycles through details, Search and the task list; `/` focuses Search.
 Search matches titles and descriptions. R (or Ctrl-R while searching) refreshes
 from Core and retains the selected task when it still matches. Escape returns
-to the same chat and unsent draft; running chat work continues. This is a
-read-only, on-demand view, not a live activity feed. Create, edit and move
-tasks in the web Work page. The plain terminal prints tasks grouped by status
-when `/board` runs; run it again to refresh.
+to the same chat and unsent draft; running chat work continues. It is an
+on-demand view, not a live activity feed. The board also takes the web Work
+page's actions, each read back from Core: N creates a Ready item (title and
+optional description); U checks in on the selected item (summary, optional next
+step and blocker, and its status, defaulting to the current one); T tracks the
+current conversation as a new In Progress item linked to it; L links the
+selected item to the current conversation (refused when another conversation
+owns it); A turns agent Work tools on or off. Prompts open inside the board;
+Enter saves and Escape cancels without a write. The status line reports Core's
+result, including when Core's status differs from the one chosen (a check-in
+with a blocker is saved as Blocked). Tracking a conversation whose earlier item
+is Done creates a new In Progress item, as the web page does. Work has no delete or title edit here or in the web page. The
+plain terminal prints tasks grouped by status when `/board` runs; run it again to
+refresh, and use `/board new`, `/board update`, `/board track`, `/board link` or
+`/board tools` for the same actions.
 
 Open `/notes` to browse the selected project's saved Notes without leaving the
 chat. The full-screen panel loads notes on open and refresh only. Up/Down selects
@@ -148,7 +159,10 @@ running turn and sends the message first, as the GUI's Stop and send does.
 `/model` in a saved conversation switches provider models through Core's checked
 runtime switch, also when the conversation was on a harness; a model not yet
 verified for tool use is verified first, and a switch Core defers says it applies
-after the running work. Model, effort, MCP, hook and subagent choices also become
+after the running work. `/model` also lists **More <provider> models · adds to
+allowed**: models the provider reports beyond its allowlist. Choosing one adds it to
+the provider's allowed models in Core, read back, and then switches to it, as the
+GUI's model picker does. Model, effort, MCP, hook and subagent choices also become
 the project's defaults for new chats, as they do in the GUI, and a new chat starts
 with them. `/mcp` shows each server as always loaded, on demand, excluded next
 turn or not sent; its first row chooses whether selected tool schemas are always
@@ -199,6 +213,33 @@ permit sensitive data and needs an explicit confirmation that redacted tool
 output may be sent to it. Each change saves the whole setting with the project's
 revision and is read back from Core.
 
+If you press Enter while a command or send is still finishing, the entry is kept
+as the next input instead of being dropped: the footer shows **Next:** with the
+text, it runs as soon as the shell is ready, and Ctrl-C puts it back in the
+composer for editing. In multi-select menus, Space toggles the highlighted row
+until you start typing a search; after that Space is part of the search, so
+multi-word searches such as `Select all` work. Enter always toggles. A prompt
+that opens with a suggested answer puts the cursor at its end, so typing adds to it.
+
+Opening a conversation summarizes what changed since this terminal last read it,
+as the GUI's catch-up card does: new answers, results, failed responses and actions
+waiting for you. `/catchup` lists them; choosing one opens the answer or the failed
+response's details, and `/catchup read` marks the conversation read on this device.
+Answers you watch arrive in an open conversation count as read, as at the bottom
+of the GUI's transcript; while a catch-up summary waits, they join it instead.
+`/quote` adds a saved message to your draft as a `> ` quote (an answer without its
+progress notes). `/evidence` shows an answer's supporting evidence: retrieved
+sources, observed tool results, artifacts and stated limitations. `/turn` shows a
+response's status, model, timing and error, and opens its source message.
+`/results` lists the conversation's retained results. Choosing a tool result
+opens its output, as the GUI's artifact inspector does: read it in pages (continuing
+inside very long lines), search every output of that tool call with more matches on
+request, or save the raw output to a file on this client after confirming it may be
+sensitive. For a harness conversation, `/activity` also offers **Stop subagent** for
+the harness's own running subagent tasks when the harness advertises subagent
+control, and **Rewind files** to a checkpoint while idle when it advertises
+checkpoint rewind.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -216,7 +257,7 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | `/thinking` | Show or collapse the model's thinking in the transcript |
 | `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
 | `/notes` | Browse, create, edit, refresh and delete the selected project's saved Notes in the full-screen TUI |
-| `/board` | Read the project's Work board, search tasks, inspect descriptions/check-ins and refresh without changing chat |
+| `/board` | Browse the project's Work board, create items, check in, track or link the current conversation and toggle agent Work tools, each read back from Core |
 | `/model`, `/settings`, `/mcp` | Select Core models and supported next-turn controls; `/mcp` selects this conversation's probed MCP servers |
 | `/skills`, `$name` | Toggle several skills for the next turn in one picker; `$name message` selects one skill for that message |
 | `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete (with evidence) a Core goal, including budgets, retained skills and child goals |
@@ -309,6 +350,16 @@ so the next action does not wait for a new worker to start. Set
 `NEBULA_IDLE_WORKER_GRACE_SECONDS` (0–3600; 0 retires idle workers at once) to
 change it. The grace ends early while another project is waiting for a worker
 that Core could not place.
+
+An open project in the GUI also keeps its worker. While a project page is
+visible it holds a view lease (renewed about every 30 seconds, lapsing after 90),
+and Core starts the project's worker for it, so Notes, Findings and Evidence load
+even when the project has no open chat. Reading a project never starts a worker
+by itself. The idle grace starts when the page leaves the project or its lease
+lapses. A view lease never overrides the memory budget: while Core cannot place
+the worker, the page shows "Waiting to start this project" with Core's reason.
+Clients hold a lease with `PUT /api/v1/engagements/{project}/view-leases/{lease_id}`
+(optional `ttl_seconds`, 30–300) and end it with `DELETE` on the same path.
 
 Core prints its host administration token once at startup. Keep it on the host;
 remote chat uses device pairing. `NEBULA_V3_API_TOKEN` can supply the host token

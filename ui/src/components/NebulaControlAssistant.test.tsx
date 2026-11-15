@@ -10,6 +10,7 @@ import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
+import { startingProject } from "../test/projectRuntimeStarting";
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: vi.fn(),
@@ -81,6 +82,45 @@ describe("NebulaControlAssistant", () => {
     expect(composer).toHaveValue("Keep this draft");
     await user.click(screen.getByRole("button", { name: "Chat" }));
     expect(screen.getByRole("log", { name: "Butler conversation" })).toBeVisible();
+  });
+
+  it("restores the saved conversation once the project's worker starts, holding the project's view only while open", async () => {
+    const user = userEvent.setup();
+    const { projectRuntime, unavailable } = startingProject();
+    const overview = {
+      project_id: "project", authority: "watch", watched_goals: [], incidents: [], decisions: [], resources: [],
+      coverage_gaps: [], actions: [], recovery_cases: [],
+      summary: { watched_goals: 0, open_incidents: 0, acknowledged_incidents: 0, resolved_incidents: 0, account_resources: 0, harness_quota_resources: 0, recovery_attention: 0 },
+      capabilities: { authority_levels: ["watch"], incidents: true, decisions: false, agent_reports: true, machine_alerts: true, resource_alerts: true, live_events: false },
+    };
+    const getControlAssistantSession = vi.fn()
+      .mockImplementationOnce(async () => { throw unavailable("chat/control-assistant/session?engagement_id=project"); })
+      .mockResolvedValue(savedButler);
+    const holdProjectView = vi.fn(async (projectId: string, leaseId: string) => ({ leaseId, projectId, expiresAt: "2026-11-15T00:00:00Z", renewAfterSeconds: 30, runtime: { state: "starting" as const } }));
+    const releaseProjectView = vi.fn(async () => undefined);
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: {
+        request: vi.fn().mockResolvedValue(overview), projectRuntime, holdProjectView, releaseProjectView, getControlAssistantSession,
+        listChatMessages: vi.fn().mockResolvedValue([{ id: "q", role: "user", content: "Earlier question" }, { id: "a", role: "assistant", content: "Earlier saved answer" }]),
+      },
+      coreState: "online", engagement: { id: "project", name: "Project", status: "active" }, providers: [], harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await waitFor(() => expect(getControlAssistantSession).toHaveBeenCalledTimes(1));
+    // Closed, Butler neither holds the project nor waits for it.
+    expect(holdProjectView).not.toHaveBeenCalled();
+    expect(projectRuntime.state).toBe("available");
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const dialog = screen.getByRole("dialog", { name: "Butler" });
+    await waitFor(() => expect(holdProjectView).toHaveBeenCalledWith("project", expect.any(String), expect.any(AbortSignal)));
+    expect(within(dialog).getByText("Restoring your saved conversation…")).toBeVisible();
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    expect(await within(dialog).findByText("Earlier saved answer", {}, { timeout: 4_000 })).toBeVisible();
+    expect(getControlAssistantSession).toHaveBeenCalledTimes(2);
+    expect(within(dialog).queryByText("Restoring your saved conversation…")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close Butler" }));
+    expect(releaseProjectView).toHaveBeenCalledWith("project", holdProjectView.mock.calls[0][1]);
   });
 
   it("takes attention from the conversation summary to Work", async () => {

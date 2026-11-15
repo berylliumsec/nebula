@@ -702,7 +702,18 @@ async def test_goal_turn_after_ten_thousand_links_persists_and_completes(tmp_pat
     assert goal.linked_turn_ids[-1] == turn.id
 
 
-async def test_successful_provider_turn_automatically_continues_running_goal(tmp_path):
+async def test_successful_provider_turn_automatically_continues_running_goal(
+    tmp_path, monkeypatch
+):
+    recorded = chat_module.record_caught_exception
+    failures: list[str] = []
+
+    def capture(feature, event_code, *args, **kwargs):
+        failures.append(event_code)
+        return recorded(feature, event_code, *args, **kwargs)
+
+    monkeypatch.setattr(chat_module, "record_caught_exception", capture)
+
     async def scenario() -> None:
         store, goals = await setup_goal(tmp_path)
         draft = await goals.create(
@@ -750,6 +761,8 @@ async def test_successful_provider_turn_automatically_continues_running_goal(tmp
         assert [turn.goal_id for turn in turns] == [running.id, running.id]
         assert goal.current_step == 2
         assert goal.blocked_reason == "Goal step budget is exhausted."
+        # Using up the step budget ends the run; it is not a failed continuation.
+        assert "chat.goal.auto_continue_failed" not in failures
         goal_requests = [
             request
             for request in provider.requests

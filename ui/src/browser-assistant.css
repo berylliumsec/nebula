@@ -82,6 +82,8 @@
 .managed-browser-view-options label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .managed-browser-view-options select { max-width: 100%; }
 .managed-browser-error { margin: 0 12px 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.managed-browser-control-failure { border-color: var(--red); }
+.managed-browser-control-failure > small { display: block; color: var(--muted); }
 .managed-browser-capture { margin: 10px 12px; padding: 14px; background: var(--surface-muted); border: 1px solid var(--border-soft); border-radius: 12px; }
 .managed-browser-screen { flex: 1 0 160px; background: var(--canvas); }
 .managed-browser-icon:focus-visible, .managed-browser-utilities summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

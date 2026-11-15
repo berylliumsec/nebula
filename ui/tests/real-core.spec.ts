@@ -7,12 +7,18 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { expect, request as playwrightRequest, test, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { expect, request as unkeyedRequest, test, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
 import {startTerminalCore} from "./fixtures/terminal-core";
 import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
+import {coreMutation, removeCoreData, waitForCoreApi} from "./fixtures/core-api";
 import {settingCatalog} from "../src/settingsCatalog";
 import {assistantDestinations, assistantDestinationPath} from "../src/assistantDestinations";
+import {keyedCoreRequests, removeCoreSockets, stopCoreWorkers} from "./fixtures/core-harness";
+
+// Core's API process refuses a mutation without a client Idempotency-Key. Every request context in
+// this file sends post, put, patch and delete through coreMutation and returns Core's final answer.
+const playwrightRequest = keyedCoreRequests(unkeyedRequest);
 
 interface RealCore {
   process: ChildProcessWithoutNullStreams;
@@ -190,6 +196,83 @@ for (const bodyFails of [false, true]) {
     if (process.env.NEBULA_TEST_KEEP_DATA !== "1") expect(existsSync(dataDir)).toBe(false);
   });
 }
+
+test("assistant upgrade owned cleanup keyed requests send a fresh key and follow a saved request to its answer", async () => {
+  // An inert stand-in for Core's API process: it refuses unkeyed mutations and saves one request.
+  const seen: Array<{method: string; url: string; key?: string; note?: string; body: string}> = [];
+  let follows = 0;
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const key = request.headers["idempotency-key"] as string | undefined;
+    seen.push({method: request.method!, url: request.url!, key, note: request.headers["x-fixture-note"] as string | undefined, body: Buffer.concat(chunks).toString("utf8")});
+    const answer = (status: number, body: unknown, headers: Record<string, string> = {}) => {
+      response.writeHead(status, {"Content-Type": "application/json", ...headers});
+      response.end(JSON.stringify(body));
+    };
+    if (request.method !== "GET" && !key) return answer(428, {detail: "A client-generated Idempotency-Key is required for this mutation"});
+    if (request.url === "/api/v1/saved") return answer(202, {state: "accepted", receipt: {command_id: "saved-1"}}, {"X-Nebula-Command-Id": "saved-1", "X-Nebula-Request-State": "pending"});
+    if (request.url === "/api/v1/runtime/requests/saved-1/response") {
+      return ++follows < 2
+        ? answer(202, {state: "running", command_id: "saved-1"}, {"X-Nebula-Request-State": "pending"})
+        : answer(201, {id: "made"}, {"X-Nebula-Command-Id": "saved-1", "X-Nebula-Request-State": "complete"});
+    }
+    if (request.url === "/api/v1/final") return answer(202, {id: "started"}, {"X-Nebula-Request-State": "complete"});
+    if (request.url === "/api/v1/in-process") return answer(202, {id: "unmarked"});
+    return answer(200, {});
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const api = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/`});
+  await withOwnedCleanup(async () => {
+    const saved = await api.post("saved", {data: {name: "one"}, headers: {"X-Fixture-Note": "kept"}});
+    expect(saved.status(), await saved.text()).toBe(201);
+    expect(await saved.json()).toEqual({id: "made"});
+    expect(follows).toBe(2);
+    // A 202 that Core marks complete, or that an in-process fixture Core leaves unmarked, is the answer itself.
+    const final = await api.post("final", {data: {}});
+    expect([final.status(), await final.json()]).toEqual([202, {id: "started"}]);
+    const unmarked = await api.put("in-process", {data: {}});
+    expect([unmarked.status(), await unmarked.json()]).toEqual([202, {id: "unmarked"}]);
+    expect((await api.patch("plain", {data: {}, headers: {"idempotency-key": "the-callers-own-key"}})).status()).toBe(200);
+    expect((await api.delete("plain")).status()).toBe(200);
+    const mutations = seen.filter(entry => entry.method !== "GET");
+    expect(mutations.map(entry => `${entry.method} ${entry.url}`)).toEqual([
+      "POST /api/v1/saved", "POST /api/v1/final", "PUT /api/v1/in-process", "PATCH /api/v1/plain", "DELETE /api/v1/plain",
+    ]);
+    expect(mutations.every(entry => /^[!-~]{1,200}$/.test(entry.key ?? ""))).toBe(true);
+    expect(new Set(mutations.map(entry => entry.key)).size).toBe(mutations.length);
+    expect(mutations[3].key).toBe("the-callers-own-key");
+    expect([mutations[0].note, mutations[0].body]).toEqual(["kept", JSON.stringify({name: "one"})]);
+    expect(seen.filter(entry => entry.method === "GET").map(entry => entry.key)).toEqual([undefined, undefined]);
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "inert HTTP server", dispose: () => stopLocalModelStub({origin: "", requests: [], server, fail: false})},
+  ]);
+});
+
+test("assistant upgrade owned cleanup ends a stopped Core's workers and removes its sockets and data", async () => {
+  test.setTimeout(120_000);
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const runtime = path.join(core.dataDir, "runtime") + path.sep;
+  const workers = () => spawnSync("ps", ["-Awwo", "args="], {encoding: "utf8"}).stdout.split("\n").filter(line => line.includes(runtime));
+  let sockets = "";
+  await withOwnedCleanup(async () => {
+    // The API worker is running; a project command also asks Core for that project's worker.
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const note = await api.post("observations", {data: {engagement_id: projects[0].id, observation_type: "note", title: "Owned", body: "Owned by this fixture.", source: "operator-note", confidence: 1}});
+    expect(note.status(), await note.text()).toBe(201);
+    expect(workers().length).toBeGreaterThan(0);
+    sockets = (JSON.parse(await readFile(path.join(runtime, "process-origin.json"), "utf8")) as {socket_root: string}).socket_root;
+    expect(existsSync(sockets)).toBe(true);
+  }, [
+    {name: "API", dispose: () => api.dispose()},
+    {name: "Core", dispose: () => stopRealCore(core)},
+  ]);
+  expect(workers()).toEqual([]);
+  expect(existsSync(sockets)).toBe(false);
+  if (process.env.NEBULA_TEST_KEEP_DATA !== "1") expect(existsSync(core.dataDir)).toBe(false);
+});
 
 test("assistant upgrade approval fixture reclaims its data after stop and failed startup", async () => {
   test.setTimeout(60_000);
@@ -438,6 +521,39 @@ function coreReady(page: Page) {
   return coreShell(page, /^Nebula Core ready$/);
 }
 
+/**
+ * A project's first write after it has been quiet waits while Core starts the
+ * project's execution worker (a real process: about 6-8 s on a loaded test
+ * host), with the page showing it in progress. Waits right after such a first
+ * write allow for that start instead of the 5 s default for an in-process write.
+ */
+const COLD_PROJECT_START_MS = 30_000;
+
+/**
+ * Read a project's worker-backed data the way a direct API client must since
+ * reads stopped admitting a project worker: hold the project's view lease (the
+ * demand the GUI holds while a project view is open) and honour Retry-After
+ * while Core answers 503 project_runtime_unavailable for the starting worker.
+ */
+async function readProjectWhenReady(api: APIRequestContext, projectId: string, readPath: string) {
+  const lease = `view-real-core-${createHash("sha256").update(`${projectId}:${readPath}:${Date.now()}`).digest("hex").slice(0, 24)}`;
+  const held = await api.put(`engagements/${encodeURIComponent(projectId)}/view-leases/${lease}`, { data: {} });
+  expect(held.ok(), await held.text()).toBe(true);
+  try {
+    const deadline = Date.now() + COLD_PROJECT_START_MS;
+    for (;;) {
+      const response = await api.get(readPath);
+      if (response.status() !== 503 || Date.now() > deadline) return response;
+      const body = await response.json().catch(() => ({})) as { code?: string };
+      if (body.code !== "project_runtime_unavailable") return response;
+      const retryAfter = Number(response.headers()["retry-after"] ?? "1");
+      await new Promise(resolve => setTimeout(resolve, Math.min(5_000, Math.max(500, (Number.isFinite(retryAfter) ? retryAfter : 1) * 1000))));
+    }
+  } finally {
+    await api.delete(`engagements/${encodeURIComponent(projectId)}/view-leases/${lease}`);
+  }
+}
+
 async function showProjectNavigation(page: Page) {
   const navigation = page.getByRole("button", { name: "Open navigation" });
   if (await navigation.getAttribute("aria-expanded") !== "true") {
@@ -580,6 +696,20 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
     }
   }
   const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
+  const coreEnvironment = {
+    ...process.env,
+    ...options.env,
+    PYTHONUNBUFFERED: "1",
+    ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
+    PYTHONPATH: embedded ? "" : [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+  };
+  // A database a journey seeded before Core's first start is an existing root to Core, which starts on
+  // it only after the operator's coordinated adoption. Adoption also saves this fixture's token.
+  if (!options.fixtureScript && !embedded && existsSync(path.join(dataDir, "nebula.db")) && !existsSync(path.join(dataDir, "runtime"))) {
+    const adopted = spawnSync(coreBinary, ["runtime-adopt", "--confirm-core-stopped", "--data-dir", dataDir],
+      {cwd: repository, env: {...coreEnvironment, NEBULA_V3_API_TOKEN: token}, encoding: "utf8"});
+    if (adopted.status !== 0) throw new Error(`Seeded Core data could not be adopted: ${adopted.stderr || adopted.stdout || adopted.error}`);
+  }
   const child = spawn(
     options.fixtureScript ? path.join(path.dirname(coreBinary), "python") : coreBinary,
     [...(options.fixtureScript ? [options.fixtureScript] : []), ...(embedded ? [
@@ -600,20 +730,13 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
     ])],
-    {
-      cwd: repository,
-      env: {
-        ...process.env,
-        ...options.env,
-        PYTHONUNBUFFERED: "1",
-        ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
-        PYTHONPATH: embedded ? "" : [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
-      },
-    },
+    {cwd: repository, env: coreEnvironment},
   );
   let output = "";
+  // A slow host can raise every Core startup wait at once, as the approval fixture already allows.
+  const startupTimeout = Math.max(options.startupTimeoutMs ?? 30_000, Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS) || 0);
   const origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), options.startupTimeoutMs ?? 30_000);
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), startupTimeout);
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = output.match(/"url"\s*:\s*"(https?):\/\/[^:\"]+:(\d+)"/);
@@ -636,7 +759,15 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   }).catch(error => withOwnedCleanup(async () => {throw error;}, [
     {name: "failed Core startup", dispose: () => stopRealCore({process: child, dataDir, origin: "", token}, {keepData: Boolean(options.dataDir)})},
   ]));
-  return { process: child, dataDir, origin, token };
+  const core = { process: child, dataDir, origin, token };
+  // Core prints its address before its API process is admitted; a read sent before that is a reconnecting 503.
+  const probe = await unkeyedRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${token}`}, ignoreHTTPSErrors: true});
+  await withOwnedCleanup(() => waitForCoreApi(probe, startupTimeout), [
+    {name: "Core readiness probe", dispose: () => probe.dispose()},
+  ]).catch(error => withOwnedCleanup(async () => {throw new Error(`Real Core did not answer an API read.\n${output}`, {cause: error});}, [
+    {name: "Core that never became ready", dispose: () => stopRealCore(core, {keepData: Boolean(options.dataDir)})},
+  ]));
+  return core;
 }
 
 function localNetworkIpv4(): string {
@@ -731,7 +862,8 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await settings.getByLabel("Credential reference").fill("env:STORAGE_CALLBACK_TOKEN");
     await settings.getByRole("button", { name: "Add disabled source" }).click();
     const issued = settings.locator(".storage-issued");
-    await expect(issued.getByText("Save this token now")).toBeVisible();
+    // The project's first write: Core starts its worker before answering.
+    await expect(issued.getByText("Save this token now")).toBeVisible({ timeout: COLD_PROJECT_START_MS });
     await expect(issued.getByLabel("Webhook URL")).toHaveValue(`${core.origin}/api/v1/storage/events`);
     const sourceToken = await issued.getByLabel("Source token").inputValue();
     const dashboard = await (await api.get("storage")).json() as { sources: Array<{ id: string }> };
@@ -2629,9 +2761,12 @@ async function stopRealCore(core: RealCore, options: { keepData?: boolean } = {}
         await wait("SIGKILL");
       }
     }},
+    // Stopping Core means its whole runtime: the supervisor alone would leave its detached workers running.
+    {name: "Core workers", dispose: () => stopCoreWorkers(core.dataDir)},
+    {name: "Core sockets", dispose: async () => { if (!options.keepData) await removeCoreSockets(core.dataDir); }},
     {name: "Core data", dispose: async () => {
       if (!options.keepData && process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
-        await rm(core.dataDir, {recursive: true, force: true});
+        await removeCoreData(core.dataDir);
       }
     }},
   ]);
@@ -2985,7 +3120,8 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     await dialog.getByRole("textbox", { name: "Title" }).fill("Build the search page");
     await dialog.getByRole("textbox", { name: "Description" }).fill("Add filters and result cards");
     await dialog.getByRole("button", { name: "Create item" }).click();
-    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+    // The project's first write after it was created: Core starts its worker before answering.
+    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible({ timeout: COLD_PROJECT_START_MS });
     expect((await board.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
     const detail = page.getByRole("complementary", { name: "Build the search page" });
     expect((await detail.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
@@ -3983,7 +4119,8 @@ test("assistant upgrade production LAN delegated Mission opens its durable super
     await dialog.getByRole("checkbox", { name: /Let the supervisor create child tasks/ }).check();
     await expect(dialog.getByLabel("Start time")).toBeDisabled();
     await dialog.getByRole("button", { name: "Automate task" }).click();
-    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Delegated production Mission")).toBeVisible();
+    // The project's first write: Core starts its worker before answering.
+    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Delegated production Mission")).toBeVisible({ timeout: COLD_PROJECT_START_MS });
     await expect.poll(async () => {
       const response = await api.get("runs", { params: { engagement_id: projectId } });
       expect(response.ok(), await response.text()).toBe(true);
@@ -5732,9 +5869,10 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     } });
     expect(create.ok(), await create.text()).toBe(true);
     const projectId = (await create.json() as { id: string }).id;
-    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    // Open this project's Code view by its URL (the old "nebula.engagement" key no longer selects a project).
+    const workbench = `${core.origin}/projects/${encodeURIComponent(projectId)}/workbench`;
 
-    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${workbench}?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("complementary", { name: "Editor files" })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Shared workspace editor")).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
@@ -5750,7 +5888,7 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("lan-proof");
     await quickOpen.getByRole("option", { name: /lan-proof\.py/ }).click();
     await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
-    await page.goto(`${core.origin}/?view=workspace#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${workbench}?view=workspace#token=${encodeURIComponent(core.token)}`);
     await page.getByRole("button", {name: "Search files and folders"}).click();
     const filesQuickOpen = page.getByRole("dialog", {name: "Quick open"});
     await filesQuickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("reports");
@@ -6261,7 +6399,9 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
   const stub = await startLocalModelStub({streamDelayMs: 20});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   await withOwnedCleanup(async () => {
-    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const projectResponse = await api.post("engagements", {data: {name: "Edit in place fixture", request_id: "edit-in-place-fixture"}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as {id: string};
     const providerResponse = await api.post("providers", {data: {
       name: "Edit in place model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
@@ -6273,7 +6413,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     const send = async (content: string, sessionId?: string) => {
       const response = await api.post("chat/completions", {data: {
         backend: "provider", provider_id: provider.id, model: "security-model",
-        engagement_id: projects[0].id, session_id: sessionId,
+        engagement_id: project.id, session_id: sessionId,
         messages: [{role: "user", content}], include_knowledge: false, stream: false,
       }});
       expect(response.ok(), await response.text()).toBe(true);
@@ -6282,7 +6422,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     const originalTask = "Summarize `activate`.\n\nRequired work:\n1. Resolve the binding.\n2. Check the `memcpy` calls.\n\n```json\n{\"binding\": \"cross-image\"}\n```";
     const sessionId = await send(originalTask);
     expect(await send("Any update on the certificate?", sessionId)).toBe(sessionId);
-    const url = `${core.origin}/?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`;
+    const url = `${core.origin}/projects/${project.id}/workbench?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`;
     await page.goto(url);
     const operator = page.locator(".chat-message.operator");
     await expect(operator.first().locator(".assistant-markdown ol > li")).toHaveCount(2);
@@ -6319,7 +6459,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     await replacedGroup.locator("summary").click();
     await expect(replacedGroup).toContainText("Any update on the certificate?");
 
-    const sessions = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{id: string}>;
+    const sessions = await (await api.get(`chat-sessions?engagement_id=${project.id}`)).json() as Array<{id: string}>;
     expect(sessions.map(item => item.id)).toEqual([sessionId]);
     const live = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{sequence: number; content: string}>;
     expect(live[0].content).toBe(originalTask);
@@ -7041,7 +7181,7 @@ async def _seed():
             raw = random.Random(index).randbytes(9600).hex()
             return f"Saved research message {index} " + " ".join(raw[offset:offset + 16] for offset in range(0, len(raw), 16))
         messages = [ChatMessage(id=f"perf-message-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=index, role="user" if index % 2 else "assistant", content=content(index), reasoning=("Private reasoning details. " * 1040) if index % 2 == 0 else "", provider_profile_id=sys.argv[4], model="security-model") for index in range(3, 455)]
-        async with (await store.transaction()) as transaction:
+        async with store.transaction() as transaction:
             (await transaction.add_chat_messages(messages))
     finally:
         await close_store_resources([item for item in [store] if item is not None])
@@ -10779,7 +10919,7 @@ async def _seed():
         store = NebulaStore(sys.argv[1])
         start = int(sys.argv[4])
         messages = [ChatMessage(id=f"butler-scroll-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=start + index, role="user" if index % 2 else "assistant", content=f"Saved Butler message {index}. " + "A detailed project update. " * 5, provider_profile_id=sys.argv[5], model="security-model") for index in range(80)]
-        async with (await store.transaction()) as transaction:
+        async with store.transaction() as transaction:
             (await transaction.add_chat_messages(messages))
     finally:
         await close_store_resources([item for item in [store] if item is not None])
@@ -11462,8 +11602,11 @@ test("assistant upgrade Butler max effort persists through settings on productio
     expect(entry).toBeTruthy();
     expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
       .toBe(build.assets[entry!]);
-    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
     await pairRealCoreBrowser(page, core, "Butler effort LAN browser", {requireReady: false});
+    // Select the fixture project as an operator does, by opening it; Settings then shows the
+    // remembered project (the old "nebula.engagement" key no longer selects one).
+    await page.goto(`${core.origin}/projects/${encodeURIComponent(project.id)}/workbench`);
+    await expect.poll(() => page.evaluate(id => Object.values(localStorage).some(value => value.includes(id)), project.id)).toBe(true);
     await page.goto(`${core.origin}/settings#butler-settings`);
     const settings = page.getByRole("region", {name: "Butler settings"});
     const effort = settings.getByRole("combobox", {name: "Butler effort"});
@@ -11855,7 +11998,8 @@ test("assistant upgrade Butler scheduled retry shows both saved attempts after r
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
     expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
-    const overview = await api.get(`engagements/${project.id}/butler/overview`);
+    // Core is starting the project's worker for its new Butler chat; a direct read waits for it.
+    const overview = await readProjectWhenReady(api, project.id, `engagements/${project.id}/butler/overview`);
     expect(overview.ok(), await overview.text()).toBe(true);
     expect((await overview.json() as {recovery_cases: Array<{model_turn_ids: string[]}>}).recovery_cases[0].model_turn_ids)
       .toEqual(["butler-overloaded-turn", "butler-retry-turn"]);
@@ -12173,7 +12317,11 @@ test("assistant upgrade clear request reaches the model without repeat confirmat
     await composer.fill(request);
     await composer.press("Enter");
     await expect(assistant).toContainText("The requested project summary is ready.", { timeout: 30_000 });
-    const dispatched = stub.requests.find((item) => JSON.stringify(item.messages).includes(request));
+    // Core also asks the model to title the new conversation, and that request quotes the first exchange too.
+    const dispatched = stub.requests.find((item) => {
+      const sent = JSON.stringify(item.messages);
+      return sent.includes(request) && !sent.includes("Name this conversation from its first exchange");
+    });
     expect(dispatched).toBeTruthy();
     expect(JSON.stringify(dispatched!.messages)).toContain("Do not ask to confirm it again.");
     expect(JSON.stringify(dispatched!.messages)).toContain("separate tool or policy approval");
@@ -12193,7 +12341,8 @@ test("project execution mode starts new projects in Host mode on production LAN 
     const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
     const scratch = projects.find(project => project.name === "Scratch Project")!;
     expect(scratch).toBeTruthy();
-    expect(await (await api.get(`engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: false });
+    // A quiet project's reads never start its worker; read as an API client holding the project open.
+    expect(await (await readProjectWhenReady(api, scratch.id, `engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: false });
 
     await page.goto(`${core.origin}/projects/${scratch.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Start new chat" })).toBeVisible({ timeout: 20_000 });
@@ -12217,8 +12366,9 @@ test("project execution mode starts new projects in Host mode on production LAN 
     const created = (await (await api.get("engagements")).json() as Array<{ id: string; name: string }>).find(project => project.name === "Host startup acceptance")!;
     expect(created).toBeTruthy();
     await expect(page).toHaveURL(new RegExp(`/projects/${created.id}/workbench`));
-    expect(await (await api.get(`engagements/${created.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
-    expect(await (await api.get(`automation/runtime?engagement_id=${created.id}`)).json()).toMatchObject({ ready: true, runner_profile_id: "host" });
+    // The new project's worker may still be starting.
+    expect(await (await readProjectWhenReady(api, created.id, `engagements/${created.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+    expect(await (await readProjectWhenReady(api, created.id, `automation/runtime?engagement_id=${created.id}`)).json()).toMatchObject({ ready: true, runner_profile_id: "host" });
     const command = await api.post(`engagements/${created.id}/automation-sessions/api/host-default/commands`, { data: { command: "pwd" } });
     expect(command.ok(), await command.text()).toBe(true);
     expect(await command.json()).toMatchObject({ exit_code: 0 });
@@ -13266,7 +13416,7 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
       "        record = ChatSubagent(id=subagent_id, engagement_id=project_id, parent_session_id=parent_session_id, parent_turn_id=parent_turn_id, child_session_id=child_session_id, child_turn_id=child_turn_id, provider_profile_id=provider_id, model='security-model', name='Restart investigator', task='Finish after Core restart.', status=ChatSubagentStatus.INTERRUPTED, finished_at=now, error='Core shut down while this subagent was running.', result_message_id=false_message_id, reported_at=now)",
       "        record = record.model_copy(update={'parent_request': {'capabilities': {'tool_names': [], 'mcp_server_ids': [], 'skills': []}}})",
       "        false_message = ChatMessage(id=false_message_id, engagement_id=project_id, session_id=parent_session_id, sequence=sequence, role=ChatRole.ASSISTANT, content='Subagent interrupted: Restart investigator\\n\\nError: Core shut down while this subagent was running.', provider_profile_id=provider_id, model='security-model', metadata={'kind': 'subagent_result', 'subagent_id': subagent_id, 'subagent_name': 'Restart investigator', 'child_session_id': child_session_id, 'subagent_status': 'interrupted', 'subagent_round': 1})",
-      "        async with (await store.transaction()) as transaction:",
+      "        async with store.transaction() as transaction:",
       "            (await transaction.add(parent_turn))",
       "            (await transaction.add(child_session))",
       "            (await transaction.add(child_turn))",
@@ -15841,7 +15991,8 @@ test("assistant upgrade shell goal draft remains editable with skills on product
     await dialog.getByRole("textbox", {name: "Objective"}).fill("Draft shell review");
     await dialog.getByRole("textbox", {name: "Completion criteria"}).fill("Evidence is checked");
     await dialog.getByRole("button", {name: "Save draft"}).click();
-    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    // Saving the draft writes the chat's settings and then the goal, the project's first writes: Core starts its worker first.
+    await expect.poll(() => new URL(page.url()).searchParams.get("session"), {timeout: COLD_PROJECT_START_MS}).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
     await expect(dialog.getByRole("region", {name: "Conversation goal"})).toContainText("draft");
     await dialog.getByRole("button", {name: "Close goal"}).click();

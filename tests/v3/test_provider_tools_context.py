@@ -78,13 +78,28 @@ class InertProvider(FakeProvider):
         )
 
 
-async def _service(tmp_path, monkeypatch, *, jev=None, preload=False):
+# The 8K fallback window's 2,048-token reply, with the 4,608-token compaction
+# target (60% of 7,680 input tokens) these journeys were sized for: their
+# short follow-up turns stay below it and do not adopt the background snapshot
+# (which would add conversation.search to the manifest).
+SIZED_MODEL = {"id": "model-a", "context_window": 9_728, "max_output_tokens": 2_048}
+
+
+async def _service(tmp_path, monkeypatch, *, jev=None, preload=False, model=None):
     service, request = await _mcp_service(
         tmp_path,
         monkeypatch,
         lambda: jev,
         scope={"tool_suggestions": jev is not None},
     )
+    if model is not None:
+        profile = await service.store.get(ProviderProfile, request.provider_id)
+        await service.store.update(
+            ProviderProfile,
+            profile.id,
+            {"metadata": {**profile.metadata, "model_descriptors": [model]}},
+            expected_revision=profile.revision,
+        )
     provider = InertProvider(request.provider_id)
     service.provider_factory = lambda _: provider
     if preload:
@@ -157,7 +172,9 @@ async def _history(service, session_id, count=8, repeat=240):
 async def test_loaded_schema_is_single_canonical_definition_across_turns_compaction_and_restart(
     tmp_path, monkeypatch
 ):
-    service, request, provider = await _service(tmp_path, monkeypatch)
+    service, request, provider = await _service(
+        tmp_path, monkeypatch, model=SIZED_MODEL
+    )
     provider.script = [_load(), _use(), {"text": "Tool used."}]
     first = await service.prepare_async(request)
     await service.complete(first)
@@ -240,7 +257,9 @@ async def test_loaded_schema_is_single_canonical_definition_across_turns_compact
 async def test_preloaded_definition_is_not_duplicated_by_a_catalog_load_or_ranked_again(
     tmp_path, monkeypatch
 ):
-    service, request, provider = await _service(tmp_path, monkeypatch, preload=True)
+    service, request, provider = await _service(
+        tmp_path, monkeypatch, preload=True, model=SIZED_MODEL
+    )
     ranked = []
     original_rank = service._rank_deferred_tools
 

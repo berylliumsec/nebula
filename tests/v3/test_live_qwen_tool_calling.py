@@ -222,12 +222,14 @@ async def test_qwen_fixture_required_probe_safe_call_and_final_response(
             metadata={"initial_title_state": "generated"},
         )
     )
+
+    async def chat_components(**_):
+        return components
+
     service = ChatService(
         store,
         provider_factory=provider_factory,
-        automation_tool_platform=SimpleNamespace(
-            chat_components=lambda **_: components
-        ),
+        automation_tool_platform=SimpleNamespace(chat_components=chat_components),
         workspace_resolver=lambda _: tmp_path,
     )
 

@@ -65,6 +65,10 @@ async def core_request(app, method, path, body=None):
 
 
 async def select_fixed(app, gateway, project_id):
+    # Core starts runner detection at startup, but ASGITransport never runs the
+    # lifespan. The first status read starts it, so the refresh below awaits it
+    # instead of a later status read starting a detection that clears candidates.
+    await core_request(app, "GET", "setup/status")
     await gateway.request(project_id, method="POST", path="setup/runtime/refresh")
     status = await core_request(app, "GET", "setup/status")
     candidate = next(
@@ -281,7 +285,7 @@ async def test_butler_setup_and_project_automation_reads_remain_closed(setup_cor
         observer = ButlerAdministration(store, selected.id, gateway)
         setup = await observer.system({"kind": "setup_status"})
         assert setup["read_back"] is True
-        policy = app.state.automation_runtime.project_policy(selected.id)
+        policy = await app.state.automation_runtime.project_policy(selected.id)
         (
             await store.update(
                 AutomationProjectPolicy,

@@ -36,7 +36,7 @@ from .domain import (
 from .knowledge import knowledge_summary
 from .relations import LEGACY_RELATION_MODELS, ResourceRelationService
 from .setup import create_engagement_with_default_scope
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, revision_conflict
 from .tool_results import without_results_api_key
 
 API_PREFIX = "/api/v1"
@@ -500,8 +500,8 @@ def _register_crud_routes(
                 raise ValueError("replacement id must match the resource id")
             current = await store.get(model, entity_id)
             if if_match is not None and current.revision != if_match:
-                raise ConflictError(
-                    f"revision conflict: expected {if_match}, found {current.revision}"
+                raise revision_conflict(
+                    model.entity_kind, entity_id, if_match, current.revision
                 )
             (await entity_validator.validate_update(current, entity))
             if isinstance(current, ProviderProfile) and isinstance(
@@ -547,9 +547,11 @@ def _register_crud_routes(
                 patch.expected_revision is not None
                 and current.revision != patch.expected_revision
             ):
-                raise ConflictError(
-                    f"revision conflict: expected {patch.expected_revision}, "
-                    f"found {current.revision}"
+                raise revision_conflict(
+                    model.entity_kind,
+                    entity_id,
+                    patch.expected_revision,
+                    current.revision,
                 )
             payload = current.model_dump(mode="python")
             payload.update(patch.changes)
@@ -620,8 +622,8 @@ def _register_crud_routes(
                     "Notebook is bundled with this project; disable its MCP profile to revoke agent access"
                 )
             if if_match is not None and current.revision != if_match:
-                raise ConflictError(
-                    f"revision conflict: expected {if_match}, found {current.revision}"
+                raise revision_conflict(
+                    model.entity_kind, entity_id, if_match, current.revision
                 )
             if model is Engagement:
                 assert isinstance(current, Engagement)

@@ -198,7 +198,12 @@ async def test_queue_review_tracks_each_item_and_restart_reconciliation(
 
     import nebula.v3.butler_attention as attention
 
-    monkeypatch.setattr(attention, "record_attention_transition", lambda *_: None)
+    async def skip_attention_transition(*_):
+        return None
+
+    monkeypatch.setattr(
+        attention, "record_attention_transition", skip_attention_transition
+    )
     pending = await store.update(
         ChatQueue,
         queue.id,
@@ -324,15 +329,15 @@ async def test_act_investigates_pending_review_and_only_approves_exact_low_risk_
         "decision": "approve",
         "expected_revision": approval.revision,
     }
-    capability._check_background_change_reason(
+    await capability._check_background_change_reason(
         case, "nebula.work.decide_approval", arguments
     )
     with pytest.raises(ValueError):
-        capability._check_background_change_reason(
+        await capability._check_background_change_reason(
             case, "nebula.work.decide_approval", {**arguments, "action_id": "other"}
         )
     with pytest.raises(ValueError):
-        capability._check_background_change_reason(
+        await capability._check_background_change_reason(
             case, "nebula.work.decide_approval", {**arguments, "expected_revision": 99}
         )
     (
@@ -344,7 +349,7 @@ async def test_act_investigates_pending_review_and_only_approves_exact_low_risk_
         )
     )
     with pytest.raises(ValueError):
-        capability._check_background_change_reason(
+        await capability._check_background_change_reason(
             case,
             "nebula.work.decide_approval",
             {**arguments, "expected_revision": approval.revision + 1},

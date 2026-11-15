@@ -18,7 +18,7 @@ from .domain import (
     utc_now,
 )
 from .relations import RESOURCE_ENTITY_KINDS
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, revision_conflict
 
 HANDOFF_TTL = timedelta(hours=24)
 
@@ -90,9 +90,7 @@ class HandoffService:
             if actual_project != project_id:
                 raise ValueError("handoff reference belongs to another project")
             if ref.revision is not None and ref.revision != row.revision:
-                raise ConflictError(
-                    f"revision conflict: expected {ref.revision}, found {row.revision}"
-                )
+                raise revision_conflict(row.kind, ref.id, ref.revision, row.revision)
 
     async def create(
         self, request: HandoffCreateRequest, *, actor_id: str

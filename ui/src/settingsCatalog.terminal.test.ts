@@ -18,6 +18,9 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   expect(pairing).toContain("project board");
   expect(pairing).toContain("/board");
   expect(pairing).toContain("work check-ins");
+  for (const phrase of ["/board new", "/board update", "track this conversation", "link work item to chat", "agent work tools"]) {
+    expect(pairing).toContain(phrase);
+  }
   expect(pairing).toContain("project notes");
   expect(pairing).toContain("/notes");
   expect(pairing).toContain("up arrow message recall");
@@ -31,7 +34,7 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   }
   expect(pairing).toContain("turn elapsed time");
   expect(pairing).toContain("token usage");
-  for (const phrase of ["/queue", "/now", "stop and send", "/mcp exclude", "project defaults for new chats", "always allow tool results", "resume harness session"]) {
+  for (const phrase of ["/queue", "/now", "stop and send", "/mcp exclude", "project defaults for new chats", "always allow tool results", "resume harness session", "adds to allowed", "allow another provider model"]) {
     expect(pairing).toContain(phrase);
   }
   for (const phrase of ["/goal complete", "/goal child", "subagent approvals", "edit pending request", "always allow on this host", "stop all subagents"]) {
@@ -39,5 +42,14 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   }
   for (const phrase of ["/project", "rename project", "relink project folder", "restore archived project", "delete archived project", "project execution mode", "project network scope", "project vpn route", "/project followup", "after-tool assistant"]) {
     expect(pairing).toContain(phrase);
+  }
+  expect(pairing).toContain("type ahead");
+  expect(pairing).toContain("multi-word picker search");
+
+  for (const reading of ["/catchup", "/quote", "/evidence", "/turn", "terminal catch-up", "supporting evidence", "turn details"]) {
+    expect(pairing).toContain(reading);
+  }
+  for (const inspector of ["artifact inspector", "tool output", "/results", "stop harness subagent", "checkpoint rewind"]) {
+    expect(pairing).toContain(inspector);
   }
 });

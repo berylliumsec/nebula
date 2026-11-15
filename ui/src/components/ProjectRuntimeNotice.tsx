@@ -1,0 +1,30 @@
+import { CirclePause, LoaderCircle } from "lucide-react";
+import type { ApiClient } from "../api/client";
+import { useProjectRuntimeState } from "../hooks/useProjectRuntime";
+
+/**
+ * One calm status line while open views wait for their project's worker.
+ * An idle project's worker retires and is readmitted when the operator acts
+ * again; nothing failed, so this is never an alert and never blocks navigation.
+ */
+export function ProjectRuntimeNotice({ api }: { api?: ApiClient }) {
+  const state = useProjectRuntimeState(api);
+  if (state === "available") return null;
+  // Wanted, but a host gate (for example the memory budget) holds the start.
+  if (state === "held") return <div className="workspace-state-banner project-runtime-notice" role="status">
+    <CirclePause size={16} aria-hidden="true" />
+    <span><strong>Waiting to start this project</strong><small>{api?.projectRuntime.detail ?? "Core starts it when the host has room. Saved work is safe."}</small></span>
+  </div>;
+  // Reads never wake an idle project: say what will, instead of promising a refresh.
+  if (state === "idle") return <div className="workspace-state-banner project-runtime-notice" role="status">
+    <CirclePause size={16} aria-hidden="true" />
+    <span><strong>This project is idle</strong><small>Saved work is safe. Its views load when you resume work here, for example by continuing a conversation.</small></span>
+  </div>;
+  // Starting (or restarting) its worker: views read again and writes finish on their own.
+  return <div className="workspace-state-banner project-runtime-notice" role="status">
+    <LoaderCircle className="spin" size={16} aria-hidden="true" />
+    <span><strong>Starting this project</strong><small>{api?.projectRuntime.waitingForWrite
+      ? "Saved work is safe. Your change finishes when the project is ready."
+      : "Saved work is safe. This view loads when the project is ready."}</small></span>
+  </div>;
+}

@@ -24,6 +24,7 @@ from .host_cpu_budget import (
     HostCpuStatus,
     HostCpuUpdate,
 )
+from .project_reads import active_control_assistant_session
 from .report_cpu_executor import ReportCpuExecutor
 from .diagnostic_requests import DiagnosticsSettingsRequest, BrowserDiagnosticBatch
 from .diagnostic_requests import BrowserDiagnosticEvent as BrowserDiagnosticEvent
@@ -588,7 +589,14 @@ from .writing_ai import (
     WritingTransformRequest,
     WritingTransformResponse,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import (
+    ConflictError,
+    NebulaStore,
+    NotFoundError,
+    RevisionConflict,
+    revision_conflict,
+)
+from .runtime_coordination import LeaseLost
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
     CHAT_RESUME_COMMAND,
@@ -2450,7 +2458,18 @@ def create_execution_kernel(
                             exc,
                             stage="schedule",
                         )
-                    await provider_chat.runtime_switcher.reconcile()
+                    try:
+                        await provider_chat.runtime_switcher.reconcile()
+                    except Exception as exc:
+                        # The worker rides out a short SQL outage; one failed
+                        # read must not stop schedules and recovery for good.
+                        record_caught_exception(
+                            "chat",
+                            "chat.runtime_switch_reconcile_failed",
+                            "Waiting model switches could not be read; the next pass retries.",
+                            exc,
+                            stage="runtime-switch",
+                        )
                     # Its scans run asynchronously and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
@@ -2869,6 +2888,10 @@ def create_execution_kernel(
             r"[a-z][a-z0-9._-]{2,159}", supplied
         ):
             return supplied
+        # Internal bookkeeping distinguishes revision contention; clients keep
+        # the established conflict code and strict revision semantics.
+        if isinstance(exc, RevisionConflict):
+            return f"{feature}.conflict_error"
         name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(exc).__name__).lower()
         return f"{feature}.{name}"
 
@@ -3428,6 +3451,35 @@ def create_execution_kernel(
         )
         response.headers["Retry-After"] = "1"
         return response
+
+    @app.exception_handler(LeaseLost)
+    async def lease_lost_handler(request: Request, exc: LeaseLost) -> JSONResponse:
+        # Only reads can be safely repeated. A mutation may already have had
+        # effects; its durable command must retain its existing reconciliation.
+        if request.scope["type"] != "http" or request.method not in {
+            "GET",
+            "HEAD",
+            "OPTIONS",
+        }:
+            raise exc
+        record_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.project.read_fenced",
+            "A read reached a worker that no longer owns the project; read again.",
+            stage="request",
+            retryable=True,
+        )
+        return JSONResponse(
+            {
+                "detail": "The project worker changed while this read ran. Saved work is unchanged; read again shortly.",
+                "code": "project_runtime_unavailable",
+                "reason": "closing",
+                "retryable": True,
+            },
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
@@ -10418,9 +10470,11 @@ def create_execution_kernel(
     ) -> ProviderCapabilityVerifyResponse:
         profile = await store.get(ProviderProfile, provider_id)
         if profile.revision != request.expected_revision:
-            raise ConflictError(
-                f"revision conflict: expected {request.expected_revision}, "
-                f"found {profile.revision}"
+            raise revision_conflict(
+                ProviderProfile.entity_kind,
+                profile.id,
+                request.expected_revision,
+                profile.revision,
             )
         return await _verify_provider_capability(
             store, profile, request.model, provider_factory
@@ -12006,25 +12060,7 @@ def create_execution_kernel(
         dependencies=[Depends(require_auth)],
     )
     async def get_control_assistant_session(engagement_id: str) -> ChatSession | None:
-        (await store.get(Engagement, engagement_id))
-        return next(
-            (
-                item
-                for item in (
-                    await store.find_entities(
-                        ChatSession,
-                        {},
-                        engagement_id=engagement_id,
-                        newest_first=True,
-                        limit=None,
-                    )
-                )
-                if item.metadata.get("control_assistant") is True
-                and not item.metadata.get("butler_recovery_case_id")
-                and item.metadata.get("archived_at") is None
-            ),
-            None,
-        )
+        return await active_control_assistant_session(store, engagement_id)
 
     @app.get(
         f"{API_PREFIX}/butler/memory",
@@ -12780,8 +12816,8 @@ def create_execution_kernel(
     ) -> Response:
         chat = await store.get(ChatSession, session_id)
         if if_match is not None and chat.revision != if_match:
-            raise ConflictError(
-                f"revision conflict: expected {if_match}, found {chat.revision}"
+            raise revision_conflict(
+                ChatSession.entity_kind, chat.id, if_match, chat.revision
             )
         if chat.backend == ChatBackend.HARNESS and chat.harness_session_id:
             # Release the vendor process and its MCP gateway before the rows

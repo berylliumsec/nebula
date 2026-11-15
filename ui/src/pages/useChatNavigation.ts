@@ -2,6 +2,8 @@ import { logCaughtDiagnostic } from "../diagnostics";
 import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/client";
 import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
+import { isProjectRuntimeUnavailable } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
 
 export interface ChatBookmark { message_id: string; active: boolean; revision: number }
 export interface ChatSearchHit { message_id: string; session_id: string; title: string; role: string; excerpt: string; sequence: number }
@@ -11,6 +13,9 @@ export function useChatNavigation(api: ApiClient | undefined, projectId: string 
   const [bookmarks, setBookmarks] = useState<ChatBookmark[]>([]);
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  // Nonzero while the project's worker is idle or starting; bookmarks read again when it answers.
+  const [runtimeWait, setRuntimeWait] = useState(0);
+  useProjectRuntimeRecovery(api, runtimeWait, () => { setRuntimeWait(0); setRefresh(value => value + 1); });
   useEffect(() => {
     const changed = (event: Event) => {
       const detail = (event as CustomEvent<ProjectDataChange>).detail;
@@ -21,10 +26,19 @@ export function useChatNavigation(api: ApiClient | undefined, projectId: string 
   }, [projectId, sessionId]);
   useEffect(() => {
     setBookmarks([]);
+    setRuntimeWait(0);
     if (!api || !sessionId) return;
     const controller = new AbortController();
-    void api.request<ChatBookmark[]>(`chat/sessions/${encodeURIComponent(sessionId)}/bookmarks`, {signal: controller.signal}).then(setBookmarks).catch((e: unknown) => { void logCaughtDiagnostic("interface.assistant_chat.read_failed", "Assistant chat state could not be read.", e, "assistant_chat");
-      if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Bookmarks could not be loaded.");
+    void api.request<ChatBookmark[]>(`chat/sessions/${encodeURIComponent(sessionId)}/bookmarks`, {signal: controller.signal}).then(items => {
+      if (controller.signal.aborted) return;
+      setBookmarks(items);
+      setError(undefined);
+    }).catch((e: unknown) => {
+      if (controller.signal.aborted) return;
+      // diagnostic-expected: the client recorded this read; the shared reconnecting notice explains the wait.
+      if (isProjectRuntimeUnavailable(e)) { setRuntimeWait(value => value || 1); return; }
+      void logCaughtDiagnostic("interface.assistant_chat.read_failed", "Assistant chat state could not be read.", e, "assistant_chat");
+      setError(e instanceof Error ? e.message : "Bookmarks could not be loaded.");
     });
     return () => controller.abort();
   }, [api, sessionId, refresh]);

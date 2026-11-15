@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .transport import ApiError, ClientError, key
+from .transport import ApiError, ClientError, key, terminal_text
 
 if TYPE_CHECKING:
     from .shell import Shell
@@ -87,12 +87,72 @@ async def save(shell: Shell, patch: dict[str, Any]) -> None:
     shell.ui.say("Saved in Core for the next turn.")
 
 
+async def discovered_model(shell: Shell, provider_id: str) -> dict[str, Any]:
+    """Add a model the provider reports but does not allow yet, as the GUI does."""
+    health = await shell.api.request("POST", f"providers/{key(provider_id)}/health")
+    if health.get("healthy") is False:
+        raise ClientError(
+            "Core could not list this provider's models: "
+            + terminal_text(health.get("detail") or "health check failed")
+        )
+    unlisted = [model for model in health.get("unlisted_models") or [] if model]
+    if not unlisted:
+        raise ClientError(
+            "This provider reports no other models. Check its catalog in Core Settings."
+        )
+    profile = await shell.api.request("GET", f"providers/{key(provider_id)}")
+    model = (
+        await shell.ui.choose(
+            f"More {profile.get('name') or 'provider'} models · adds to allowed",
+            [{"id": name, "name": name} for name in unlisted],
+        )
+    )["id"]
+    allowlist = list(dict.fromkeys([*(profile.get("model_allowlist") or []), model]))
+    await shell.api.request(
+        "PATCH",
+        f"providers/{key(provider_id)}",
+        json={
+            "changes": {"model_allowlist": allowlist},
+            "expected_revision": health.get("provider_revision") or profile["revision"],
+        },
+    )
+    observed = await shell.api.request("GET", f"providers/{key(provider_id)}")
+    if model not in (observed.get("model_allowlist") or []):
+        raise ClientError("Core did not confirm the allowed model. Reopen /model.")
+    shell.profiles[provider_id] = observed
+    shell.ui.say(
+        f"Added {model} to {observed.get('name') or 'the provider'}'s allowed models."
+    )
+    return {
+        "id": f"provider:{provider_id}:{model}",
+        "backend": "provider",
+        "profile_id": provider_id,
+        "model": model,
+        "profile": observed,
+    }
+
+
 async def model(shell: Shell) -> None:
     current = await shell.configuration()
     options = await shell.runtimes()
     if not options:
         raise ClientError("No enabled model is configured on Core.")
-    chosen = await shell.ui.choose("Model runtime", options)
+    providers = {
+        row["profile_id"]: row["profile"]
+        for row in options
+        if row["backend"] == "provider" and (row["profile"].get("model_allowlist"))
+    }
+    more = [
+        {
+            "id": "more:" + identifier,
+            "name": f"More {profile.get('name') or identifier} models · adds to allowed",
+            "provider_id": identifier,
+        }
+        for identifier, profile in providers.items()
+    ]
+    chosen = await shell.ui.choose("Model runtime", [*options, *more])
+    if chosen["id"].startswith("more:"):
+        chosen = await discovered_model(shell, chosen["provider_id"])
     patch = {name: chosen[name] for name in ("backend", "profile_id", "model")}
     view = shell.current()
     if view.session and chosen["backend"] == "provider":

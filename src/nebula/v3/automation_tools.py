@@ -919,6 +919,9 @@ class AutomationToolPlatform:
             if engagement.scope_policy_id is not None
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, engagement_id, scope)
         broker = AutomationBroker(
             manager=self.manager,
             store=self.store,
@@ -994,6 +997,11 @@ class AutomationToolPlatform:
                 raise MissionConfigurationError(
                     "engagement scope policy ownership is inconsistent"
                 )
+            from .execution_policy import effective_scope
+
+            browser_scope = await effective_scope(
+                self.store, engagement.id, browser_scope
+            )
             browser_specs = autonomous_browser_specs()
             components = AutomationToolComponents(
                 broker=BrowserAutomationBroker(self.store, self.browser_automation),

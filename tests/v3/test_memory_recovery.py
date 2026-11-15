@@ -634,3 +634,30 @@ async def test_launched_earlier_boot_job_still_needs_verified_group_removal(budg
     assert await reconciler.once() == []
     assert resolved == ["job"]
     assert (await service.get_job("job")).reserved_bytes == 2 * GIB
+
+
+async def test_reconciliation_loop_survives_an_unreadable_pass():
+    """A worker rides out a short SQL outage now; one failed read of the lost
+    jobs must not end lost-worker cleanup for the rest of its life."""
+    from sqlalchemy.exc import OperationalError
+
+    reads = []
+
+    async def reconciliation_jobs(*, after):
+        reads.append(after)
+        if len(reads) == 1:
+            raise OperationalError("SELECT", {}, ConnectionRefusedError("refused"))
+        return []
+
+    reconciler = MemoryReconciler(
+        SimpleNamespace(reconciliation_jobs=reconciliation_jobs), None
+    )
+    await reconciler.start()
+    try:
+        # The loop passes every five seconds; the second pass follows the failure.
+        async with asyncio.timeout(15):
+            while len(reads) < 2:
+                assert not reconciler.task.done(), reconciler.task
+                await asyncio.sleep(0.05)
+    finally:
+        await reconciler.close()

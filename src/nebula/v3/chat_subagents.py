@@ -4935,7 +4935,12 @@ class SubagentService:
     async def _continue_goal(self, record: ChatSubagent) -> None:
         """Let a running goal pick up what arrived after its reply."""
 
-        from .chat import ChatCompletionRequest, ChatHistoryConflict, ChatRequestMessage
+        from .chat import (
+            ChatCompletionRequest,
+            ChatHistoryConflict,
+            ChatRequestMessage,
+            GoalBudgetConfigurationError,
+        )
         from .chat_schedules import ChatScheduleService
 
         parent_turn = await self._parent_turn(record)
@@ -4996,6 +5001,10 @@ class SubagentService:
             # diagnostic-expected: an operator message or another goal
             # continuation started first; losing that race is the intended
             # outcome, and the reports reach whichever turn won.
+            return
+        except GoalBudgetConfigurationError:
+            # diagnostic-expected: prepare paused the goal with its budget
+            # reason; resuming it later delivers the waiting reports.
             return
         except Exception as exc:
             record_caught_exception(

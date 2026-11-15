@@ -23,3 +23,23 @@ scope, runtime-privacy, turn-liveness, session-rebinding and browser-reset check
 in force. Core metadata remains the sole durable authority; the UI mirrors it.
 Test resumed input/navigation, reload and follow-up, explicit stop, stale approvals,
 concurrent queued operations and browser reset through component/Python/real Core.
+
+## Stop and Resume are saved or reported
+
+Journey: Browser > Stop assistant control (or Resume) > the control and status
+show what Core saved. Core's session row is the only authority for
+`assistant_paused`; the viewer mirrors it and never shows a state Core did not
+confirm.
+
+| Step | Observable invariant | Authority | Test layer |
+| --- | --- | --- | --- |
+| Stop / Resume | The control changes only after Core answers; meanwhile the status reads "Stopping…" or "Resuming…" and the control takes no second click | Core session row | component, real Core |
+| Stop while the viewer polls or reconnects | Stop is saved and pending approvals are revoked whatever else writes the row; an unchanged tab poll writes nothing | Core session row | Python, real Core |
+| Failure | "Assistant control was not stopped. The Assistant may still act in this browser." stays on screen with Core's reason and Retry stop; the control keeps Core's last reported state | viewer state | component, real Core |
+| Retry | Retry sends the same Stop again; success clears the notice and returns focus to the control | Core session row | component, real Core |
+| Reconnect / next poll | The notice clears once Core reports the requested state; hiding the browser chrome never hides it | Core session row | component, real Core |
+
+The viewer's tab poll, a reconnect, a conversation rebind and the operator's
+Stop all save the same row. Each applies its own fields to the row as stored and
+tries again when another writer saved first, so none of them is refused as stale.
+A Stop that still cannot be saved answers 409 and is shown, never dropped.

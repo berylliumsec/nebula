@@ -43,8 +43,15 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [actions, setActions] = useState<Action[]>([]);
   const [paused, setPaused] = useState(true);
   const [approvalPolicy, setApprovalPolicy] = useState<"always" | "on_boundary" | "never">("on_boundary");
-  const [controlBusy, setControlBusy] = useState(false);
+  // The state a Stop or Resume in flight asks Core for; undefined while none is in flight.
+  const [controlRequest, setControlRequest] = useState<boolean>();
+  // A Stop or Resume that Core did not confirm. It stays on screen until Core reports that state or a retry succeeds.
+  const [controlFailure, setControlFailure] = useState<{ paused: boolean; detail: string }>();
   const controlRevision = useRef(0);
+  const showControl = useCallback((next: boolean) => {
+    setPaused(next);
+    setControlFailure(current => current?.paused === next ? undefined : current);
+  }, []);
   const [connected, setConnected] = useState(false);
   const [credentials, setCredentials] = useState<BrowserCredential[]>([]);
   const [credentialLabel, setCredentialLabel] = useState("");
@@ -82,11 +89,11 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       if (!mounted.current) return;
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
       setSession(next); setTabs(next.tabs); setTabId(selected?.id ?? ""); setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
-      if (next.page_state_reset) { controlRevision.current += 1; setPaused(true); setError(BROWSER_RESTART_NOTICE); }
+      if (next.page_state_reset) { controlRevision.current += 1; showControl(true); setError(BROWSER_RESTART_NOTICE); }
       if (!conversationRef.current && next.conversation_id) onConversationRef.current(next.conversation_id);
     } catch (caught) { if (mounted.current) logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
-  }, [conversationId, draftId, projectId, request]);
+  }, [conversationId, draftId, projectId, request, showControl]);
   useEffect(() => { mounted.current = true; if (active && !session) void open(); return () => { mounted.current = false; }; }, [open, active, session]);
   const openLinkedPage = useCallback(async (url: string, requestId: string) => {
     if (!session || !tabId) return;
@@ -159,7 +166,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
           request<{ tabs: Tab[] }>(`browser-companion/${session.session_id}/operations`, { operation: "tabs" }),
         ]);
         if (!cancelled) {
-          setActions(next); setCredentials(protectedValues); setFiles(attachedFiles); if (revision === controlRevision.current && typeof control.paused === "boolean") setPaused(control.paused);
+          setActions(next); setCredentials(protectedValues); setFiles(attachedFiles); if (revision === controlRevision.current && typeof control.paused === "boolean") showControl(control.paused);
           if (control.approval_policy) setApprovalPolicy(control.approval_policy);
           setTabs(currentTabs.tabs);
           const selected = currentTabs.tabs.find(tab => tab.id === currentTabRef.current);
@@ -171,7 +178,32 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     };
     void refresh(); const timer = setInterval(() => void refresh(), 3000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [active, request, session]);
+  }, [active, request, session, showControl]);
+  const changeControl = (nextPaused: boolean) => {
+    if (!session || controlRequest !== undefined) return;
+    const revision = ++controlRevision.current;
+    setControlRequest(nextPaused);
+    setControlFailure(current => current?.paused === nextPaused ? current : undefined);
+    void request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, undefined, "PUT")
+      .then(() => {
+        setControlFailure(undefined);
+        if (revision === controlRevision.current) { controlRevision.current += 1; showControl(nextPaused); if (!nextPaused) setError(current => current === BROWSER_RESTART_NOTICE ? "" : current); }
+      })
+      .catch(caught => {
+        // Core did not confirm the change. The control keeps the state Core last reported, and the failure stays on screen with a retry.
+        void logCaughtDiagnostic("interface.browser_companion.control_failed", nextPaused ? "Assistant browser control could not be stopped." : "Assistant browser control could not be resumed.", caught, "browser_companion");
+        setControlFailure({ paused: nextPaused, detail: caught instanceof Error ? caught.message : String(caught) });
+      })
+      .finally(() => setControlRequest(undefined));
+  };
+  const controlButton = useRef<HTMLButtonElement>(null);
+  const retriedControl = useRef(false);
+  useEffect(() => {
+    // A retry that succeeds removes its own button. Hand keyboard focus to the control it changed.
+    if (!retriedControl.current || controlRequest !== undefined) return;
+    retriedControl.current = false;
+    if (!controlFailure) (controlsOpen ? controlButton.current : document.querySelector<HTMLButtonElement>('button[aria-label="Show browser controls"]'))?.focus({ preventScroll: true });
+  }, [controlFailure, controlRequest, controlsOpen]);
   const operate = async (operation: string, extra: Record<string, unknown> = {}) => {
     if (!session || busy) return;
     setBusy(true); setError("");
@@ -238,15 +270,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     <div className="managed-browser-tool-strip">
     <div className="managed-browser-toolbar managed-browser-actions" role="group" aria-label="Page actions">
       <button className="button quiet managed-browser-icon" disabled={!session || busy} onClick={() => void operate("capture")} aria-label="Ask about page" title="Ask about page"><MessageSquareText size={18} aria-hidden="true" /></button>
-      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Stop assistant control"} title={paused ? "Resume assistant control" : "Stop assistant control"} disabled={controlBusy || !session} onClick={() => {
-        if (!session) return;
-        const nextPaused = !paused;
-        const revision = ++controlRevision.current;
-        setControlBusy(true);
-        void request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, undefined, "PUT")
-          .then(() => { if (revision === controlRevision.current) { controlRevision.current += 1; setPaused(nextPaused); if (!nextPaused) setError(current => current === BROWSER_RESTART_NOTICE ? "" : current); } })
-          .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setControlBusy(false));
-      }}>{paused ? <Play size={18} aria-hidden="true" /> : <Hand size={18} aria-hidden="true" />}</button>
+      <button ref={controlButton} className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Stop assistant control"} title={paused ? "Resume assistant control" : "Stop assistant control"} disabled={controlRequest !== undefined || !session} onClick={() => changeControl(!paused)}>{paused ? <Play size={18} aria-hidden="true" /> : <Hand size={18} aria-hidden="true" />}</button>
     </div>
 
     <div className="managed-browser-utilities" onKeyDown={event => { if (event.key === "Escape") { const detail = (event.target as HTMLElement).closest("details"); if (detail?.open) { event.stopPropagation(); detail.open = false; detail.querySelector("summary")?.focus(); } } }} onToggle={event => { const opened = event.target as HTMLDetailsElement; if (opened.open) event.currentTarget.querySelectorAll("details").forEach(detail => { if (detail !== opened) detail.open = false; }); }}>
@@ -275,8 +299,13 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     </div>
     </div>
     </div>
-    <p role="status">{busy ? "Connecting or reading page…" : connected ? `Assistant browser · ${paused ? "Assistant paused" : approvalPolicy === "never" ? "Assistant control enabled · project allows without prompts" : "Assistant control enabled · approval policy applies"}` : "Assistant browser view disconnected"}</p>
+    <p role="status">{controlRequest !== undefined ? controlRequest ? "Stopping assistant control…" : "Resuming assistant control…" : busy ? "Connecting or reading page…" : connected ? `Assistant browser · ${paused ? "Assistant paused" : approvalPolicy === "never" ? "Assistant control enabled · project allows without prompts" : "Assistant control enabled · approval policy applies"}` : "Assistant browser view disconnected"}</p>
     <p className="managed-browser-view-hint">Read-only view. Give browsing directions in the Assistant.</p>
+    {controlFailure && <div className="managed-browser-error managed-browser-control-failure" role="alert">
+      <strong>{controlFailure.paused ? "Assistant control was not stopped." : "Assistant control was not resumed."}</strong>{controlFailure.paused && " The Assistant may still act in this browser."}
+      <small>{controlFailure.detail}</small>
+      <button className="button secondary" disabled={controlRequest !== undefined || !session} onClick={() => { retriedControl.current = true; changeControl(controlFailure.paused); }}>{controlFailure.paused ? "Retry stop" : "Retry resume"}</button>
+    </div>}
     {error && <div className="managed-browser-error" role="alert">{error}<button className="button quiet" disabled={busy} onClick={() => failedLink ? void openLinkedPage(failedLink, `${projectId}:${session?.session_id ?? ""}:${initialOpenRequest ?? "retry"}`) : void open()}>{failedLink ? "Retry link" : "Reconnect view"}</button></div>}
     {active && (actionContainer ? createPortal(requiredActions, actionContainer) : requiredActions)}
     {actions.filter(action => action.status === "complete" || action.status === "revoked").sort((a, b) => Date.parse(b.expires_at) - Date.parse(a.expires_at)).slice(0, 1).map(action => <p role="status" key={action.id}>{action.request.operation === "upload" ? "File upload" : "Browser action"} {action.status === "complete" ? "completed" : "cancelled"}.</p>)}

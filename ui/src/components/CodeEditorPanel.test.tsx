@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type KeyboardEvent } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
+import { PROJECT_RUNTIME_UNAVAILABLE, ProjectRuntimeRecovery } from "../api/projectRuntime";
 import type { ProviderHealth } from "../api/types";
 import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
 import { CodeEditorPanel } from "./CodeEditorPanel";
@@ -587,6 +588,44 @@ describe("CodeEditorPanel", () => {
     expect(within(screen.getByRole("tablist", { name: "Open editor files" })).getAllByRole("tab")).toHaveLength(2);
     expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("def scan():\n    pass\n");
     expect(searchWorkspace).toHaveBeenCalledWith("project-1", "scanner", "files", "", expect.any(AbortSignal));
+  });
+
+  it("waits for a starting project's worker instead of an empty tree, then lists and quick-opens in place", async () => {
+    const user = userEvent.setup();
+    // The client records each coded 503 with the shared recovery; one probe answers once the worker is up.
+    const probe = vi.fn().mockResolvedValue({ answered: true });
+    const projectRuntime = new ProjectRuntimeRecovery(probe);
+    const starting = (path: string) => {
+      projectRuntime.unavailable(path, undefined, "starting");
+      return new ApiError("The project runtime is not ready.", 503, undefined, { detail: "The project runtime is not ready.", code: PROJECT_RUNTIME_UNAVAILABLE, reason: "starting", retryable: true });
+    };
+    const listWorkspace = vi.fn()
+      .mockImplementationOnce(async () => { throw starting("engagements/project-1/workspace"); })
+      .mockResolvedValue(listing());
+    const searchWorkspace = vi.fn()
+      .mockImplementationOnce(async () => { throw starting("engagements/project-1/workspace/search?query=tool"); })
+      .mockResolvedValue({ engagementId: "project-1", query: "tool", mode: "files", matches: [{ path: "tool.py", kind: "path", preview: "tool.py" }], scannedFiles: 1, truncated: false });
+    renderPanel({ listWorkspace, searchWorkspace, downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('a')\n"])), projectRuntime } as unknown as Partial<ApiClient>);
+
+    await waitFor(() => expect(listWorkspace).toHaveBeenCalledTimes(1));
+    // Starting is not empty and not a failure: the tree says it is loading.
+    expect(screen.queryByText("No files here")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading files" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(projectRuntime.state).toBe("reconnecting");
+    expect(await screen.findByRole("button", { name: /tool\.py/ }, { timeout: 4_000 })).toBeVisible();
+    expect(listWorkspace).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Search editor files and folders" }));
+    const dialog = await screen.findByRole("dialog", { name: "Quick open" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Find a workspace file" }), "tool");
+    await waitFor(() => expect(searchWorkspace).toHaveBeenCalledTimes(1));
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("No matches")).not.toBeInTheDocument();
+    expect(await within(dialog).findByRole("option", { name: /tool\.py/ }, { timeout: 4_000 })).toBeVisible();
+    expect(searchWorkspace).toHaveBeenCalledTimes(2);
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows repository changes and a hardened diff without duplicating Git mutations", async () => {

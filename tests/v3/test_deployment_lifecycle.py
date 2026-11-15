@@ -11,6 +11,7 @@ import pytest
 
 from nebula.v3.database import (
     Database,
+    DeploymentReceiptRow,
     RuntimeCommandRow,
     RuntimeResourceRow,
     EntityRow,
@@ -18,7 +19,7 @@ from nebula.v3.database import (
     RuntimeProcessRow,
     RuntimeInstanceRow,
 )
-from sqlalchemy import update
+from sqlalchemy import select, update
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator, checkpoint_digest
 from nebula.v3.deployment_protocol import (
@@ -28,7 +29,11 @@ from nebula.v3.deployment_protocol import (
     WorkerIdentity,
 )
 from nebula.v3.domain import ChatSession, Engagement, Observation
-from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
+from nebula.v3.runtime_coordination import (
+    CoordinationConflict,
+    LeaseLost,
+    OperationRejected,
+)
 from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.process_identity import process_birth
 from tests.v3.test_runtime_coordination import location as location
@@ -289,6 +294,48 @@ async def test_third_execution_version_stages_while_compatible_api_can_promote(h
     result = await coordinator.status()
     assert result.resident_versions == ["v1", "v2"] and result.api_version == "v3"
     assert "v3" in result.staged_versions
+
+
+async def test_third_execution_version_cannot_become_the_target(host):
+    coordinator, _store = host
+    oldest = await worker(host, "v1")
+    await worker(host, "v2")
+    await coordinator.target_execution("v2")
+    before = await coordinator.status()
+
+    # Admission and recovery start workers at the target; a third resident
+    # version could never start, so neither path may record it.
+    with pytest.raises(OperationRejected, match="v1, v2 are resident") as refused:
+        await coordinator.target_execution("v3")
+    assert "The execution target stays v2." in str(refused.value)
+    with pytest.raises(OperationRejected, match="cannot become the execution target"):
+        await coordinator.rollback_code("v3", expected_revision=before.revision)
+
+    after = await coordinator.status()
+    assert after.target_execution_version == "v2"
+    assert after.revision == before.revision
+    async with coordinator.database.session() as session:
+        targeted = [
+            row.result["version"]
+            for row in await session.scalars(
+                select(DeploymentReceiptRow).where(
+                    DeploymentReceiptRow.action.in_(
+                        ("execution.target", "execution.code_rollback")
+                    )
+                )
+            )
+        ]
+    assert targeted == ["v2"]
+
+    # Resident versions stay targetable, and retiring one frees the slot.
+    await coordinator.rollback_code("v1", expected_revision=after.revision)
+    assert (await coordinator.status()).target_execution_version == "v1"
+    proof = await coordinator.begin_retirement(oldest)
+    stop_worker(host, oldest)
+    await coordinator.retired(proof)
+    await coordinator.target_execution("v3")
+    assert (await coordinator.status()).target_execution_version == "v3"
+    assert await worker(host, "v3") is not None
 
 
 async def test_pinned_project_remains_usable_while_another_transfers(host):

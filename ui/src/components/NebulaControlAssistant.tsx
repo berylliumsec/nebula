@@ -9,6 +9,9 @@ import {HOST_PRESSURE_CHANGED} from "../api/hostPressure";
 import {HOST_CPU_BUDGET_CHANGED} from "../api/hostCpuBudget";
 import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 import { ApiError } from "../api/client";
+import { isProjectRuntimeUnavailable, readWhenProjectReady } from "../api/projectRuntime";
+import { useProjectRuntimeRecovery } from "../hooks/useProjectRuntime";
+import { useProjectViewLease } from "../hooks/useProjectViewLease";
 import { ACCEPTED_LIBRARY_FILES, encodeLibraryFile, MAX_LIBRARY_ITEM_BYTES, startLibraryArtifactDownload } from "../api/libraryFiles";
 import { isNebulaShell } from "../hooks/useCompactLayout";
 import { startVisiblePoll } from "../api/visiblePoll";
@@ -153,6 +156,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [cyberDraft, setCyberDraft] = useState<ChatAssistantConfig["harnessCyberAccessProgram"]>("automatic");
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyWaiting, setHistoryWaiting] = useState(false);
+  const [historyRetry, setHistoryRetry] = useState(0);
   const [pendingTurn, setPendingTurn] = useState<ChatTurn>();
   const [pendingCheckedSessionId, setPendingCheckedSessionId] = useState<string>();
   const [pendingStatusError, setPendingStatusError] = useState("");
@@ -191,7 +196,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     : Boolean(harnesses.find((item) => item.id === runtime?.id)?.modelOptions?.find((item) => item.model === runtime?.model)?.imageInput);
   const storageKey = engagement ? `nebula.control-assistant.session.${engagement.id}` : undefined;
   const actionOutcomesKey = storageKey ? `${storageKey}.action-outcomes` : undefined;
-  const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState);
+  // The open dialog shows the selected project's Butler (history, oversight,
+  // settings) on any route, so it holds that project's view lease while open.
+  useProjectViewLease(api, open && engagement && engagement.status !== "archived" ? engagement.id : undefined);
+  const { overview: attentionOverview, refresh: refreshAttention } = useButlerOverview(engagement ? api : undefined, engagement?.id ?? "", coreState, open);
   const attentionCount = attentionOverview?.summary.openIncidents ?? 0;
   const workAttentionCount = attentionCount
     + (attentionOverview?.actions.filter((action) => action.status === "uncertain" || action.status === "held").length ?? 0)
@@ -297,11 +305,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSuggestions([]);
     setError("");
     setLoadingHistory(false);
-    if (!storageKey || !api) return;
+    setHistoryWaiting(false);
+  }, [api, engagement?.id, storageKey, actionOutcomesKey]);
+
+  // Restore the saved conversation. While the project's worker starts, this stays
+  // "Restoring your saved conversation…" (not an error) and reads again once the
+  // open dialog sees the worker answer.
+  useEffect(() => {
+    if (!storageKey || !api || !engagement) return;
     setLoadingHistory(true);
     let current = true;
     const request = historyRead.current;
-    void api.getControlAssistantSession(engagement!.id).then((session) => {
+    void api.getControlAssistantSession(engagement.id).then((session) => {
       if (!current || !session || session.engagementId !== engagement?.id) return;
       localStorage.setItem(storageKey, session.id);
       setSessionId(session.id);
@@ -326,12 +341,23 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     })
       .catch((caught: unknown) => {
         if (!current) return;
+        if (isProjectRuntimeUnavailable(caught)) {
+          // diagnostic-expected: the project's worker is starting; the restore reads again when it answers.
+          current = false;
+          setHistoryWaiting(true);
+          return;
+        }
         void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.history_load_failed", message: "The saved assistant conversation could not be loaded.", outcome: "failure", stage: "history", retryable: true, exception: caught });
         setError("The saved conversation could not be loaded. Retry after Core reconnects.");
       })
       .finally(() => { if (current) setLoadingHistory(false); });
     return () => { current = false; };
-  }, [api, engagement?.id, storageKey, actionOutcomesKey]);
+  }, [api, engagement?.id, storageKey, actionOutcomesKey, historyRetry]);
+  // Only the shown dialog waits (and holds the project's view lease); a closed one restores when opened.
+  useProjectRuntimeRecovery(api, open && historyWaiting ? historyRetry + 1 : 0, () => {
+    setHistoryWaiting(false);
+    setHistoryRetry((value) => value + 1);
+  });
 
   useEffect(() => {
     if (!api || !sessionId || !open || coreState !== "online" || typeof api.getPendingChatTurn !== "function") return;
@@ -507,15 +533,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!settingsOpen) { setSettingsBusy(false); return; }
     if (!api || !engagement?.id) return;
     let current = true;
+    const settingsAbort = new AbortController();
     setSettingsBusy(true);
     void (async () => {
       try {
-        // A settings deep link may open before the selected project loads.
+        // A settings deep link may open before the selected project loads, or
+        // while its worker starts: stay busy and read again when it answers.
         // Read Core when it becomes available, rather than capturing an empty draft.
-        const restored = await api.getControlAssistantSession(engagement.id);
+        const restored = await readWhenProjectReady(api.projectRuntime, () => api.getControlAssistantSession(engagement.id), settingsAbort.signal);
         if (!current) return;
         if (restored && restored.engagementId !== engagement.id) throw new Error("Core returned a conversation outside this project's Butler. Retry after reconnecting.");
-        const saved = restored ? await api.getChatAssistantConfig(restored.id) : undefined;
+        const saved = restored ? await readWhenProjectReady(api.projectRuntime, () => api.getChatAssistantConfig(restored.id), settingsAbort.signal) : undefined;
         if (!current) return;
         const config = saved?.settings;
         if (restored) setSessionId(restored.id);
@@ -529,7 +557,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setSettingsError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry by reopening settings.");
       } finally { if (current) setSettingsBusy(false); }
     })();
-    return () => { current = false; };
+    return () => { current = false; settingsAbort.abort(); };
   }, [settingsOpen, api, engagement?.id]);
 
   useEffect(() => {

@@ -38,7 +38,6 @@ from tests.v3.test_chat_subagents import (
     _request,
     _response,
     _setup,
-    _until,
 )
 from tests.v3.test_chat_subagent_lifecycle import _child, _session, _turn
 from tests.v3.test_harness_provider_subagents import (
@@ -53,6 +52,20 @@ async def _settled(store, record_id: str) -> bool:
     return (
         await store.get(ChatSubagent, record_id)
     ).status != ChatSubagentStatus.RUNNING
+
+
+async def _until_saved(check, timeout: float = 30.0) -> None:
+    """Wait until the async ``check`` holds; the store is read with await.
+
+    The bound covers a whole async chain (a child's turn, the parent's resume
+    and the report's post) on a busy runner; a hang still fails here.
+    """
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not await check():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition was not reached in time")
+        await asyncio.sleep(0.01)
 
 
 async def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path: Path):
@@ -72,7 +85,7 @@ async def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path:
                 await connection.call("subagent.start", task="Map.")
             )
             child.gate.set()
-            await _until(lambda: _settled(store, first["subagent_id"]))
+            await _until_saved(lambda: _settled(store, first["subagent_id"]))
             # And again once it finished and Core handed the harness its report.
             seen["finished"] = _payload(
                 await connection.call("subagent.start", task="Map.")
@@ -80,8 +93,8 @@ async def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path:
             return "Mapped."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Map the routes.")
-        await runtime.start_chat_turn(turn.id)
+        _, _, turn = await _prepare(runtime, project, harness, "Map the routes.")
+        await (await runtime.start_chat_turn(turn.id))
 
         assert (
             await store.get(HarnessTurn, turn.id)
@@ -138,13 +151,13 @@ async def test_harness_retry_of_a_start_whose_child_failed_is_not_a_start_failur
         async def script(connection: ScriptedConnection, prompt: str) -> str:
             del prompt
             first = _payload(await connection.call("subagent.start", task="Scan."))
-            await _until(lambda: _settled(store, first["subagent_id"]))
+            await _until_saved(lambda: _settled(store, first["subagent_id"]))
             seen["retry"] = await connection.call("subagent.start", task="Scan.")
             return "Scanned."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Scan it.")
-        await runtime.start_chat_turn(turn.id)
+        _, _, turn = await _prepare(runtime, project, harness, "Scan it.")
+        await (await runtime.start_chat_turn(turn.id))
 
         # The child ran and failed: not a start failure, and not running.
         retry = _payload(seen["retry"])
@@ -183,9 +196,9 @@ async def test_harness_retry_of_a_start_that_never_ran_fails_again(tmp_path: Pat
             return "Probed."
 
         adapter.script = script
-        parent_chat, _, turn = _prepare(runtime, project, harness, "Probe it.")
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Probe it.")
         parent["session_id"] = parent_chat.id
-        await runtime.start_chat_turn(turn.id)
+        await (await runtime.start_chat_turn(turn.id))
 
         for key in ("first", "retry"):
             response = seen[key]
@@ -225,7 +238,17 @@ async def test_provider_replay_of_a_start_reports_the_childs_real_status(
         parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(lambda: _settled(store, record.id))
+
+        async def reported() -> bool:
+            # The result message is posted in a write after the one that
+            # settles the child.
+            saved = await store.get(ChatSubagent, record.id)
+            return (
+                saved.status != ChatSubagentStatus.RUNNING
+                and saved.result_message_id is not None
+            )
+
+        await _until_saved(reported)
         parent = await store.get(ChatTurn, parent_turn_id)
         assert parent.status == ChatTurnStatus.COMPLETE
 

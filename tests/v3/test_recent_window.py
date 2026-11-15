@@ -27,6 +27,7 @@ from nebula.v3.chat_turn_ledger import (
     recent_window_tokens,
 )
 from nebula.v3.context import estimate_model_request, resolve_context_limits
+from nebula.v3.domain import ProviderProfile
 from nebula.v3.providers import ModelRequest, ToolCall, ToolChoice
 from tests.v3.test_chat_tool_loop import _response
 from tests.v3.test_in_turn_context_pruning import (
@@ -40,6 +41,11 @@ from tests.v3.test_in_turn_context_pruning import (
 from tests.v3.test_midturn_compaction import ProbeBroker
 
 BATCH = 5
+# Twelve responses of five ~2 KB results (about 3,500 tokens each). Once the
+# older batches fold, the request must sit below the 60% compaction target by
+# the clearing headroom (three such steps), or a crossing also clears results
+# in place: on 32K the target leaves no such room, on this window it does.
+BATCHED_WINDOW = 45_056
 
 
 def _entry(step: int, group: int, size: int = 3_000) -> dict:
@@ -151,9 +157,20 @@ class BatchingProvider(LongTurnProvider):
 async def _batched_turn(tmp_path, monkeypatch, *, token_bound: bool):
     if not token_bound:
         monkeypatch.setattr(chat_module, "recent_window_tokens", lambda _capacity: None)
-    # Twelve responses of five ~2 KB results on a 32K window.
     provider = BatchingProvider(calls=60)
     store, service, prepared = await _long_turn(tmp_path, provider, ProbeBroker())
+    profile = prepared.provider_profile
+    prepared.provider_profile = await store.update(
+        ProviderProfile,
+        profile.id,
+        {
+            "metadata": {
+                **profile.metadata,
+                "options": {"context_window": BATCHED_WINDOW},
+            }
+        },
+        expected_revision=profile.revision,
+    )
     completion = await service.complete(prepared)
     assert completion.message.content == ANSWER
     routing = [

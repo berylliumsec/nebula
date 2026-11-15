@@ -4,6 +4,7 @@ import {MemoryRouter} from "react-router-dom";
 import {DialogProvider} from "./DialogSystem";
 import {EngagementPolicySettings} from "./EngagementPolicySettings";
 import {ApiError} from "../api/client";
+import {startingProject} from "../test/projectRuntimeStarting";
 
 const fixture = vi.hoisted(() => ({api: {} as Record<string, ReturnType<typeof vi.fn>>, project: "first"}));
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api: fixture.api, coreState: "online", engagement: {id: fixture.project}, previewMode: false})}));
@@ -16,6 +17,13 @@ beforeEach(() => {
 });
 
 describe("project policy hydration", () => {
+  it("explains that never bypasses permissions for every Core tool", async () => {
+    fixture.api.getAutomationPolicy.mockResolvedValueOnce({...policy("first"), approvalPolicy: "never"});
+    render(view());
+    await screen.findByText("All enabled Core-managed tools run without permission checks or approval prompts. Authentication, execution limits and operating-system controls still apply.");
+    expect(screen.getByText(/Never bypasses tool permissions, scope restrictions and explicit deny rules/)).toBeInTheDocument();
+  });
+
   it("keeps one-time Host consent and exposes package downloads in Project settings", async () => {
     fixture.api.getAutomationPolicy.mockResolvedValueOnce({...policy("first"), executionMode: "host", hostAccessAcknowledged: true});
     fixture.api.updateAutomationPolicy = vi.fn(async (id: string, request: {networkEnabled: boolean}) => ({...policy(id), executionMode: "host", hostAccessAcknowledged: true, networkEnabled: request.networkEnabled, revision: 2}));
@@ -54,6 +62,25 @@ describe("project policy hydration", () => {
     await waitFor(() => expect(fixture.api.updateAutomationPolicy).toHaveBeenCalledTimes(2));
   });
 
+  it("keeps loading while the project's worker starts and shows the policy once it answers", async () => {
+    const {projectRuntime, unavailable} = startingProject();
+    fixture.api.projectRuntime = projectRuntime as never;
+    fixture.api.getAutomationPolicy.mockImplementationOnce(async (id: string) => { throw unavailable(`engagements/${id}/automation-policy`, "idle"); });
+    fixture.api.getEngagementScope.mockImplementationOnce(async (id: string) => { throw unavailable(`engagements/${id}/scope`); });
+    render(view());
+    await waitFor(() => expect(fixture.api.getAutomationPolicy).toHaveBeenCalledTimes(1));
+    // Calm and in place: no "idle" error, no retry button, the same loading line.
+    expect(screen.getByRole("status")).toHaveTextContent("Loading project policy…");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "Retry loading project policy"})).not.toBeInTheDocument();
+    const mode = screen.getByRole("combobox", {name: "Project execution mode"});
+    await waitFor(() => expect(mode).toBeEnabled(), {timeout: 4_000});
+    expect(fixture.api.getAutomationPolicy).toHaveBeenCalledTimes(2);
+    expect(fixture.api.getEngagementScope).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("textbox", {name: /^Allowed domains/})).toHaveValue("first.test");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("disables all policy and scope inputs until their saved state arrives", async () => {
     let resolve!: (value: ReturnType<typeof policy>) => void;
     fixture.api.getAutomationPolicy.mockImplementation(() => new Promise(done => { resolve = done; }));
@@ -64,7 +91,7 @@ describe("project policy hydration", () => {
     await act(async () => { resolve(policy("first")); });
     expect(approval).toBeEnabled();
     expect(approval).toHaveValue("on_boundary");
-    expect(approval).toHaveAccessibleDescription(/provider and harness tool approvals/);
+    expect(approval).toHaveAccessibleDescription(/all Core-managed tools/);
   });
 
   it("ignores an earlier project's policy response after switching projects", async () => {

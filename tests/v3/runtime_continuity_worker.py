@@ -377,10 +377,19 @@ async def serve(config):
         if operation == "automatic-recovery":
             from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
 
-            if automatic is None:
+            created = automatic is None
+            if created:
                 automatic = RuntimeAutoAdmission(
                     supervisor, default_version=config["bundles"][0]["version"]
                 )
+            if "idle_grace_ms" in body:
+                # Test fixture only: a short idle grace keeps a browser journey
+                # short. Core takes its grace from the host's own bounded
+                # setting; no client request can change it.
+                automatic.idle_grace_ms = max(
+                    0, min(int(body["idle_grace_ms"]), 60_000)
+                )
+            if created:
                 await automatic.start()
             return {"started": True}
         if operation == "pending-commands":

@@ -1,5 +1,6 @@
 """Canonical release features cross the actual worker admission and main entry."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 import hashlib
@@ -15,6 +16,7 @@ import httpx
 from pydantic import SecretStr
 import pytest
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError
 
 from nebula.v3.database import (
     Database,
@@ -27,6 +29,8 @@ from nebula.v3.deployment_protocol import ReleaseManifest, WorkerIdentity
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.process_identity import process_birth
 from nebula.v3.release_store import MANIFEST_NAME, ReleaseStore
+from nebula.v3 import runtime_coordination
+from nebula.v3.runtime_coordination import LeaseLost, RuntimeCoordination
 from nebula.v3.runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
@@ -261,3 +265,100 @@ async def test_actual_worker_refuses_before_factory_or_readiness(
             assert not await connection.run_sync(
                 lambda sync: inspect(sync).has_table(missing.__tablename__)
             )
+
+
+async def test_actual_worker_rides_out_refused_heartbeats_until_its_lease_bound(
+    worker_host, monkeypatch
+):
+    """The first refused heartbeat no longer stops the worker. It keeps serving
+    while its last acknowledged renewal proves the lease live, and stops with
+    LeaseLost once that bound is spent, before the lease itself can expire."""
+    value = worker_host
+    release = await value.stage("sql-outage")
+    reference = str(uuid4())
+    endpoint = value.host.socket_root / (uuid4().hex + ".outage.sock")
+    runtime_id = await value.coordinator.reserve_worker(
+        release.manifest.version,
+        role="execution",
+        endpoint="unix://" + str(endpoint),
+        credential_reference=reference,
+    )
+    value.host.credentials.create(reference=reference)
+    identity = WorkerIdentity(
+        runtime_id=runtime_id,
+        role="execution",
+        version=release.manifest.version,
+        pid=os.getpid(),
+        process_birth=process_birth(os.getpid()),
+        endpoint="unix://" + str(endpoint),
+    )
+    await value.coordinator.bind_spawn(identity)
+    bootstrap = WorkerBootstrap(
+        identity=identity,
+        data_root=str(value.host.data_root),
+        release_root=str(release.installed),
+        manifest_sha256=release.digest,
+        database=value.database.url,
+        credential_reference=reference,
+        credential_directory=str(value.host.credentials.directory),
+        process_origin=value.host.launch_origin,
+        pool_settings=asdict(SETTINGS),
+        operator_token=SecretStr(TOKEN),
+    )
+    # Short leases: renew every 0.1 s, 6 s leases, a 3 s local bound.
+    monkeypatch.setattr(runtime_worker, "HEARTBEAT_SECONDS", 0.1)
+    monkeypatch.setattr(runtime_coordination, "LEASE_MS", 6_000)
+    monkeypatch.setattr(runtime_coordination, "LEASE_SAFETY_MS", 3_000, raising=False)
+    monkeypatch.setattr(
+        "nebula.v3.diagnostics.configure_diagnostics",
+        lambda *_args, **_kwargs: SimpleNamespace(close=lambda: None),
+    )
+    original = RuntimeCoordination.heartbeat
+    down, renewed = [False], []
+
+    async def refused_while_down(self, runtime):
+        started = asyncio.get_running_loop().time()
+        if down[0]:
+            raise OperationalError(
+                "UPDATE runtime_instances", {}, ConnectionRefusedError("refused")
+            )
+        await original(self, runtime)
+        renewed.append(started)
+
+    monkeypatch.setattr(RuntimeCoordination, "heartbeat", refused_while_down)
+
+    @asynccontextmanager
+    async def inert(_context):
+        async def application(_scope, _receive, _send):
+            raise AssertionError("No request reaches this inert worker")
+
+        yield application
+
+    worker = asyncio.create_task(
+        runtime_worker.run_worker(bootstrap, execution_factory=inert)
+    )
+    try:
+        async with asyncio.timeout(20):
+            while len(renewed) < 3:
+                assert not worker.done(), worker
+                await asyncio.sleep(0.02)
+        down[0] = True
+        await asyncio.sleep(0.8)
+        assert not worker.done()
+        down[0] = False
+        seen = len(renewed)
+        async with asyncio.timeout(5):
+            while len(renewed) <= seen:
+                await asyncio.sleep(0.02)
+        assert not worker.done()
+        down[0] = True
+        last = renewed[-1]
+        with pytest.raises(LeaseLost, match="could no longer prove its lease"):
+            async with asyncio.timeout(10):
+                await worker
+        stopped = asyncio.get_running_loop().time()
+        # It waited out the provable window, then stopped before the lease.
+        assert 2.8 <= stopped - last < 6.0
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)

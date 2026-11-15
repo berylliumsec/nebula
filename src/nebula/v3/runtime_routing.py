@@ -7,24 +7,31 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qsl, unquote
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .database import (
     DeploymentHostRow,
     EntityRow,
     MemoryJobRow,
+    ProjectAdmissionHoldRow,
     ProjectOwnershipRow,
+    RuntimeCommandRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeReleaseRow,
     RuntimeResourceRow,
 )
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT, ReleaseManifest
-from .runtime_coordination import CoordinationConflict, RuntimeCoordination
+from .runtime_coordination import (
+    CoordinationConflict,
+    RuntimeCoordination,
+    project_worker_commands,
+)
 from .runtime_delivery import HttpIntent
 from .runtime_http import HttpUpstream
-from .runtime_ipc import RuntimeCredentials, RuntimeIpcError
+from .runtime_ipc import ProjectRuntimeUnavailable, RuntimeCredentials, RuntimeIpcError
 from .runtime_routes import forwarding_lane
+from .runtime_view_leases import live_view_lease
 
 
 def _references(path: str, query: bytes, payload) -> tuple[set[str], set[str]]:
@@ -198,9 +205,13 @@ class RuntimeRouting:
             or process.state != "ready"
             or instance.lease_expires_at_ms <= now
         ):
-            raise RuntimeIpcError(
+            detail = (
                 "The authoritative runtime is unavailable; saved work remains queued"
             )
+            if role == "execution":
+                # The project's owner is assigned but its process is not ready.
+                raise ProjectRuntimeUnavailable(detail, reason="starting")
+            raise RuntimeIpcError(detail)
         return HttpUpstream(
             process.endpoint,
             self.credentials.read(process.credential_reference),
@@ -213,14 +224,77 @@ class RuntimeRouting:
         async with self.coordination.database.session() as session:
             owner = await session.get(ProjectOwnershipRow, project)
             if owner is not None and owner.retirement_requested:
-                raise RuntimeIpcError(
-                    "The project worker is closing; retry after a chat is opened"
+                raise ProjectRuntimeUnavailable(
+                    "The project worker is closing; retry after a chat is opened",
+                    reason="closing",
                 )
             now = await self.coordination._clock_ms(session)
-            if owner is None or owner.lease_expires_at_ms <= now:
-                raise RuntimeIpcError("The project has no live execution owner")
+            if owner is None or owner.runtime_id is None:
+                reason, detail = await self._admission_reason(session, project)
+                raise ProjectRuntimeUnavailable(
+                    detail or "The project has no live execution owner", reason=reason
+                )
+            if owner.lease_expires_at_ms <= now:
+                # Automatic recovery readmits an owner whose lease expired.
+                raise ProjectRuntimeUnavailable(
+                    "The project has no live execution owner", reason="starting"
+                )
             lane = forwarding_lane(scope)
             return await self._target(session, owner.runtime_id, "execution", lane)
+
+    async def _admission_reason(
+        self, session, project_id: str
+    ) -> tuple[str, str | None]:
+        """ "starting" when Core admits a worker by itself, otherwise "idle".
+
+        Mirrors the admission demand: queued project commands, pending chat
+        starts and, for an active project, an unarchived chat or an open
+        project view (a live view lease). Reads never admit a worker, so an
+        idle project waits for the operator to resume work in it. Wanted work
+        whose start a host gate refuses is "held", with the gate's reason.
+        """
+        if project_id == GLOBAL_EXECUTION_PROJECT:
+            return "starting", None
+        if await self._demand_reason(session, project_id) == "idle":
+            return "idle", None
+        hold = await session.get(ProjectAdmissionHoldRow, project_id)
+        return ("held", hold.reason) if hold is not None else ("starting", None)
+
+    async def _demand_reason(self, session, project_id: str) -> str:
+        pending_chat_start = (
+            select(RuntimeCommandRow.id)
+            .where(
+                RuntimeCommandRow.project_id == project_id,
+                RuntimeCommandRow.chat_start.is_(True),
+                RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+            )
+            .exists()
+        )
+        if await session.scalar(
+            select(or_(project_worker_commands(project_id), pending_chat_start))
+        ):
+            return "starting"
+        status = await session.scalar(
+            select(EntityRow.payload["status"].as_string()).where(
+                EntityRow.id == project_id, EntityRow.kind == "engagements"
+            )
+        )
+        if status == "archived":
+            return "idle"
+        open_chat = (
+            select(EntityRow.id)
+            .where(
+                EntityRow.kind == "chat_sessions",
+                EntityRow.engagement_id == project_id,
+                EntityRow.payload["metadata"]["archived_at"].as_string().is_(None),
+            )
+            .exists()
+        )
+        if await session.scalar(select(open_chat)):
+            return "starting"
+        now = await self.coordination._clock_ms(session)
+        viewed = live_view_lease(project_id, now)
+        return "starting" if await session.scalar(select(viewed)) else "idle"
 
     async def api_upstream(self, scope: dict) -> HttpUpstream:
         async with self.coordination.database.session() as session:

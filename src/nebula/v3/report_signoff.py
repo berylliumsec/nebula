@@ -15,7 +15,12 @@ from .domain import (
     ReportStatus,
     utc_now,
 )
-from .storage import ConflictError, NebulaStore, StoreTransaction
+from .storage import (
+    ConflictError,
+    NebulaStore,
+    StoreTransaction,
+    revision_conflict,
+)
 
 _SIGNABLE_FINDING_STATUSES = {
     FindingStatus.VALIDATED,
@@ -42,9 +47,8 @@ async def sign_off_report(
 ) -> Report:
     report = await store.get(Report, report_id)
     if report.revision != request.expected_revision:
-        raise ConflictError(
-            f"revision conflict: expected {request.expected_revision}, "
-            f"found {report.revision}"
+        raise revision_conflict(
+            Report.entity_kind, report.id, request.expected_revision, report.revision
         )
     if report.status != ReportStatus.REVIEW:
         raise ConflictError("only a report in review can be signed off")

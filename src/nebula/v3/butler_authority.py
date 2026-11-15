@@ -140,6 +140,8 @@ class ButlerAuthorityService:
         self.store = store
         self.work = work
         self.memory_service = memory_service
+        # Actions whose dispatch this process has started but not yet settled.
+        self._dispatching: set[str] = set()
 
     async def get(self, project_id: str) -> dict:
         (await self.store.get(Engagement, project_id))
@@ -846,37 +848,58 @@ class ButlerAuthorityService:
                 (await self._cancel(action, "main_goal_required"))
                 return
             target = goal.session_id
-        async with self.store.transaction(immediate=True) as transaction:
-            state = await _entity(
-                transaction, ButlerProjectState, project_state_id(action.engagement_id)
-            )
-            current = await _entity(transaction, ButlerAction, action.id)
-            current_policy = await _entity(
-                transaction, ButlerAuthorityPolicy, policy_id(action.engagement_id)
-            )
-            if (
-                state is None
-                or state.lease_owner != worker_id
-                or not state.lease_expires_at
-                or state.lease_expires_at <= utc_now()
-                or current is None
-                or current.status != "planned"
-                or current_policy is None
-                or policy is None
-                or current_policy.revision != policy.revision
-                or action.action_type not in _effective_actions(current_policy)
-            ):
-                return
-            action = await transaction.update(
-                ButlerAction,
-                current.id,
-                {
-                    "status": "dispatching",
-                    "target_session_id": target,
-                    "started_at": utc_now(),
-                },
-                expected_revision=current.revision,
-            )
+        # From its dispatching commit until its outcome is saved, an action's
+        # receipt exists only in this process. A project handoff waits for it
+        # (ProjectHandoffAgent), so its next owner never has to guess.
+        key = action.id
+        self._dispatching.add(key)
+        try:
+            async with self.store.transaction(immediate=True) as transaction:
+                state = await _entity(
+                    transaction,
+                    ButlerProjectState,
+                    project_state_id(action.engagement_id),
+                )
+                current = await _entity(transaction, ButlerAction, action.id)
+                current_policy = await _entity(
+                    transaction, ButlerAuthorityPolicy, policy_id(action.engagement_id)
+                )
+                if (
+                    state is None
+                    or state.lease_owner != worker_id
+                    or not state.lease_expires_at
+                    or state.lease_expires_at <= utc_now()
+                    or current is None
+                    or current.status != "planned"
+                    or current_policy is None
+                    or policy is None
+                    or current_policy.revision != policy.revision
+                    or action.action_type not in _effective_actions(current_policy)
+                ):
+                    return
+                action = await transaction.update(
+                    ButlerAction,
+                    current.id,
+                    {
+                        "status": "dispatching",
+                        "target_session_id": target,
+                        "started_at": utc_now(),
+                    },
+                    expected_revision=current.revision,
+                )
+            await self._deliver(action, goal, decision, target)
+        finally:
+            self._dispatching.discard(key)
+
+    async def _deliver(
+        self,
+        action: ButlerAction,
+        goal: ChatGoal,
+        decision: ButlerDecision,
+        target: str,
+    ) -> None:
+        """Run a started action once and save the outcome it observed."""
+
         try:
             if action.action_type == "force_one_task_plan":
                 receipt = await self.work.require_plan(

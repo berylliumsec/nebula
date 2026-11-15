@@ -12,7 +12,7 @@ the local Core database.
 | Linked project access | A parent agent can find and check in to a directly linked child project's Work; unrelated and disabled projects stay inaccessible | Core project hierarchy and Work item ownership | provider and gateway |
 | Create item | A saved item appears in its project board | Core `WorkItem` | API and real Core browser |
 | Check in | An update appears in history and changes item status | Core `WorkUpdate` and `WorkItem` | service, API, real Core browser |
-| Track agent | A live assigned conversation appears as working; a blocked task stays distinct from activity | Core chat activity and Work records | browser |
+| Track agent | A live assigned conversation appears as working; a blocked task stays distinct from activity. Tracking a conversation whose tracked item is Done creates a new open item, and repeating Track returns that item | Core chat activity and Work records | component and real Core browser |
 | Agent initiative | Eligible turns name the Work tools without a timed check-in prompt | Core tool catalog and turn instructions | service and gateway |
 | Agent roster | An eligible agent can read its project's live working and waiting conversations and any linked open Work item, even when Work posting or peer messaging is off | Core chat turns, sessions, and Work items | service, API, provider, and gateway |
 | Live updates and navigate | Core signals saved Work changes and chat activity transitions; the board and timeline refresh without polling and survive reload and deep links | Core change feed, URL, and Core database | real Core browser |

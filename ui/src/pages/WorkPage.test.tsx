@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkPage } from "./WorkPage";
+import { startingProject } from "../test/projectRuntimeStarting";
 
 const { workspace, saved, live } = vi.hoisted(() => {
   const project: { id: string; name: string; status: string; workEnabled: boolean; parentEngagementId?: string } = { id: "project-1", name: "Documentation portal", status: "active", workEnabled: true };
@@ -31,7 +32,11 @@ const { workspace, saved, live } = vi.hoisted(() => {
     if (path.endsWith("/work") && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       const projectId = path.split("/")[1];
-      const item = { ...saved.item, ...body, id: "tracked-item", engagement_id: projectId, last_update_at: null };
+      // Like Core, a request ID keeps returning its first item, whatever its status.
+      const existing = body.request_id && saved.items.find((candidate) => candidate.engagement_id === projectId && candidate.request_id === body.request_id);
+      if (existing) return existing;
+      const tracked = saved.items.filter((candidate) => String(candidate.id).startsWith("tracked-item")).length;
+      const item = { ...saved.item, ...body, id: tracked ? `tracked-item-${tracked + 1}` : "tracked-item", engagement_id: projectId, last_update_at: null };
       saved.items = [item, ...saved.items];
       return item;
     }
@@ -90,6 +95,49 @@ describe("Work operator journey", () => {
     await user.click(within(form).getByRole("button", { name: "Save update" }));
     expect(await screen.findByText("Filters render in search results")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+  });
+
+  it("waits for a starting project's board instead of failing, then shows the saved item", async () => {
+    const { projectRuntime, unavailable } = startingProject();
+    const api = workspace.api as typeof workspace.api & { projectRuntime?: unknown };
+    api.projectRuntime = projectRuntime;
+    const original = api.request.getMockImplementation()!;
+    api.request.mockImplementationOnce(async (path: string) => { throw unavailable(path); });
+    try {
+      openItem();
+      await vi.waitFor(() => expect(api.request).toHaveBeenCalledWith("engagements/project-1/work", expect.any(Object)));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: "Build the search page" }, { timeout: 4_000 })).toBeVisible();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      delete api.projectRuntime;
+      api.request.mockImplementation(original);
+    }
+  });
+
+  it("shows Create item in progress while a cold project's worker takes the write", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    const original = workspace.api.request.getMockImplementation()!;
+    workspace.api.request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/work") && init?.method === "POST") await new Promise<void>((resolve) => { finish = resolve; });
+      return original(path, init);
+    });
+    try {
+      openItem();
+      await user.click(await screen.findByRole("button", { name: "New item" }));
+      const dialog = screen.getByRole("dialog", { name: "New work item" });
+      await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Cold start item");
+      await user.click(within(dialog).getByRole("button", { name: "Create item" }));
+      const create = within(dialog).getByRole("button", { name: "Create item" });
+      // Busy, not a dead control: announced as in progress until Core answers.
+      expect(create).toHaveAttribute("aria-busy", "true");
+      expect(create.querySelector(".spin")).not.toBeNull();
+      await act(async () => { finish(); });
+      expect(await screen.findByRole("heading", { name: "Cold start item" })).toBeVisible();
+    } finally {
+      workspace.api.request.mockImplementation(original);
+    }
   });
 
   it("starts with agent tools on and keeps saved Work when they are disabled", async () => {
@@ -163,6 +211,35 @@ describe("Work operator journey", () => {
     render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     await user.click(await screen.findByRole("button", { name: "1 Working now" }));
     expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/tracked-item");
+  });
+
+  it("tracks a conversation again after its tracked item is Done without duplicating the open item", async () => {
+    const user = userEvent.setup();
+    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    saved.items.push({ ...saved.item, id: "finished-item", title: "First review", status: "done", assignee_session_id: "session-2", source_id: "session-2", request_id: "track:session-2" });
+    const first = render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByText("Review documentation");
+    await user.click(screen.getByRole("button", { name: "Track work" }));
+    let dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    await user.clear(within(dialog).getByRole("textbox", { name: "Title" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Second review");
+    await user.click(within(dialog).getByRole("button", { name: "Create and link" }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work", expect.objectContaining({ method: "POST", body: expect.stringContaining('"request_id":"track:session-2:after:finished-item"') }));
+    await user.click(await screen.findByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/tracked-item");
+    expect(saved.items.find((item) => item.id === "tracked-item")).toMatchObject({ title: "Second review", status: "in_progress", assignee_session_id: "session-2" });
+
+    // Another client tracked the conversation while this page still showed it untracked: the same open item comes back.
+    first.unmount();
+    saved.items.find((item) => item.id === "tracked-item")!.status = "done";
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "Track work" }));
+    dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    saved.items.unshift({ ...saved.item, id: "other-client-item", title: "Third review", status: "in_progress", assignee_session_id: "session-2", source_id: "session-2", request_id: "track:session-2:after:tracked-item" });
+    await user.click(within(dialog).getByRole("button", { name: "Create and link" }));
+    await user.click(await screen.findByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/other-client-item");
+    expect(saved.items.filter((item) => item.assignee_session_id === "session-2" && item.status !== "done").map((item) => item.id)).toEqual(["other-client-item"]);
   });
 
   it("links an existing open item and reports a stale assignment without replacing it", async () => {

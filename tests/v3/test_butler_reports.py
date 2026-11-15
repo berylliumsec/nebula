@@ -6,7 +6,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -217,12 +216,10 @@ async def test_butler_report_note_transform_tracks_authoritative_relation_change
         "instruction": "Rewrite this note as a report section.",
     }
 
-    def invoke(operation: str, params: dict):
-        return asyncio.run(
-            capabilities.invoke(
-                {"operation": f"nebula.reports.{operation}", "arguments": params},
-                change=operation == "transform_note",
-            )
+    async def invoke(operation: str, params: dict):
+        return await capabilities.invoke(
+            {"operation": f"nebula.reports.{operation}", "arguments": params},
+            change=operation == "transform_note",
         )
 
     relation = await client.post(
@@ -238,12 +235,13 @@ async def test_butler_report_note_transform_tracks_authoritative_relation_change
     assert (await client.get(f"/api/v1/reports/{report.id}", headers=auth)).json()[
         "observation_ids"
     ] == [note.id]
-    assert invoke("detail", {"report_id": report.id})["observation_ids"] == [note.id]
-    assert invoke("list", {})["reports"][0]["note_count"] == 1
-    assert (
-        invoke("transform_note", arguments)["client_action"]["observation_id"]
-        == note.id
-    )
+    assert (await invoke("detail", {"report_id": report.id}))["observation_ids"] == [
+        note.id
+    ]
+    assert (await invoke("list", {}))["reports"][0]["note_count"] == 1
+    assert (await invoke("transform_note", arguments))["client_action"][
+        "observation_id"
+    ] == note.id
 
     removed = await client.delete(
         f"/api/v1/projects/{selected.id}/relations/{relation.json()['id']}",
@@ -254,10 +252,10 @@ async def test_butler_report_note_transform_tracks_authoritative_relation_change
     current = (await client.get(f"/api/v1/reports/{report.id}", headers=auth)).json()
     assert current["revision"] == report.revision
     assert current["observation_ids"] == []
-    assert invoke("detail", {"report_id": report.id})["observation_ids"] == []
-    assert invoke("list", {})["reports"][0]["note_count"] == 0
+    assert (await invoke("detail", {"report_id": report.id}))["observation_ids"] == []
+    assert (await invoke("list", {}))["reports"][0]["note_count"] == 0
     with pytest.raises(ValueError, match="select the note"):
-        invoke("transform_note", arguments)
+        await invoke("transform_note", arguments)
 
 
 async def test_butler_report_note_transform_requires_linked_current_source_and_review(
