@@ -22,9 +22,7 @@ _generations = table(
 async def read_checkpoint_generation(session, project_id: str) -> int:
     """Read the generation before/after a checkpoint's statement snapshot."""
     value = await session.scalar(
-        select(_generations.c.generation).where(
-            _generations.c.project_id == project_id
-        )
+        select(_generations.c.generation).where(_generations.c.project_id == project_id)
     )
     return 0 if value is None else int(value)
 
@@ -37,11 +35,7 @@ async def lock_checkpoint_generation(session, project_id: str) -> int:
     that acquire ownership before their input-change triggers run. SQLite's
     caller must already hold BEGIN IMMEDIATE, as normal fenced writes do.
     """
-    insert = (
-        pg_insert
-        if session.bind.dialect.name == "postgresql"
-        else sqlite_insert
-    )
+    insert = pg_insert if session.bind.dialect.name == "postgresql" else sqlite_insert
     await session.execute(
         insert(_generations)
         .values(project_id=project_id, generation=0)
@@ -56,9 +50,7 @@ async def lock_checkpoint_generation(session, project_id: str) -> int:
     return int(value)
 
 
-async def assert_checkpoint_generation(
-    session, project_id: str, expected: int
-) -> None:
+async def assert_checkpoint_generation(session, project_id: str, expected: int) -> None:
     """Keep the scanned project stable through the caller's fenced commit."""
     if await lock_checkpoint_generation(session, project_id) != expected:
         raise CoordinationConflict(

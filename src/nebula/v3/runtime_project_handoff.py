@@ -155,7 +155,9 @@ async def snapshot_project_checkpoint(coordinator, project_id, *, lease=None):
         generation = await read_checkpoint_generation(session, project_id)
         checkpoint = await project_sql_checkpoint(session, project_id)
         if await read_checkpoint_generation(session, project_id) != generation:
-            raise CoordinationConflict("Project changed during checkpoint scan; retry recovery")
+            raise CoordinationConflict(
+                "Project changed during checkpoint scan; retry recovery"
+            )
         if lease is not None:
             await coordinator.coordination._check(session, lease, lock=False)
     return checkpoint, generation
@@ -168,12 +170,14 @@ async def restored_checkpoint(coordinator, lease):
     # compare the accepted checkpoint as well, without pinning heartbeat SQL.
     async with coordinator.database.session() as session:
         pending = await session.scalar(
-            select(RuntimeRecoveryRow.operation_id).where(
+            select(RuntimeRecoveryRow.operation_id)
+            .where(
                 RuntimeRecoveryRow.project_id == lease.project_id,
                 RuntimeRecoveryRow.target_runtime_id == lease.runtime_id,
                 RuntimeRecoveryRow.target_fencing_token == lease.fencing_token,
                 RuntimeRecoveryRow.phase.in_(("held", "prepared")),
-            ).limit(1)
+            )
+            .limit(1)
         )
     if pending is not None:
         return await coordinator.prepare_recovery(lease, operation_id=pending)
@@ -209,10 +213,7 @@ async def restored_checkpoint(coordinator, lease):
             raise CoordinationConflict(
                 "This runtime cannot restore the project's checkpoint"
             )
-        elif (
-            checkpoint
-            != handoff.checkpoint
-        ):
+        elif checkpoint != handoff.checkpoint:
             raise CoordinationConflict(
                 "Project state changed before restoration; keep queued work held for reconciliation"
             )
@@ -421,19 +422,29 @@ class ProjectHandoffAgent:
             self.coordinator, self.lease.project_id, lease=self.lease
         )
         if generation != inventory_generation:
-            raise CoordinationConflict("Project changed during handoff inventory; retry")
+            raise CoordinationConflict(
+                "Project changed during handoff inventory; retry"
+            )
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
         async with self.coordinator.coordination.fenced(self.lease) as session:
-            await assert_checkpoint_generation(session, self.lease.project_id, generation)
-            current_jobs = set(await session.scalars(
-                select(MemoryJobRow.id).where(
-                    MemoryJobRow.project_id == self.lease.project_id,
-                    MemoryJobRow.state.in_(_HELD),
-                ).limit(257)
-            ))
+            await assert_checkpoint_generation(
+                session, self.lease.project_id, generation
+            )
+            current_jobs = set(
+                await session.scalars(
+                    select(MemoryJobRow.id)
+                    .where(
+                        MemoryJobRow.project_id == self.lease.project_id,
+                        MemoryJobRow.state.in_(_HELD),
+                    )
+                    .limit(257)
+                )
+            )
             if current_jobs != set(jobs):
-                raise CoordinationConflict("Compute jobs changed during handoff inventory; retry")
+                raise CoordinationConflict(
+                    "Compute jobs changed during handoff inventory; retry"
+                )
             now = await self.coordinator.coordination._clock_ms(session)
             current = {}
             for key, detail in found.items():

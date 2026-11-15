@@ -1632,10 +1632,7 @@ class DeploymentCoordinator:
                     "project changed after its transferable checkpoint"
                 )
             if handoff.checkpoint.get("format") == "nebula.project-checkpoint/v1":
-                if (
-                    scanned
-                    != handoff.checkpoint
-                ):
+                if scanned != handoff.checkpoint:
                     raise CoordinationConflict(
                         "Project state changed after its handoff checkpoint; verify a fresh boundary"
                     )

@@ -75,8 +75,11 @@ async def insert_input(session, family):
     else:
         await session.execute(
             insert(ProviderToolManifestRow).values(
-                session_id="input", revision=1, project_id="project",
-                definitions=[], digest="a" * 64,
+                session_id="input",
+                revision=1,
+                project_id="project",
+                definitions=[],
+                digest="a" * 64,
             )
         )
 
@@ -95,7 +98,9 @@ async def test_slow_scan_allows_heartbeat_and_fenced_writer(cluster, monkeypatch
 
     monkeypatch.setattr(handoff, "project_sql_checkpoint", slow_scan)
     scan = asyncio.create_task(
-        handoff.snapshot_project_checkpoint(coordinator(cluster), "project", lease=lease)
+        handoff.snapshot_project_checkpoint(
+            coordinator(cluster), "project", lease=lease
+        )
     )
     try:
         await asyncio.wait_for(entered.wait(), timeout=5)
@@ -107,7 +112,8 @@ async def test_slow_scan_allows_heartbeat_and_fenced_writer(cluster, monkeypatch
         async def change_project():
             async with writer.fenced(lease) as session:
                 await session.execute(
-                    update(EntityRow).where(EntityRow.id == "project")
+                    update(EntityRow)
+                    .where(EntityRow.id == "project")
                     .values(revision=EntityRow.revision + 1)
                 )
 
@@ -149,7 +155,8 @@ async def test_write_after_scan_rejects_publication(cluster):
     )
     async with owner.fenced(lease) as session:
         await session.execute(
-            update(EntityRow).where(EntityRow.id == "project")
+            update(EntityRow)
+            .where(EntityRow.id == "project")
             .values(revision=EntityRow.revision + 1)
         )
     with pytest.raises(CoordinationConflict, match="changed"):
@@ -207,14 +214,19 @@ async def test_moving_input_invalidates_old_and_new_project(cluster, family):
         if family == "queue":
             await session.execute(
                 insert(EntityRow).values(
-                    id="other-input", kind="chat_turns", engagement_id="other", payload={}
+                    id="other-input",
+                    kind="chat_turns",
+                    engagement_id="other",
+                    payload={},
                 )
             )
             # Capture the new project's baseline after its turn is inserted.
             before["other"] = await read_checkpoint_generation(session, "other")
             changes = {"turn_id": "other-input"}
         else:
-            changes = {"engagement_id" if family == "entities" else "project_id": "other"}
+            changes = {
+                "engagement_id" if family == "entities" else "project_id": "other"
+            }
         await session.execute(update(row).where(predicate).values(**changes))
     for key in before:
         assert await generation(database, key) > before[key]
@@ -277,7 +289,8 @@ async def test_recovery_scan_keeps_heartbeat_and_writer_live(
             async with deployment.coordination.fenced(lease) as session:
                 if change_input:
                     await session.execute(
-                        update(EntityRow).where(EntityRow.id == "one")
+                        update(EntityRow)
+                        .where(EntityRow.id == "one")
                         .values(revision=EntityRow.revision + 1)
                     )
 
@@ -320,7 +333,8 @@ async def test_recovery_rejects_input_changed_between_scan_and_publication(
         result = await original(*args, **kwargs)
         async with deployment.coordination.fenced(lease) as session:
             await session.execute(
-                update(EntityRow).where(EntityRow.id == "one")
+                update(EntityRow)
+                .where(EntityRow.id == "one")
                 .values(revision=EntityRow.revision + 1)
             )
         return result
