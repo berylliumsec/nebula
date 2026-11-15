@@ -1,29 +1,40 @@
 {
-  "reviewed_by": "Claude; #1096 independent validation (selection toolbar geometry and secret fields)",
-  "reason": "Only the selected-text toolbar placement, its sensitive-field rule, and the storage token, Butler token and pairing link markers. Vitest covers placement geometry, secret-field exclusion, and the storage token through Ask Nebula and drafts; the selection-toolbar Playwright area checks the Add asset dialog buttons stay reachable at 1440, 1024, 393, 320 and WebKit 390, and keeps the Ask Nebula popup journey.",
-  "exclusions": "No Core, API, provider, harness or native change. Python suites excluded (tests/test_playwright_impact.py already fails on main for unrelated specs missing from full_include). Unrelated vitest and Playwright suites excluded.",
+  "reviewed_by": "Claude #1095 implementer; all four defects independently reproduced on 7495a04 by a separate Claude validation subagent (issues/work-goals/validation.md); an independent diff review is still required before merge",
+  "reason": "Fixes #1095. Work page: Link item PATCHes with the expected_revision it just read (one re-read on 409) and refuses an item that became Done, so a concurrent claim is reported, not overwritten; the operator's check-in status choice is kept per item across live updates and an untouched status is omitted so Core keeps the latest; while a blocker is entered the Status select shows Blocked (disabled) with a described hint. Provider work_check_in, gateway work.check_in and Butler check_in_work_item now say a blocker saves Blocked. Goals: ChatGoalService.write refuses resume of a step- or token-exhausted goal with 409 before any change (as for time), except restart recovery (allow_pending_recovery), which must still finish the turn that ran on the last step/tokens; dispatch_running_goal treats GoalBudgetConfigurationError as expected instead of logging chat.goal.dispatch_failed. Python: test_chat_goals.py (new: 409 parity for step/token/time over HTTP with the real dispatcher and no diagnostic, the restart-recovery exemption, the dispatch budget race, and restart recovery of a final step/token turn; the step/token and dispatch cases fail on 7495a04), test_chat_stream_follow.py (restart-recovery goal gating), test_work_gateway.py (gateway Work tools), and six test_work.py node IDs: the new blocker-rule test covering the provider, gateway and Butler check-in descriptions, plus the check-in, revision, provider-tool and API tests around the changed code. Frontend: WorkPage.test.tsx (revision-safe link, Done refusal, kept status, blocker form). Playwright: work-import real-Core journey, extended with a blocked check-in, at desktop and Chromium/WebKit 390.",
+  "exclusions": "Run locally but not selected because they hold failures already present on 7495a04 that this diff does not touch (unawaited async store/catalog calls in the tests, and a harness runtime-switch fixture that changes a runtime before the chat service is initialized): test_control_assistant_work.py (36 such failures; Butler's check-in schema change is asserted by the selected test_work.py blocker test), test_harness_chat_goals.py (2, test_goal_resume_uses_saved_next_harness_in_same_chat; its other tests, including budget pauses and resume, pass with this diff), test_work.py::test_work_project_batch_links_existing_projects_and_prevents_cycles, test_butler_capabilities.py (1) and test_all_tool_failure_guidance.py (2), which only name Work tools. real-core.spec.ts work hub area stays excluded (owned by the real-core-e2e repair). Other work-import profiles (320/430/compact) are the same journey at other widths. No native, settings or product-knowledge (docs/*.md) changes; the Butler workflow registry UI call inventory is unchanged.",
+  "python_browser": false,
+  "python_node": false,
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
-  "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 44,
+    "python": 53,
+    "frontend": 21,
     "native": 0,
-    "playwright": 10
+    "playwright": 3
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_stream_follow.py",
+    "tests/v3/test_work_gateway.py",
+    "tests/v3/test_work.py::test_work_default_on_and_check_ins_are_durable_and_idempotent",
+    "tests/v3/test_work.py::test_work_item_revision_checks_preserve_edits_and_idempotent_check_ins",
+    "tests/v3/test_work.py::test_provider_work_tools_use_chat_scope_and_opt_out",
+    "tests/v3/test_work.py::test_provider_work_tools_reach_only_linked_child_project",
+    "tests/v3/test_work.py::test_work_api_auth_scope_and_refresh",
+    "tests/v3/test_work.py::test_check_in_tools_tell_agents_a_blocker_saves_the_item_as_blocked"
+  ],
   "frontend": [
-    "ui/src/components/selection/selectionActions.test.tsx",
-    "ui/src/components/selection/toolbarPlacement.test.ts",
-    "ui/src/components/StorageIntegrations.selection.test.tsx",
-    "ui/src/components/AskNebulaPopup.test.tsx"
+    "ui/src/pages/WorkPage.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:selection-toolbar"
+    "work-import/assistant-real-desktop",
+    "work-import/assistant-real-chromium-390",
+    "work-import/assistant-real-webkit-390"
   ],
-  "checks": [],
-  "change_digest": "bd8e838ec76cf78b4a27da7d0829a0453398dff3286483eb0a6cbc567480119d"
+  "checks": [
+    "frontend-audit"
+  ],
+  "change_digest": "ac493ebbf14f23c8ffc0e5ab800fea2489b5d175e59f195ab6cb03c49322f28d"
 }
