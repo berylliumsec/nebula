@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex release integrator; independently diagnosed, reviewed by lifecycle agent",
-  "reason": "Combine concurrent harness/provider turn bookkeeping, mission terminal bookkeeping, follower settlement, runtime switch naming tolerance and remembered subagent choice, preserving integrated Stop handling and public conflict diagnostic codes. Effects are never replayed for bookkeeping retries.",
+  "reason": "Combine concurrent harness/provider turn bookkeeping, mission terminal bookkeeping, follower settlement, runtime switch naming tolerance and remembered subagent choice, preserving integrated Stop handling and public conflict diagnostic codes. Effects are never replayed for bookkeeping retries. Rebased onto main5655cf30643cf76eb5c6e12c94340118becabf2f after batch6 merged; independent review preserved typed named-conflict diagnostics and the fenced-read LeaseLost import boundary. The reviewed86-test selection is unchanged.",
   "exclusions": "No new UI/native surface. Synthetic LAN harness24calls passed on base; lifecycle feature acceptance follows on final integrated source. Full release gates remain separate.",
   "python_browser": false,
   "python_node": false,
