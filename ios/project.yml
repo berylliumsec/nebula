@@ -9,12 +9,17 @@ settings:
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: '0.1.0'
-    CURRENT_PROJECT_VERSION: '5'
+    CURRENT_PROJECT_VERSION: '6'
 targets:
   Nebula:
     type: application
     platform: iOS
-    sources: [Nebula]
+    sources:
+      - path: Nebula
+      # Built Core web UI, copied by bundle-web-ui.sh; served on 127.0.0.1 by LocalUIServer.
+      - path: WebUI
+        type: folder
+        buildPhase: resources
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

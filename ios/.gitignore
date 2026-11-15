@@ -1,3 +1,4 @@
 build/
 *.log
 *.xcodeproj/
+WebUI/

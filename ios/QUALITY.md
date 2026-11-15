@@ -9,6 +9,19 @@ link, the physical Pair device control submitted it, and Core's authenticated
 device list gained one entry at the test time. The native selected address is
 device-local; successful-load history is recorded separately.
 
+## Butler + Projects app contract (2026-11-15)
+
+Supersedes the assistant-only contract below. For the `NebulaShell/1.0` token, Core's
+UI serves only two routes: `/projects/<id>/butler` (Butler docked full screen; it
+cannot be hidden or closed, and the app tab bar sits under its composer) and
+`/projects` (snapshot of `status: active` projects with at least one non-archived,
+non-Butler, non-subagent, non-side chat, ranked needs-you → running → recent, polled
+every 30 s while visible). Every other path redirects to Butler or the handoff page.
+Build 6 bundles this UI in the app and tunnels only `/api/*` to Core, so the phone gets it without a Core deploy (see README).
+Browser evidence: `iPhone assistant shell has only docked Butler…` in
+`ui/tests/interface.spec.ts` (desktop, Chromium and WebKit phones). Physical iPhone
+verification is recorded at deployment.
+
 ## Assistant-only app contract (2026-10-14)
 
 The installed iPhone app uses its existing Core connection, pairing cookie, and

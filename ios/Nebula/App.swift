@@ -27,6 +27,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
         if let url = contexts.first?.url { browser.openLink(url) }
     }
+    func sceneWillEnterForeground(_ scene: UIScene) { browser.resume() }
 }
 
 /// Native colors for the few screens the shell draws itself (Nebula dark tokens).
@@ -46,6 +47,8 @@ enum Palette {
 
 /// The whole app: one edge-to-edge web view. Native UI appears only to connect,
 /// to recover from a failed load, or when the page opens `nebula://settings`.
+/// The page itself (Butler and Projects) ships inside the app and is served from
+/// a loopback origin; only Core's API goes to the selected server.
 final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
     private var server: URL?
@@ -54,6 +57,12 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private var observations: [NSKeyValueObservation] = []
     private var statusStyle: UIStatusBarStyle = .lightContent
     private let defaults = UserDefaults.standard
+    private let localUI = LocalUIServer()
+    private var localReady = false
+
+    /// Where the page is loaded from: the bundled UI, or the server itself when the
+    /// bundle is missing or the loopback port could not be opened.
+    private var pageOrigin: URL? { localReady ? LocalUIServer.origin : server }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { statusStyle }
 
@@ -173,7 +182,9 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
         // The one-time secret is never written to native preferences.
         webView.stopLoading()
         offline.isHidden = true
-        var document = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        var document = URLComponents(url: pageOrigin ?? url, resolvingAgainstBaseURL: false)!
+        document.path = "/"
+        document.fragment = url.fragment
         document.queryItems = [URLQueryItem(name: "pairing_attempt", value: UUID().uuidString)]
         webView.load(URLRequest(url: document.url!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20))
     }
@@ -186,13 +197,58 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
         // and last-connected time below only record completed loads.
         defaults.set(url.absoluteString, forKey: "nebula.server")
         offline.isHidden = true
+        guard let localUI else { load(url); return }
+        localUI.upstream = url
+        localUI.start { [weak self] ready in
+            guard let self, self.server == url else { return }
+            self.localReady = ready
+            guard ready else { self.load(url); return }
+            self.copyPairing(from: url) { self.load(LocalUIServer.origin) }
+        }
+    }
+
+    private func load(_ url: URL) {
         webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20))
+    }
+
+    /// iOS may close the loopback listener while the app is suspended.
+    func resume() {
+        guard let localUI, localReady, !localUI.isRunning else { return }
+        localUI.start { [weak self] ready in
+            guard let self else { return }
+            if ready { self.webView.reload() } else if let server = self.server { self.localReady = false; self.load(server) }
+        }
+    }
+
+    /// A phone paired against the server's own origin keeps that pairing: its two
+    /// Nebula cookies are copied once to the loopback origin, where the page now runs.
+    private func copyPairing(from server: URL, then done: @escaping () -> Void) {
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        store.getAllCookies { cookies in
+            let host = server.host?.lowercased() ?? ""
+            let names: Set<String> = ["nebula_device", "nebula_csrf"]
+            let local = Set(cookies.filter { $0.domain == "127.0.0.1" }.map(\.name))
+            let missing = cookies.filter {
+                names.contains($0.name) && !local.contains($0.name)
+                    && $0.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == host
+            }
+            let group = DispatchGroup()
+            for cookie in missing {
+                var properties: [HTTPCookiePropertyKey: Any] = [.domain: "127.0.0.1", .path: "/", .name: cookie.name, .value: cookie.value, .sameSitePolicy: HTTPCookieStringPolicy.sameSiteStrict]
+                if let expires = cookie.expiresDate { properties[.expires] = expires }
+                if cookie.isHTTPOnly { properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE" }
+                guard let copy = HTTPCookie(properties: properties) else { continue }
+                group.enter()
+                store.setCookie(copy) { group.leave() }
+            }
+            group.notify(queue: .main, execute: done)
+        }
     }
 
     private func reloadPage() {
         guard let server else { showConnect(firstRun: true); return }
         offline.isHidden = true
-        if let current = webView.url, ServerAddress.sameOrigin(current, server) {
+        if let current = webView.url, let origin = pageOrigin, ServerAddress.sameOrigin(current, origin) {
             webView.reloadFromOrigin()
         } else { connect(server) }
     }
@@ -232,8 +288,8 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
             openLink(url)
             return
         }
-        guard let server else { decisionHandler(.cancel); return }
-        if ServerAddress.sameOrigin(url, server) {
+        guard let origin = pageOrigin else { decisionHandler(.cancel); return }
+        if ServerAddress.sameOrigin(url, origin) {
             if action.targetFrame == nil { decisionHandler(.cancel); webView.load(action.request) }
             else { decisionHandler(.allow) }
             return
