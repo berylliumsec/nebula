@@ -1730,7 +1730,11 @@ async def test_dispatch_of_a_goal_whose_budget_is_spent_is_not_a_failure(
     running = await store.update(
         ChatGoal,
         paused.id,
-        {"status": ChatGoalStatus.RUNNING, "paused_at": None, "active_since": utc_now()},
+        {
+            "status": ChatGoalStatus.RUNNING,
+            "paused_at": None,
+            "active_since": utc_now(),
+        },
         expected_revision=paused.revision,
     )
     provider = FakeProvider("provider", local=False)
