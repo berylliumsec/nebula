@@ -857,23 +857,29 @@ class RuntimeAutoAdmission:
                 )
                 .exists()
             )
-            query = select(ProjectOwnershipRow).where(
+            # Queued project work admits a worker without any chat, so the
+            # same work needs that worker recovered when it dies. A command
+            # the dead owner was running becomes uncertain during recovery.
+            project_work = project_worker_commands(
+                ProjectOwnershipRow.project_id, ("queued", "running")
+            )
+            query = select(ProjectOwnershipRow, project_work).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
                 ProjectOwnershipRow.lease_expires_at_ms <= now,
-                or_(open_chat, pending_chat_start, legacy_chat_start),
+                or_(open_chat, pending_chat_start, legacy_chat_start, project_work),
             )
             if self._recovery_cursor is not None:
                 query = query.where(
                     ProjectOwnershipRow.project_id > self._recovery_cursor
                 )
             owners = list(
-                await session.scalars(
+                await session.execute(
                     query.order_by(ProjectOwnershipRow.project_id).limit(16)
                 )
             )
         # This cursor only schedules bounded scans; operation receipts remain
         # the authority across controller or host restarts.
-        self._recovery_cursor = owners[-1].project_id if owners else None
+        self._recovery_cursor = owners[-1][0].project_id if owners else None
         if not owners:
             return
         # Older embedders without a process host cannot prove OS absence.
@@ -887,7 +893,7 @@ class RuntimeAutoAdmission:
             for worker in await supervisor.host.rediscover()
             if worker.process_state == "gone" and worker.identity is not None
         }
-        for owner in owners:
+        for owner, has_project_work in owners:
             worker = observed.get(owner.runtime_id)
             if worker is None:
                 continue
@@ -897,7 +903,9 @@ class RuntimeAutoAdmission:
                     continue
             try:
                 project = await supervisor.store.get(Engagement, owner.project_id)
-                if project.status == "archived":
+                if project.status == "archived" and not has_project_work:
+                    # As in admission: an archived project's chats keep no
+                    # worker, but its delete or unarchive request does.
                     continue
                 expected_owner = {
                     "project_id": owner.project_id,

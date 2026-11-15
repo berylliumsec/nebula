@@ -27,13 +27,13 @@ from collections.abc import Mapping
 import re
 from typing import Any, Iterator
 
-from sqlalchemy import and_, event, exists, literal, or_, select
+from sqlalchemy import and_, event, exists, false, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import CompileError, DBAPIError, StatementError
+from sqlalchemy.exc import CompileError, DBAPIError, InvalidRequestError, StatementError
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import with_loader_criteria
 from sqlalchemy.sql import Delete, Insert, Select, Update
-from sqlalchemy.sql.elements import BindParameter, TextClause
+from sqlalchemy.sql.elements import BindParameter, ClauseElement, TextClause
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.schema import Column, Table
 
@@ -194,28 +194,46 @@ class ExecutionSQLScope:
             connection.info["execution_checking"] = False
 
     @staticmethod
-    def _entity_predicate(projects):
+    def _one_of(column, projects, expanding=True):
+        if expanding:
+            return column.in_(projects)
+        # An executemany UPDATE or DELETE (an ORM flush of several rows) cannot
+        # carry an expanding IN parameter, so each project is bound on its own.
+        if not projects:
+            return false()
+        return column.in_([literal(project, column.type) for project in projects])
+
+    @classmethod
+    def _entity_predicate(cls, projects, expanding=True):
         return or_(
             and_(EntityRow.kind != "engagements", EntityRow.engagement_id.is_(None)),
-            EntityRow.engagement_id.in_(projects),
-            and_(EntityRow.kind == "engagements", EntityRow.id.in_(projects)),
+            cls._one_of(EntityRow.engagement_id, projects, expanding),
+            and_(
+                EntityRow.kind == "engagements",
+                cls._one_of(EntityRow.id, projects, expanding),
+            ),
         )
 
-    def _predicate(self, table, projects):
+    def _predicate(self, table, projects, expanding=True):
         columns = table.c
         if table.name == "entities":
-            return self._entity_predicate(projects)
+            return self._entity_predicate(projects, expanding)
         if "engagement_id" in columns:
-            return columns.engagement_id.in_(projects)
+            return self._one_of(columns.engagement_id, projects, expanding)
         if "project_id" in columns:
-            return or_(columns.project_id.in_(projects), columns.project_id.is_(None))
+            return or_(
+                self._one_of(columns.project_id, projects, expanding),
+                columns.project_id.is_(None),
+            )
         owner = next(
             (name for name in ("run_id", "turn_id", "session_id") if name in columns),
             None,
         )
         if owner is not None:
             return columns[owner].in_(
-                select(EntityRow.id).where(EntityRow.engagement_id.in_(projects))
+                select(EntityRow.id).where(
+                    self._one_of(EntityRow.engagement_id, projects, expanding)
+                )
             )
         return None
 
@@ -342,7 +360,7 @@ class ExecutionSQLScope:
                 raise CoordinationConflict(
                     "execution workers cannot mutate host coordination state"
                 )
-            predicate = self._predicate(table, projects)
+            predicate = self._predicate(table, projects, expanding=not multiparams)
             if predicate is None:
                 raise CoordinationConflict(
                     f"execution table has no project authority: {table.name}"
@@ -380,23 +398,13 @@ class ExecutionSQLScope:
                         "execution insert shape requires an explicit project adapter"
                     )
                 else:
-                    values = {
-                        getattr(key, "key", key): value.value
-                        if isinstance(value, BindParameter)
-                        else value
-                        for key, value in (
-                            getattr(statement, "_values", None) or {}
-                        ).items()
-                    }
-                    batches = multiparams or [params or {}]
-                    for batch in batches:
-                        if not isinstance(batch, Mapping):
-                            raise CoordinationConflict(
-                                "execution insert values must be named"
-                            )
+                    for batch in self._parameter_sets(multiparams, params):
                         if (
                             self._validate_insert(
-                                connection, table, {**values, **batch}, projects
+                                connection,
+                                table,
+                                self._assigned_values(statement, table, batch),
+                                projects,
                             )
                             is None
                             and table.name in _GLOBAL_TABLES
@@ -408,20 +416,13 @@ class ExecutionSQLScope:
                         raise CoordinationConflict(
                             "ordered execution updates require an explicit project adapter"
                         )
-                    values = {
-                        getattr(key, "key", key): value.value
-                        if isinstance(value, BindParameter)
-                        else value
-                        for key, value in (
-                            getattr(statement, "_values", None) or {}
-                        ).items()
-                    }
-                    for batch in multiparams or [params or {}]:
+                    for batch in self._parameter_sets(multiparams, params):
                         self._validate_update(
                             connection,
                             statement,
                             predicate,
-                            {**values, **batch},
+                            self._assigned_values(statement, table, batch),
+                            batch,
                             projects,
                         )
                 if (
@@ -525,7 +526,46 @@ class ExecutionSQLScope:
                 "raw driver SQL is unavailable in execution workers"
             )
 
-    def _validate_update(self, connection, statement, predicate, values, projects):
+    @staticmethod
+    def _parameter_sets(multiparams, params) -> list[Mapping[str, Any]]:
+        batches = multiparams or [params or {}]
+        for batch in batches:
+            if not isinstance(batch, Mapping):
+                raise CoordinationConflict("execution statement values must be named")
+        return batches
+
+    @staticmethod
+    def _assigned_values(statement, table, batch) -> dict[str, Any]:
+        """Return the column values one parameter set really writes.
+
+        SQLAlchemy binds a VALUES/SET entry from the execution parameters when
+        the parameters carry its bind name (or, for a literal, its column
+        key), and adds any other parameter named after a column. A bind whose
+        value is missing cannot be validated, so it fails closed.
+        """
+        values: dict[str, Any] = {}
+        for key, value in (getattr(statement, "_values", None) or {}).items():
+            name = getattr(key, "key", key)
+            if isinstance(value, BindParameter):
+                if value.key in batch:
+                    value = batch[value.key]
+                elif value.unique and name in batch:
+                    value = batch[name]
+                elif value.required:
+                    raise CoordinationConflict(
+                        "execution statement values must be bound"
+                    )
+                else:
+                    value = value.effective_value
+            values[name] = value
+        for name, value in batch.items():
+            if name in table.c and name not in values:
+                values[name] = value
+        return values
+
+    def _validate_update(
+        self, connection, statement, predicate, values, parameters, projects
+    ):
         table = statement.table
         owner = next(
             (
@@ -542,9 +582,15 @@ class ExecutionSQLScope:
             None,
         )
         if owner is None:
-            return
+            raise CoordinationConflict(
+                f"execution table has no project authority: {table.name}"
+            )
         assigned = values.get(owner)
         payload = values.get("payload")
+        if table.name == "entities" and isinstance(payload, ClauseElement):
+            raise CoordinationConflict(
+                "execution entity payloads require literal documents"
+            )
         if owner not in values and not (
             table.name == "entities"
             and isinstance(payload, dict)
@@ -555,13 +601,19 @@ class ExecutionSQLScope:
             raise CoordinationConflict(
                 "execution owner changes require literal identifiers"
             )
+        # Evaluate exactly the rows this UPDATE will touch: its WHERE criteria
+        # can bind values (an ORM flush binds the primary key) that travel in
+        # this parameter set, not in the statement.
+        check = select(table.c[owner]).where(*statement._where_criteria, predicate)
+        try:
+            check.compile(dialect=connection.dialect).construct_params(parameters)
+        except InvalidRequestError as exc:
+            raise CoordinationConflict(
+                "execution update rows cannot be determined"
+            ) from exc
         connection.info["execution_checking"] = True
         try:
-            current = list(
-                connection.scalars(
-                    select(table.c[owner]).where(*statement._where_criteria, predicate)
-                )
-            )
+            current = list(connection.scalars(check, parameters))
         finally:
             connection.info["execution_checking"] = False
         for project in current:
@@ -615,7 +667,7 @@ class ExecutionSQLScope:
                 ),
                 None,
             )
-            if key is None or not values.get(key):
+            if key is None or not isinstance(values.get(key), str) or not values[key]:
                 raise CoordinationConflict("execution insert lacks its owning record")
             connection.info["execution_checking"] = True
             try:
