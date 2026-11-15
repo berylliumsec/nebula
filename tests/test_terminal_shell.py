@@ -215,6 +215,69 @@ def test_stream_reports_acceptance_and_tool_progress_before_answer(tmp_path):
     asyncio.run(run())
 
 
+def test_browser_handoff_receipt_is_not_reported_as_finished(tmp_path):
+    class FeedbackUI(UI):
+        def activity(self, value):
+            self.output.append("Activity: " + value)
+
+    handoff = {
+        "state": "pending_browser_apply",
+        "client_action": {"kind": "note_delete", "project_id": "project-a"},
+        "butler_operation": "nebula.notes.delete",
+    }
+    frames = b"".join(
+        [
+            frame("started", turn_id="turn-a"),
+            frame(
+                "tool_completed",
+                turn_id="turn-a",
+                capability="nebula.capabilities.change",
+                display_name="Butler change",
+                status="completed",
+                receipt=handoff,
+            ),
+            frame("done", turn_id="turn-a", message={"content": "Asked."}),
+        ]
+    )
+
+    async def run():
+        ui = FeedbackUI()
+        shell = make_shell(
+            tmp_path, lambda _request: httpx.Response(200, content=frames), ui=ui
+        )
+        await shell.stream(shell.current(), "GET", "chat/turns/turn-a/events")
+        assert not any("Tool finished" in line for line in ui.output)
+        assert (
+            "nebula.notes.delete needs the Nebula web app. The terminal cannot "
+            "apply it, so nothing changed; open the project in the Nebula web "
+            "app to finish it."
+        ) in ui.output
+        assert "Activity: Needs the Nebula web app: Butler change" in ui.output
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_browser_handoff_notice_reads_provider_and_harness_receipts():
+    from nebula.terminal.transport import browser_handoff_notice
+
+    handoff = {"state": "pending_browser_apply", "client_action": {"kind": "x"}}
+    assert browser_handoff_notice({"receipt": {"state": "core_records_saved"}}) is None
+    assert browser_handoff_notice({"display_name": "Search", "receipt": None}) is None
+    assert "needs the Nebula web app" in browser_handoff_notice(
+        {"capability": "nebula.capabilities.change", "receipt": handoff}
+    )
+    # Harness MCP results carry the receipt as text content.
+    harness = {
+        "tool_name": "nebula.capabilities.change",
+        "payload": {"result": [{"type": "text", "text": json.dumps(handoff)}]},
+    }
+    assert browser_handoff_notice(harness).startswith(
+        "nebula.capabilities.change needs the Nebula web app"
+    )
+    assert browser_handoff_notice({"payload": {"result": "plain text"}}) is None
+
+
 def test_provider_body_uses_saved_settings_and_excludes_harness_fields(tmp_path):
     def handler(request):
         assert request.url.path.endswith("assistant-config")
@@ -232,6 +295,7 @@ def test_provider_body_uses_saved_settings_and_excludes_harness_fields(tmp_path)
         assert body["model"] == "changed-on-desktop"
         assert not any(name.startswith("harness_") for name in body)
         assert body["control_assistant"] is False
+        assert body["client_surface"] == "terminal"
         assert body["skill"]["path"].startswith("/core/")
         assert body["messages"] == [{"role": "user", "content": "hello"}]
         await shell.api.close()
@@ -1294,7 +1358,9 @@ def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
 
     async def run():
         nonlocal decided, pending_id
-        shell = make_shell(tmp_path, handler, ui=UI(choices=["main:approval-a", "approve"]))
+        shell = make_shell(
+            tmp_path, handler, ui=UI(choices=["main:approval-a", "approve"])
+        )
         shell.current().session["backend"] = (
             "provider" if backend == "harness" else "harness"
         )

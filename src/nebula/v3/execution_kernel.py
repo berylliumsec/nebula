@@ -10739,6 +10739,7 @@ def create_execution_kernel(
                 pending_provider_subagent=request.harness_pending_provider_subagent(),
                 allow_agent_messaging=request.allow_agent_messaging,
                 control_assistant=request.control_assistant,
+                client_surface=request.client_surface,
             )
             if companion_ids:
                 (await browser_companion.bind(next(iter(companion_ids)), chat.id))

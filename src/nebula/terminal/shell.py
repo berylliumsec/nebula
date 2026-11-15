@@ -14,6 +14,8 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from .conversations import chat_markers, chat_order, side_chat_body
 from .state import Cursor, Draft, View, main_chat, visible_message
 from .transport import (
+    CLIENT_SURFACE,
+    browser_handoff_notice,
     AcceptedRequest,
     ApiError,
     AsyncApi,
@@ -946,6 +948,7 @@ class Shell:
             "engagement_id": view.project_id,
             "messages": [block],
             "stream": True,
+            "client_surface": CLIENT_SURFACE,
             "control_assistant": bool(
                 view.session
                 and (view.session.get("metadata") or {}).get("control_assistant")
@@ -1388,7 +1391,13 @@ class Shell:
                         elif event == "tool_started":
                             detail = "Tool: " + str(detail)
                         elif event == "tool_completed":
-                            detail = "Tool finished: " + str(detail)
+                            notice = browser_handoff_notice(payload)
+                            if notice:
+                                # Not finished work: only a web app applies it.
+                                self.ui.say(notice)
+                                detail = "Needs the Nebula web app: " + str(detail)
+                            else:
+                                detail = "Tool finished: " + str(detail)
                         if isinstance(self.ui, TuiUI):
                             self.ui.set_turn_phase(
                                 "queued" if event == "queued" else "working"
