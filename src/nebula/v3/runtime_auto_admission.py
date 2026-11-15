@@ -26,7 +26,7 @@ from .database import (
     RuntimeReleaseRow,
 )
 from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 from .domain import Engagement
 from .runtime_coordination import CoordinationConflict, project_worker_commands
 from .runtime_view_leases import live_view_lease
@@ -97,6 +97,9 @@ class RuntimeAutoAdmission:
         # Whether each staged release can quiesce under a project retirement
         # hold. A staged release's manifest never changes.
         self._idle_retirement: dict[str, bool] = {}
+        # The idle worker last noted as skipped, and why, so each skip is
+        # recorded once instead of on every half-second pass.
+        self._idle_skips: dict[str, str] = {}
         self._serial = asyncio.Lock()
 
     async def start(self):
@@ -346,7 +349,7 @@ class RuntimeAutoAdmission:
                 idle_owners = [
                     (project_id, runtime_id)
                     for project_id, runtime_id in idle_owners
-                    if await self._retires_idle(session, runtime_id)
+                    if await self._retires_idle(session, project_id, runtime_id)
                 ]
                 api_id = host.api_runtime_id
             if api_id is None and self._blocked.get("api") != signature:
@@ -535,21 +538,76 @@ class RuntimeAutoAdmission:
                 stage="admission",
             )
 
-    async def _retires_idle(self, session, runtime_id: str) -> bool:
+    async def _retires_idle(self, session, project_id: str, runtime_id: str) -> bool:
         process = await session.get(RuntimeProcessRow, runtime_id)
         if process is None:
+            self._note_idle_skip(project_id, runtime_id, None, "process_missing")
             return False
         supported = self._idle_retirement.get(process.version)
         if supported is None:
             release = await session.get(RuntimeReleaseRow, process.version)
             if release is None:
+                self._note_idle_skip(
+                    project_id, runtime_id, process.version, "release_missing"
+                )
                 return False
             supported = (
                 IDLE_RETIREMENT_FEATURE
                 in ReleaseManifest.model_validate(release.manifest).features
             )
             self._idle_retirement[process.version] = supported
+        if not supported:
+            self._note_idle_skip(
+                project_id, runtime_id, process.version, "release_lacks_feature"
+            )
         return supported
+
+    def _note_idle_skip(
+        self, project_id: str, runtime_id: str, version: str | None, kind: str
+    ) -> None:
+        """Say once why an idle worker stays resident, so it is not a silent leak.
+
+        Its project keeps working on that worker; the deployer's handoff moves
+        it to a release that can quiesce. Nothing is held for the operator.
+        """
+        key = runtime_id + "\0" + project_id
+        if self._idle_skips.get(key) == kind:
+            return
+        if len(self._idle_skips) >= 256:
+            self._idle_skips.clear()
+        self._idle_skips[key] = kind
+        record_diagnostic(
+            "info",
+            "runtime",
+            "runtime.idle_retirement.skipped",
+            {
+                "release_lacks_feature": (
+                    "An idle project's worker stays resident: its release "
+                    "cannot quiesce for idle retirement."
+                ),
+                "release_missing": (
+                    "An idle project's worker stays resident: its release "
+                    "record is missing."
+                ),
+                "process_missing": (
+                    "An idle project's worker stays resident: its process "
+                    "record is missing."
+                ),
+            }[kind],
+            project_id=project_id,
+            stage="idle-retirement",
+            outcome="skipped",
+            operator_detail=(
+                "The deployer's rolling handoff moves this project to the "
+                "current release, whose workers retire when idle."
+                if kind == "release_lacks_feature"
+                else "Idle retirement retries on its next pass."
+            ),
+            metadata={"kind": kind, "version": version},
+            # Diagnostics default to errors only; this is an expected state
+            # an operator still needs to see when a worker looks leaked.
+            force=True,
+        )
 
     async def _forget_settled_pending(self) -> None:
         """Drop a prepared worker that can no longer start its project.

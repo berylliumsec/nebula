@@ -1,29 +1,30 @@
 {
-  "reviewed_by": "Codex and independent permission-path reviewer",
-  "reason": "Project never policy, gateway start/resume, broker revocation, browser approval and operator guidance only.",
-  "exclusions": "CI only; no local tests or backups. No broad suites. UI copy only; no geometry or origin behavior changes. Live SSH workflow verified after deployment.",
+  "reviewed_by": "Claude idle-retirement implementer for #1113; both defects independently reproduced on 7495a04 by a separate Claude validation subagent (issues/idle-retirement/validation.md) before the fix; an independent diff review is still required before merge",
+  "reason": "Core fix for #1113. (1) Idle retirement skipped a worker whose release lacks project.idle-retirement/v1 (or whose process/release row is missing) without any record, so resident older-release workers looked leaked; RuntimeAutoAdmission now records one forced info diagnostic runtime.idle_retirement.skipped per worker, project and reason, and still never retires it (#1111 demand rules unchanged). (2) ExecutionWorker._prepare_quiescence, used by idle retirement and host-shutdown quiescence, ignored a follow-up claim in queue._inflight and a Butler action in _dispatching that the handoff checkpoint already refuses; both paths now share ProjectHandoffAgent.dispatch_blockers, read before and again after the SQL quiesce checkpoint, so the worker refuses with quiesce_blockers and the host aborts the retirement hold instead of stranding the claim. Python: new tests/v3/test_idle_retirement_dispatch.py (the queue, Butler and silent-skip cases, all failing on 7495a04), a new handoff test for the Butler blocker, and the handoff, quiescence and mixed-release idle-retirement files whose fake agents gained dispatch_blockers. Playwright: the two real-Core journeys that retire idle project workers through the changed quiesce gate, desktop only.",
+  "exclusions": "No UI, frontend unit, native or settings changes; the diagnostic appears through the existing diagnostics surface and no setting or assistant destination is added. No admission hold row is written for a skipped worker: that row means a wanted worker is starting and would mislead views. Mobile 390/320/430 and compact Playwright profiles are excluded because no layout or client code changes; the retained-continuity process acceptance and handoff journeys are excluded because the handoff checkpoint behavior is unchanged (only refactored into the shared helper, covered by test_project_handoff_agent.py).",
+  "python_browser": false,
+  "python_node": false,
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
-  "python_node": false,
   "expected_tests": {
-    "python": 26,
-    "frontend": 11,
+    "python": 81,
+    "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 2
   },
   "python": [
-    "tests/v3/test_never_policy.py",
-    "tests/v3/test_harness_adapters.py::test_codex_project_never_policy_keeps_butler_change_callable",
-    "tests/v3/test_harnesses.py::test_harness_session_freezes_project_never_approval_policy",
-    "tests/v3/test_browser_security.py::test_project_never_policy_auto_approves_native_browser_actions",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_never_permission_bypass"
+    "tests/v3/test_idle_retirement_dispatch.py",
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_runtime_quiescence.py",
+    "tests/v3/test_mixed_release_idle_retirement.py"
   ],
-  "frontend": ["ui/src/components/EngagementPolicySettings.loading.test.tsx"],
+  "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "project-view-lease/model-desktop",
+    "runtime-pane-recovery/model-desktop"
+  ],
   "checks": [],
-  "change_digest": "e09f2526c162d784b3b9e6091b34abd923dff64f510d3026cfb7f0ac222d5e84"
+  "change_digest": "19a0474ae92578143412e048d176b47a706ded9f1611489c963deb6bafbf5d87"
 }
