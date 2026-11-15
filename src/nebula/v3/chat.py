@@ -5694,6 +5694,10 @@ class ChatService:
             return None
         except DatabaseBusyError:  # diagnostic-expected: capacity is retried by reconciliation without changing goal state.
             return None
+        except GoalBudgetConfigurationError:
+            # diagnostic-expected: prepare paused the goal with its budget
+            # reason; a budget spent before dispatch is not a failure.
+            return None
         except Exception as exc:
             record_caught_exception(
                 "chat",

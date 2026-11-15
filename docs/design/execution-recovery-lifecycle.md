@@ -158,6 +158,7 @@ rows.
 | Recovery required, caused by a Core stop or restart, not yet attempted | Core adopts late receipts, materializes unknowns, records `auto_resume_attempted_at`, resumes a paused goal with budget left, and starts the turn. `/state` reports `recovering`. |
 | The automatic start, or its admission, fails | The turn stays interrupted with `automatic_retry_pending`; the next pass retries; the goal pauses with the reason. |
 | Its goal is cancelled, completed or blocked, or its time budget is spent | Core cancels the turn with that reason, stops its subagents and posts the reports they held. |
+| Its paused goal's step or token budget was spent by this same turn | Core resumes the goal for this one turn only; the next goal step pauses with the budget reason. An operator or Butler resume of a goal whose step, token or time budget is spent is refused with a 409 before the goal changes. |
 | Automatic resume already attempted, or the interruption was not Core's | `/state` reports `needs_stop`; Stop is the exit. |
 | Operator Stop, at any point | `cancel_turn` cancels the turn, its pending approval and open calls; background commands holding its callback lease are terminated; its subagents stop; held reports post; its goal pauses. |
 

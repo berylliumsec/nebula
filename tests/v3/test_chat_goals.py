@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -1624,3 +1625,192 @@ async def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def _paused_with_spent_budget(store, goals, kind: str) -> ChatGoal:
+    budget, spent = {
+        "step": (
+            {"step_budget": 2},
+            {"current_step": 2, "blocked_reason": "Goal step budget is exhausted."},
+        ),
+        "token": (
+            {"token_budget": 100},
+            {
+                "usage": ChatTokenUsage(input_tokens=100, total_tokens=100),
+                "blocked_reason": "Goal token budget is exhausted.",
+            },
+        ),
+        "time": (
+            {"time_budget_seconds": 1800},
+            {
+                "elapsed_seconds": 1800.0,
+                "blocked_reason": "Goal active-time budget is exhausted.",
+            },
+        ),
+    }[kind]
+    draft = await goals.create(
+        "session",
+        GoalCreate(objective="Inspect", completion_criteria=["Done"], **budget),
+    )
+    running = await goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    paused = await goals.write(
+        "session", GoalWrite(expected_revision=running.revision, action="pause")
+    )
+    return await store.update(
+        ChatGoal, paused.id, spent, expected_revision=paused.revision
+    )
+
+
+@pytest.mark.parametrize("kind", ["step", "token", "time"])
+async def test_resume_refuses_every_spent_budget_before_the_goal_changes(
+    tmp_path, kind, monkeypatch
+):
+    store, goals = await setup_goal(tmp_path)
+    goal = await _paused_with_spent_budget(store, goals, kind)
+    provider = FakeProvider("provider", local=False)
+    chat = ChatService(store, provider_factory=lambda _: provider)
+    diagnostics: list[str] = []
+    original = chat_module.record_caught_exception
+
+    def spy(area, code, *args, **kwargs):
+        diagnostics.append(code)
+        return original(area, code, *args, **kwargs)
+
+    monkeypatch.setattr(chat_module, "record_caught_exception", spy)
+    app = FastAPI()
+
+    @app.exception_handler(ConflictError)
+    async def conflict(_request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    app.include_router(goals_router(store, goal_dispatcher=chat.dispatch_running_goal))
+    async with TestClient(app) as client:
+        response = await client.post(
+            "/chat/sessions/session/goal/actions",
+            json={"expected_revision": goal.revision, "action": "resume"},
+        )
+
+    # Step, token and time budgets answer alike: 409, the goal is untouched,
+    # nothing is dispatched and no failure diagnostic is recorded.
+    assert response.status_code == 409
+    assert response.json()["detail"] == f"goal {kind} budget is exhausted"
+    after = await goals.get("session")
+    assert after.status == ChatGoalStatus.PAUSED
+    assert after.revision == goal.revision
+    assert after.blocked_reason == goal.blocked_reason
+    assert diagnostics == []
+    assert await store.list_entities(ChatTurn, engagement_id="project") == []
+
+    # Restart recovery may finish a turn already counted against the last
+    # step or tokens; a spent time budget settles that turn instead.
+    if kind == "time":
+        with pytest.raises(ConflictError, match="goal time budget is exhausted"):
+            await goals.write(
+                "session",
+                GoalWrite(expected_revision=goal.revision, action="resume"),
+                allow_pending_recovery=True,
+            )
+    else:
+        recovered = await goals.write(
+            "session",
+            GoalWrite(expected_revision=goal.revision, action="resume"),
+            allow_pending_recovery=True,
+        )
+        assert recovered.status == ChatGoalStatus.RUNNING
+
+
+async def test_dispatch_of_a_goal_whose_budget_is_spent_is_not_a_failure(
+    tmp_path, monkeypatch
+):
+    store, goals = await setup_goal(tmp_path)
+    paused = await _paused_with_spent_budget(store, goals, "step")
+    # A budget spent between the resume write and dispatch (a racing turn).
+    running = await store.update(
+        ChatGoal,
+        paused.id,
+        {"status": ChatGoalStatus.RUNNING, "paused_at": None, "active_since": utc_now()},
+        expected_revision=paused.revision,
+    )
+    provider = FakeProvider("provider", local=False)
+    chat = ChatService(store, provider_factory=lambda _: provider)
+    diagnostics: list[str] = []
+    original = chat_module.record_caught_exception
+
+    def spy(area, code, *args, **kwargs):
+        diagnostics.append(code)
+        return original(area, code, *args, **kwargs)
+
+    monkeypatch.setattr(chat_module, "record_caught_exception", spy)
+    assert await chat.dispatch_running_goal("session", "Continue") is None
+    after = await goals.get("session")
+    assert after.status == ChatGoalStatus.PAUSED
+    assert after.revision == running.revision + 1
+    assert after.blocked_reason == "Goal step budget is exhausted."
+    assert diagnostics == []
+
+
+@pytest.mark.parametrize("kind", ["step", "token"])
+async def test_restart_recovery_finishes_the_turn_on_a_goals_last_budget(
+    tmp_path, kind
+):
+    from tests.v3.test_chat import WaitingRecoveryProvider, _profile
+
+    store = NebulaStore(tmp_path / "final-step.db")
+    engagement = await store.create(Engagement(name="Final step"))
+    profile = await store.create(_profile(local=True))
+    session = await store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Final step",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    spent = {
+        "step": {"step_budget": 1, "current_step": 1},
+        "token": {
+            "token_budget": 100,
+            "usage": ChatTokenUsage(input_tokens=100, total_tokens=100),
+        },
+    }[kind]
+    goal = await store.create(
+        ChatGoal(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Continue safely",
+            completion_criteria=["Evidence reviewed"],
+            status=ChatGoalStatus.RUNNING,
+            **spent,
+        )
+    )
+    turn = await store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.INTERRUPTED,
+            error="Core stopped.",
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "Continue."}],
+                ).model_dump(mode="json"),
+                "context_usage": {},
+                "recovery": {"required": True, "cause": "core_shutdown"},
+            },
+        )
+    )
+    provider = WaitingRecoveryProvider(profile.id, local=True)
+    service = ChatService(store, provider_factory=lambda _: provider)
+    await service.startup()
+    try:
+        # The turn that was running on the last step or tokens is resumed,
+        # not refused into a recovery loop.
+        assert await service.resume_turns_stopped_by_core() == [turn.id]
+        assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.RUNNING
+    finally:
+        await service.shutdown()
