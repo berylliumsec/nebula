@@ -84,6 +84,9 @@ async def core_components(
         if project.scope_policy_id
         else ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id)
     )
+    from .execution_policy import effective_scope
+
+    scope = await effective_scope(store, project.id, scope)
     workspace = await resolve_workspace(runtime.workspace_resolver, project.id)
     components = notes_components(store, scope, workspace)
     components = combine_tool_components(

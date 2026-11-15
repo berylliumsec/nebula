@@ -4672,6 +4672,10 @@ class CodexAppServerAdapter(HarnessAdapter):
             mcp_config=effective_mcp,
             native_capabilities=native_capabilities,
             core_planned=core_planned,
+            bypass_permissions=request.session.metadata.get("scope_snapshot", {}).get(
+                "bypass_permissions"
+            )
+            is True,
         )
         try:
             verified_activity_protocol = bool(
@@ -4730,6 +4734,10 @@ class CodexAppServerAdapter(HarnessAdapter):
                                 native_capabilities=native_capabilities,
                                 trusted_butler_gateway=trusted_butler_gateway,
                                 core_planned=core_planned,
+                                bypass_permissions=request.session.metadata.get(
+                                    "scope_snapshot", {}
+                                ).get("bypass_permissions")
+                                is True,
                             ),
                             "developerInstructions": developer_instructions,
                             # Nebula never reads thread.turns, and a long history
@@ -4765,6 +4773,10 @@ class CodexAppServerAdapter(HarnessAdapter):
                             native_capabilities=native_capabilities,
                             trusted_butler_gateway=trusted_butler_gateway,
                             core_planned=core_planned,
+                            bypass_permissions=request.session.metadata.get(
+                                "scope_snapshot", {}
+                            ).get("bypass_permissions")
+                            is True,
                         ),
                         "developerInstructions": developer_instructions,
                         **(
@@ -4846,6 +4858,7 @@ class CodexAppServerAdapter(HarnessAdapter):
         mcp_config: dict[str, dict[str, Any]] | None = None,
         native_capabilities: HarnessNativeCapabilities | None = None,
         core_planned: bool = False,
+        bypass_permissions: bool = False,
     ) -> _CodexRpc:
         if profile.connection_mode == HarnessConnectionMode.SPAWN:
             if not profile.executable:
@@ -4873,7 +4886,13 @@ class CodexAppServerAdapter(HarnessAdapter):
                 child_env["OPENAI_API_KEY"] = _resolve_secret(
                     credentials, profile.secret_ref
                 )
-            argv.extend(_codex_mcp_overrides(selected_mcp_config, child_env))
+            argv.extend(
+                _codex_mcp_overrides(
+                    selected_mcp_config,
+                    child_env,
+                    bypass_permissions=bypass_permissions,
+                )
+            )
             if profile.home_directory:
                 argv.extend(["-c", 'cli_auth_credentials_store="file"'])
             argv.extend(["--strict-config", "--listen", "stdio://"])
@@ -4949,7 +4968,10 @@ def _toml_value(value: Any) -> str:
 
 
 def _codex_mcp_overrides(
-    config: dict[str, dict[str, Any]], child_env: dict[str, str]
+    config: dict[str, dict[str, Any]],
+    child_env: dict[str, str],
+    *,
+    bypass_permissions: bool = False,
 ) -> list[str]:
     argv: list[str] = []
     for ordinal, (name, item) in enumerate(config.items()):
@@ -4960,7 +4982,13 @@ def _codex_mcp_overrides(
             "startup_timeout_sec": item["startup_timeout_seconds"],
             "tool_timeout_sec": item["tool_timeout_seconds"],
             # Codex must ask the client for every selected MCP tool.
-            "default_tools_approval_mode": ("auto" if name == "nebula" else "prompt"),
+            "default_tools_approval_mode": (
+                "approve"
+                if name == "nebula" and bypass_permissions
+                else "auto"
+                if name == "nebula"
+                else "prompt"
+            ),
         }
         if item["enabled_tools"]:
             values["enabled_tools"] = item["enabled_tools"]
@@ -5058,6 +5086,7 @@ def _codex_thread_config(
     native_capabilities: HarnessNativeCapabilities | None = None,
     trusted_butler_gateway: bool = False,
     core_planned: bool = False,
+    bypass_permissions: bool = False,
 ) -> dict[str, Any]:
     """Convert the gateway config to the app-server per-thread config shape."""
 
@@ -5068,7 +5097,9 @@ def _codex_thread_config(
             "required": item["required"],
             "startup_timeout_sec": item["startup_timeout_seconds"],
             "tool_timeout_sec": item["tool_timeout_seconds"],
-            "default_tools_approval_mode": "auto",
+            "default_tools_approval_mode": "approve"
+            if name == "nebula" and bypass_permissions
+            else "auto",
         }
         if name == "nebula" and trusted_butler_gateway:
             # Butler's change gateway is in-process and delegates to Core's
@@ -10072,6 +10103,9 @@ class HarnessRuntimeService:
             else ScopePolicy(id=f"scope:{engagement_id}", engagement_id=engagement_id)
         )
         try:
+            from .execution_policy import effective_scope
+
+            scope = await effective_scope(self.store, engagement_id, scope)
             profiles = await resolve_mcp_profiles(
                 self.store,
                 ids,
@@ -11129,6 +11163,9 @@ class HarnessRuntimeService:
             if project.scope_policy_id
             else ScopePolicy(engagement_id=engagement_id)
         )
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, engagement_id, scope)
         catalog_profiles = (
             (
                 await catalog_mcp_profiles(
@@ -18816,6 +18853,33 @@ class HarnessRuntimeService:
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
         session = await self.store.get(HarnessSession, session.id)
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, session.engagement_id)
+        approval_policy = await self._project_approval_policy(session.engagement_id)
+        if (
+            session.metadata.get("scope_snapshot") != scope.model_dump(mode="json")
+            or session.metadata.get("approval_policy") != approval_policy
+        ):
+            self._gateway_oci_components.pop(session.id, None)
+            self._gateway_core_components.pop(turn.id, None)
+            existing = self._connections.get(session.id)
+            if existing is not None:
+                await self._discard_connection(
+                    session.id, existing, reason="project_permissions_changed"
+                )
+            session = await self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "scope_snapshot": scope.model_dump(mode="json"),
+                        "approval_policy": approval_policy,
+                    }
+                },
+                expected_revision=session.revision,
+            )
         standing = turn.metadata.get("standing_instructions")
         if standing is not None:
             snapshot_text(standing)

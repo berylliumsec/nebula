@@ -17,6 +17,13 @@ beforeEach(() => {
 });
 
 describe("project policy hydration", () => {
+  it("explains that never bypasses permissions for every Core tool", async () => {
+    fixture.api.getAutomationPolicy.mockResolvedValueOnce({...policy("first"), approvalPolicy: "never"});
+    render(view());
+    await screen.findByText("All enabled Core-managed tools run without permission checks or approval prompts. Authentication, execution limits and operating-system controls still apply.");
+    expect(screen.getByText(/Never bypasses tool permissions, scope restrictions and explicit deny rules/)).toBeInTheDocument();
+  });
+
   it("keeps one-time Host consent and exposes package downloads in Project settings", async () => {
     fixture.api.getAutomationPolicy.mockResolvedValueOnce({...policy("first"), executionMode: "host", hostAccessAcknowledged: true});
     fixture.api.updateAutomationPolicy = vi.fn(async (id: string, request: {networkEnabled: boolean}) => ({...policy(id), executionMode: "host", hostAccessAcknowledged: true, networkEnabled: request.networkEnabled, revision: 2}));

@@ -1148,7 +1148,9 @@ class BrowserSecurityService:
         scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
         if scope.engagement_id != engagement_id:
             raise BrowserWorkflowError("Project scope ownership is invalid")
-        return scope
+        from .execution_policy import effective_scope
+
+        return await effective_scope(self.store, engagement_id, scope)
 
     def _require_in_scope(
         self,

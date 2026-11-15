@@ -2028,6 +2028,7 @@ class AutomationRuntimeManager:
         chat_origin: bool = False,
     ) -> _ManagedSession:
         from .temporary_command_override import unmanaged_commands_allowed
+        from .execution_policy import effective_scope
 
         async def require_host_command_access() -> None:
             if (
@@ -2047,9 +2048,17 @@ class AutomationRuntimeManager:
             existing_id = self._owner_sessions.get(key)
             if existing_id is not None and existing_id in self._sessions:
                 existing = self._sessions[existing_id]
-                if existing.policy.execution_mode == "host":
-                    await require_host_command_access()
-                return existing
+                current_policy = await self.project_policy(engagement_id)
+                current_scope = await effective_scope(self.store, engagement_id)
+                if (
+                    existing.policy.revision == current_policy.revision
+                    and existing.scope == current_scope
+                ):
+                    if existing.policy.execution_mode == "host":
+                        await require_host_command_access()
+                    return existing
+                # Rebuild the execution boundary as well as its approval policy.
+                await self.close_session(existing_id)
             engagement = await self.store.get(Engagement, engagement_id)
             policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
@@ -2072,6 +2081,7 @@ class AutomationRuntimeManager:
                     if engagement.scope_policy_id
                     else None
                 )
+                scope = await effective_scope(self.store, engagement_id, scope)
                 backend: RuntimeBackendSession = HostRuntimeSession(workspace)
                 entity = AutomationSession(
                     engagement_id=engagement_id,
@@ -2147,6 +2157,7 @@ class AutomationRuntimeManager:
                 if engagement.scope_policy_id is not None
                 else None
             )
+            scope = await effective_scope(self.store, engagement_id, scope)
             rules, domains = self._network_boundary(policy, scope)
             vpn: VpnProfile | None = None
             vpn_config = None

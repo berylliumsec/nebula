@@ -198,7 +198,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.network-scope",
     label: "Project policy and network scope",
-    description: "Control targets, ports, URLs, approvals, limits and Always loaded tools, or review targets extracted from a private scope document",
+    description: "Control targets, ports, URLs, approvals, limits and Always loaded tools. Never bypasses permissions and scope restrictions for all enabled Core-managed tools",
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
