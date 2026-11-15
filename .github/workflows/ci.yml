@@ -285,7 +285,11 @@ jobs:
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
           poetry run pytest --collect-only -q "${targets[@]}"
-          poetry run -- python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+          if jq -e 'index("tests/v3/test_checkpoint_heartbeat.py") != null' <<<"$SELECTED_TESTS" >/dev/null; then
+            timeout 300s poetry run -- python scripts/run_pytest_thread_guard.py -- -vv -o faulthandler_timeout=45 -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+          else
+            poetry run -- python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+          fi
       - name: Lint Nebula 3
         if: env.RUN_SELECTED == 'true'
         run: poetry run ruff check src/nebula/v3 tests/v3
