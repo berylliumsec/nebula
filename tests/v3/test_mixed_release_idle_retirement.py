@@ -10,6 +10,7 @@ a project's admission only while its worker can actually quiesce.
 
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,7 @@ from nebula.v3.database import (
     DeploymentHostRow,
     DeploymentReceiptRow,
     ProjectOwnershipRow,
+    ProjectViewLeaseRow,
     RuntimeProcessRow,
 )
 from nebula.v3.database_pool import PoolSettings
@@ -32,7 +34,9 @@ from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
 from nebula.v3.runtime_coordination import CoordinationConflict
 from nebula.v3.runtime_ipc import RuntimeRpcClient
 from nebula.v3.runtime_processes import RuntimeProcessHost
+from nebula.v3.runtime_view_leases import ProjectViewLeases
 from nebula.v3.storage import NebulaStore
+from tests.v3.runtime_continuity_bundle import bundle_features
 from tests.v3.test_deployment_lifecycle import manifest
 from tests.v3.test_execution_worker import runtime as runtime, until
 from tests.v3.test_runtime_coordination import location as location
@@ -45,6 +49,7 @@ OLDER_FEATURES = ["project.handoff/v1", "project.quiesce/v1"]
 # Releases since chat-scoped admission quiesce under a project retirement hold.
 IDLE_RETIREMENT_FEATURE = "project.idle-retirement/v1"
 CURRENT_FEATURES = [*OLDER_FEATURES, IDLE_RETIREMENT_FEATURE]
+SOURCE = Path(__file__).resolve().parents[2] / "src"
 
 
 @pytest.fixture
@@ -59,7 +64,12 @@ async def mixed(location):
     database._bootstrap = False
     store = NebulaStore(database)
     coordinator = DeploymentCoordinator(database)
-    for version, features in (("older", OLDER_FEATURES), ("current", CURRENT_FEATURES)):
+    for version, features in (
+        ("older", OLDER_FEATURES),
+        ("current", CURRENT_FEATURES),
+        # The real-Core continuity journeys run workers from this manifest.
+        ("acceptance", bundle_features(SOURCE)),
+    ):
         await coordinator.stage(
             manifest(version, features=features),
             Path("/synthetic/releases") / version,
@@ -156,6 +166,52 @@ async def test_new_supervisor_never_asks_an_older_release_worker_to_retire(mixed
                 )
             )
         )
+
+
+def test_acceptance_bundles_declare_every_feature_a_release_build_declares():
+    # Release builds take their features from runtime-compatibility.json. A
+    # fixture allowlist that dropped project.idle-retirement/v1 made every
+    # continuity worker look like an older release that never retires idle.
+    declared = json.loads(
+        (SOURCE / "nebula/v3/runtime-compatibility.json").read_text()
+    )["manifest"]["features"]
+    features = bundle_features(SOURCE)
+
+    assert IDLE_RETIREMENT_FEATURE in features
+    assert set(declared) <= set(features)
+
+
+async def test_acceptance_worker_stays_while_viewed_and_retires_after_the_grace(
+    mixed,
+):
+    await owned_project(
+        mixed, "chatting", "acceptance-chatting", "acceptance", chat="open"
+    )
+    await owned_project(mixed, "viewed", "acceptance-viewed", "acceptance")
+    retired = []
+    automatic = admission(mixed, retired)
+    automatic.idle_grace_ms = 60_000
+    leases = ProjectViewLeases(mixed.database, mixed.coordinator.coordination)
+
+    # An open view and an open chat each keep their worker.
+    await leases.hold("operator", "viewed", "view-lease-accept")
+    await automatic.reconcile()
+    assert retired == []
+    # Leaving starts the grace; the worker stays until it has run out.
+    await leases.release("operator", "viewed", "view-lease-accept")
+    await automatic.reconcile()
+    assert retired == []
+    async with mixed.database.session() as session:
+        now = await mixed.coordinator.coordination._clock_ms(session)
+        lease = await session.get(
+            ProjectViewLeaseRow, ("operator", "view-lease-accept")
+        )
+        lease.expires_at_ms = now - 61_000
+    await automatic.reconcile()
+
+    # Once all demand has ended this release's worker is asked to retire; the
+    # project with an open chat keeps its worker.
+    assert retired == ["viewed"]
 
 
 class _Worker:
