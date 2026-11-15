@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
 import { DialogProvider } from "./DialogSystem";
 import { WorkspacePanel } from "./WorkspacePanel";
+import { startingProject } from "../test/projectRuntimeStarting";
 
 function renderPanel(api: Partial<ApiClient>) {
   return render(<DialogProvider><WorkspacePanel
@@ -37,6 +38,20 @@ describe("WorkspacePanel uploads", () => {
     expect(screen.queryByText("Workspace is empty")).not.toBeInTheDocument();
     resolveListing(listing());
     expect(await screen.findByText("Workspace is empty")).toBeVisible();
+  });
+
+  it("keeps loading while the project's worker starts and lists the files once it answers", async () => {
+    const { projectRuntime, unavailable } = startingProject();
+    const listWorkspace = vi.fn()
+      .mockImplementationOnce(async () => { throw unavailable("engagements/project-1/workspace"); })
+      .mockResolvedValue({ ...listing(), entries: [{ path: "notes.txt", name: "notes.txt", kind: "file", size: 4, modifiedAt: "2026-11-15T00:00:00Z" }], total: 1 });
+    renderPanel({ listWorkspace, projectRuntime } as unknown as Partial<ApiClient>);
+    await waitFor(() => expect(listWorkspace).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status", { name: "Loading files" })).toBeVisible();
+    expect(screen.queryByText("Workspace is empty")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(await screen.findByText("notes.txt", {}, { timeout: 4_000 })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("searches folders and opens a matching file in Files", async () => {

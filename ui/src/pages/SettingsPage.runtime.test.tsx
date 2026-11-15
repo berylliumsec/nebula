@@ -8,6 +8,7 @@ import { DialogProvider } from "../components/DialogSystem";
 import { SettingsPage } from "./SettingsPage";
 import { invoke } from "@tauri-apps/api/core";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { startingProject } from "../test/projectRuntimeStarting";
 
 const { workspace } = vi.hoisted(() => ({
   workspace: {
@@ -42,7 +43,9 @@ vi.mock("../state/ThemeContext", async (importOriginal) => ({
 vi.mock("../state/uiZoom", () => ({ useUiZoom: () => ({ zoom: 1, supported: false, change: vi.fn() }), UI_ZOOM_DEFAULT: 1, UI_ZOOM_STEPS: [1] }));
 vi.mock("../hooks/useCredentialVault", () => ({ useCredentialVault: () => ({ state: "unlocked", available: true, refresh: vi.fn() }), vaultUnavailableNote: () => "" }));
 vi.mock("../state/ChromeContext", () => ({ useChrome: () => ({ toolbarHost: null, trailingToolbarHost: null }) }));
-vi.mock("../diagnostics", () => ({
+vi.mock("../diagnostics", async (original) => ({
+  ...(await original<typeof import("../diagnostics")>()),
+  logDiagnostic: vi.fn(),
   logCaughtDiagnostic: vi.fn(),
   DiagnosticErrorNotice: ({ error }: { error: string }) => <div role="alert">{error}</div>,
   DiagnosticsPanel: () => null,
@@ -227,5 +230,60 @@ describe("selected Project image preparation", () => {
     expect(api.retrySetupImage).not.toHaveBeenCalled();
     expect(api.cancelSetupImage).not.toHaveBeenCalled();
     expect(api.setupStatus).toHaveBeenCalledWith(expect.any(AbortSignal), "project-a");
+  });
+});
+
+describe("selected Project sections while its worker starts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workspace.engagement = {id: "project-a"};
+    workspace.setupStatus = undefined;
+    workspace.providers = [] as never[];
+    workspace.providerCatalog = [] as never[];
+  });
+  afterEach(() => { workspace.api = undefined; workspace.engagement = undefined; });
+
+  it("holds the Project's view lease while open and reads its skill catalogs again once the worker answers", async () => {
+    const {projectRuntime, unavailable} = startingProject();
+    const api = {
+      ...projectApi(),
+      projectRuntime,
+      holdProjectView: vi.fn(async (projectId: string, leaseId: string) => ({leaseId, projectId, expiresAt: "2026-11-15T00:00:00Z", renewAfterSeconds: 30, runtime: {state: "starting" as const}})),
+      releaseProjectView: vi.fn(async () => undefined),
+    };
+    api.getSkillCatalog.mockImplementationOnce(async () => { throw unavailable("engagements/project-a/skills/catalog", "idle"); })
+      .mockResolvedValue({projectRoot: "/workspace/.agents/skills", managedRoot: "/data/skills"});
+    workspace.api = api as unknown as ApiClient;
+    const view = renderSettings("/settings#project-policy-settings");
+    await vi.waitFor(() => expect(api.holdProjectView).toHaveBeenCalledWith("project-a", expect.stringMatching(/^view-/), expect.any(AbortSignal)));
+    const catalogs = document.querySelector(".settings-skill-catalog")!;
+    await vi.waitFor(() => expect(api.getSkillCatalog).toHaveBeenCalledTimes(1));
+    // Settings is the open view of this project, so the wait reads as starting, never "idle" or an error.
+    expect(projectRuntime.state).toBe("reconnecting");
+    expect(catalogs).toHaveTextContent("Reading skill catalogs…");
+    expect(within(catalogs as HTMLElement).queryByRole("alert", {hidden: true})).toBeNull();
+    await vi.waitFor(() => expect(catalogs).toHaveTextContent("/workspace/.agents/skills"), {timeout: 4_000});
+    expect(api.getSkillCatalog).toHaveBeenCalledTimes(2);
+    expect(within(catalogs as HTMLElement).queryByRole("alert", {hidden: true})).toBeNull();
+    view.unmount();
+    expect(api.releaseProjectView).toHaveBeenCalledWith("project-a", api.holdProjectView.mock.calls[0][1]);
+  });
+});
+
+describe("Butler settings deep link", () => {
+  afterEach(() => { workspace.api = undefined; workspace.engagement = undefined; });
+
+  it("opens Butler settings even when the wrapping Butler dialog starts listening after this page mounts", async () => {
+    workspace.api = undefined;
+    workspace.engagement = undefined;
+    const opened = vi.fn();
+    renderSettings("/settings#butler-settings");
+    // The Butler dialog wraps the routed page, so its effect (and listener) runs after this page's effect.
+    window.addEventListener("nebula:open-butler-settings", opened);
+    try {
+      await vi.waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+    } finally {
+      window.removeEventListener("nebula:open-butler-settings", opened);
+    }
   });
 });

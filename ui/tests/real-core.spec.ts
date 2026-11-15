@@ -521,6 +521,39 @@ function coreReady(page: Page) {
   return coreShell(page, /^Nebula Core ready$/);
 }
 
+/**
+ * A project's first write after it has been quiet waits while Core starts the
+ * project's execution worker (a real process: about 6-8 s on a loaded test
+ * host), with the page showing it in progress. Waits right after such a first
+ * write allow for that start instead of the 5 s default for an in-process write.
+ */
+const COLD_PROJECT_START_MS = 30_000;
+
+/**
+ * Read a project's worker-backed data the way a direct API client must since
+ * reads stopped admitting a project worker: hold the project's view lease (the
+ * demand the GUI holds while a project view is open) and honour Retry-After
+ * while Core answers 503 project_runtime_unavailable for the starting worker.
+ */
+async function readProjectWhenReady(api: APIRequestContext, projectId: string, readPath: string) {
+  const lease = `view-real-core-${createHash("sha256").update(`${projectId}:${readPath}:${Date.now()}`).digest("hex").slice(0, 24)}`;
+  const held = await api.put(`engagements/${encodeURIComponent(projectId)}/view-leases/${lease}`, { data: {} });
+  expect(held.ok(), await held.text()).toBe(true);
+  try {
+    const deadline = Date.now() + COLD_PROJECT_START_MS;
+    for (;;) {
+      const response = await api.get(readPath);
+      if (response.status() !== 503 || Date.now() > deadline) return response;
+      const body = await response.json().catch(() => ({})) as { code?: string };
+      if (body.code !== "project_runtime_unavailable") return response;
+      const retryAfter = Number(response.headers()["retry-after"] ?? "1");
+      await new Promise(resolve => setTimeout(resolve, Math.min(5_000, Math.max(500, (Number.isFinite(retryAfter) ? retryAfter : 1) * 1000))));
+    }
+  } finally {
+    await api.delete(`engagements/${encodeURIComponent(projectId)}/view-leases/${lease}`);
+  }
+}
+
 async function showProjectNavigation(page: Page) {
   const navigation = page.getByRole("button", { name: "Open navigation" });
   if (await navigation.getAttribute("aria-expanded") !== "true") {
@@ -829,7 +862,8 @@ test("stabilization storage public source reaches dashboard chat and approved re
     await settings.getByLabel("Credential reference").fill("env:STORAGE_CALLBACK_TOKEN");
     await settings.getByRole("button", { name: "Add disabled source" }).click();
     const issued = settings.locator(".storage-issued");
-    await expect(issued.getByText("Save this token now")).toBeVisible();
+    // The project's first write: Core starts its worker before answering.
+    await expect(issued.getByText("Save this token now")).toBeVisible({ timeout: COLD_PROJECT_START_MS });
     await expect(issued.getByLabel("Webhook URL")).toHaveValue(`${core.origin}/api/v1/storage/events`);
     const sourceToken = await issued.getByLabel("Source token").inputValue();
     const dashboard = await (await api.get("storage")).json() as { sources: Array<{ id: string }> };
@@ -3086,7 +3120,8 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     await dialog.getByRole("textbox", { name: "Title" }).fill("Build the search page");
     await dialog.getByRole("textbox", { name: "Description" }).fill("Add filters and result cards");
     await dialog.getByRole("button", { name: "Create item" }).click();
-    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+    // The project's first write after it was created: Core starts its worker before answering.
+    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible({ timeout: COLD_PROJECT_START_MS });
     expect((await board.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
     const detail = page.getByRole("complementary", { name: "Build the search page" });
     expect((await detail.boundingBox())!.y).toBeLessThan((await subprojectSearch.boundingBox())!.y);
@@ -4084,7 +4119,8 @@ test("assistant upgrade production LAN delegated Mission opens its durable super
     await dialog.getByRole("checkbox", { name: /Let the supervisor create child tasks/ }).check();
     await expect(dialog.getByLabel("Start time")).toBeDisabled();
     await dialog.getByRole("button", { name: "Automate task" }).click();
-    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Delegated production Mission")).toBeVisible();
+    // The project's first write: Core starts its worker before answering.
+    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Delegated production Mission")).toBeVisible({ timeout: COLD_PROJECT_START_MS });
     await expect.poll(async () => {
       const response = await api.get("runs", { params: { engagement_id: projectId } });
       expect(response.ok(), await response.text()).toBe(true);
@@ -5833,9 +5869,10 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     } });
     expect(create.ok(), await create.text()).toBe(true);
     const projectId = (await create.json() as { id: string }).id;
-    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    // Open this project's Code view by its URL (the old "nebula.engagement" key no longer selects a project).
+    const workbench = `${core.origin}/projects/${encodeURIComponent(projectId)}/workbench`;
 
-    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${workbench}?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("complementary", { name: "Editor files" })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Shared workspace editor")).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
@@ -5851,7 +5888,7 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("lan-proof");
     await quickOpen.getByRole("option", { name: /lan-proof\.py/ }).click();
     await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
-    await page.goto(`${core.origin}/?view=workspace#token=${encodeURIComponent(core.token)}`);
+    await page.goto(`${workbench}?view=workspace#token=${encodeURIComponent(core.token)}`);
     await page.getByRole("button", {name: "Search files and folders"}).click();
     const filesQuickOpen = page.getByRole("dialog", {name: "Quick open"});
     await filesQuickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("reports");
@@ -11565,8 +11602,11 @@ test("assistant upgrade Butler max effort persists through settings on productio
     expect(entry).toBeTruthy();
     expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex"))
       .toBe(build.assets[entry!]);
-    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
     await pairRealCoreBrowser(page, core, "Butler effort LAN browser", {requireReady: false});
+    // Select the fixture project as an operator does, by opening it; Settings then shows the
+    // remembered project (the old "nebula.engagement" key no longer selects one).
+    await page.goto(`${core.origin}/projects/${encodeURIComponent(project.id)}/workbench`);
+    await expect.poll(() => page.evaluate(id => Object.values(localStorage).some(value => value.includes(id)), project.id)).toBe(true);
     await page.goto(`${core.origin}/settings#butler-settings`);
     const settings = page.getByRole("region", {name: "Butler settings"});
     const effort = settings.getByRole("combobox", {name: "Butler effort"});
@@ -11958,7 +11998,8 @@ test("assistant upgrade Butler scheduled retry shows both saved attempts after r
     const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
     expect(entry).toBeTruthy();
     expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
-    const overview = await api.get(`engagements/${project.id}/butler/overview`);
+    // Core is starting the project's worker for its new Butler chat; a direct read waits for it.
+    const overview = await readProjectWhenReady(api, project.id, `engagements/${project.id}/butler/overview`);
     expect(overview.ok(), await overview.text()).toBe(true);
     expect((await overview.json() as {recovery_cases: Array<{model_turn_ids: string[]}>}).recovery_cases[0].model_turn_ids)
       .toEqual(["butler-overloaded-turn", "butler-retry-turn"]);
@@ -12296,7 +12337,8 @@ test("project execution mode starts new projects in Host mode on production LAN 
     const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
     const scratch = projects.find(project => project.name === "Scratch Project")!;
     expect(scratch).toBeTruthy();
-    expect(await (await api.get(`engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: false });
+    // A quiet project's reads never start its worker; read as an API client holding the project open.
+    expect(await (await readProjectWhenReady(api, scratch.id, `engagements/${scratch.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: false });
 
     await page.goto(`${core.origin}/projects/${scratch.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Start new chat" })).toBeVisible({ timeout: 20_000 });
@@ -12320,8 +12362,9 @@ test("project execution mode starts new projects in Host mode on production LAN 
     const created = (await (await api.get("engagements")).json() as Array<{ id: string; name: string }>).find(project => project.name === "Host startup acceptance")!;
     expect(created).toBeTruthy();
     await expect(page).toHaveURL(new RegExp(`/projects/${created.id}/workbench`));
-    expect(await (await api.get(`engagements/${created.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
-    expect(await (await api.get(`automation/runtime?engagement_id=${created.id}`)).json()).toMatchObject({ ready: true, runner_profile_id: "host" });
+    // The new project's worker may still be starting.
+    expect(await (await readProjectWhenReady(api, created.id, `engagements/${created.id}/automation-policy`)).json()).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+    expect(await (await readProjectWhenReady(api, created.id, `automation/runtime?engagement_id=${created.id}`)).json()).toMatchObject({ ready: true, runner_profile_id: "host" });
     const command = await api.post(`engagements/${created.id}/automation-sessions/api/host-default/commands`, { data: { command: "pwd" } });
     expect(command.ok(), await command.text()).toBe(true);
     expect(await command.json()).toMatchObject({ exit_code: 0 });
@@ -15944,7 +15987,8 @@ test("assistant upgrade shell goal draft remains editable with skills on product
     await dialog.getByRole("textbox", {name: "Objective"}).fill("Draft shell review");
     await dialog.getByRole("textbox", {name: "Completion criteria"}).fill("Evidence is checked");
     await dialog.getByRole("button", {name: "Save draft"}).click();
-    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    // Saving the draft writes the chat's settings and then the goal, the project's first writes: Core starts its worker first.
+    await expect.poll(() => new URL(page.url()).searchParams.get("session"), {timeout: COLD_PROJECT_START_MS}).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
     await expect(dialog.getByRole("region", {name: "Conversation goal"})).toContainText("draft");
     await dialog.getByRole("button", {name: "Close goal"}).click();

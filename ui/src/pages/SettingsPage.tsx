@@ -28,6 +28,8 @@ import { announceSettingsSaved, SettingsSaveFeedback } from "../components/Setti
 import { THEME_OPTIONS, useTheme } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
 import { useCredentialVault, vaultUnavailableNote } from "../hooks/useCredentialVault";
+import { useProjectViewLease } from "../hooks/useProjectViewLease";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
 import { ShowMeHow } from "../guides/ShowMeHow";
@@ -128,6 +130,10 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     workspaceState,
     engagement,
   } = useWorkspace();
+  // Settings shows the selected project's sections (policy, tooling, skills,
+  // follow-up, setup): while open, that project is in use, so Core starts its
+  // worker instead of answering those reads "idle" for as long as Settings stays open.
+  useProjectViewLease(api, engagement && engagement.status !== "archived" ? engagement.id : undefined);
   const vault = useCredentialVault();
   const [adding, setAdding] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ProviderHealth>();
@@ -256,7 +262,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setProjectSetup({api, projectId});
     const load = async () => {
       try {
-        const status = await api.setupStatus(controller.signal, projectId);
+        const status = await readWhenProjectReady(api.projectRuntime, () => api.setupStatus(controller.signal, projectId), controller.signal);
         if (controller.signal.aborted) return;
         setProjectSetup({api, projectId, status});
         if (status.terminal.status === "detecting_runner"
@@ -305,10 +311,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setNativeSkills([]);
     setSkillCatalogError(undefined);
     setSkillCatalogLoading(true);
-    void Promise.all([
-      api.getSkillCatalog(engagement.id, controller.signal),
-      api.listSkills(engagement.id, controller.signal),
-    ]).then(([catalog, skills]) => {
+    const projectId = engagement.id;
+    // While the project's worker starts, keep "Reading skill catalogs…" and read again when it answers.
+    void readWhenProjectReady(api.projectRuntime, () => Promise.all([
+      api.getSkillCatalog(projectId, controller.signal),
+      api.listSkills(projectId, controller.signal),
+    ]), controller.signal).then(([catalog, skills]) => {
       if (!controller.signal.aborted) { setSkillCatalog(catalog); setNativeSkills(skills); }
     }).catch((error) => {
       if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
@@ -337,11 +345,14 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   useEffect(() => {
     if (embedded) return;
     const hash = locationHash.slice(1);
-    if (hash === "butler-settings") window.dispatchEvent(new Event("nebula:open-butler-settings"));
-    if (hash === "butler-oversight") window.dispatchEvent(new Event("nebula:open-butler-oversight"));
+    // The Butler dialog wraps this page, so on a fresh load its listener is
+    // added after this child effect runs: open it once this commit settles.
+    const butlerEvent = hash === "butler-settings" ? "nebula:open-butler-settings" : hash === "butler-oversight" ? "nebula:open-butler-oversight" : undefined;
+    const openButler = butlerEvent ? window.setTimeout(() => window.dispatchEvent(new Event(butlerEvent)), 0) : undefined;
     const section = sectionFromHash(hash);
     setSettingsSection(section);
     if (section === "advanced-settings") setOpenAdvancedGroup(advancedGroupFromHash(hash));
+    return () => { if (openButler !== undefined) window.clearTimeout(openButler); };
   }, [embedded, locationHash]);
 
   useEffect(() => {

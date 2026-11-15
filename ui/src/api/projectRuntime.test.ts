@@ -6,6 +6,7 @@ import {
   parseRetryAfter,
   projectRuntimeReason,
   projectRuntimeRetryDelay,
+  readWhenProjectReady,
 } from "./projectRuntime";
 import { ApiClient, ApiError } from "./client";
 
@@ -230,5 +231,79 @@ describe("ApiClient project reads", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(recovered).toHaveBeenCalledTimes(1);
     expect(api.projectRuntime.state).toBe("available");
+  });
+});
+
+describe("readWhenProjectReady", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("waits while the project's worker starts and reads again when it answers", async () => {
+    const recovery = new ProjectRuntimeRecovery(vi.fn().mockResolvedValue({ answered: true }));
+    const read = vi.fn()
+      .mockImplementationOnce(async () => { recovery.unavailable("engagements/p/workspace", undefined, "starting"); throw away(); })
+      .mockResolvedValueOnce(["listing"]);
+    const waiting = vi.fn();
+    const result = readWhenProjectReady(recovery, read, undefined, waiting);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(waiting).toHaveBeenCalledTimes(1);
+    // One shared probe for every waiting view; the view does not re-read on its own.
+    expect(recovery.state).toBe("reconnecting");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(result).resolves.toEqual(["listing"]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(recovery.state).toBe("available");
+  });
+
+  it("keeps every other failure an error and stops when the view goes away", async () => {
+    const recovery = new ProjectRuntimeRecovery(vi.fn().mockResolvedValue({ answered: false }));
+    const denied = new ApiError("Forbidden", 403);
+    await expect(readWhenProjectReady(recovery, async () => { throw denied; })).rejects.toBe(denied);
+    // A client without the recovery (or a plain 503) reports the failure as before.
+    await expect(readWhenProjectReady(undefined, async () => { throw away(); })).rejects.toMatchObject({ status: 503 });
+    const controller = new AbortController();
+    const read = vi.fn(async () => { recovery.unavailable("engagements/p/notes"); throw away(); });
+    const pending = readWhenProjectReady(recovery, read, controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(recovery.state).toBe("available");
+  });
+
+  it("describes an idle read as starting only for a project a view holds", () => {
+    const recovery = new ProjectRuntimeRecovery(vi.fn().mockResolvedValue({ answered: false }));
+    recovery.unavailable("engagements/other/notes", undefined, "idle");
+    void recovery.waitForRuntime().catch(() => undefined);
+    recovery.holdingView("held");
+    expect(recovery.state).toBe("idle");
+    recovery.unavailable("engagements/held/automation-policy", undefined, "idle");
+    expect(recovery.state).toBe("reconnecting");
+    recovery.releasedView("held");
+    expect(recovery.state).toBe("idle");
+  });
+});
+
+describe("ApiClient writes while a project starts", () => {
+  it("counts a write as in progress until Core answers it", async () => {
+    let answer!: (response: Response) => void;
+    const fetch = vi.fn((url: string) => String(url).endsWith("/work")
+      ? new Promise<Response>(resolve => { answer = resolve; })
+      : Promise.resolve(new Response("{}", { status: 200 })));
+    const api = new ApiClient({ baseUrl: "http://core/api/v1", token: "t", fetch: fetch as unknown as typeof globalThis.fetch });
+    api.projectRuntime.holdingView("p");
+    api.projectRuntime.viewRuntime("p", "starting");
+    expect(api.projectRuntime.state).toBe("available");
+    const states: string[] = [];
+    api.projectRuntime.subscribe(state => states.push(state));
+    const created = api.request("engagements/p/work", { method: "POST", body: JSON.stringify({ title: "x" }) });
+    await vi.waitFor(() => expect(api.projectRuntime.state).toBe("reconnecting"));
+    expect(api.projectRuntime.waitingForWrite).toBe(true);
+    answer(new Response(JSON.stringify({ id: "w" }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    await created;
+    expect(api.projectRuntime.state).toBe("available");
+    expect(states).toEqual(["reconnecting", "available"]);
   });
 });

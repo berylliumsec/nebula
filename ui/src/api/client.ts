@@ -5403,10 +5403,13 @@ export class ApiClient {
     if (!headers.has("X-Nebula-Operation-ID")) {
       headers.set("X-Nebula-Operation-ID", newOperationId());
     }
-    const pending = !["GET", "HEAD", "OPTIONS"].includes(method)
+    const write = !["GET", "HEAD", "OPTIONS"].includes(method);
+    const pending = write
       ? await this.prepareRequest(path, method, headers, init.body) : undefined;
 
     let response: Response;
+    // A write to a project whose worker is starting waits for it; the page says so.
+    if (write) this.projectRuntime.writeStarted();
     try {
       response = await this.fetchImpl(
         `${this.baseUrl}/${path.replace(/^\//, "")}`,
@@ -5438,6 +5441,8 @@ export class ApiClient {
         metadata: { method: init.method ?? "GET" },
       });
       throw error;
+    } finally {
+      if (write) this.projectRuntime.writeSettled();
     }
 
     const read = method === "GET" || method === "HEAD";

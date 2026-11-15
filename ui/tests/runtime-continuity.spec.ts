@@ -128,7 +128,7 @@ test("worker-backed panes wait calmly while an idle project's worker is away and
   const chat = `/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`;
   const answer = page.locator(".chat-message.assistant").filter({hasText: "Synthetic saved answer before the project went idle."});
   const bookmark = page.locator(".chat-message").filter({hasText: "Synthetic saved question"}).getByRole("button", {name: "Bookmark"});
-  const reconnecting = page.getByRole("status").filter({hasText: "Reconnecting to this project"});
+  const reconnecting = page.getByRole("status").filter({hasText: "Starting this project"});
   const idle = page.getByRole("status").filter({hasText: "This project is idle"});
   const hardErrors = page.getByText(/Runtime delivery is unavailable|could not be loaded|could not sync|Could not restore this conversation/).filter({visible: true});
   const alerts = page.locator(".workspace-notices [role=alert], .chat-panel [role=alert]").filter({visible: true});

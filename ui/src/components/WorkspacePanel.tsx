@@ -2,6 +2,7 @@ import { IconAction } from "./IconAction";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { Activity, AlertTriangle, Download, EllipsisVertical, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, Search, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import type { WorkspaceEntry, WorkspacePreview, WorkspaceResetStatus, WorkspaceSearchMatch } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -58,13 +59,15 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
     setLoading(true);
     setError(undefined);
     try {
-      const listing = await api.listWorkspace(engagementId, path, offset, signal);
+      // While the project's worker starts the listing stays loading and reads again when it answers.
+      const listing = await readWhenProjectReady(api.projectRuntime, () => api.listWorkspace(engagementId, path, offset, signal), signal);
       setEntries((current) => offset ? [...current, ...listing.entries] : listing.entries);
       setNextOffset(listing.nextOffset);
       setTotal(listing.total);
     } catch (loadError) {
+      if (signal?.aborted) return; // diagnostic-expected: the panel closed or listed another folder.
       void logCaughtDiagnostic("interface.workspace_panel.caught_failure_01", "A handled interface operation failed.", loadError, "workspace_panel");
-      if (!signal?.aborted) setError(loadError instanceof Error ? loadError.message : "Could not list the workspace.");
+      setError(loadError instanceof Error ? loadError.message : "Could not list the workspace.");
     } finally {
       if (!signal?.aborted) setLoading(false);
     }

@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { FileCode2, Folder, LoaderCircle, Search, TextSearch, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import { readWhenProjectReady } from "../api/projectRuntime";
 import type { WorkspaceSearchMatch } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface } from "./DialogSystem";
@@ -37,15 +38,17 @@ export function EditorWorkspaceSearch({ api, engagementId, initialMode, initialQ
     const timer = globalThis.setTimeout(() => {
       setLoading(true);
       setError(undefined);
-      void api.searchWorkspace(engagementId, normalized, mode, "", controller.signal)
+      // While the project's worker starts, keep searching (no error) and search again when it answers.
+      void readWhenProjectReady(api.projectRuntime, () => api.searchWorkspace(engagementId, normalized, mode, "", controller.signal), controller.signal)
         .then((result) => {
           setMatches(result.matches);
           setScannedFiles(result.scannedFiles);
           setTruncated(result.truncated);
         })
         .catch((caughtError: unknown) => {
+          if (controller.signal.aborted) return; // diagnostic-expected: a newer query or closing the dialog superseded this search.
           void logCaughtDiagnostic("interface.code_editor.workspace_search", "Workspace search failed.", caughtError, "code_editor");
-          if (!controller.signal.aborted) setError(caughtError instanceof Error ? caughtError.message : "Could not search the workspace.");
+          setError(caughtError instanceof Error ? caughtError.message : "Could not search the workspace.");
         })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, 140);
