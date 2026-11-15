@@ -90,7 +90,7 @@ jobs:
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
           poetry run pytest --collect-only -q tests packaging
-          poetry run pytest -q tests packaging -vv --durations=20 --junitxml="$RUNNER_TEMP/full-tests-python.xml"
+          poetry run python scripts/run_pytest_thread_guard.py -- -q tests packaging -vv --durations=20 --junitxml="$RUNNER_TEMP/full-tests-python.xml"
       - name: Collect and run every frontend test
         if: success() || failure()
         working-directory: ui
@@ -202,7 +202,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     services:
       postgres:
-        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py')) && 'postgres:16-alpine' || '' }}
+        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_management.py')) && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: nebula_async
           POSTGRES_PASSWORD: synthetic-ci-password
@@ -275,17 +275,17 @@ jobs:
         if: env.RUN_SELECTED == 'true'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.python }}
-          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
+          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_work_batch_integration.py') || contains(needs.selection.outputs.python, 'tests/v3/test_api_worker_composition.py') || contains(needs.selection.outputs.python, 'tests/v3/test_shutdown_readmission.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_management.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           NEBULA_TEST_POSTGRES_ADMIN_URL: ${{ contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') && 'postgresql://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
-          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination|test_runtime_work_batch_integration|test_api_worker_composition|test_shutdown_readmission)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
+          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination|test_runtime_work_batch_integration|test_api_worker_composition|test_shutdown_readmission|test_runtime_management)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
             test -n "$NEBULA_TEST_POSTGRES_URL" || { echo 'Selected PostgreSQL coverage requires its owned database runtime.' >&2; exit 1; }
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
           poetry run pytest --collect-only -q "${targets[@]}"
-          poetry run pytest -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+          poetry run python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
       - name: Lint Nebula 3
         if: env.RUN_SELECTED == 'true'
         run: poetry run ruff check src/nebula/v3 tests/v3
@@ -473,7 +473,8 @@ jobs:
       - name: Exercise one owned native activation journey
         run: >-
           poetry run python scripts/benchmarks/core_worker_activation_smoke.py
-          --binary dist/nebula-core --output frozen-cpu-activation.json
+          --binary dist/nebula-core --runtime-bundle ui/src-tauri/resources/nebula-runtime
+          --output frozen-cpu-activation.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

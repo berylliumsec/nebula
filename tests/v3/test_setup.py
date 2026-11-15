@@ -11,17 +11,17 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from threading import Event
 from types import SimpleNamespace
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from tests.v3.async_test_support import AsyncTestClient as TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3 import database as database_module
 from nebula.v3.database import BootstrapStateRow, Database, ProjectCreateRequestRow
 from nebula.v3.domain import (
     AutomationProjectPolicy,
@@ -53,6 +53,8 @@ from nebula.v3.runtime_platform import (
     _runner_profile_fingerprint,
 )
 
+pytest_plugins = ["tests.v3.thread_leak_guard"]
+
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
@@ -62,12 +64,14 @@ async def test_status_keeps_event_loop_responsive_while_snapshot_waits(
 ):
     service = SetupService(NebulaStore(tmp_path / "core.db"), None)
     original_snapshot = service._snapshot
-    entered = Event()
-    release = Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
 
+    # Since 831d0d0 the snapshot is async SQL that status() awaits directly, so
+    # a slow snapshot waits without blocking the loop.
     async def waiting_snapshot():
         entered.set()
-        assert release.wait(timeout=2)
+        await asyncio.wait_for(release.wait(), timeout=2)
         return await original_snapshot()
 
     monkeypatch.setattr(service, "_snapshot", waiting_snapshot)
@@ -421,7 +425,7 @@ asyncio.run(main())
             "scratch-project"
         ]
         async with store.database.session() as session:
-            markers = session.query(BootstrapStateRow).all()
+            markers = list(await session.scalars(select(BootstrapStateRow)))
         assert len(markers) == 1
         assert markers[0].key == "scratch_project_v1"
         assert markers[0].status == "complete"
@@ -435,12 +439,14 @@ async def test_interrupted_fresh_migration_preserves_scratch_eligibility(
 ):
     path = tmp_path / "interrupted.db"
 
-    def interrupt_migration(_database: Database) -> None:
+    def interrupt_migration(*_args, **_kwargs) -> None:
         raise RuntimeError("simulated migration interruption")
 
-    monkeypatch.setattr(Database, "_run_alembic_migrations", interrupt_migration)
+    # Since 831d0d0 the bootstrap marker preflight and Alembic DDL run inside
+    # async Database.initialize(); interrupt the Alembic upgrade it applies.
+    monkeypatch.setattr(database_module.command, "upgrade", interrupt_migration)
     with pytest.raises(RuntimeError, match="simulated migration interruption"):
-        Database(path)
+        await Database(path).initialize()
 
     monkeypatch.undo()
     store = NebulaStore(path)
@@ -454,47 +460,48 @@ async def test_interrupted_fresh_migration_preserves_scratch_eligibility(
 async def test_setup_status_contract_is_authenticated_and_model_optional(tmp_path):
     store = NebulaStore(tmp_path / "api.db")
     app = create_app(store, auth_token=TOKEN, bootstrap_workspace=True)
-    client = TestClient(app)
+    # Scratch bootstrap runs in Core's lifespan, which only an entered
+    # client starts (831d0d0).
+    async with TestClient(app) as client:
+        assert (await client.get("/api/v1/setup/status")).status_code == 401
+        response = await client.get("/api/v1/setup/status", headers=AUTH)
 
-    assert (await client.get("/api/v1/setup/status")).status_code == 401
-    response = await client.get("/api/v1/setup/status", headers=AUTH)
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "application_stage": "ready",
-        "stage_detail": "Nebula is ready.",
-        "stage_started_at": None,
-        "retryable": False,
-        "recovery_actions": [],
-        "core": {"status": "ready", "detail": None},
-        "scratch_project_id": "scratch-project",
-        "terminal": {
-            "status": "disabled",
-            "runner_profile_id": None,
-            "candidates": [],
-            "image_preparation": {
-                "phase": "not_started",
-                "operation_id": None,
-                "project_id": None,
-                "progress_percent": None,
-                "progress_indeterminate": False,
-                "can_cancel": False,
-                "can_retry": False,
-                "image_digest": None,
-                "started_at": None,
-                "completed_at": None,
-                "detail": None,
+        assert response.status_code == 200
+        assert response.json() == {
+            "application_stage": "ready",
+            "stage_detail": "Nebula is ready.",
+            "stage_started_at": None,
+            "retryable": False,
+            "recovery_actions": [],
+            "core": {"status": "ready", "detail": None},
+            "scratch_project_id": "scratch-project",
+            "terminal": {
+                "status": "disabled",
+                "runner_profile_id": None,
+                "candidates": [],
+                "image_preparation": {
+                    "phase": "not_started",
+                    "operation_id": None,
+                    "project_id": None,
+                    "progress_percent": None,
+                    "progress_indeterminate": False,
+                    "can_cancel": False,
+                    "can_retry": False,
+                    "image_digest": None,
+                    "started_at": None,
+                    "completed_at": None,
+                    "detail": None,
+                },
+                "detail": "Container terminal execution is disabled in this Core.",
             },
-            "detail": "Container terminal execution is disabled in this Core.",
-        },
-        "assistant": {
-            "status": "needs_model",
-            "provider_profile_id": None,
-            "detail": (
-                "Assistant setup is optional; Terminal is available independently."
-            ),
-        },
-    }
+            "assistant": {
+                "status": "needs_model",
+                "provider_profile_id": None,
+                "detail": (
+                    "Assistant setup is optional; Terminal is available independently."
+                ),
+            },
+        }
 
 
 async def test_create_app_does_not_bootstrap_embedded_stores_unless_requested(tmp_path):
@@ -868,6 +875,14 @@ async def test_image_preparation_reports_phases_can_cancel_and_retry(
 
         final_retry = await service.retry_image_preparation(ImagePreparationRequest())
         ready = await wait_for_phase("ready")
+        # State changes before the async snapshot is appended to the event
+        # stream. Wait for that observable event before checking its history.
+        async with asyncio.timeout(5):
+            while not any(
+                event.reason.value == "image_preparation_ready"
+                for event in service.replay_events(0).events
+            ):
+                await asyncio.sleep(0)
         return (
             first,
             retry,
@@ -1096,7 +1111,10 @@ async def test_idle_image_preparation_reports_needs_image_not_preparing(
             await asyncio.sleep(0)
         return detected, preparing, cancelled, ready
 
-    detected, preparing, cancelled, ready = await scenario()
+    try:
+        detected, preparing, cancelled, ready = await scenario()
+    finally:
+        await service.shutdown()
 
     # A selected runner with nothing running is idle, not "preparing_image":
     # Settings would otherwise show "Preparing Kali runtime…" and poll forever.
