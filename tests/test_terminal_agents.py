@@ -364,6 +364,18 @@ def test_subagent_chat_opens_instead_of_being_refused(tmp_path):
             return httpx.Response(200, json={"settings": CONFIG, "revision": 2})
         if route == "chat/sessions/child-1/messages":
             return httpx.Response(200, json=[])
+        if route == "chat/sessions/child-1/catch-up" and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "initialized": True,
+                    "revision": 1,
+                    "through_at": "2026-11-14T12:00:00Z",
+                    "items": [],
+                    "pending": [],
+                    "truncated": False,
+                },
+            )
         if route == "chat/sessions/child-1/state":
             return httpx.Response(
                 200, json={"session_id": "child-1", "busy": False, "pending": []}
