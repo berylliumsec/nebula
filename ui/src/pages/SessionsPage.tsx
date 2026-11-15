@@ -204,12 +204,14 @@ import { useChrome } from "../state/ChromeContext";
 import { settingCatalogEntry } from "../settingsCatalog";
 import { WebSearchResults } from "../components/WebSearchResults";
 import { AgentsPage } from "./AgentsPage";
+import { appendSearchPage, readContinuation } from "./artifactPaging";
 import {
   harnessCostLabel,
   isTimelineActivity,
   isSameHarnessSessionActivity,
   reduceHarnessActivity,
   shouldShowActivityItem,
+  subagentStoppable,
   type HarnessActivityItem,
 } from "./harnessActivity";
 import { beginGuardedStream, detachChatStream, harnessActivityOwnsStream } from "./chatStreamLifecycle";
@@ -853,7 +855,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
           const item = entry.sourceItem;
           const card = entry.sourceTool;
           return <>
-            {item?.kind === "subagent" && item.status === "running" && shared.subagentControl && <button className="button quiet" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.stopSubagent(item)}>Stop subagent</button>}
+            {item && subagentStoppable(item) && shared.subagentControl && <button className="button quiet" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.stopSubagent(item)}>Stop subagent</button>}
             {item?.type === "checkpoint" && shared.checkpointRewind && <button className="button quiet" type="button" disabled={shared.harnessControlBusy || (item.sessionId === shared.harnessSessionId && shared.harnessBusy)} title={item.sessionId === shared.harnessSessionId && shared.harnessBusy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void actions.rewindCheckpoint(item)}>Rewind files here</button>}
             {card && card.status !== "running" && <button className="button quiet" type="button" onClick={() => void actions.openArtifacts(card)}><Search size={13} /> Artifacts</button>}
           </>;
@@ -1566,7 +1568,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [artifactInspector, setArtifactInspector] = useState<ToolLifecycleCard>();
   const [artifactQuery, setArtifactQuery] = useState("");
   const [artifactSearch, setArtifactSearch] = useState<ToolOutputSearchResult>();
+  // The query the shown matches answer; a further page continues this query.
+  const [artifactSearchQuery, setArtifactSearchQuery] = useState("");
   const [artifactRead, setArtifactRead] = useState<ToolOutputReadResult>();
+  const artifactReadNext = artifactRead ? readContinuation(artifactRead) : undefined;
   const [artifactBusy, setArtifactBusy] = useState(false);
   const [artifactError, setArtifactError] = useState<string>();
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
@@ -6344,6 +6349,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const openArtifacts = async (card: ToolLifecycleCard) => {
     setArtifactInspector(card);
     setArtifactQuery("");
+    setArtifactSearchQuery("");
     setArtifactSearch(undefined);
     setArtifactRead(undefined);
     setArtifactError(undefined);
@@ -6367,18 +6373,33 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (!api || !artifactInspector || !artifactQuery.trim()) return;
     setArtifactBusy(true); setArtifactError(undefined); setArtifactRead(undefined);
     try {
-      setArtifactSearch(await api.searchToolOutput(artifactInspector.toolCallId, artifactQuery.trim()));
+      const query = artifactQuery.trim();
+      setArtifactSearch(await api.searchToolOutput(artifactInspector.toolCallId, query));
+      setArtifactSearchQuery(query);
     } catch (searchError) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_17", "A handled interface operation failed.", searchError, "sessions_page");
       setArtifactError(searchError instanceof Error ? searchError.message : "Could not search tool artifacts.");
     } finally { setArtifactBusy(false); }
   };
 
-  const readArtifact = async (artifactId: string, startingLine = 1) => {
+  const searchMoreArtifacts = async () => {
+    const cursor = artifactSearch?.continuationCursor;
+    if (!api || !artifactInspector || !cursor || !artifactSearchQuery) return;
+    setArtifactBusy(true); setArtifactError(undefined);
+    try {
+      const page = await api.searchToolOutput(artifactInspector.toolCallId, artifactSearchQuery, { cursor });
+      setArtifactSearch((current) => appendSearchPage(current, page));
+    } catch (searchError) {
+      void logCaughtDiagnostic("interface.sessions_page.artifact_search_more_failed", "More artifact matches could not be loaded.", searchError, "sessions_page");
+      setArtifactError(searchError instanceof Error ? searchError.message : "Could not load more matches.");
+    } finally { setArtifactBusy(false); }
+  };
+
+  const readArtifact = async (artifactId: string, startingLine = 1, cursor?: string) => {
     if (!api) return;
     setArtifactBusy(true); setArtifactError(undefined);
     try {
-      setArtifactRead(await api.readToolOutput(artifactId, startingLine));
+      setArtifactRead(await api.readToolOutput(artifactId, startingLine, undefined, cursor));
     } catch (readError) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_18", "A handled interface operation failed.", readError, "sessions_page");
       setArtifactError(readError instanceof Error ? readError.message : "Could not read the artifact.");
@@ -7676,7 +7697,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         <NebulaAssistantLauncherButton mobile />
       </nav>}
       {!shellOnly && mobileMoreOpen && <MobileMorePanel view={view} onSelectView={setView} onFocusMode={() => setFullScreen(true)} onClose={() => setMobileMoreOpen(false)} />}
-      {artifactInspector && <ModalSurface as="section" className="provider-dialog resource-dialog" labelledBy="artifact-inspector-title" onClose={() => setArtifactInspector(undefined)}><header><div><small>Untrusted tool data · bounded retrieval</small><h2 id="artifact-inspector-title">{artifactInspector.capability} artifacts</h2></div><button className="icon-button subtle" type="button" aria-label="Close artifact inspector" onClick={() => setArtifactInspector(undefined)}><X size={17} /></button></header>{artifactInspector.receipt && <div className="knowledge-status" role="status"><ShieldCheck size={15} /><span>Receipt {String(artifactInspector.receipt.status ?? artifactInspector.status)} · parser {String((artifactInspector.receipt.parser as Record<string, unknown> | undefined)?.state ?? "not configured")}{Array.isArray(artifactInspector.receipt.warnings) && artifactInspector.receipt.warnings.length ? ` · ${artifactInspector.receipt.warnings.join(" · ")}` : ""}</span></div>}<div className="runtime-resource-list">{artifactInspector.artifacts.length ? artifactInspector.artifacts.map((artifact) => <article className="runtime-resource-card" key={artifact.artifactId}><header><div><strong>{artifact.filename ?? artifact.kind}</strong><code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code></div><span>{artifact.truncated ? "truncated" : artifact.searchable ? "searchable" : "binary"}</span></header><small>{artifact.byteCount.toLocaleString()} retained byte{artifact.byteCount === 1 ? "" : "s"}{artifact.observedByteCount !== artifact.byteCount ? ` · ${artifact.observedByteCount.toLocaleString()} observed` : ""} · {artifact.mediaType}</small><footer>{artifact.searchable && <button className="button quiet" type="button" onClick={() => void readArtifact(artifact.artifactId)} disabled={artifactBusy}>Read excerpt</button>}<button className="button quiet" type="button" onClick={() => void saveRawArtifact(artifact)}>Save acknowledged raw</button></footer></article>) : <p>Artifact references are available through search for this historical or gateway result.</p>}</div><form className="chat-composer" onSubmit={(event) => void searchArtifacts(event)}><label>Search all searchable artifacts<input value={artifactQuery} maxLength={512} placeholder="open 443/tcp" onChange={(event) => setArtifactQuery(event.target.value)} /></label><button className="button primary" type="submit" disabled={artifactBusy || !artifactQuery.trim()}><Search size={14} /> {artifactBusy ? "Searching…" : "Search"}</button></form>{artifactError && <DiagnosticErrorNotice error={artifactError} fallback="Artifact retrieval failed." compact />}{artifactSearch && <section><h3>Search matches</h3>{artifactSearch.matches.length ? artifactSearch.matches.map((match, index) => <article className="panel" key={`${match.artifactId}-${match.line}-${index}`}><header><strong>{match.filename ?? match.artifactId}</strong><button className="button quiet" type="button" onClick={() => void readArtifact(match.artifactId, Math.max(1, match.line - 10))}>Read around line {match.line}</button></header><pre>{match.context.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre></article>) : <p>No matching lines.</p>}{artifactSearch.truncated && <small>More matches are available with the continuation cursor.</small>}</section>}{artifactRead && <section><h3>{artifactRead.filename ?? artifactRead.artifactId}</h3>{artifactRead.searchable ? <pre>{artifactRead.lines.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre> : <p>This binary artifact is retained but not searchable.</p>}{artifactRead.continuationStartingLine && <button className="button quiet" type="button" onClick={() => void readArtifact(artifactRead.artifactId, artifactRead.continuationStartingLine)}>Read next lines</button>}</section>}<footer><span>Excerpts are redacted, line-numbered, and capped at 8 KiB.</span><button className="button secondary" type="button" onClick={() => setArtifactInspector(undefined)}>Close</button></footer></ModalSurface>}
+      {artifactInspector && <ModalSurface as="section" className="provider-dialog resource-dialog" labelledBy="artifact-inspector-title" onClose={() => setArtifactInspector(undefined)}><header><div><small>Untrusted tool data · bounded retrieval</small><h2 id="artifact-inspector-title">{artifactInspector.capability} artifacts</h2></div><button className="icon-button subtle" type="button" aria-label="Close artifact inspector" onClick={() => setArtifactInspector(undefined)}><X size={17} /></button></header>{artifactInspector.receipt && <div className="knowledge-status" role="status"><ShieldCheck size={15} /><span>Receipt {String(artifactInspector.receipt.status ?? artifactInspector.status)} · parser {String((artifactInspector.receipt.parser as Record<string, unknown> | undefined)?.state ?? "not configured")}{Array.isArray(artifactInspector.receipt.warnings) && artifactInspector.receipt.warnings.length ? ` · ${artifactInspector.receipt.warnings.join(" · ")}` : ""}</span></div>}<div className="runtime-resource-list">{artifactInspector.artifacts.length ? artifactInspector.artifacts.map((artifact) => <article className="runtime-resource-card" key={artifact.artifactId}><header><div><strong>{artifact.filename ?? artifact.kind}</strong><code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code></div><span>{artifact.truncated ? "truncated" : artifact.searchable ? "searchable" : "binary"}</span></header><small>{artifact.byteCount.toLocaleString()} retained byte{artifact.byteCount === 1 ? "" : "s"}{artifact.observedByteCount !== artifact.byteCount ? ` · ${artifact.observedByteCount.toLocaleString()} observed` : ""} · {artifact.mediaType}</small><footer>{artifact.searchable && <button className="button quiet" type="button" onClick={() => void readArtifact(artifact.artifactId)} disabled={artifactBusy}>Read excerpt</button>}<button className="button quiet" type="button" onClick={() => void saveRawArtifact(artifact)}>Save acknowledged raw</button></footer></article>) : <p>Artifact references are available through search for this historical or gateway result.</p>}</div><form className="chat-composer" onSubmit={(event) => void searchArtifacts(event)}><label>Search all searchable artifacts<input value={artifactQuery} maxLength={512} placeholder="open 443/tcp" onChange={(event) => setArtifactQuery(event.target.value)} /></label><button className="button primary" type="submit" disabled={artifactBusy || !artifactQuery.trim()}><Search size={14} /> {artifactBusy ? "Searching…" : "Search"}</button></form>{artifactError && <DiagnosticErrorNotice error={artifactError} fallback="Artifact retrieval failed." compact />}{artifactSearch && <section><h3>Search matches</h3>{artifactSearch.matches.length ? artifactSearch.matches.map((match, index) => <article className="panel" key={`${match.artifactId}-${match.line}-${index}`}><header><strong>{match.filename ?? match.artifactId}</strong><button className="button quiet" type="button" onClick={() => void readArtifact(match.artifactId, Math.max(1, match.line - 10))}>Read around line {match.line}</button></header><pre>{match.context.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre></article>) : <p>No matching lines.</p>}{artifactSearch.truncated && (artifactSearch.continuationCursor
+        ? <button className="button quiet" type="button" disabled={artifactBusy} onClick={() => void searchMoreArtifacts()}>More matches</button>
+        : <small>More matches exist; narrow the search to see them.</small>)}</section>}{artifactRead && <section><h3>{artifactRead.filename ?? artifactRead.artifactId}</h3>{artifactRead.searchable ? <pre>{artifactRead.lines.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre> : <p>This binary artifact is retained but not searchable.</p>}{artifactReadNext && <button className="button quiet" type="button" disabled={artifactBusy} onClick={() => void readArtifact(artifactRead.artifactId, artifactReadNext.startingLine, artifactReadNext.cursor)}>{artifactReadNext.label}</button>}</section>}<footer><span>Excerpts are redacted, line-numbered, and capped at 8 KiB.</span><button className="button secondary" type="button" onClick={() => setArtifactInspector(undefined)}>Close</button></footer></ModalSurface>}
       {shellOnly && handoffUrl && <ModalSurface as="section" className="assistant-shell-handoff" labelledBy="assistant-shell-handoff-title" onClose={() => setHandoffUrl(undefined)}><header><h2 id="assistant-shell-handoff-title">Open in full Nebula</h2><button className="icon-button subtle" type="button" aria-label="Close link details" title="Close" onClick={() => setHandoffUrl(undefined)}><X size={18} aria-hidden="true" /></button></header><p>{handoffUrl.startsWith("File: ") ? "This project file can be opened from the desktop Workbench." : "This link can be opened from a browser."}</p><label>Reference<input readOnly value={handoffUrl} onFocus={event => event.currentTarget.select()} /></label>{/^https?:\/\//i.test(handoffUrl) && <a className="button secondary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open link</a>}</ModalSurface>}
       {shellOnly && studioGoalOpen && goalEditor && <ModalSurface as="section" className="assistant-goal-dialog" labelledBy="assistant-goal-dialog-title" onClose={() => setStudioGoalOpen(false)}><header><h2 id="assistant-goal-dialog-title">Goal</h2><button className="icon-button subtle" type="button" aria-label="Close goal" title="Close goal" onClick={() => setStudioGoalOpen(false)}><X size={18} aria-hidden="true" /></button></header>{goalLoading ? <p role="status">Loading goal…</p> : providerGoalError ? <div role="alert"><p>{providerGoalError}</p><button className="button secondary" type="button" onClick={reloadGoal}>Retry goal</button></div> : goalEditor}</ModalSurface>}
       {!shellOnly && runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("activity"); }} />}

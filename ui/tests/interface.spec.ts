@@ -9644,6 +9644,164 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
   await expect(restoredLedger.getByText("Search evidence", { exact: true })).toBeVisible();
 });
 
+test("GUI parity subagent Stop follows Core's stoppable flag", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile parity projects.");
+  const turnId = "turn-subagent-stop";
+  const stops: string[] = [];
+  const task = (sequence: number, itemId: string, title: string, status: string, payload: Record<string, unknown>) => ({
+    id: `subagent-${sequence}`, type: "item_upsert", schema_version: "nebula.harness-activity/v2", sequence,
+    vendor: "claude_agent_sdk", harness_session_id: "session-subagent-stop", harness_turn_id: turnId,
+    item_id: itemId, item_kind: "subagent", item_status: status, title,
+    occurred_at: new Date(Date.UTC(2026, 10, 15, 12, 0, sequence)).toISOString(), artifact_ids: [], payload,
+  });
+  // Core's events (harnesses._claude_task_event and the stop route's record).
+  const events = [
+    task(1, "t-stream", "Scan hosts", "running", { task_id: "t-stream", stoppable: true }),
+    task(2, "t-stream", "Scan hosts", "streaming", { task_id: "t-stream", last_tool_name: "Bash", stoppable: true }),
+    task(3, "t-queued", "Queued helper", "queued", { task_id: "t-queued", patch: { status: "pending" }, stoppable: true }),
+    task(4, "t-stopped", "Stopped helper", "running", { task_id: "t-stopped", stoppable: true }),
+    task(5, "t-stopped", "Stopped helper", "cancelled", { task_id: "t-stopped" }),
+    task(6, "t-done", "Finished helper", "completed", { task_id: "t-done", stoppable: false }),
+  ];
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/harnesses") && request.method() === "GET") return route.fulfill({ json: [{
+      ...entity, id: "harness-subagent-stop", name: "Claude harness", kind: "claude_agent_sdk", connection_mode: "spawn",
+      transport: "stdio", executable: "claude", endpoint: null, auth_mode: "existing_session", secret_ref: null,
+      default_model: "claude-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true },
+      native_capabilities: { workspace_access: "write", shell: true, subagents: true },
+      capabilities: { models: ["claude-model"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0", subagent_activity: true, subagent_control: true },
+    }] });
+    if (path.endsWith("/chat-sessions")) return route.fulfill({ json: [{
+      ...entity, id: "chat-subagent-stop", engagement_id: "scratch-project", title: "Subagent stop",
+      backend: "harness", harness_profile_id: "harness-subagent-stop", harness_session_id: "session-subagent-stop",
+      model: "claude-model", metadata: {},
+    }] });
+    if (path.endsWith("/chat/sessions/chat-subagent-stop/messages")) return route.fulfill({ json: [{
+      ...entity, id: "assistant-subagent-stop", engagement_id: "scratch-project", session_id: "chat-subagent-stop",
+      sequence: 1, role: "assistant", content: "Delegated the scan.", citations: [], metadata: { harness_turn_id: turnId },
+    }] });
+    if (path.endsWith("/chat/sessions/chat-subagent-stop/pending-turn")) return route.fulfill({ json: null });
+    if (path.endsWith(`/harness-turns/${turnId}/events`)) return route.fulfill({ json: { events, next_sequence: events.length } });
+    if (path.endsWith(`/harness-turns/${turnId}/interactions`)) return route.fulfill({ json: [] });
+    if (path.endsWith("/harness-sessions/session-subagent-stop/activity")) return route.fulfill({ json: {
+      session_id: "session-subagent-stop", session_status: "running", busy: true, live: true, turn_id: turnId,
+      turn_status: "running", turn_origin: "chat", started_at: entity.updated_at, last_activity_at: entity.updated_at,
+      detail: "The harness is working.",
+    } });
+    if (path.endsWith(`/harness-turns/${turnId}/tasks/t-stream/stop`) && request.method() === "POST") {
+      stops.push(path);
+      return route.fulfill({ json: { status: "stopping" } });
+    }
+    if (path.includes(`/harness-turns/${turnId}/tasks/`)) {
+      stops.push(path);
+      return route.fulfill({ status: 409, json: { detail: "unexpected stop" } });
+    }
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=chat-subagent-stop", "Workbench");
+  const ledger = page.getByRole("region", { name: "Work summary" }).first();
+  await ledger.getByRole("button", { name: /Show activity|Inspect saved work|View work/ }).click();
+  const entry = (title: string) => ledger.locator(".activity-ledger-audit > ol > li details").filter({ has: page.locator("summary", { hasText: title }) });
+  for (const title of ["Scan hosts", "Queued helper", "Stopped helper", "Finished helper"]) {
+    await entry(title).locator(":scope > summary").click();
+  }
+  // Streaming and queued tasks are stoppable in Core; stopped and finished ones are not.
+  await expect(entry("Scan hosts").getByRole("button", { name: "Stop subagent" })).toBeVisible();
+  await expect(entry("Queued helper").getByRole("button", { name: "Stop subagent" })).toBeVisible();
+  await expect(entry("Stopped helper").getByRole("button", { name: "Stop subagent" })).toHaveCount(0);
+  await expect(entry("Finished helper").getByRole("button", { name: "Stop subagent" })).toHaveCount(0);
+  const stop = entry("Scan hosts").getByRole("button", { name: "Stop subagent" });
+  if (testInfo.project.name.startsWith("mobile-")) expectTouchTarget((await stop.boundingBox())?.height, "Stop subagent height");
+  await stop.click();
+  await expect.poll(() => stops).toEqual([`/api/v1/harness-turns/${turnId}/tasks/t-stream/stop`]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("subagent-stop.png") });
+});
+
+test("GUI parity artifact inspector pages search matches and long-line reads with Core's cursors", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile parity projects.");
+  const searches: unknown[] = [];
+  const reads: unknown[] = [];
+  const match = (line: number) => ({ artifact_id: "artifact-scan", filename: "scan.txt", line, context: [{ line, text: `open ${line}/tcp` }] });
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [{
+      ...entity, id: "chat-artifact-cursors", engagement_id: "scratch-project", title: "Artifact cursors",
+      backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {},
+    }] });
+    if (path.endsWith("/chat/sessions/chat-artifact-cursors/messages")) return route.fulfill({ json: [
+      { ...entity, id: "artifact-user", engagement_id: "scratch-project", session_id: "chat-artifact-cursors", sequence: 1, role: "user", content: "Scan the lab.", citations: [], metadata: {} },
+      { ...entity, id: "artifact-assistant", engagement_id: "scratch-project", session_id: "chat-artifact-cursors", sequence: 2, role: "assistant", content: "Scan saved.", citations: [], metadata: { tool_results: [{ tool_call_id: "tool-scan", capability: "Run scan", status: "complete", summary: "Saved the scan output.", evidence_ids: [], result_artifact_id: "artifact-scan" }] } },
+    ] });
+    if (path.endsWith("/chat/sessions/chat-artifact-cursors/pending-turn")) return route.fulfill({ json: null });
+    if (path.endsWith("/tool-calls/tool-scan/artifacts")) return route.fulfill({ json: [{
+      id: "artifact-scan", sha256: "d".repeat(64), size: 90_000, filename: "scan.txt", media_type: "text/plain",
+      metadata: { searchable: true },
+    }] });
+    if (path.endsWith("/tool-calls/tool-scan/output/search")) {
+      const body = request.postDataJSON() as { query: string; cursor: string | null };
+      searches.push(body);
+      return route.fulfill({ json: body.cursor === "SEARCH-2"
+        ? { matches: [match(41)], skipped: [], truncated: false, continuation_cursor: null }
+        : { matches: [match(1), match(2)], skipped: [], truncated: true, continuation_cursor: "SEARCH-2" } });
+    }
+    if (path.endsWith("/artifacts/artifact-scan/output/read")) {
+      const body = request.postDataJSON() as { starting_line?: number; continuation_cursor?: string };
+      reads.push(body);
+      // Core's _read_page: a page split inside line 2 names only a cursor.
+      if (!body.continuation_cursor) return route.fulfill({ json: {
+        artifact_id: "artifact-scan", filename: "scan.txt", searchable: true, starting_line: 1,
+        lines: [{ line: 1, text: "head" }, { line: 2, text: "a".repeat(120), line_truncated: true }],
+        truncated: true, continuation: { continuation_cursor: "READ-2" }, continuation_cursor: "READ-2",
+      } });
+      return route.fulfill({ json: {
+        artifact_id: "artifact-scan", filename: "scan.txt", searchable: true, starting_line: 2,
+        lines: [{ line: 2, text: "the rest of the long line" }, { line: 3, text: "tail" }],
+        truncated: false, continuation: null, continuation_cursor: null,
+      } });
+    }
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=chat-artifact-cursors", "Workbench");
+  const ledger = page.getByRole("region", { name: "Work summary" }).first();
+  await ledger.getByRole("button", { name: "Show activity" }).click();
+  await ledger.locator(".activity-ledger-audit > ol > li details > summary", { hasText: "Run scan" }).click();
+  await ledger.getByRole("button", { name: "Artifacts" }).click();
+  const inspector = page.getByRole("dialog", { name: "Run scan artifacts" });
+  await expect(inspector.getByText("scan.txt").first()).toBeVisible();
+
+  await inspector.getByRole("textbox", { name: "Search all searchable artifacts" }).fill("open");
+  await inspector.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(inspector.getByRole("button", { name: /^Read around line/ })).toHaveCount(2);
+  // A changed input does not change the query a further page continues.
+  await inspector.getByRole("textbox", { name: "Search all searchable artifacts" }).fill("closed");
+  await inspector.getByRole("button", { name: "More matches" }).click();
+  await expect(inspector.getByRole("button", { name: /^Read around line/ })).toHaveCount(3);
+  await expect(inspector.getByRole("button", { name: "Read around line 41" })).toBeVisible();
+  await expect(inspector.getByRole("button", { name: "More matches" })).toHaveCount(0);
+  expect(searches).toEqual([
+    expect.objectContaining({ query: "open", cursor: null }),
+    expect.objectContaining({ query: "open", cursor: "SEARCH-2" }),
+  ]);
+
+  await inspector.getByRole("button", { name: "Read excerpt" }).click();
+  const next = inspector.getByRole("button", { name: "Continue line 2" });
+  await expect(next).toBeVisible();
+  if (testInfo.project.name.startsWith("mobile-")) expectTouchTarget((await next.boundingBox())?.height, "Continue line height");
+  await next.click();
+  await expect(inspector.getByText("the rest of the long line", { exact: false })).toBeVisible();
+  await expect(inspector.getByRole("button", { name: /^Continue line|^Read next lines/ })).toHaveCount(0);
+  expect(reads).toEqual([{ starting_line: 1, line_count: 100 }, { line_count: 100, continuation_cursor: "READ-2" }]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".resource-dialog").analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("artifact-cursors.png") });
+});
+
 test("stabilization completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";

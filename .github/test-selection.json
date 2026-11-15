@@ -1,28 +1,30 @@
 {
-  "reviewed_by": "Claude #1097 parity implementer; defects independently validated by a separate Claude validator (issues/parity/validation.md, real-Core terminal probe); an independent diff review is still required before merge",
-  "reason": "Terminal parity for #1097. (1) The terminal Assistant now holds Core's #1101 project-view lease while it shows a project (PUT engagements/{id}/view-leases/{lease} with ttl_seconds 90, renewed on Core's 30 s hint, retried after 10 s on failure so a Core restart renews or recreates the same keyed lease), moves it when another project opens, and releases it (DELETE) on Core switch and on exit; without it a chatless project's Notes/Board reads stayed 503 'project is idle'. (2) /board track offered the terminal's placeholder title 'Conversation' because view.session is copied before Core names the chat; the track action now reads Core's current conversation title (falling back to the local copy), preserving the track:<session> request-key chain and Done-item reporting from #1067. Selected: the new lease unit file (hold/renew/same id/retry after 503/refusal/project switch/Core switch release), the shell file (startup + quit releases the lease), the board action file (Core title default, fallback, request-key chain), the client package file (new module is in the wheel allowlist) and a product-knowledge discovery check for the CLI.md guidance.",
-  "exclusions": "No Core, API or GUI source changes: the lease routes and admission rules (#1101) are unchanged and covered by tests/v3/test_project_view_leases.py, which this diff does not touch. No frontend or native changes, so no frontend, native or Playwright selection. The PTY layout suite and other terminal files do not exercise the lease or /board track. Other *_knowledge files only re-read the regenerated product index.",
+  "reviewed_by": "Claude #1097 parity implementer; defects independently validated by a separate Claude validator (issues/parity/validation.md, Core's own subagent events through the real ApiClient and reducer); an independent diff review is still required before merge",
+  "reason": "GUI parity for #1097. (1) Stop subagent was gated on status === 'running', but Core marks a Claude task stoppable while queued, running or streaming (harnesses.py _claude_task_event) and every TaskProgressMessage turns a task into 'streaming', so Stop vanished at the first progress update and never showed for a queued task. The gate is now subagentStoppable(item): an active Core status and Core's stoppable flag not false; the status check matters because Core's stop record carries only task_id and the reducer merges payloads, leaving a stale stoppable=true on a cancelled task. (2) The artifact inspector never sent Core's continuation cursors: search offered only a 'More matches are available with the continuation cursor' note, and read mapped only continuation.starting_line, so a page that stopped inside a long line (>~8 KiB) had no next control. readToolOutput now accepts and maps continuation_cursor; the inspector offers More matches (appending pages for the query that produced them) and Continue line N / Read next lines. Selected: vitest for the stoppable rule over Core-shaped events through ApiClient + reducer, the client cursor mapping and paging helpers, and the existing harnessActivity reducer tests; Playwright: the activity-ledger area (whose entry actions host both controls), extended with the two new 'GUI parity' journeys, on desktop, 320 px Chromium and 390 px WebKit.",
+  "exclusions": "No Core or Python source changes; Core's stop route, stoppable flag and tool-output read/search cursors are unchanged and covered by tests/v3/test_automation_runtime.py and the harness tests, which this diff does not touch. ChatResults' one-page excerpt and the terminal are unchanged. checkpoint_rewind stays disabled and untouched. The butler-workflow-registry.json change only updates the UI API call inventory count. No native changes. Other Playwright areas that list SessionsPage.tsx do not exercise subagent controls or the artifact inspector; compact/wide/other mobile profiles are excluded to keep CI narrow.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 75,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 26,
     "native": 0,
-    "playwright": 0
+    "playwright": 12
   },
-  "python": [
-    "tests/test_terminal_view_lease.py",
-    "tests/test_terminal_shell.py",
-    "tests/test_terminal_board_actions.py",
-    "tests/test_terminal_package.py",
-    "tests/v3/test_terminal_view_lease_knowledge.py"
+  "python": [],
+  "frontend": [
+    "ui/src/pages/subagentStop.test.ts",
+    "ui/src/pages/artifactPaging.test.ts",
+    "ui/src/pages/harnessActivity.test.ts"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "activity-ledger/desktop",
+    "activity-ledger/mobile-chromium-small",
+    "activity-ledger/mobile-webkit"
+  ],
   "checks": [],
-  "change_digest": "84f65450999308ed8ed38b4c64facf0b04e57ff87ccebfd7894278d9178cbfbb"
+  "change_digest": "b5b8bd6ec462567ce34e6a17221aee04b8d39c5479f25e5d5f1c2316eec9a418"
 }

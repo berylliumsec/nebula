@@ -5588,7 +5588,7 @@
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::searchToolOutput",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::setChatSessionArchived",
