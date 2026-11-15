@@ -17117,6 +17117,13 @@ class HarnessRuntimeService:
                 value = await set_post_tool_preference(
                     self.store, self.artifact_store, turn.engagement_id, arguments
                 )
+            from .butler_capabilities import refuse_browser_handoff
+
+            # These direct names bypass ButlerCapabilities.invoke; a terminal
+            # turn refuses their browser handoffs the same way.
+            refuse_browser_handoff(
+                name, value, str(turn.metadata.get("client_surface") or "browser")
+            )
             return {
                 "content": [{"type": "text", "text": json.dumps(value)}],
                 "structuredContent": value,
