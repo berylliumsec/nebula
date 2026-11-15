@@ -397,6 +397,13 @@ async def test_actual_retained_project_setup_status_cancel_retry_and_capacity_ar
     )
     root, fixture = settings.root, settings.managed
     await fixture.stage("operator-v1", _SETUP_WORKER)
+
+    # Retained workers need the host memory reserve's admission; like the
+    # sibling retained-worker journeys, this fixture admits every worker.
+    async def admission(_manifest, _role):
+        return None
+
+    root.worker_admission = admission
     execution = await root.prepare_execution("operator-v1")
     await root.attach_execution("admitted-project", execution.runtime_id)
     other = await root.prepare_execution("operator-v1")
