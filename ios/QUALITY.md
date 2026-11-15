@@ -22,6 +22,17 @@ Browser evidence: `iPhone assistant shell has only docked Butler…` in
 `ui/tests/interface.spec.ts` (desktop, Chromium and WebKit phones). Physical iPhone
 verification is recorded at deployment.
 
+2026-11-15 installation: Xcode's signed Debug build 0.1.0 (6) passed strict
+`codesign` verification. `devicectl` installed it on David's iPhone, read back
+version 0.1.0 (6),
+and launched the bundle ID successfully. The live Core release was read back as
+`2f1d195981cc751e8f31fc6260f28a338d2d0cb4`, matching the bundled UI base.
+The operator reported that the app appears to work on the phone. Core was
+unavailable at the time, so Butler messaging, Projects data, background/resume,
+and offline recovery were not confirmed end to end. Installation, launch, and
+the operator's general visual impression are the physical evidence for this
+build; the individual UI checks are not recorded as passed.
+
 ## Assistant-only app contract (2026-10-14)
 
 The installed iPhone app uses its existing Core connection, pairing cookie, and
