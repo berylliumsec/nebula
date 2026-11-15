@@ -11077,6 +11077,7 @@ class HarnessRuntimeService:
         control_assistant: bool = False,
         butler_initiated: bool = False,
         butler_recovery_case_id: str | None = None,
+        client_surface: str = "browser",
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -11931,6 +11932,15 @@ class HarnessRuntimeService:
                 engagement_id, clean_prompt
             )
         standing_context += assistant_scope
+        if (
+            control_assistant
+            and butler_recovery_case_id is None
+            and client_surface == "terminal"
+        ):
+            from .butler_capabilities import BUTLER_TERMINAL_SURFACE_INSTRUCTION
+
+            # Per turn: the same Butler conversation may continue in the web app.
+            runtime_context += "\n\n" + BUTLER_TERMINAL_SURFACE_INSTRUCTION
         if planning_enabled:
             standing_context += (
                 "\n\nPlanning is requested for this turn. Make a concise plan before "
@@ -12023,6 +12033,7 @@ class HarnessRuntimeService:
             metadata={
                 "standing_instructions": standing_instructions,
                 "butler_recovery_case_id": butler_recovery_case_id,
+                "client_surface": client_surface,
                 "user_prompt": clean_prompt,
                 "image_blocks": [
                     block.model_dump(mode="json") for block in image_blocks
@@ -14874,6 +14885,9 @@ class HarnessRuntimeService:
                 profile_id=retry_profile_id,
                 model=retry_model,
                 prompt=str(original.metadata.get("user_prompt") or original.prompt),
+                client_surface=str(
+                    original.metadata.get("client_surface") or "browser"
+                ),
                 content_blocks=[
                     ChatContentBlock.model_validate(block)
                     for block in original.metadata.get("image_blocks", [])
@@ -16065,6 +16079,11 @@ class HarnessRuntimeService:
                 )
             ),
             instructions_root=getattr(self, "butler_instructions_root", None),
+            client_surface=(
+                str(turn.metadata.get("client_surface") or "browser")
+                if turn is not None
+                else "browser"
+            ),
             background_runtime_local=(
                 (
                     await self.store.get(
