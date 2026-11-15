@@ -1,12 +1,12 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "ebfadf891456ade3cd6d0b56c359aeb63527f8fb38daa46a23f7fb1a7067d249",
+  "migration_tree_sha256": "cef31261230a2e45f1c77cac3a772519b7c6147887ab6e0f49ab5e2798acd5d6",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,
     "schema_max": 5,
     "additive_migrations": true,
-    "migration_head": "0049_project_view_leases",
+    "migration_head": "0050_project_checkpoint_generation",
     "api_protocol_min": 1,
     "api_protocol_max": 1,
     "execution_protocol_min": 1,
