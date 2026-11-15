@@ -234,3 +234,56 @@ async def test_concurrent_accepted_devices_do_not_share_identity_context(
         assert body(await delivery.page("device:" + name, receipt.command_id)) == {
             "device_id": name
         }
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        "storage-source:source:" + "a" * 63,
+        "storage-source:source:" + "g" * 64,
+        "storage-source::" + "a" * 64,
+        "storage-source:" + "s" * 150 + ":" + "a" * 64,
+        "storage-source:source\nid:" + "a" * 64,
+        "storage-source:source",
+        "storage:source:" + "a" * 64,
+        "anything",
+    ],
+)
+def test_runtime_principal_refuses_malformed_storage_source_actors(actor):
+    from nebula.v3.authentication import runtime_principal
+
+    with pytest.raises(ValueError, match="authenticated Core actor"):
+        with runtime_principal(actor):
+            pass
+
+
+async def test_storage_source_principal_reaches_no_operator_route(cluster):
+    from nebula.v3.authentication import runtime_principal
+
+    _, stores, _clock = cluster
+    auth = CoreAuthentication(stores[0], _TOKEN)
+    app, calls = FastAPI(), []
+
+    @app.post("/api/v1/local-only", dependencies=[Depends(auth.require_bearer_auth)])
+    async def local_only():
+        calls.append("bearer")
+        return {}
+
+    @app.post("/api/v1/operator", dependencies=[Depends(auth.require_auth)])
+    async def operator():
+        calls.append("operator")
+        return {}
+
+    actor = "storage-source:source-id:" + "a" * 64
+    operator_bearer = {"Authorization": "Bearer " + _TOKEN}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://runtime"
+    ) as client:
+        with runtime_principal(actor):
+            bearer_only = await client.post(
+                "/api/v1/local-only", headers=operator_bearer
+            )
+            any_auth = await client.post("/api/v1/operator", headers=operator_bearer)
+    assert bearer_only.status_code == 401
+    assert any_auth.status_code == 403
+    assert calls == []

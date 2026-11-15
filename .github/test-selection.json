@@ -1,34 +1,37 @@
 {
-  "reviewed_by": "Claude migrator-fix implementer; root cause independently validated from raw evidence by a separate fresh Codex read-only agent (it was given the failure, the instrumented target/source rows and file pointers, not the conclusion); an independent diff review is still required before merge",
-  "reason": "SQLite-to-PostgreSQL migrator failed on main with UniqueViolation copying project_checkpoint_generations: migration 0050's AFTER statement triggers on entities/provider_turn_queue/provider_tool_manifests fire on the migrator's COPY and derive generation rows a second time (and provider rows copied after that table would silently bump already verified generations). The migrator now disables user triggers on the target for the copy, re-enables them before final verification and refuses to commit if any stays disabled. Python: tests/v3/test_database_migration.py (16, including the new test_checkpoint_generations_copy_verbatim_and_triggers_resume, which fails on origin/main along with the 3 existing full-copy tests) and the migration CLI tests that run in the database-migrations job.",
-  "exclusions": "tests/v3/test_database_migration_cli.py::test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart is not selected: on main it fails on this UniqueViolation, and with this fix it passes locally only when NEBULA_V3_DB_ADMIN_RESERVE (and the connection budget variables) are set, which the database-migrations CI job does not provide; that environment gap is outside this change. tests/v3/test_migrations.py is unchanged by this diff (migration 0050 itself is not modified). No frontend, native, Playwright, settings or product-knowledge changes: the migrator is an offline CLI path with unchanged output.",
-  "python_browser": false,
-  "python_node": false,
+  "reviewed_by": "Claude",
+  "reason": "Storage senders on a supervisor Core (#1112). The API worker authenticates POST /api/v1/storage/test, /events and /inventory with the source token on explicit routes matched on the decoded path, validates every body before saving (422 without echoing input), answers /test itself and saves reports as storage.report/v1 commands for the source's project under a principal bound to the token digest; delivery confines that principal to the report paths and revalidates it on replay; authentication refuses it on operator routes; an interrupted report fails retryably; handoff and API promotion fence pending reports. test_api_worker (sender routes, path spellings, undecodable bodies, capacity, retries, release gate), test_runtime_principal, test_storage_integrations, test_storage_sender and test_storage_report_compatibility hold the regression tests; test_runtime_delivery, test_runtime_coordination, test_runtime_routing, test_deployment_lifecycle, test_chat_acceptance_compatibility, test_authentication_api, test_api_worker_composition, test_runtime_global_api and test_runtime_work_batches cover the delivery, claim, routing, deployment-fence, authentication and response-view paths these changes touch. test_runtime_coordination and test_api_worker_composition also make CI provision PostgreSQL.",
+  "exclusions": "No UI or native code changed. test_runtime_worker_features.py is excluded: it spawns real worker processes; a scratch supervisor Core on PostgreSQL started API and execution workers from a release declaring storage.report/v1 and ran the sender journey instead. Playwright area storage-integrations is excluded: real-core.spec.ts is not run on main and its provider fixture cannot finish turns on this host; the same journey was run with curl against the scratch supervisor Core. All unrelated tests excluded.",
   "python_versions": [
     "3.12"
   ],
+  "python_browser": false,
+  "python_node": false,
   "expected_tests": {
-    "python": 28,
+    "python": 398,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_database_migration.py",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_migration_is_discoverable_in_cli_help",
-    "tests/v3/test_database_migration_cli.py::test_schema_migrate_uses_psycopg3_for_a_bare_postgresql_url",
-    "tests/v3/test_database_migration_cli.py::test_serve_preserves_local_mission_checkpoint_location",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_inspect_reads_existing_sqlite_without_target_or_changes",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_copy_requires_explicit_stopped_core_acknowledgment",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_copy_explains_missing_target",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_copy_uses_environment_and_creates_private_receipt",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_url_file_overrides_environment_and_progress_is_separate",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_receipt_refuses_overwrite_before_copy",
-    "tests/v3/test_database_migration_cli.py::test_postgresql_errors_do_not_reveal_connection_credentials"
+    "tests/v3/test_api_worker.py",
+    "tests/v3/test_runtime_principal.py",
+    "tests/v3/test_storage_integrations.py",
+    "tests/v3/test_storage_sender.py",
+    "tests/v3/test_storage_report_compatibility.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_chat_acceptance_compatibility.py",
+    "tests/v3/test_authentication_api.py",
+    "tests/v3/test_api_worker_composition.py",
+    "tests/v3/test_runtime_global_api.py",
+    "tests/v3/test_runtime_work_batches.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "e6a801e8ed52dd031dfb9295281e6028981f4479d5197ccdd5011d76bf43716b"
+  "change_digest": "31bbf836965e708f4607bfd2091ce214afcb90ca38a5531cb61d122f29700d18"
 }

@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import ipaddress
 import json
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator, Literal, TypeVar
+from datetime import datetime, timedelta
+from typing import Any, AsyncIterator, TypeVar
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field
 from sqlalchemy import literal, select, tuple_
 from sqlalchemy.orm import aliased
 
@@ -46,59 +45,28 @@ from .domain import (
 from .execution_scope import current_execution_lease
 from .query_predicates import open_storage_row, storage_payload_text
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .authentication import current_runtime_principal
+from .storage_sender import (  # noqa: F401 - the sender contract is re-exported here
+    MAX_EVENT_BYTES,
+    StorageEvent,
+    StorageIdentity,
+    StorageInventory,
+    StorageVolumeReport,
+    authenticate_storage_source,
+    parse_storage_source_actor,
+    revalidate_storage_source,
+    sender_transport_allowed,
+)
 
-MAX_EVENT_BYTES = 64 * 1024
 MAX_CALLBACK_BYTES = 64 * 1024
+# One bound for a whole callback exchange, not each socket operation.
+CALLBACK_DEADLINE_SECONDS = 15.0
 SEVERITY = {"healthy": 0, "warning": 1, "critical": 2, "unavailable": 3}
 # Pending dispatches are read in pages of this size.
 DISPATCH_PAGE = 100
 # The Storage page lists at most this many incidents, actions and dispatches.
 DASHBOARD_ROWS = 2000
 EntityT = TypeVar("EntityT", bound=Entity)
-
-
-class StorageIdentity(NebulaModel):
-    id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
-    label: str = Field(min_length=1, max_length=300)
-
-
-class StorageVolumeReport(StorageIdentity):
-    path: str | None = Field(default=None, max_length=2048)
-
-
-class StorageEvent(NebulaModel):
-    schema_version: Literal[1]
-    event_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
-    observed_at: datetime
-    kind: Literal["snapshot", "transition"] = "snapshot"
-    device: StorageIdentity
-    volume: StorageVolumeReport
-    state: Literal["healthy", "warning", "critical", "unavailable"]
-    free_bytes: int | None = Field(default=None, ge=0)
-    total_bytes: int | None = Field(default=None, ge=0)
-
-    @field_validator("observed_at")
-    @classmethod
-    def aware_time(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("observed_at requires a timezone")
-        return value.astimezone(timezone.utc)
-
-    @model_validator(mode="after")
-    def coherent_bytes(self) -> "StorageEvent":
-        if self.state != "unavailable" and (
-            self.free_bytes is None or self.total_bytes is None
-        ):
-            raise ValueError("available volumes require free_bytes and total_bytes")
-        if self.total_bytes is not None and self.free_bytes is not None:
-            if self.total_bytes <= 0 or self.free_bytes > self.total_bytes:
-                raise ValueError("total_bytes must be positive and at least free_bytes")
-        return self
-
-
-class StorageInventory(NebulaModel):
-    schema_version: Literal[1]
-    devices: list[StorageIdentity] = Field(max_length=500)
 
 
 class StorageSourceCreate(NebulaModel):
@@ -282,6 +250,7 @@ class StorageIntegrationService:
         self._task: asyncio.Task | None = None
         self._stopping = False
         self._dispatch_lock = asyncio.Lock()
+        self._dispatch_wake = asyncio.Event()
 
     async def startup(self) -> None:
         self._stopping = False
@@ -314,7 +283,17 @@ class StorageIntegrationService:
                 )
             if self._stopping:
                 return
-            await asyncio.sleep(10)
+            # A recorded report wakes the scan early; otherwise it runs every 10 s.
+            try:
+                await asyncio.wait_for(self._dispatch_wake.wait(), timeout=10)
+            except TimeoutError:
+                # diagnostic-expected: the periodic scan runs without a wake.
+                pass
+            self._dispatch_wake.clear()
+
+    def wake_dispatch(self) -> None:
+        """Ask the dispatch loop to scan now, without waiting for its callbacks."""
+        self._dispatch_wake.set()
 
     async def _validate_runtime(
         self, engagement_id: str, backend: ChatBackend, profile_id: str, model: str
@@ -417,24 +396,9 @@ class StorageIntegrationService:
     async def authenticate(
         self, authorization: str | None, *, allow_disabled: bool = False
     ) -> StorageSource:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(401, "storage source bearer token required")
-        raw = authorization[7:]
-        source_id, dot, _ = raw.partition(".")
-        if not dot or not source_id or len(raw) > 300:
-            raise HTTPException(401, "invalid storage source token")
-        try:
-            source = await self.store.get(StorageSource, source_id)
-        except NotFoundError as exc:
-            raise HTTPException(401, "invalid storage source token") from exc
-        if not hmac.compare_digest(
-            hashlib.sha256(raw.split(".", 1)[1].encode()).hexdigest(),
-            source.token_sha256,
-        ):
-            raise HTTPException(401, "invalid storage source token")
-        if not source.enabled and not allow_disabled:
-            raise HTTPException(403, "storage source is disabled")
-        return source
+        return await authenticate_storage_source(
+            self.store, authorization, allow_disabled=allow_disabled
+        )
 
     async def ingest(
         self, source: StorageSource, event: StorageEvent
@@ -721,27 +685,43 @@ class StorageIntegrationService:
                 source.callback_credential_ref
             ).get_secret_value()
         }
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            async with client.stream(
-                "POST", source.callback_url + path, json=body, headers=headers
-            ) as response:
-                chunks = bytearray()
-                async for chunk in response.aiter_bytes():
-                    chunks.extend(chunk)
-                    if len(chunks) > MAX_CALLBACK_BYTES:
-                        raise ValueError("callback response exceeds 64 KiB")
-                if response.status_code == 409 and path.endswith("/preview"):
-                    try:
-                        refusal = json.loads(chunks)
-                    except ValueError:  # diagnostic-expected: source refusal may be non-JSON; use the generic refusal.
-                        refusal = None
-                    reason = refusal.get("error") if isinstance(refusal, dict) else None
-                    if isinstance(reason, str):
-                        reason = " ".join(reason.split())[:500]
-                    if not reason:
-                        reason = "the selected source is no longer available; choose another offer"
-                    raise ConflictError(f"Storage source refused preview: {reason}")
-                response.raise_for_status()
+        # The per-operation timeout cannot bound a source that trickles bytes;
+        # the whole exchange gets one deadline, reported like any timeout.
+        try:
+            async with asyncio.timeout(CALLBACK_DEADLINE_SECONDS):
+                async with httpx.AsyncClient(
+                    timeout=10.0, follow_redirects=False
+                ) as client:
+                    async with client.stream(
+                        "POST", source.callback_url + path, json=body, headers=headers
+                    ) as response:
+                        chunks = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            chunks.extend(chunk)
+                            if len(chunks) > MAX_CALLBACK_BYTES:
+                                raise ValueError("callback response exceeds 64 KiB")
+                        if response.status_code == 409 and path.endswith("/preview"):
+                            try:
+                                refusal = json.loads(chunks)
+                            except ValueError:  # diagnostic-expected: source refusal may be non-JSON; use the generic refusal.
+                                refusal = None
+                            reason = (
+                                refusal.get("error")
+                                if isinstance(refusal, dict)
+                                else None
+                            )
+                            if isinstance(reason, str):
+                                reason = " ".join(reason.split())[:500]
+                            if not reason:
+                                reason = "the selected source is no longer available; choose another offer"
+                            raise ConflictError(
+                                f"Storage source refused preview: {reason}"
+                            )
+                        response.raise_for_status()
+        except TimeoutError as exc:
+            raise httpx.ReadTimeout(
+                "storage source callback exceeded its overall deadline"
+            ) from exc
         value = json.loads(chunks)
         if not isinstance(value, dict):
             raise ValueError("callback response must be an object")
@@ -775,8 +755,14 @@ class StorageIntegrationService:
             after = (page[-1].created_at, page[-1].id)
 
     async def _dispatch_pending_unlocked(self) -> None:
+        # Every supervisor execution worker runs this loop, but each sees only
+        # its own project's sources. A dispatch belongs to its source's project
+        # owner; another worker must leave it pending rather than fail it.
+        scoped = current_execution_lease() is not None
         async for dispatch in self._pending_dispatches():
             if dispatch.status != "pending":
+                continue
+            if scoped and not await self._sees_source(dispatch.source_id):
                 continue
             try:
                 await self._dispatch(dispatch)
@@ -809,6 +795,14 @@ class StorageIntegrationService:
                         expected_revision=incident.revision,
                     )
                 )
+
+    async def _sees_source(self, source_id: str) -> bool:
+        try:
+            await self.store.get(StorageSource, source_id)
+        except NotFoundError:
+            # diagnostic-expected: another project's worker owns this source.
+            return False
+        return True
 
     async def _dispatch(self, dispatch: StorageDispatch) -> None:
         source = await self.store.get(StorageSource, dispatch.source_id)
@@ -1166,17 +1160,22 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
 
     def require_sender_transport(request: Request) -> None:
         client = request.client.host if request.client else ""
-        try:
-            local = ipaddress.ip_address(client).is_loopback
-        except ValueError:
-            # diagnostic-expected: a DNS client name is not an IP literal.
-            local = client == "localhost"
-        if request.url.scheme != "https" and not local:
+        if not sender_transport_allowed(request.url.scheme, client):
             raise HTTPException(403, "remote storage senders require HTTPS")
 
     async def source_auth(
         request: Request, authorization: str | None = Header(default=None)
     ) -> StorageSource:
+        principal = current_runtime_principal()
+        if parse_storage_source_actor(principal) is not None:
+            # A supervisor API worker already checked the sender's transport
+            # and token before saving this report; recheck the source now.
+            source = await revalidate_storage_source(service.store, principal)
+            if source is None:
+                raise HTTPException(
+                    401, "storage source was disabled, revoked or rotated"
+                )
+            return source
         require_sender_transport(request)
         return await service.authenticate(authorization)
 
@@ -1280,7 +1279,12 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
             outcome = await service.ingest(source, event)
         except ConflictError as exc:
             raise HTTPException(409, str(exc)) from exc
-        await service.dispatch_pending()
+        if parse_storage_source_actor(current_runtime_principal()) is not None:
+            # A report replayed from a supervisor API worker holds its project's
+            # work lane; the source's callbacks run in the dispatch loop instead.
+            service.wake_dispatch()
+        else:
+            await service.dispatch_pending()
         return outcome
 
     @router.post("/inventory", status_code=202, openapi_extra=inventory_body)

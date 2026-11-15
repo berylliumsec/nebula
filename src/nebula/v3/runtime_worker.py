@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -31,6 +32,7 @@ from .deployments import DeploymentCoordinator
 from .diagnostics import record_caught_exception, record_diagnostic
 from .release_store import ReleaseStore
 from .runtime_coordination import HEARTBEAT_SECONDS, LeaseLost, LeaseRenewal
+from .runtime_coordination import STORAGE_REPORT_COMMAND as STORAGE_REPORT_FEATURE
 from .runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
@@ -221,6 +223,10 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
             project_for=routing.project_for,
             chat_acceptance_for=routing.supports_chat_acceptance,
             chat_resume_for=routing.supports_chat_resume,
+            storage_reports_for=partial(
+                routing.supports_storage_reports,
+                default=STORAGE_REPORT_FEATURE in context.manifest.features,
+            ),
             upstream_for=routing.upstream_for,
             static_dir=Path(bootstrap.release_root) / context.manifest.ui_directory,
             dispose_database=False,
@@ -280,6 +286,7 @@ async def run_worker(
             STANDING_INSTRUCTIONS_FEATURE,
             HOST_SEARCH_FEATURE,
             WORK_BATCH_FEATURE,
+            STORAGE_REPORT_FEATURE,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
