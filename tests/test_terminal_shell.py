@@ -278,6 +278,92 @@ def test_browser_handoff_notice_reads_provider_and_harness_receipts():
     assert browser_handoff_notice({"payload": {"result": "plain text"}}) is None
 
 
+def test_older_core_gets_the_assistant_turn_without_the_client_surface(tmp_path):
+    older_core_422 = {
+        "detail": [
+            {
+                "type": "extra_forbidden",
+                "loc": ["body", "client_surface"],
+                "msg": "Extra inputs are not permitted",
+                "input": "terminal",
+            }
+        ]
+    }
+    answer = b"".join(
+        [
+            frame("started", turn_id="turn-a"),
+            frame("done", turn_id="turn-a", message={"content": "Older Core."}),
+        ]
+    )
+    submitted = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        submitted.append((request.headers["Idempotency-Key"], body))
+        if "client_surface" in body:
+            return httpx.Response(422, json=older_core_422)
+        return httpx.Response(200, content=answer)
+
+    async def run():
+        ui = UI()
+        shell = make_shell(tmp_path, handler, ui=ui)
+        body = {
+            "session_id": "session-a",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "client_surface": "terminal",
+        }
+        await shell.stream(shell.current(), "POST", "chat/completions", dict(body))
+        assert not any("422" in line for line in ui.output)
+        assert "Older Core." in "".join(ui.output)
+        # The refused request saved nothing; the turn is sent once more with a
+        # new key, and later turns skip the field for this Core.
+        await shell.stream(shell.current(), "POST", "chat/completions", dict(body))
+        assert [("client_surface" in sent) for _, sent in submitted] == [
+            True,
+            False,
+            False,
+        ]
+        assert submitted[0][0] != submitted[1][0]
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_other_validation_errors_are_not_resent_without_the_surface(tmp_path):
+    submitted = []
+
+    def handler(request):
+        submitted.append(json.loads(request.content))
+        return httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "type": "extra_forbidden",
+                        "loc": ["body", "unknown_field"],
+                        "msg": "Extra inputs are not permitted",
+                    }
+                ]
+            },
+        )
+
+    async def run():
+        api = make_shell(tmp_path, handler).api
+        with pytest.raises(ApiError, match="unknown_field"):
+            async for _ in api.events(
+                "POST",
+                "chat/completions",
+                body={"stream": True, "client_surface": "terminal"},
+            ):
+                pass
+        assert len(submitted) == 1
+        assert api.client_surface_supported is True
+        await api.close()
+
+    asyncio.run(run())
+
+
 def test_provider_body_uses_saved_settings_and_excludes_harness_fields(tmp_path):
     def handler(request):
         assert request.url.path.endswith("assistant-config")

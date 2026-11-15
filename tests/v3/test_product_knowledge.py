@@ -1017,6 +1017,16 @@ def test_product_search_explains_butler_browser_actions_in_the_terminal(monkeypa
     assert "client_surface" in text
 
 
+def test_product_search_explains_a_terminal_newer_than_core(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "terminal newer than an older Core Butler turn refused resend upgrade Core"
+    )
+    text = " ".join("\n".join(str(item["text"]) for item in matches).lower().split())
+    assert "sends the same turn once more without saying so" in text
+    assert "upgrade core to get the terminal-aware butler" in text
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()
