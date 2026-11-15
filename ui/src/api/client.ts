@@ -7213,24 +7213,31 @@ export class ApiClient {
     }));
   }
 
+  /**
+   * Read one bounded page of an artifact. Pass Core's continuation cursor to
+   * resume where the last page stopped, including inside one long line (Core
+   * then names no starting line); a cursor replaces `startingLine`.
+   */
   readToolOutput(
     artifactId: string,
     startingLine = 1,
     lineCount = 100,
+    continuationCursor?: string,
   ): Promise<ToolOutputReadResult> {
     return this.request<{
       artifact_id: string;
       filename?: string | null;
       searchable?: boolean;
+      starting_line?: number;
       lines?: Array<{ line: number; text: string; line_truncated?: boolean }>;
       truncated?: boolean;
-      continuation?: { starting_line?: number } | null;
+      continuation?: { starting_line?: number; continuation_cursor?: string } | null;
+      continuation_cursor?: string | null;
     }>(`artifacts/${encodeURIComponent(artifactId)}/output/read`, {
       method: "POST",
-      body: JSON.stringify({
-        starting_line: startingLine,
-        line_count: lineCount,
-      }),
+      body: JSON.stringify(continuationCursor
+        ? { line_count: lineCount, continuation_cursor: continuationCursor }
+        : { starting_line: startingLine, line_count: lineCount }),
     }).then((value) => ({
       artifactId: value.artifact_id,
       filename: value.filename ?? undefined,
@@ -7242,6 +7249,7 @@ export class ApiClient {
       })),
       truncated: value.truncated ?? false,
       continuationStartingLine: value.continuation?.starting_line,
+      continuationCursor: value.continuation?.continuation_cursor ?? value.continuation_cursor ?? undefined,
     }));
   }
 

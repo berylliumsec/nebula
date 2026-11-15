@@ -397,6 +397,21 @@ export function reasoningSummaryText(item: HarnessActivityItem): string | undefi
   return item.streams.reasoning_summary || undefined;
 }
 
+/** Core marks a Claude task stoppable while it is queued, running or streaming. */
+const STOPPABLE_SUBAGENT_STATUSES = new Set(["queued", "running", "streaming"]);
+
+/**
+ * Whether Core would stop this subagent now. Core sends `stoppable` with each
+ * task update, but the event that records a stop carries only the task ID, so
+ * the merged payload can still say `stoppable: true` on a cancelled or
+ * finished task: the status must be an active one as well. An event without
+ * the flag (an older Core) counts as stoppable while the task is active.
+ */
+export function subagentStoppable(item: HarnessActivityItem | undefined): boolean {
+  if (!item || item.kind !== "subagent" || !STOPPABLE_SUBAGENT_STATUSES.has(item.status ?? "")) return false;
+  return item.payload.stoppable !== false;
+}
+
 export function shouldShowActivityItem(_item: HarnessActivityItem): boolean {
   // A completed episode without supplied text still explains a visible wait.
   return true;

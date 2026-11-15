@@ -2620,9 +2620,9 @@
       {"area":"assistant-direct-request","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade clear request reaches the model without repeat confirmation on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "activity-ledger": [
-      {"area":"activity-ledger","project":"desktop","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
-      {"area":"activity-ledger","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
-      {"area":"activity-ledger","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"}
+      {"area":"activity-ledger","project":"desktop","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail|GUI parity ","runtime":"mock","shard":"1/1"},
+      {"area":"activity-ledger","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail|GUI parity ","runtime":"mock","shard":"1/1"},
+      {"area":"activity-ledger","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail|GUI parity ","runtime":"mock","shard":"1/1"}
     ],
     "codex-public-progress": [
       {"area":"codex-public-progress","project":"desktop","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},

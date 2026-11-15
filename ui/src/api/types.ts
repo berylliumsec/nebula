@@ -368,7 +368,10 @@ export interface ToolOutputReadResult {
   searchable: boolean;
   lines: ToolOutputLine[];
   truncated: boolean;
+  /** The next page starts at this line; absent when the page stopped inside a line. */
   continuationStartingLine?: number;
+  /** Core's cursor for the next page; the only way to resume inside a long line. */
+  continuationCursor?: string;
 }
 
 export type RunnerRuntime = "podman" | "docker";
