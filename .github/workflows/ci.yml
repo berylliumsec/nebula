@@ -90,7 +90,7 @@ jobs:
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
           poetry run pytest --collect-only -q tests packaging
-          poetry run python scripts/run_pytest_thread_guard.py -- -q tests packaging -vv --durations=20 --junitxml="$RUNNER_TEMP/full-tests-python.xml"
+          poetry run -- python scripts/run_pytest_thread_guard.py -- -q tests packaging -vv --durations=20 --junitxml="$RUNNER_TEMP/full-tests-python.xml"
       - name: Collect and run every frontend test
         if: success() || failure()
         working-directory: ui
@@ -285,7 +285,7 @@ jobs:
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")
           poetry run pytest --collect-only -q "${targets[@]}"
-          poetry run python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+          poetry run -- python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
       - name: Lint Nebula 3
         if: env.RUN_SELECTED == 'true'
         run: poetry run ruff check src/nebula/v3 tests/v3
