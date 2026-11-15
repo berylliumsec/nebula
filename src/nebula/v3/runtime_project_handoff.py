@@ -426,6 +426,14 @@ class ProjectHandoffAgent:
 
         async with self.coordinator.coordination.fenced(self.lease) as session:
             await assert_checkpoint_generation(session, self.lease.project_id, generation)
+            current_jobs = set(await session.scalars(
+                select(MemoryJobRow.id).where(
+                    MemoryJobRow.project_id == self.lease.project_id,
+                    MemoryJobRow.state.in_(_HELD),
+                ).limit(257)
+            ))
+            if current_jobs != set(jobs):
+                raise CoordinationConflict("Compute jobs changed during handoff inventory; retry")
             now = await self.coordinator.coordination._clock_ms(session)
             current = {}
             for key, detail in found.items():
