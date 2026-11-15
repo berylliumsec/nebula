@@ -24,6 +24,23 @@ def _projects(table, prefix):
     return f"SELECT {prefix}.project_id AS project_id"
 
 
+def _statement_projects(table, transition):
+    """Collect each affected project once, even for a large bulk write."""
+    if table == "entities":
+        return (
+            f"SELECT engagement_id AS project_id FROM {transition} "
+            f"UNION SELECT id AS project_id FROM {transition} "
+            "WHERE kind = 'engagements'"
+        )
+    if table == "provider_turn_queue":
+        return (
+            "SELECT entity.engagement_id AS project_id "
+            f"FROM {transition} AS changed "
+            "JOIN entities AS entity ON entity.id = changed.turn_id"
+        )
+    return f"SELECT project_id FROM {transition}"
+
+
 def upgrade():
     op.create_table(
         "project_checkpoint_generations",
@@ -38,7 +55,13 @@ def upgrade():
             ("DELETE", ("OLD",)),
         ):
             name = f"checkpoint_generation_{table}_{event.lower()}"
-            projects = " UNION ".join(_projects(table, p) for p in prefixes)
+            if postgres:
+                transitions = [p.lower() + "_rows" for p in prefixes]
+                projects = " UNION ".join(
+                    _statement_projects(table, transition) for transition in transitions
+                )
+            else:
+                projects = " UNION ".join(_projects(table, p) for p in prefixes)
             # Sort multi-project changes consistently before touching counters.
             # No FK: deletion must retain the last generation as evidence.
             select_projects = (
@@ -61,9 +84,14 @@ def upgrade():
                         RETURN NULL;
                     END $$"""
                 )
+                referencing = " ".join(
+                    f"{prefix} TABLE AS {transition}"
+                    for prefix, transition in zip(prefixes, transitions)
+                )
                 op.execute(
                     f"CREATE TRIGGER {name} AFTER {event} ON {table} "
-                    f"FOR EACH ROW EXECUTE FUNCTION {name}()"
+                    f"REFERENCING {referencing} "
+                    f"FOR EACH STATEMENT EXECUTE FUNCTION {name}()"
                 )
             else:
                 op.execute(
