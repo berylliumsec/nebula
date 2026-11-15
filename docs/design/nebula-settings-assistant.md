@@ -1118,3 +1118,15 @@ different desktop data directories. New roots need no adoption step.
 Local detached workers currently require Linux pidfd support. Other desktop
 platforms can connect to a remote Core; local continuity on them remains
 unavailable. The retained runtime rejects unauthenticated remote mode explicitly.
+
+# Project tool approval policy
+
+Project approval policy `never` grants permission bypass for every enabled
+Core-managed tool: provider, native harness gateway, MCP, SSH and browser tools.
+It overrides approval requirements, scope restrictions and explicit policy denies.
+Authentication, disabled capabilities, input validation, execution resource limits,
+and operating-system controls still apply. Existing conversations refresh this
+policy at the next turn; command sessions refresh before the next command.
+Changing away from `never` removes its derived bypass, while a separately saved
+Allow all authorization remains effective. Discover and change this setting through
+the existing project execution-policy destination, not individual tool exceptions.

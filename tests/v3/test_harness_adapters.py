@@ -1309,6 +1309,7 @@ async def test_codex_project_never_policy_keeps_butler_change_callable(
             metadata={
                 "approval_policy": "never",
                 "control_assistant": control_assistant,
+                "scope_snapshot": {"bypass_permissions": True},
             },
         )
 
@@ -1339,7 +1340,7 @@ async def test_codex_project_never_policy_keeps_butler_change_callable(
         )
         assert thread_request["approvalPolicy"] == "never"
         gateway = thread_request["config"]["mcp_servers"]["nebula"]
-        assert gateway["default_tools_approval_mode"] == "auto"
+        assert gateway["default_tools_approval_mode"] == "approve"
         if control_assistant:
             assert gateway["tools"] == {
                 "nebula.capabilities.change": {"approval_mode": "approve"}

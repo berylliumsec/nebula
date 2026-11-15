@@ -456,6 +456,9 @@ class RuntimePlatform:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, engagement_id, scope)
         search_enabled = web_search_enabled(scope)
         if (
             not mcp_profiles

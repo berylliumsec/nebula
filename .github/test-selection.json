@@ -1,25 +1,29 @@
 {
-  "reviewed_by": "Codex; independent causal reviewer and regression author",
-  "reason": "Only checkpoint heartbeat, generation concurrency and v1 digest compatibility on SQLite and PostgreSQL.",
-  "exclusions": "No UI, native, origin, provider or harness adapter changes. All unrelated tests excluded. User prohibits local tests and backups. CI only, Python 3.12.",
+  "reviewed_by": "Codex and independent permission-path reviewer",
+  "reason": "Project never policy, gateway start/resume, broker revocation, browser approval and operator guidance only.",
+  "exclusions": "CI only; no local tests or backups. No broad suites. UI copy only; no geometry or origin behavior changes. Live SSH workflow verified after deployment.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 48,
-    "frontend": 0,
+    "python": 26,
+    "frontend": 11,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_checkpoint_heartbeat.py",
-    "tests/v3/test_runtime_checkpoint_batches.py"
+    "tests/v3/test_never_policy.py",
+    "tests/v3/test_harness_adapters.py::test_codex_project_never_policy_keeps_butler_change_callable",
+    "tests/v3/test_harnesses.py::test_harness_session_freezes_project_never_approval_policy",
+    "tests/v3/test_browser_security.py::test_project_never_policy_auto_approves_native_browser_actions",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_never_permission_bypass"
   ],
-  "frontend": [],
+  "frontend": ["ui/src/components/EngagementPolicySettings.loading.test.tsx"],
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "cb68b5610b30528812f809a48ad9ee87768bee2ac9923aea827a4dcfac6a9f46"
+  "change_digest": "e09f2526c162d784b3b9e6091b34abd923dff64f510d3026cfb7f0ac222d5e84"
 }

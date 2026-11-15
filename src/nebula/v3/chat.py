@@ -6349,14 +6349,9 @@ class ChatService:
             try:
                 bypass_permissions = False
                 if engagement_id:
-                    selected_engagement = await self.store.get(
-                        Engagement, engagement_id
-                    )
-                    if selected_engagement.scope_policy_id:
-                        selected_scope = await self.store.get(
-                            ScopePolicy, selected_engagement.scope_policy_id
-                        )
-                        bypass_permissions = selected_scope.bypass_permissions
+                    bypass_permissions = (
+                        await self._project_scope(engagement_id)
+                    ).bypass_permissions
                 mcp_profiles = await resolve_mcp_profiles(
                     self.store,
                     request.mcp_server_ids,
@@ -12690,11 +12685,15 @@ class ChatService:
         """
         engagement = await self.store.get(Engagement, engagement_id)
         if engagement.scope_policy_id:
-            return await self.store.get(ScopePolicy, engagement.scope_policy_id)
-        return ScopePolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement.id}")),
-            engagement_id=engagement.id,
-        )
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
+        else:
+            scope = ScopePolicy(
+                id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement.id}")),
+                engagement_id=engagement.id,
+            )
+        from .execution_policy import effective_scope
+
+        return await effective_scope(self.store, engagement_id, scope)
 
     async def _mcp_catalog(
         self,
@@ -12718,6 +12717,9 @@ class ChatService:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, engagement_id, scope)
         if not force_on_demand and not on_demand_enabled(scope):
             return ()
         return await catalog_mcp_profiles(

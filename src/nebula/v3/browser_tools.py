@@ -746,6 +746,9 @@ class BrowserAutomationToolPlatform:
 
         engagement = await self.store.get(Engagement, engagement_id)
         scope = await self.store.get(ScopePolicy, engagement.scope_policy_id or "")
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, engagement_id, scope)
         specs = autonomous_browser_specs()
         return RuntimeToolComponents(
             broker=BrowserAutomationBroker(self.store, self.automation),
@@ -771,6 +774,9 @@ class BrowserAutomationToolPlatform:
             )
         engagement = await self.store.get(Engagement, run.engagement_id)
         scope = await self.store.get(ScopePolicy, engagement.scope_policy_id or "")
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, run.engagement_id, scope)
         broker = BrowserAutomationBroker(self.store, self.automation)
         workspace = Path(engagement.workspace_path or ".").resolve()
         specialist = BrokeredToolSpecialist(
@@ -967,6 +973,9 @@ class BrowserToolPlatform:
         )
         if scope is None or scope.engagement_id != engagement_id:
             raise ValueError("Project scope is required for AI browser proposals")
+        from .execution_policy import effective_scope
+
+        scope = await effective_scope(self.store, engagement_id, scope)
         broker = BrowserActionProposalBroker(self.store, session)
         workspace = Path(engagement.workspace_path or ".").resolve()
         result = RuntimeToolComponents(
