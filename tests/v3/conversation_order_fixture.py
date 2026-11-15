@@ -113,7 +113,58 @@ async def main():
                     metadata={"initial_title_state": "operator"},
                 )
             )
-            return {"parent": parent.id, "child": child.id, "chat": chat.id}
+            # Many linked projects have no chats; they must add nothing.
+            for index in range(40):
+                await store.create(
+                    Engagement(
+                        name=f"Empty child {index:02d}",
+                        parent_engagement_id=parent.id,
+                    )
+                )
+            approvals = await store.create(
+                Engagement(name="Approvals child", parent_engagement_id=parent.id)
+            )
+            busy = await store.create(
+                Engagement(name="Busy child", parent_engagement_id=parent.id)
+            )
+            # Older than every idle chat below, so recency alone would put it
+            # past the first page; Core must still list it first.
+            waiting = await store.create(
+                ChatSession(
+                    engagement_id=approvals.id,
+                    title="Approval needed chat",
+                    provider_profile_id=provider.id,
+                    model="fixture",
+                    metadata={"initial_title_state": "operator"},
+                )
+            )
+            await store.create(
+                ChatTurn(
+                    id="turn-" + waiting.id,
+                    engagement_id=approvals.id,
+                    session_id=waiting.id,
+                    provider_profile_id=provider.id,
+                    model="fixture",
+                    status="waiting_approval",
+                )
+            )
+            for index in range(30):
+                await store.create(
+                    ChatSession(
+                        engagement_id=busy.id,
+                        title=f"Busy chat {index:02d}",
+                        provider_profile_id=provider.id,
+                        model="fixture",
+                        metadata={"initial_title_state": "operator"},
+                    )
+                )
+            return {
+                "parent": parent.id,
+                "child": child.id,
+                "chat": chat.id,
+                "waiting": waiting.id,
+                "approvals": approvals.id,
+            }
 
         controls = [
             route

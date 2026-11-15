@@ -64,12 +64,17 @@ test("parent project shows child conversations and opens their owned chat", asyn
   expect(new URL(String(info.project.use.baseURL)).hostname).not.toBe("127.0.0.1");
   const seeded = await request.post(local + "/fixture/child-project-conversations", {headers});
   expect(seeded.ok(), await seeded.text()).toBe(true);
-  const {parent, child, chat} = await seeded.json();
+  const {parent, child, chat, waiting, approvals} = await seeded.json();
   const pairing = await (await request.post(local + "/api/v1/auth/pairings", {headers, data: {name: "Child project chats"}})).json();
   await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
   await page.getByLabel("Device name").fill("Child project chats");
   await page.getByRole("button", {name: "Pair device", exact: true}).click();
   await expect(page.getByLabel("Device name")).toBeHidden({timeout: 20000});
+  const reads: string[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/api/v1/chat")) reads.push(url.pathname + url.search);
+  });
   await page.goto(`/projects/${parent}/workbench?view=chat`);
   const sidebar = page.getByRole("complementary", {name: "Conversations", exact: true});
   const showSidebar = async () => {
@@ -81,10 +86,38 @@ test("parent project shows child conversations and opens their owned chat", asyn
     await expect(sidebar).toBeVisible();
   };
   await showSidebar();
-  const section = sidebar.getByRole("region", {name: "Child project conversations"});
+  const search = async (text: string) => {
+    const box = sidebar.getByRole("searchbox", {name: "Search conversations"});
+    await box.fill(text);
+    // A refilled field keeps its old text selected; collapse the selection so
+    // the phone selection toolbar does not cover the list.
+    await box.press("End");
+  };
+  const section = sidebar.getByRole("region", {name: "Subproject conversations"});
+  await expect(section).toBeVisible();
+  // One list: no per-project folders, and no empty ones.
+  await expect(section.getByText("No saved chats")).toHaveCount(0);
+  await expect(section.getByRole("link").first()).toHaveAccessibleName("Open Approval needed chat in Approvals child");
+  await expect(section.getByRole("group", {name: "Needs you"})).toContainText("Waiting for you");
+  await expect(section.getByRole("link")).toHaveCount(25);
+  // The oldest chat is not on the first page by recency; Show more reveals it.
   const link = section.getByRole("link", {name: "Open Example child chat in Child project"});
+  await expect(link).toHaveCount(0);
+  await section.getByRole("button", {name: "Show more chats"}).click();
   await expect(link).toBeVisible();
-  await sidebar.getByRole("searchbox", {name: "Search conversations"}).fill("Example child");
+  await expect(section.getByRole("button", {name: "Show more chats"})).toHaveCount(0);
+  const linkedReads = reads.filter(path => path.includes("/linked-chats"));
+  expect(linkedReads.length).toBeGreaterThanOrEqual(2);
+  expect(linkedReads.length).toBeLessThanOrEqual(4);
+  expect(reads.filter(path => path.includes("chat-sessions?engagement_id=") && !path.includes(parent))).toEqual([]);
+  expect(reads.filter(path => path.includes("session-activity") && !path.includes(parent))).toEqual([]);
+  await search("Example child");
+  await expect(link).toBeVisible();
+  await expect(section.getByRole("link")).toHaveCount(1);
+  await search("no such chat anywhere");
+  await expect(section).toHaveCount(0);
+  await expect(sidebar.getByText("No conversations match “no such chat anywhere”.")).toBeVisible();
+  await search("Example child");
   await expect(link).toBeVisible();
   await link.click();
   await expect(page).toHaveURL(new RegExp(`/projects/${child}/workbench\\?view=chat&session=${chat}$`));
@@ -93,6 +126,11 @@ test("parent project shows child conversations and opens their owned chat", asyn
   await page.reload();
   await showSidebar();
   await expect(sidebar.locator(".session-list-item.active .conversation-title-text")).toHaveText("Example child chat");
+  await page.goBack();
+  await showSidebar();
+  await expect(section).toBeVisible();
+  await section.getByRole("link", {name: "Open Approval needed chat in Approvals child"}).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${approvals}/workbench\\?view=chat&session=${waiting}$`));
   await page.goBack();
   await showSidebar();
   await expect(section).toBeVisible();
