@@ -657,6 +657,93 @@ class StagedDeployer:
                 and project.get("runtime_version") is None
             )
 
+        def verified_successor(value, project, source_id, target_id, source_fence):
+            # A clean shutdown may replace a fully transferred target before the
+            # deployer finishes its journal. Never rewrite that transfer's IDs.
+            # The saved source-retirement receipt proves this deployer already
+            # observed verified ownership by the original target.
+            steps = list(journal.get("steps", {}).values())
+            handoff = next(
+                (
+                    step
+                    for step in steps
+                    if step.get("action") == "handoff"
+                    and step.get("parameters")
+                    == {
+                        "project_id": project["project_id"],
+                        "target_runtime_id": target_id,
+                    }
+                    and step.get("receipt", {}).get("state") == "succeeded"
+                ),
+                None,
+            )
+            retirement = next(
+                (
+                    step
+                    for step in steps
+                    if step.get("action") == "retire"
+                    and step.get("parameters") == {"runtime_id": source_id}
+                    and step.get("receipt", {}).get("state") == "succeeded"
+                    and (step["receipt"].get("result") or {}).get("runtime_id")
+                    == source_id
+                ),
+                None,
+            )
+            processes = value.get("processes")
+            successor_id = project.get("runtime_id")
+            if (
+                handoff is None
+                or retirement is None
+                or not isinstance(processes, list)
+                or not successor_id
+                or source_id in owner_ids(value)
+                or target_id in owner_ids(value)
+                or any(
+                    row.get("runtime_id") in (source_id, target_id) for row in processes
+                )
+                or value.get("target_execution_version") != version
+                or project.get("phase") != "verified"
+                or project.get("runtime_version") != version
+                or project.get("target_version") != version
+                or project.get("admission_held") is not False
+                or project.get("blockers") != []
+            ):
+                return False
+            # Core grants transfer ownership at source_fence + 1. A later
+            # claimant must exceed that grant, even when the handoff response
+            # predates verification and therefore has no saved target fence.
+            target_fence = source_fence + 1
+            for row in (handoff["receipt"].get("result") or {}).get("projects", []):
+                if (
+                    row.get("project_id") == project["project_id"]
+                    and row.get("runtime_id") == target_id
+                    and row.get("phase") == "verified"
+                ):
+                    target_fence = max(target_fence, row.get("fencing_token", 0))
+            if project.get("fencing_token", 0) <= target_fence:
+                return False
+            if not any(
+                row.get("runtime_id") == successor_id
+                and row.get("role") == "execution"
+                and row.get("version") == version
+                and row.get("state") == "ready"
+                and row.get("ready_verified") is True
+                for row in processes
+            ):
+                return False
+            journal.setdefault("reconciled_successors", {})[project["project_id"]] = {
+                "runtime_id": successor_id,
+                "original_target_runtime_id": target_id,
+                "source_runtime_id": source_id,
+                "fencing_token": project["fencing_token"],
+                "original_target_fence_lower_bound": target_fence,
+                "deployment_revision": value.get("revision"),
+                "handoff_operation_id": handoff.get("operation_id"),
+                "source_retirement_operation_id": retirement.get("operation_id"),
+            }
+            self.save(self.record)
+            return True
+
         def waiting(value, pending, pinned_rows):
             self.record["active"] = version
             journal["waiting_for_handoffs"] = {
@@ -723,7 +810,15 @@ class StagedDeployer:
             source_id = source_by_project[project_id]
             if project.get("runtime_id") == source_id:
                 continue
+            successor_verified = False
             if project.get("runtime_id") not in (target_id, None):
+                successor_verified = verified_successor(
+                    status, project, source_id, target_id, expected_fence
+                )
+            if (
+                project.get("runtime_id") not in (target_id, None)
+                and not successor_verified
+            ):
                 return waiting(
                     status,
                     [
@@ -734,7 +829,9 @@ class StagedDeployer:
                     ],
                     pinned,
                 )
-            if not verified_target(project, target_id, expected_fence):
+            if not successor_verified and not verified_target(
+                project, target_id, expected_fence
+            ):
                 return waiting(
                     status,
                     [
