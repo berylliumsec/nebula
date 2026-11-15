@@ -1,14 +1,14 @@
 {
   "reviewed_by": "Claude #1100 fixing agent; each defect independently reproduced on 7495a04 by a separate validator subagent (revision-sweep/validation.md); an independent diff review is still required before merge",
   "reason": "#1100 runtime revision races: operator executions (Cancel during terminal persist discarded output and evidence; Cancel losing to persist raised; Cancel during the RUNNING transition recorded failed with a raw conflict), automation LAN results vs process finalization (results dropped with a raw revision conflict, or finalization failing and process_io raising), and notebook Interrupt on a queued cell being overwritten as failed. Each write now decides again on the newest record; Cancel/Interrupt are honoured, finished output is kept, no program is run twice. Python: new test_runtime_revision_races.py (all 6 fail on 7495a04) plus the passing execution, automation-runtime and notebook tests.",
-  "exclusions": "Not selected: 8 test_executions.py, 7 test_automation_runtime.py and 8 test_notebooks.py tests fail identically on origin/main 7495a04 (same failure set before and after; host commands need a protected memory-runner/v1 agent on this host, sync stub resolvers). No UI, frontend, native or Playwright changes; the races need a forced interleaving a real-Core journey cannot reproduce deterministically.",
+  "exclusions": "Not selected: 8 test_executions.py, 7 test_automation_runtime.py and 8 test_notebooks.py tests fail identically on origin/main 7495a04 (same failure set before and after; host commands need a protected memory-runner/v1 agent on this host, sync stub resolvers). No UI, frontend, native or Playwright changes; the races need a forced interleaving a real-Core journey cannot reproduce deterministically. Also not selected: the 3 test_automation_runtime.py tests that set NEBULA_TEMP_UNMANAGED_COMMAND_PROJECT_IDS (host-mode consent and the temporary host override, one on a disposable LAN Core). They exercise that operator override, not these revision races, and this release work must not enable the override, even in tests.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 65,
+    "python": 62,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -40,7 +40,6 @@
     "tests/v3/test_automation_runtime.py::test_general_command_reuses_session_and_persists_artifacts",
     "tests/v3/test_automation_runtime.py::test_historical_process_io_preserves_agent_ownership",
     "tests/v3/test_automation_runtime.py::test_historical_raw_tool_output_fails_closed_to_a_receipt",
-    "tests/v3/test_automation_runtime.py::test_host_mode_requires_consent_and_reads_external_folder_without_docker",
     "tests/v3/test_automation_runtime.py::test_inherited_blocking_before_hook_denies_nested_workspace_command",
     "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file",
     "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_process_write_without_parent_context",
@@ -59,8 +58,6 @@
     "tests/v3/test_automation_runtime.py::test_small_command_output_is_redacted_in_receipt_without_extra_read",
     "tests/v3/test_automation_runtime.py::test_startup_removes_exact_orphan_runtime_and_gateway_names",
     "tests/v3/test_automation_runtime.py::test_startup_sweeps_stale_capture_directories",
-    "tests/v3/test_automation_runtime.py::test_temporary_host_chat_command_on_disposable_lan_core",
-    "tests/v3/test_automation_runtime.py::test_temporary_host_override_accepts_chat_origin_harness_only",
     "tests/v3/test_automation_runtime.py::test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page",
     "tests/v3/test_automation_runtime.py::test_tool_output_search_budget_is_separate_from_the_regex_guard",
     "tests/v3/test_automation_runtime.py::test_tool_output_search_rejects_a_cursor_that_no_longer_resolves",
