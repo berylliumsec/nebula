@@ -203,6 +203,18 @@ def run(binary: Path, output: Path, *, runtime_bundle: Path) -> None:
                 else {}
             )
             response = client.request(method, path, json=body, headers=headers)
+            if method == "GET":
+                deadline = time.monotonic() + 120
+                while (
+                    response.status_code == 503
+                    and response.json().get("code") == "project_runtime_unavailable"
+                ):
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(
+                            "Leased project runtime did not become ready"
+                        )
+                    time.sleep(1)
+                    response = client.get(path)
             if (
                 response.status_code == 202
                 and response.headers.get("x-nebula-request-state") != "complete"
@@ -319,6 +331,11 @@ def run(binary: Path, output: Path, *, runtime_bundle: Path) -> None:
             project = request(
                 "POST", "/api/v1/engagements", {"name": "Synthetic native CPU smoke"}
             )
+            request(
+                "PUT",
+                f"/api/v1/engagements/{project['id']}/view-leases/cpu-smoke",
+                {"ttl_seconds": 300},
+            )
             note = request(
                 "POST",
                 "/api/v1/observations",
@@ -411,6 +428,13 @@ def run(binary: Path, output: Path, *, runtime_bundle: Path) -> None:
                 assert (
                     not restored["activation_supported"] and not restored["worker_pids"]
                 )
+            # A project view explicitly holds demand after coordinated restart,
+            # as the GUI does; reads alone must not start an idle worker.
+            request(
+                "PUT",
+                f"/api/v1/engagements/{project['id']}/view-leases/cpu-smoke",
+                {"ttl_seconds": 300},
+            )
             saved_render = request("GET", f"/api/v1/report-renders/{render['id']}")
             assert (
                 saved_render["status"] == "failed"
