@@ -134,6 +134,7 @@ async def test_never_works_without_a_saved_scope():
     scope = await effective_scope(store, "project")
     assert scope.engagement_id == "project"
     assert scope.bypass_permissions
+    assert scope == await effective_scope(store, "project")
 
 
 async def test_caller_supplied_scope_preserves_original_permission_fields():

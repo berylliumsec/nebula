@@ -1,5 +1,7 @@
 """Resolve the operator's project-wide tool permission policy."""
 
+from datetime import datetime, timezone
+
 from .domain import (
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
@@ -17,7 +19,12 @@ async def effective_scope(
         scope = (
             await store.get(ScopePolicy, project.scope_policy_id)
             if project.scope_policy_id
-            else ScopePolicy(id=f"scope:{engagement_id}", engagement_id=engagement_id)
+            else ScopePolicy(
+                id=f"scope:{engagement_id}",
+                engagement_id=engagement_id,
+                created_at=datetime(1970, 1, 1, tzinfo=timezone.utc),
+                updated_at=datetime(1970, 1, 1, tzinfo=timezone.utc),
+            )
         )
     if scope.engagement_id != engagement_id:
         raise ValueError("Project scope ownership is invalid")
