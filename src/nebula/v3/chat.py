@@ -279,6 +279,7 @@ from .chat_turn_outcomes import (
     turn_outcome_text,
 )
 from .storage import (
+    REVISE_ATTEMPTS,
     ConflictError,
     CorruptRecordError,
     NebulaStore,
@@ -3401,8 +3402,6 @@ class ChatService:
     ) -> bool:
         """Reconcile and resume one turn the previous Core stopped; True if it resumed."""
 
-        from .chat_goals import GoalWrite
-
         if (
             saved.backend != ChatBackend.PROVIDER
             or saved.status != ChatTurnStatus.INTERRUPTED
@@ -3482,11 +3481,11 @@ class ChatService:
                     )
                 )
             if goal is not None:
+                # Resumed child goals keep charging the parent while it is
+                # resumed, so the resume is decided on its newest revision.
                 (
-                    await goals.write(
-                        saved.session_id,
-                        GoalWrite(expected_revision=goal.revision, action="resume"),
-                        allow_pending_recovery=True,
+                    await goals.write_latest(
+                        saved.session_id, "resume", allow_pending_recovery=True
                     )
                 )
             (await self.start_provider_turn(prepared, automatic_recovery=True))
@@ -4116,13 +4115,33 @@ class ChatService:
     async def _claim_execution(self, prepared: PreparedChat) -> None:
         """Atomically fence one Core worker around a provider turn and its goal."""
 
-        from .chat_goals import active_time_changes
-
         turn = prepared.turn
         if turn is None:
             return
         if prepared.execution_claim_id is not None:
             (await self._assert_execution_owner(prepared))
+            return
+        # The goal's subagents and compaction keep charging usage to it while
+        # this turn starts. A claim that loses only to such bookkeeping reads
+        # the turn and goal again and claims on their newest revisions; a
+        # claim another worker took is seen on that read and still refused.
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            try:
+                (await self._claim_execution_once(prepared))
+                return
+            except ChatHistoryConflict as exc:
+                # diagnostic-expected: only a moved revision is claimed again;
+                # the last loss reaches the caller.
+                if attempt == REVISE_ATTEMPTS or not isinstance(
+                    exc.__cause__, RevisionConflict
+                ):
+                    raise
+
+    async def _claim_execution_once(self, prepared: PreparedChat) -> None:
+        from .chat_goals import active_time_changes
+
+        turn = prepared.turn
+        if turn is None:
             return
         latest = await self.store.get(ChatTurn, turn.id)
         if latest.execution_claim_id is not None:
@@ -4217,59 +4236,75 @@ class ChatService:
         claim_id = prepared.execution_claim_id
         if turn is None or claim_id is None:
             return
-        latest = await self.store.get(ChatTurn, turn.id)
-        if (
-            latest.execution_owner_id != self.worker_id
-            or latest.execution_claim_id != claim_id
-        ):
-            return
-        goal = (
-            (await self.store.get(ChatGoal, latest.goal_id)) if latest.goal_id else None
-        )
-        # A parked or settled turn stops the goal's active time unless one of
-        # its subagents still works.
-        idle_changes = (
-            active_time_changes(
-                goal,
-                working=(
-                    await ChatGoalService(self.store).has_working_subagents(
-                        latest.session_id
-                    )
-                ),
-                now=utc_now(),
-            )
-            if goal is not None
-            else {}
-        )
-        async with self.store.transaction() as transaction:
-            prepared.turn = await transaction.update(
-                ChatTurn,
-                latest.id,
-                {
-                    "execution_owner_id": None,
-                    "execution_claim_id": None,
-                    "execution_claimed_at": None,
-                },
-                expected_revision=latest.revision,
-            )
+        # The goal's subagents and compaction keep charging usage to it while
+        # the turn settles. A release that loses to such a write reads the
+        # turn and goal again and releases on their newest revisions, so the
+        # claim never outlives the turn and wedges the goal's next turn.
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            latest = await self.store.get(ChatTurn, turn.id)
             if (
-                goal is not None
-                and goal.execution_owner_id == self.worker_id
-                and goal.execution_claim_id == claim_id
+                latest.execution_owner_id != self.worker_id
+                or latest.execution_claim_id != claim_id
             ):
-                (
-                    await transaction.update(
-                        ChatGoal,
-                        goal.id,
+                return
+            goal = (
+                (await self.store.get(ChatGoal, latest.goal_id))
+                if latest.goal_id
+                else None
+            )
+            # A parked or settled turn stops the goal's active time unless one
+            # of its subagents still works.
+            idle_changes = (
+                active_time_changes(
+                    goal,
+                    working=(
+                        await ChatGoalService(self.store).has_working_subagents(
+                            latest.session_id
+                        )
+                    ),
+                    now=utc_now(),
+                )
+                if goal is not None
+                else {}
+            )
+            try:
+                async with self.store.transaction() as transaction:
+                    released = await transaction.update(
+                        ChatTurn,
+                        latest.id,
                         {
                             "execution_owner_id": None,
                             "execution_claim_id": None,
                             "execution_claimed_at": None,
-                            **idle_changes,
                         },
-                        expected_revision=goal.revision,
+                        expected_revision=latest.revision,
                     )
-                )
+                    if (
+                        goal is not None
+                        and goal.execution_owner_id == self.worker_id
+                        and goal.execution_claim_id == claim_id
+                    ):
+                        (
+                            await transaction.update(
+                                ChatGoal,
+                                goal.id,
+                                {
+                                    "execution_owner_id": None,
+                                    "execution_claim_id": None,
+                                    "execution_claimed_at": None,
+                                    **idle_changes,
+                                },
+                                expected_revision=goal.revision,
+                            )
+                        )
+            except RevisionConflict:
+                # diagnostic-expected: release again on the newest revisions;
+                # the last loss reaches the caller.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+                continue
+            prepared.turn = released
+            break
         prepared.execution_claim_id = None
         prepared.execution_claim_released = True
 
@@ -15445,33 +15480,55 @@ class ChatService:
                         idempotency_key=f"tool:{call.id}:chat-stop",
                     )
                 )
-        goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
-        async with self.store.transaction() as transaction:
-            cancelled = await transaction.update(
-                ChatTurn,
-                turn.id,
-                {
-                    "status": ChatTurnStatus.CANCELLED,
-                    "error": reason,
-                    "execution_owner_id": None,
-                    "execution_claim_id": None,
-                    "execution_claimed_at": None,
-                },
-                expected_revision=turn.revision,
+        # The goal's subagents keep charging usage to it while Stop cancels
+        # the turn's approval and tool calls. Stop is saved on the newest turn
+        # and goal revisions, so such bookkeeping never loses the Stop.
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            if attempt > 1:
+                turn = await self.store.get(ChatTurn, turn_id)
+                if turn.status in {ChatTurnStatus.COMPLETE, ChatTurnStatus.CANCELLED}:
+                    # It ended meanwhile; settle it as a repeated Stop does.
+                    return await self.cancel_turn(turn_id, reason=reason)
+            goal = (
+                (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
             )
-            if goal is not None and goal.execution_claim_id == turn.execution_claim_id:
-                (
-                    await transaction.update(
-                        ChatGoal,
-                        goal.id,
+            try:
+                async with self.store.transaction() as transaction:
+                    cancelled = await transaction.update(
+                        ChatTurn,
+                        turn.id,
                         {
+                            "status": ChatTurnStatus.CANCELLED,
+                            "error": reason,
                             "execution_owner_id": None,
                             "execution_claim_id": None,
                             "execution_claimed_at": None,
                         },
-                        expected_revision=goal.revision,
+                        expected_revision=turn.revision,
                     )
-                )
+                    if (
+                        goal is not None
+                        and goal.execution_claim_id == turn.execution_claim_id
+                    ):
+                        (
+                            await transaction.update(
+                                ChatGoal,
+                                goal.id,
+                                {
+                                    "execution_owner_id": None,
+                                    "execution_claim_id": None,
+                                    "execution_claimed_at": None,
+                                },
+                                expected_revision=goal.revision,
+                            )
+                        )
+            except RevisionConflict:
+                # diagnostic-expected: save Stop again on the newest
+                # revisions; the last loss reaches the caller.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+                continue
+            break
         # A turn stopped while queued or parked (waiting for an approval or a
         # callback, or interrupted) ends here, not in admission release.
         (await self._settle_admission(cancelled.id))
