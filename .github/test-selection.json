@@ -1,27 +1,23 @@
 {
-  "change_digest": "d6dc343300411c3c425caa1ee834d470903701e30e45cf7ee1acacb0c8444f35",
-  "reviewed_by": "Claude (core-starting-screen bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "Health reported every unpromoted API as api_state 'unavailable' and the UI showed 'Core needs a memory budget' for all of them, including every restart and coordinated shutdown. Health now adds api_admission (held/stopping/starting) from the supervisor's recorded API admission refusal (runtime_auto_admission.py -> RuntimeBootstrap.api_admission_hold) and DeploymentHostRow.shutdown_requested; the UI maps it (client.ts, types.ts) and shows memory recovery only for 'held' or an older Core (App.tsx, WorkspaceContext.tsx). Python: runtime bootstrap health (new starting/held/ready/stopping regression) and admission retry (auto-admission changed). Frontend: App host recovery screens and client health mapping.",
-  "exclusions": "tests/v3/test_runtime_bootstrap.py worker-spawning tests cannot start workers on this host; CI's 3.12 runner runs them. test_paired_browser_repairs_memory_before_real_api_admission was already red (it expected MemoryBudgetError, which prepare_api has wrapped as OperationRejected since #1022) and is repaired here. test_shutdown_readmission.py and test_supervisor.py need a LAN address/pidfd locally and are not selected; shutdown only gains a read of shutdown_requested. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No Playwright area maps App.tsx host recovery (playwright_impact select returned no areas); the restart journey was dogfooded on the staging Core in desktop Chromium. No settings, catalog, product knowledge or native change.",
+  "change_digest": "7cdcb42855576a911a5af31c2976bf93b5a7065f125cc4aca0f07571047fd432",
+  "reviewed_by": "Claude (capabilities-not-prepared bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
+  "reason": "execution-capabilities recorded six ERROR caught_failure_002 entries per read when the Kali automation runtime was never prepared, an expected setup state already reported in the response detail. resolve_operator_runtime now raises AutomationRuntimeNotPrepared (a RuntimePlatformError subclass, runtime_platform.py) and ExecutionService.capabilities reports it only in the detail; other runtime faults are still recorded. tests/v3/test_executions.py gains the regression and its stub platform becomes async (8 tests had been failing since #939).",
+  "exclusions": "The exception is raised only from resolve_operator_runtime; other callers catch RuntimePlatformError and keep their behaviour since the new class subclasses it. No UI, settings, catalog, product knowledge or native change, so frontend, Playwright and native are empty. Revalidated on the staging Core: repeated reads keep the same detail and add no errors.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 26,
-    "frontend": 13,
+    "python": 9,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_bootstrap.py",
-    "tests/v3/test_admission_retry.py"
+    "tests/v3/test_executions.py"
   ],
-  "frontend": [
-    "ui/src/App.hostRecovery.test.tsx",
-    "ui/src/api/clientHealth.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "checks": []
