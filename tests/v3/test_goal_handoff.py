@@ -373,7 +373,7 @@ async def test_scheduled_butler_checks_act_revision_and_starts_only_linked_draft
     class Work:
         calls = []
 
-        def goal_detail(self, project_id, session_id):
+        async def goal_detail(self, project_id, session_id):
             assert project_id == project.id
             assert session_id == source.id
             return {

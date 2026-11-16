@@ -33,6 +33,8 @@ from nebula.v3.domain import (
     ButlerRecoveryCase,
     ChatBackend,
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     HarnessCapabilities,
     HarnessKind,
@@ -40,7 +42,6 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
-    HarnessTurnStatus,
     ProviderProfile,
     utc_now,
 )
@@ -252,23 +253,52 @@ async def test_global_check_uses_saved_butler_harness_effort(tmp_path):
         await store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)
     )[0]
 
+    # #945 (99bb2e0) runs the scheduled check as a durable harness chat turn:
+    # create_session, prepare_chat, stream_turn, then the chat turn's result.
     class Runtime:
-        def _validate_harness_privacy(self, *_args, **_kwargs):
+        async def _validate_harness_privacy(self, *_args, **_kwargs):
             pass
 
-        async def analyze_structured(self, **request):
-            assert request["profile_id"] == alternate.id
-            assert request["reasoning_effort"] == "max"
-            assert "Check idle work." in request["prompt"]
-            request["on_turn_created"](SimpleNamespace(id="harness-turn"))
-            return SimpleNamespace(
-                status=HarnessTurnStatus.COMPLETE,
-                response="Checked Core state",
-                id="harness-turn",
+        async def create_session(self, **kwargs):
+            assert kwargs["profile_id"] == profile.id
+            assert kwargs["control_assistant"] is True
+            return await store.create(
+                HarnessSession(
+                    engagement_id=project.id,
+                    harness_profile_id=kwargs["profile_id"],
+                    model=kwargs["model"],
+                )
             )
+
+        async def prepare_chat(self, **request):
+            assert request["profile_id"] == alternate.id
+            assert request["harness_reasoning_effort"] == "max"
+            assert "Check idle work." in request["runtime_context"]
+            turn = await store.create(
+                ChatTurn(
+                    engagement_id=project.id,
+                    session_id=request["chat_session_id"],
+                    backend=ChatBackend.HARNESS,
+                    harness_turn_id="harness-turn",
+                    model=request["model"],
+                    status=ChatTurnStatus.COMPLETE,
+                    content="Checked Core state",
+                    request_snapshot={"harness_profile_id": request["profile_id"]},
+                )
+            )
+            return None, turn, SimpleNamespace(id="harness-turn")
+
+        async def stream_turn(self, _turn_id):
+            if False:
+                yield None
+
+    class Subagents:
+        async def for_session(self, _session_id):
+            return []
 
     class Work:
         available = True
+        chat = SimpleNamespace(subagents=Subagents())
 
         async def harness_quota(self, project_id, arguments):
             assert project_id == project.id
