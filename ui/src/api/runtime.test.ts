@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { browserAuthorizationRecovery, browserSessionAuthorizationStatus, browserSessionRequiresRelaunch, resolveApiRuntime } from "./runtime";
+import { browserAuthorizationRecovery, browserSessionAuthorizationStatus, browserSessionRequiresRelaunch, captureBrowserFragmentToken, resolveApiRuntime } from "./runtime";
 
 describe("browser API runtime", () => {
   beforeEach(() => {
@@ -32,6 +32,18 @@ describe("browser API runtime", () => {
     expect(window.location.hash).toBe("");
     expect(localStorage.getItem("nebula.api.token")).toBeNull();
     expect(sessionStorage.getItem("nebula.api.token")).toBeNull();
+  });
+
+  it("keeps a startup token when a first-render redirect drops the fragment", async () => {
+    window.history.replaceState({}, "", "/sessions#token=startup-secret");
+    captureBrowserFragmentToken();
+    expect(window.location.href).not.toContain("startup-secret");
+    // A legacy route's <Navigate> replaces the URL before the workspace resolves.
+    window.history.replaceState({}, "", "/?view=chat");
+
+    const runtime = await resolveApiRuntime();
+
+    expect(runtime).toMatchObject({ mode: "browser", state: "ready", token: "startup-secret" });
   });
 
   it("requires relaunch after a production browser reload but not during development", () => {

@@ -1,8 +1,8 @@
 {
-  "change_digest": "7bc565516acb289a2bddc4862335007300200ef431c143fd9f0c82b84ce6e07f",
-  "reviewed_by": "Claude (red-ui-suites bug loop); selection reviewed against the diff by the implementing agent, triage and the operator race independently validated by a separate subagent",
-  "reason": "Activating an operator profile also changes the former active profile's revision, but SettingsPage disabled only the activated row while the request and list refresh ran, so a quick Edit of the former active profile saved a stale revision and got a 409. All operator rows now wait while any operator change is in flight (SettingsPage.tsx). The same change repairs 14 frontend tests that were red on main and never selected: SettingsPage.test mocks MemoryBudgetSettings; App.test awaits the shell behind ea9c8cf's entry gate, answers runtime/identity, host-pressure and memory-budgets with real shapes, loads fake-indexeddb, gives the long provider test the file's 15 s timeout, and holds the operator activation to assert every row stays disabled.",
-  "exclusions": "Python, native and Playwright are empty: no Core change, and no mocked Playwright spec covers operator profiles (only real-core.spec.ts, which CI does not run); playwright_impact select returned no areas. Dogfooded on the staging Core in desktop Chromium: with activation delayed 1.5 s both rows' Edit buttons stay disabled, then editing the former active profile saves with 200 and no conflict. Both files pass 3 of 3 full runs locally (59 tests).",
+  "change_digest": "e76e868d1f709cb6923dca15cf9cef7ffd4a539ecaa6fb253742048f11d92a1a",
+  "reviewed_by": "Claude (early-fragment-token bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
+  "reason": "The browser read a launcher #token= fragment only inside WorkspaceProvider's effect; routes that redirect on first render (/sessions, /agents, /missions, /work, the * catch-all) ran their child Navigate effect first and replaced the URL without the fragment, so such links opened 'Browser session expired'. runtime.ts exports captureBrowserFragmentToken() and main.tsx calls it before rendering (skipped for Tauri and Electron). Frontend: runtime.test (new regression: a startup-captured token survives a redirect that drops the fragment, plus the existing fragment-consumption tests).",
+  "exclusions": "No Python, native or Playwright selection: no Core change, and no mocked Playwright spec opens a legacy route with #token= (playwright_impact select returned no areas). Revalidated on the staging Core with the production bundle in Chromium and WebKit: /sessions, /agents, /missions, /work, an unknown path and / opened with #token= are all authorized and the token never remains in the URL.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
@@ -10,14 +10,13 @@
   ],
   "expected_tests": {
     "python": 0,
-    "frontend": 59,
+    "frontend": 8,
     "native": 0,
     "playwright": 0
   },
   "python": [],
   "frontend": [
-    "ui/src/App.test.tsx",
-    "ui/src/pages/SettingsPage.test.tsx"
+    "ui/src/api/runtime.test.ts"
   ],
   "native": [],
   "playwright": [],
