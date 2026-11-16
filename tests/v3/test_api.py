@@ -271,6 +271,9 @@ async def test_goal_conversation_exists_before_its_first_message(api):
     assert session["metadata"] == {
         "tools_enabled": True,
         "mcp_server_ids": [],
+        # #974 (8770094): the goal composer saves next-turn MCP context choices.
+        "excluded_mcp_server_ids": [],
+        "mcp_context_mode": "always_loaded",
         "hook_ids": ["audit"],
         "reasoning_effort": None,
         "planning_enabled": False,
@@ -2154,10 +2157,11 @@ async def test_harness_delete_checks_only_entities_that_can_reference_it(
     visited = []
     original = store.iter_reference_candidates
 
-    async def record(model, references):
+    async def record(model, references, **kwargs):
         visited.append(model.entity_kind)
         assert references == [("harness_profile_id", harness.id, False)]
-        return original(model, references)
+        async for item in original(model, references, **kwargs):
+            yield item
 
     def reject_full_scan(_model):
         raise AssertionError("harness deletion must use reference candidates")
@@ -2377,7 +2381,11 @@ async def test_harness_turn_event_socket_sends_an_error_frame_on_stream_failure(
     # turn tore the socket down with no error frame for the viewer.
     client, _, _ = api
     runtime = client.app.state.harness_runtime_service
-    monkeypatch.setattr(runtime, "activity_events", lambda *args, **kwargs: None)
+
+    async def activity_events(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "activity_events", activity_events)
 
     async def follow_turn(turn_id: str, *, after_sequence: int = 0):
         raise RuntimeError("ledger unavailable")
@@ -2913,7 +2921,7 @@ async def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(a
             engagement_id=engagement.id, harness_profile_id="harness-1", model="m"
         )
     )
-    older, newer = (
+    older, newer = [
         (
             await store.create(
                 HarnessTurn(
@@ -2926,7 +2934,7 @@ async def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(a
             )
         )
         for prompt in ("older", "newer")
-    )
+    ]
     base = utc_now()
 
     def interaction(turn: HarnessTurn, index: int, at) -> HarnessInteraction:
@@ -3276,7 +3284,7 @@ async def test_terminal_output_page_always_advances_past_a_multibyte_character(a
     history = client.app.state.terminal_command_history
     output = "a☃b\n".encode()
     now = utc_now()
-    record = history.record_capture(
+    record = await history.record_capture(
         engagement_id=project.id,
         session_id="terminal-paging",
         operator_id="operator",

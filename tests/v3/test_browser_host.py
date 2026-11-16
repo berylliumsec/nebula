@@ -59,19 +59,19 @@ async def test_identity_proxy_rechecks_durable_revocation_and_deletion(tmp_path)
         try:
             await host._identity_proxy(identity.id)
             proxy = host._proxies[identity.id]
-            proxy.authorize("https://allowed.test/")
+            await proxy.authorize("https://allowed.test/")
             with pytest.raises(ValueError):
-                proxy.authorize("https://outside.test/")
+                await proxy.authorize("https://outside.test/")
             (
                 await store.update(
                     BrowserIdentity, identity.id, {"revoked_at": utc_now()}
                 )
             )
             with pytest.raises(ValueError, match="revoked"):
-                proxy.authorize("https://allowed.test/")
+                await proxy.authorize("https://allowed.test/")
             (await store.delete(BrowserIdentity, identity.id))
             with pytest.raises(ValueError, match="unavailable"):
-                proxy.authorize("https://allowed.test/")
+                await proxy.authorize("https://allowed.test/")
         finally:
             await host.close()
 

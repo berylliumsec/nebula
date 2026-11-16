@@ -127,7 +127,13 @@ async def test_real_kernel_grant_delivery_and_supervisor_replacement(supervised)
 
 
 async def test_unavailable_host_service_does_not_create_a_local_fallback(managed):
-    await managed.stage("v1", _API_WORKER)
+    # #1023: a worker waits out a supervisor replacement (120 s) before an
+    # absent host fails it; this host never returns, so bound that wait.
+    await managed.stage(
+        "v1",
+        "from nebula.v3.runtime_host_services import HostServiceClient\n"
+        "HostServiceClient.reconnect_seconds = 0.5\n" + _API_WORKER,
+    )
     identity = await managed.host.spawn("v1", "execution")
     lease = await managed.coordinator.coordination.claim_project(
         "admitted-project", identity.runtime_id
