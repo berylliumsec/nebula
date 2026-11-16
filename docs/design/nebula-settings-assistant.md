@@ -126,6 +126,7 @@ Settings assistant and the complete destination catalog.
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
 | Manage Nebula-wide Butler instructions | The catalog opens the editable BUTLER.md Markdown code editor above the Settings popup after Core loads the file. The full Settings page retains its file row and preview; upload opens a draft. The API checks the loaded digest before saving and the UI reads Core back before confirming | Core data directory and durable Butler global clock | Tool unit, component and real Core browser |
 | Set Butler model and effort | The catalog opens Butler settings. Full Assistant settings opens Butler's saved conversation with its Assistant settings panel visible. Core saves the selected effort on Butler's chat; the next direct turn and each new scheduled harness check use that saved choice. An unset effort uses the model's advertised default | Core Assistant settings and harness session | Core unit, component and real Core |
+| Queue messages while Butler works | While a response runs, the composer queues the next message in Core's follow-up queue for Butler's chat. The Butler queue list edits, reorders, removes, pauses, resumes, clears and retries items; the queue survives reload and tab close. Core sends queued items in order; the device that queued one follows its response and applies its browser actions, and device-only commands run immediately | Core chat follow-up queue, Butler turn ledger and the queuing device's local memory of its queued items | Component, browser and real Core |
 | Let Butler delegate to subagents | The catalog opens Butler settings. **Delegate longer work to subagents** is on by default for a provider runtime until the operator saves a choice; **Running at once** is optional (empty means no limit). On a harness runtime the operator turns on Subagents and picks a provider model. Butler answers quick requests itself, starts a subagent for each multi-step or independent item, replies without waiting, and posts each report into its conversation. The panel shows a compact strip of working and finished subagents, links to Butler's Subagents drawer, and adds reports as Core posts them without reopening. Children run in Butler mode on a provider model with Butler's Core tools and approvals, appear under Butler in the sidebar, and report browser actions instead of requesting them | Core Assistant settings, `ChatSubagent` records and Butler's transcript | Core unit, component, browser and real Core |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
@@ -1120,6 +1121,22 @@ composer and adds each report as Core posts it. Finished rows clear on the next
 request. **Subagents** opens Butler's saved conversation with its Subagents
 drawer, where a child can be read, messaged or stopped. Children cannot request
 browser actions; they report what needs the operator instead.
+
+## Queueing messages for Butler
+
+While Butler answers, its composer stays open and its button reads **Queue**;
+**Stop** moves to the Butler activity row. Each queued message goes into Core's
+follow-up queue for Butler's conversation, the same queue the terminal's
+`/queue` edits, so it is kept when the tab closes and appears on other devices.
+Core sends queued messages in order when Butler is free. The **Butler queue**
+list above the composer edits, reorders or removes a queued message, and
+**Pause**, **Resume** and **Clear** act on the whole queue. A message Core could
+not send pauses the queue and shows **Needs review** with **Retry**; nothing is
+resent silently. The device that queued a message follows its response as if it
+had just sent it, so settings, pickers and other browser actions still apply
+there; other devices only see the saved reply. Device-only commands such as
+changing the theme, opening a setting or switching project mode run at once
+instead of queueing.
 
 Open **Butler scheduled activity** in Oversight, expand **Check transcript**, then
 choose **Open investigation and subagents** to inspect the case's saved chat,
