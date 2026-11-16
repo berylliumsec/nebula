@@ -1,27 +1,36 @@
 {
-  "change_digest": "d1d774657bdf7ec4d0890218152b96b6a3ea7299686dbd13f38598b10340c7f6",
-  "reviewed_by": "Claude (py-test-rot chat group); selection reviewed against the diff by the implementing agent; remaining behavioural failures bisected by a separate subagent",
-  "reason": "Test-only repair of seven chat/context suites left stale by #939's async storage move: helpers wrapping asyncio.run in async tests made async, un-awaited store calls and service.prepare awaited, store-reading lambdas passed to _until hoisted into local async checks. A concurrent-compaction test that awaited inside asyncio.gather's list now runs concurrently again. Expectations stale since 6509bd4 (compaction target 0.60) rescaled; four async-exposed races wait for naming, precompaction, report delivery and goal turns.",
-  "exclusions": "No product code changes. These files were red on main and never selected; all pass locally (214 tests) and the bisect agent ran each previously failing test 4-8 times. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. Other red files are repaired in separate area PRs.",
+  "change_digest": "c496e89128ae79b6b947717a34d89e8cd26a4d1060724976db1104d984b41e50",
+  "reviewed_by": "Claude (py-test-rot Misc A); selection reviewed against the diff by the implementing agent; the subagent start race independently validated by a separate subagent",
+  "reason": "Product: SubagentService.start (chat_subagents.py) checked the parent's children for the same idempotency key and against the sibling limit, then awaited plans, activity, goals and the harness session before storing; since #939 those awaits yield, so concurrent starts with one key could create two children and concurrent starts could exceed the sibling limit. start() now holds a per-parent lock through the write, with the MCP catalog read before the lock. Tests: twelve tests/v3 files left stale by #939 are repaired (async stubs/helpers, off-loop sync check, restoration barrier after #1114's locked recheck, migration 0050 irreversible since #1114, report PDFs need a memory-managed runner since 64e0379). test_mcp_catalog_reads covers the race; the subagent suites cover the lock.",
+  "exclusions": "test_notebooks, test_operator_help, test_packaging and test_product_knowledge carry partial repairs but still fail on separate product issues (notebook inventory blocks the loop; help keywords; conditional imports; a docs edit moved a help passage), so they are not selected. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 214,
+    "python": 236,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_context_assembly.py",
-    "tests/v3/test_chat_final_synthesis_recovery.py",
-    "tests/v3/test_chat_leftovers.py",
-    "tests/v3/test_chat_reference_material.py",
-    "tests/v3/test_chat_routing_tolerance.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_context.py"
+    "tests/v3/test_action_broker.py",
+    "tests/v3/test_all_tool_failure_guidance.py",
+    "tests/v3/test_archived_project_deletion.py",
+    "tests/v3/test_debugger.py",
+    "tests/v3/test_diagnostics.py",
+    "tests/v3/test_execution_ai.py",
+    "tests/v3/test_execution_restoration.py",
+    "tests/v3/test_mcp_catalog_reads.py",
+    "tests/v3/test_notebook_file_index.py",
+    "tests/v3/test_performance.py",
+    "tests/v3/test_project_view_leases.py",
+    "tests/v3/test_reporting.py",
+    "tests/v3/test_butler_subagents.py",
+    "tests/v3/test_subagent_start_replay.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_subagent_delivery.py"
   ],
   "frontend": [],
   "native": [],
