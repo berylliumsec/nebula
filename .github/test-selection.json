@@ -1,28 +1,27 @@
 {
-  "change_digest": "5881c432f78ca31f555f01772c6094a5fb56bdab94d778c2cd43405a681397ca",
-  "reviewed_by": "Claude (recovery-control-path); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "Recovery waited for reconciliation while the execution worker started its command consumers only after restoration and activation, so operator pause/stop stayed queued; goal pause was also classified as work by path. The change attaches the recovery target while blockers remain, holds it in a 'recovering' state that constructs no application, and runs only recovery-safe controls (goal pause, chat turn stop) through a fenced store-only runner (runtime_recovery_controls.py, RuntimeCoordination.queued_controls/claim_control, DurableHttpRunner.run_recovery_control). Goal pause is classified as control from its body (runtime_routes.py, api_worker); start/resume stay work. Claims and uncertain commands are retained; shutdown reports retained claims; restart recovery honours durable operator pause/stop marks (recovery_markers.py, chat.py, chat_goals.py). Python: the new regression file (classification; pause/stop while blocked with work and other controls held; stale owner; duplicate and interrupted claim; activation only after blockers resolve; restart recovery keeps operator pause/stop), the recovery reconciliation and runtime recovery suites (held-phase behaviour changed), runtime delivery (runner refactor and lane classification), the execution worker suite (lifetime changes) and chat goals (write() changes).",
-  "exclusions": "tests/v3/test_recovery_reconciliation.py::test_retained_prepared_worker_survives_host_detach_and_new_host_activates_saved_recovery fails locally on origin/main as well (no pidfd in the local Python); CI's 3.12 runner is expected to support it. tests/v3/test_harness_chat_goals.py::test_goal_resume_uses_saved_next_harness_in_same_chat fails identically on origin/main and is not selected. test_supervisor.py and test_shutdown_readmission.py need a LAN address/pidfd locally and fail identically on main; the supervisor and shutdown changes are covered by the selected recovery tests. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No UI, settings or native changes, so frontend, Playwright and native are empty; no settings catalog or product knowledge change.",
+  "change_digest": "e8ff66e47adbe12055d6f586ac7b1d41160d66b232ef34f5907c4c5db02c62f3",
+  "reviewed_by": "Claude (core-starting-screen bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
+  "reason": "Health reported every unpromoted API as api_state 'unavailable' and the UI showed 'Core needs a memory budget' for all of them, including every restart and coordinated shutdown. Health now adds api_admission (held/stopping/starting) from the supervisor's recorded API admission refusal (runtime_auto_admission.py -> RuntimeBootstrap.api_admission_hold) and DeploymentHostRow.shutdown_requested; the UI maps it (client.ts, types.ts) and shows memory recovery only for 'held' or an older Core (App.tsx, WorkspaceContext.tsx). Python: runtime bootstrap health (new starting/held/ready/stopping regression) and admission retry (auto-admission changed). Frontend: App host recovery screens and client health mapping.",
+  "exclusions": "tests/v3/test_runtime_bootstrap.py worker-spawning tests (paired memory repair, ready-only-while-answering, and the new test's ready leg) fail locally on origin/main as well because local workers cannot start here; CI's 3.12 runner runs them. test_shutdown_readmission.py and test_supervisor.py need a LAN address/pidfd locally and are not selected; shutdown only gains a read of shutdown_requested. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No Playwright area maps App.tsx host recovery (playwright_impact select returned no areas); the restart journey was dogfooded on the staging Core in desktop Chromium. No settings, catalog, product knowledge or native change.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 148,
-    "frontend": 0,
+    "python": 26,
+    "frontend": 13,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_recovery_controls.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_runtime_recovery.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_chat_goals.py"
+    "tests/v3/test_runtime_bootstrap.py",
+    "tests/v3/test_admission_retry.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/App.hostRecovery.test.tsx",
+    "ui/src/api/clientHealth.test.ts"
+  ],
   "native": [],
   "playwright": [],
   "checks": []
