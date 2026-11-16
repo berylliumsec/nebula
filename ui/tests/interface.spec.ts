@@ -4929,27 +4929,49 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
   await expect(page.locator(".diagnostics-unavailable")).toHaveCount(0);
 });
 
-test("stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss", async ({page}) => {
-  test.setTimeout(45_000);
-  let healthReads = 0;
-  let failuresRemaining = 0;
-  await page.route(/\/api\/v1\/health(?:\?|$)/, async route => {
-    healthReads += 1;
-    if (failuresRemaining > 0) {
-      failuresRemaining -= 1;
+// Simulates Core outages at the network boundary. The monitor proves
+// reachability from any answered request and probes only when idle, so an
+// outage must fail every Core request, not just the health read.
+async function routeCoreOutage(page: Page) {
+  const outage = {probes: 0, down: false, missOneProbe: false};
+  await page.route(/\/api\/v1\//, async route => {
+    const path = new URL(route.request().url()).pathname;
+    const probe = /\/api\/v1\/health(?:\/live)?$/.test(path);
+    if (probe) outage.probes += 1;
+    if (outage.missOneProbe) {
+      // A transient miss: Core stops answering until one probe has failed.
+      if (probe) outage.missOneProbe = false;
       await route.abort("connectionfailed");
       return;
     }
-    await route.fulfill({json: {
-      status: "ok",
-      version: "3.0.0",
-      mode: "local",
-      runner: "ready",
-      human_pty: "unavailable",
-      container_terminal: "configured",
-      diagnostics: {writable: true, degraded: false, browser_event_ingress: "enabled"},
-    }});
+    if (outage.down) {
+      await route.abort("connectionfailed");
+      return;
+    }
+    if (path.endsWith("/health/live")) {
+      await route.fulfill({json: {status: "alive"}});
+      return;
+    }
+    if (path.endsWith("/health")) {
+      await route.fulfill({json: {
+        status: "ok",
+        version: "3.0.0",
+        mode: "local",
+        runner: "ready",
+        human_pty: "unavailable",
+        container_terminal: "configured",
+        diagnostics: {writable: true, degraded: false, browser_event_ingress: "enabled"},
+      }});
+      return;
+    }
+    await route.fallback();
   });
+  return outage;
+}
+
+test("stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss", async ({page}) => {
+  test.setTimeout(60_000);
+  const outage = await routeCoreOutage(page);
   await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
     ...entity,
     id: "connection-resilience-fixture",
@@ -4970,17 +4992,18 @@ test("stabilization LAN connection keeps the workspace through a transient miss 
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
   await composer.fill("Keep this unsent draft through reconnect.");
 
-  const beforeTransientMiss = healthReads;
-  failuresRemaining = 1;
-  await expect.poll(() => healthReads, {timeout: 9_000}).toBeGreaterThanOrEqual(beforeTransientMiss + 2);
+  const beforeTransientMiss = outage.probes;
+  outage.missOneProbe = true;
+  await expect.poll(() => outage.probes, {timeout: 15_000}).toBeGreaterThanOrEqual(beforeTransientMiss + 2);
   await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toHaveCount(0);
   await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
 
-  const beforeConfirmedLoss = healthReads;
-  failuresRemaining = 3;
-  await expect.poll(() => healthReads, {timeout: 10_000}).toBeGreaterThanOrEqual(beforeConfirmedLoss + 3);
+  const beforeConfirmedLoss = outage.probes;
+  outage.down = true;
+  await expect.poll(() => outage.probes, {timeout: 15_000}).toBeGreaterThanOrEqual(beforeConfirmedLoss + 3);
   await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toBeVisible();
   await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
+  outage.down = false;
 
   const connection = page.locator(".connection-chip");
   await expect(connection).toHaveAccessibleName(/Nebula Core failed\. Retry connection/);
@@ -4996,20 +5019,7 @@ test("stabilization LAN connection keeps the workspace through a transient miss 
 
 test("stabilization composer keeps text typed through a window resize and a Core reconnect", async ({page}) => {
   test.setTimeout(60_000);
-  let healthReads = 0;
-  let failuresRemaining = 0;
-  await page.route(/\/api\/v1\/health(?:\?|$)/, async route => {
-    healthReads += 1;
-    if (failuresRemaining > 0) {
-      failuresRemaining -= 1;
-      await route.abort("connectionfailed");
-      return;
-    }
-    await route.fulfill({json: {
-      status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable",
-      container_terminal: "configured", diagnostics: {writable: true, degraded: false, browser_event_ingress: "enabled"},
-    }});
-  });
+  const outage = await routeCoreOutage(page);
   await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
     ...entity,
     id: "draft-continuity-fixture",
@@ -5040,10 +5050,11 @@ test("stabilization composer keeps text typed through a window resize and a Core
   await page.setViewportSize(size);
 
   // A confirmed loss and a reconnect give the page a new client and scope.
-  const beforeLoss = healthReads;
-  failuresRemaining = 3;
-  await expect.poll(() => healthReads, {timeout: 12_000}).toBeGreaterThanOrEqual(beforeLoss + 3);
+  const beforeLoss = outage.probes;
+  outage.down = true;
+  await expect.poll(() => outage.probes, {timeout: 15_000}).toBeGreaterThanOrEqual(beforeLoss + 3);
   await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toBeVisible();
+  outage.down = false;
   await page.locator(".connection-chip").click();
   await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toHaveCount(0, {timeout: 10_000});
   await expect(composer).toHaveValue("Typed before and after a resize.");
