@@ -36,6 +36,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("butler-effort", "Butler model and effort", "butler-settings"),
     ("butler-activity", "Butler scheduled activity", "butler-oversight"),
     ("butler-voice", "Butler Voice timeout", "butler-settings"),
+    ("butler-subagents", "Butler subagents", "butler-settings"),
     ("usage", "Usage and credits", "usage-settings"),
     ("appearance", "Appearance and theme", "appearance-settings"),
     ("providers", "Model providers", "provider-settings"),

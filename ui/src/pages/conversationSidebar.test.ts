@@ -159,6 +159,16 @@ describe("groupSidebarConversations", () => {
     expect(result.groups[0].rows[0].childCount).toBe(2);
   });
 
+  it("keeps Butler as the owner when a newer Butler-mode subagent exists", () => {
+    const butler = session("butler", { isControlAssistant: true, updatedAt: "2026-09-22T10:00:00Z" });
+    const chat = session("chat", { isButlerInitiated: true });
+    const agent = session("agent", { parentSessionId: butler.id, isSubagent: true, isControlAssistant: true, updatedAt: "2026-09-22T14:00:00Z" });
+    const result = groupSidebarConversations([agent, chat, butler], {}, "", new Set([butler.id]), now);
+    const rows = result.groups[0].rows.map(row => [row.session.id, row.depth]);
+    expect(rows[0]).toEqual(["butler", 0]);
+    expect(rows.slice(1).sort()).toEqual([["agent", 1], ["chat", 1]]);
+  });
+
   it("surfaces recent and waiting Butler work at the parent row", () => {
     const butler = session("butler", { isControlAssistant: true, updatedAt: "2026-09-01T10:00:00Z" });
     const chat = session("chat", { isButlerInitiated: true, updatedAt: "2026-09-22T14:00:00Z" });

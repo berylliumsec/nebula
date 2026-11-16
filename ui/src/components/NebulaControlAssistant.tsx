@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { ChevronDown, GripHorizontal, Image, Minimize2, Send, Settings2, Square, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -27,7 +27,7 @@ import { assistantDestinations, assistantDestinationPath, destinationToOpen, typ
 import { projectSurface, resourcePath } from "../resourceRoutes";
 import { sha256BlobHex, sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
-import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatTurn, type ObservationSummary, type VoicePauseSeconds, type WritingTransformResponse } from "../api/types";
+import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatSubagentView, type ChatTurn, type ObservationSummary, type VoicePauseSeconds, type WritingTransformResponse } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -57,6 +57,8 @@ import { notifyProjectDataChanged } from "../api/projectDataEvents";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
+import { ChatSubagentPostedResult, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, useChatSubagents, type HarnessSubagentChoice } from "./chat-subagents";
+import { ButlerSubagentActivity, butlerActivityRows, hasUnreadReport } from "./ButlerSubagentActivity";
 import styles from "./NebulaControlAssistant.module.css";
 
 function readActionOutcomes(key: string): Record<string, string> {
@@ -74,8 +76,10 @@ function projectNameKey(name: string): string {
   return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-const ButlerTranscript = memo(function ButlerTranscript({ messages, api, projectId, sessionId, transcriptRef, onScroll, onOpenSetting, onNavigate, onHide }: {
+const ButlerTranscript = memo(function ButlerTranscript({ messages, api, projectId, sessionId, transcriptRef, onScroll, onOpenSetting, onNavigate, onHide, subagentResults }: {
   messages: ChatMessage[];
+  /** Butler's subagents by the id of the report message Core posted. */
+  subagentResults: ReadonlyMap<string, ChatSubagentView>;
   api: ReturnType<typeof useWorkspace>["api"];
   projectId?: string;
   sessionId?: string;
@@ -85,7 +89,14 @@ const ButlerTranscript = memo(function ButlerTranscript({ messages, api, project
   onNavigate: (path: string) => void;
   onHide: (hidden: boolean) => void;
 }) {
-  return <div ref={transcriptRef} className={styles.transcript} role="log" aria-label="Butler conversation" tabIndex={0} data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation" onScroll={(event) => onScroll(event.currentTarget)}>{messages.map((message, index) => <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
+  return <div ref={transcriptRef} className={styles.transcript} role="log" aria-label="Butler conversation" tabIndex={0} data-selection-source-kind="conversation" data-selection-source-id={sessionId} data-selection-source-label="Butler conversation" onScroll={(event) => onScroll(event.currentTarget)}>{messages.map((message, index) => {
+  const report = message.metadata?.kind === "subagent_result";
+  const subagent = report && message.id ? subagentResults.get(message.id) : undefined;
+  const openChat = (childSessionId: string) => { if (!projectId) return; onNavigate(`/projects/${encodeURIComponent(projectId)}/workbench?view=chat&session=${encodeURIComponent(childSessionId)}`); onHide(true); };
+  if (report) return <div key={`${index}-${message.id ?? ""}`} className={styles.answer}>{subagent
+    ? <ChatSubagentResultCard subagent={subagent} postedContent={message.content} onOpenConversation={openChat} />
+    : <ChatSubagentPostedResult content={message.content} />}</div>;
+  return <div key={`${index}-${message.id ?? ""}`} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children, ...props }) => <div className={styles.tableScroll} role="region" aria-label="Butler response table" tabIndex={0}><table {...props}>{children}</table></div>, a: ({ href, children, ...props }) => {
     const setting = settingCatalog.find((entry) => href === `/settings#${entry.target}`);
     const destination = assistantDestinations.find((entry) => href === assistantDestinationPath(entry, projectId));
     const workLink = projectId && href && /^\/projects\/[^/]+\/workbench\?view=(?:chat&session|missions&mission)=/.test(href)
@@ -95,7 +106,8 @@ const ButlerTranscript = memo(function ButlerTranscript({ messages, api, project
       : destination ? <a href={href} onClick={(event) => { event.preventDefault(); onHide(true); onNavigate(assistantDestinationPath(destination, projectId) ?? "/projects"); }}>{children}</a>
       : workLink ? <a href={workLink} onClick={(event) => { event.preventDefault(); onNavigate(workLink); onHide(true); }}>{children}</a>
       : <a href={href} {...props}>{children}</a>;
-  } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>)}</div>;
+  } }}>{message.content}</ReactMarkdown>{api && message.contentBlocks?.filter((block) => block.type === "image").map((block, imageIndex) => <AuthenticatedChatImage key={`${block.artifactId ?? "image"}-${imageIndex}`} api={api} block={block} className={styles.transcriptImage} />)}</div>;
+})}</div>;
 });
 
 export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, onCloseSetting, onSavedSetting, docked = false, dockFooter }: {
@@ -158,6 +170,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [voiceSettingsStatus, setVoiceSettingsStatus] = useState("");
   const [effortDraft, setEffortDraft] = useState("");
   const [cyberDraft, setCyberDraft] = useState<ChatAssistantConfig["harnessCyberAccessProgram"]>("automatic");
+  const [subagentsDraft, setSubagentsDraft] = useState(false);
+  const [subagentLimitDraft, setSubagentLimitDraft] = useState<number>();
+  const [harnessSubagentDraft, setHarnessSubagentDraft] = useState<HarnessSubagentChoice>({ enabled: false, providerId: "", model: "" });
+  const [shownSubagentIds, setShownSubagentIds] = useState<ReadonlySet<string>>(() => new Set());
+  const requestedReports = useRef(new Set<string>());
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyWaiting, setHistoryWaiting] = useState(false);
@@ -210,6 +227,35 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     + (attentionOverview?.summary.recoveryAttention ?? 0);
   const activePendingTurn = pendingTurn?.id === settledTurnId.current ? undefined : pendingTurn;
   const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
+  // Butler's delegated children: polled while any runs or a reply may start one.
+  const butlerSubagents = useChatSubagents(api, sessionId, { enabled: open && Boolean(sessionId), live: activeBusy });
+  const subagentResults = useMemo(() => new Map(butlerSubagents.subagents.flatMap((item) => item.resultMessageId ? [[item.resultMessageId, item] as const] : [])), [butlerSubagents.subagents]);
+  const subagentRows = butlerActivityRows(butlerSubagents.subagents, shownSubagentIds);
+  useEffect(() => { setShownSubagentIds(new Set()); requestedReports.current = new Set(); }, [sessionId]);
+  useEffect(() => {
+    const active = butlerSubagents.active.map((item) => item.id);
+    setShownSubagentIds((current) => active.every((id) => current.has(id)) ? current : new Set([...current, ...active]));
+  }, [butlerSubagents.active]);
+  // A report Core posts after Butler's reply appears without reopening the
+  // panel. Only the new report messages are added, so device-only notes stay.
+  useEffect(() => {
+    if (!api || !sessionId || activeBusy || loadingHistory) return;
+    const shownIds = new Set(messages.flatMap((item) => item.id ? [item.id] : []));
+    const missing = butlerSubagents.subagents.flatMap((item) => item.resultMessageId && !shownIds.has(item.resultMessageId) && !requestedReports.current.has(item.resultMessageId) ? [item.resultMessageId] : []);
+    if (!missing.length || !hasUnreadReport(butlerSubagents.subagents, shownIds)) return;
+    missing.forEach((id) => requestedReports.current.add(id));
+    let current = true;
+    const request = historyRead.current;
+    void api.listChatMessages(sessionId).then((history) => {
+      if (!current || request !== historyRead.current) return;
+      const reports = history.filter((item) => item.id && missing.includes(item.id));
+      if (reports.length) setMessages((shown) => [...shown, ...reports.filter((item) => !shown.some((existing) => existing.id === item.id))]);
+    }).catch((caught: unknown) => {
+      missing.forEach((id) => requestedReports.current.delete(id));
+      void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.subagent_report_load_failed", message: "A Butler subagent report could not be loaded.", outcome: "failure", stage: "subagents", retryable: true, exception: caught });
+    });
+    return () => { current = false; };
+  }, [api, sessionId, activeBusy, loadingHistory, butlerSubagents.subagents, messages]);
   const pendingReady = !sessionId || !api?.getPendingChatTurn || (pendingCheckedSessionId === sessionId && !pendingStatusError);
 
   const scrollSurface = useCallback(() => nativeShell || window.matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches
@@ -523,6 +569,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
+  const applySubagentDrafts = (config?: ChatAssistantConfig) => {
+    // Before Butler's first conversation, mirror Core's default: a provider
+    // Butler delegates until the operator saves otherwise.
+    setSubagentsDraft(config ? config.allowSubagents : runtime?.kind === "provider");
+    setSubagentLimitDraft(config?.maxActiveSubagents ?? undefined);
+    setHarnessSubagentDraft({
+      enabled: Boolean(config?.allowSubagents && config.subagentProviderId),
+      providerId: config?.subagentProviderId ?? "",
+      model: config?.subagentModel ?? "",
+      limit: config?.maxActiveSubagents ?? undefined,
+      reasoningEffort: config?.subagentReasoningEffort,
+    });
+  };
+
   const openSettings = () => {
     setView("more");
     if (settingsOpen) { setSettingsOpen(false); return; }
@@ -555,6 +615,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setSettingsRevision(saved?.revision);
         setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
         setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
+        applySubagentDrafts(config);
       } catch (caught) {
         if (!current) return;
         void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.settings_open_failed", message: "Butler settings could not be loaded.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
@@ -601,15 +662,22 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const current = settingsRevision === undefined || !sessionId
         ? await api.getChatAssistantConfig(targetSessionId)
         : { revision: settingsRevision };
+      // Butler's children run on a provider model so they keep its Core tools.
+      const subagents = selectedSettingsRuntime.kind === "provider"
+        ? { allowSubagents: subagentsDraft, maxActiveSubagents: subagentsDraft ? subagentLimitDraft ?? null : null }
+        : harnessSubagentDraft.enabled
+          ? { allowSubagents: true, subagentProviderId: harnessSubagentDraft.providerId, subagentModel: harnessSubagentDraft.model, maxActiveSubagents: harnessSubagentDraft.limit ?? null, subagentReasoningEffort: harnessSubagentDraft.reasoningEffort ?? null }
+          : { allowSubagents: false };
       const patch = selectedSettingsRuntime.kind === "provider"
-        ? { reasoningEffort: effortDraft || null }
-        : { harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}) };
+        ? { reasoningEffort: effortDraft || null, ...subagents }
+        : { harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}), ...subagents };
       await api.updateChatAssistantConfig(targetSessionId, current.revision, patch);
       const saved = await api.getChatAssistantConfig(targetSessionId);
       setSessionConfig(saved.settings);
       setSettingsRevision(saved.revision);
       setEffortDraft(saved.settings.backend === "provider" ? saved.settings.reasoningEffort ?? "" : saved.settings.harnessReasoningEffort ?? "");
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
+      applySubagentDrafts(saved.settings);
       setSettingsStatus(selectedSettingsRuntime.kind === "harness"
         ? sessionId
           ? "Saved. Applies to Butler’s next message and scheduled check."
@@ -2024,6 +2092,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const hasImages = pendingImages.length > 0;
     if (hasImages && !imageInputSupported) { setImageHelp(true); return; }
     setSuggestions([]);
+    // Finished subagents leave the strip when the operator asks something new.
+    setShownSubagentIds(new Set(butlerSubagents.active.map((item) => item.id)));
     const requestedTheme = themeChange(prompt);
     if (!hasImages && requestedTheme) {
       setDraft("");
@@ -2549,7 +2619,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         {workAttentionCount > 0 && <div className={styles.attentionLine} role="status"><span>{workAttentionCount} {workAttentionCount === 1 ? "item needs" : "items need"} attention</span><button className="button quiet" type="button" onClick={() => setView("work")}>Review work</button></div>}
         {coreState === "offline" && <p className={styles.connectionLine} role="status">Butler is offline. Your conversation remains available.</p>}
         {messages.length === 0 && !loadingHistory && <div className={styles.emptyConversation}><strong>Ask Butler</strong><p>Check on work, start an assistant or mission, or change a setting.</p></div>}
-      <ButlerTranscript messages={messages} api={api} projectId={engagement?.id} sessionId={sessionId} transcriptRef={transcript} onScroll={handleConversationScroll} onOpenSetting={onOpenSetting} onNavigate={onNavigate} onHide={setHidden} />
+      <ButlerTranscript messages={messages} subagentResults={subagentResults} api={api} projectId={engagement?.id} sessionId={sessionId} transcriptRef={transcript} onScroll={handleConversationScroll} onOpenSetting={onOpenSetting} onNavigate={onNavigate} onHide={setHidden} />
       {suggestions.length > 0 && <div className={styles.settingList} role="group" aria-label="Suggested settings">{suggestions.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { openSelectedSetting(entry); setSuggestions([]); }}>{entry.label}</button>)}</div>}
       {error && <p role="alert">{error}</p>}
       {loadingHistory && <p role="status">Restoring your saved conversation…</p>}
@@ -2579,7 +2649,12 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError) || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
           {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
           {selectedSettingsRuntime?.kind === "harness" && !selectedModelOptions?.reasoningEfforts.length && <small>This harness does not advertise effort choices.</small>}
-          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || Boolean(settingsError) || busy}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}&assistantSettings=open`); }}>Full Assistant settings</button>}</div>
+          {selectedSettingsRuntime?.kind === "provider" && <>
+            <label className={styles.subagentToggle}><input type="checkbox" checked={subagentsDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setSubagentsDraft(event.target.checked)} /><span><strong>Delegate longer work to subagents</strong><small>Butler replies right away and posts each report here when it finishes. Subagents use this model and Butler’s Core tools.</small></span></label>
+            {subagentsDraft && <SubagentLimitField limit={subagentLimitDraft} delegator="Butler" disabled={settingsBusy || Boolean(settingsError)} onChange={setSubagentLimitDraft} />}
+          </>}
+          {selectedSettingsRuntime?.kind === "harness" && <HarnessSubagentSettings providers={providers} choice={harnessSubagentDraft} harnessName={selectedHarness?.name ?? "Butler"} disabled={settingsBusy || Boolean(settingsError)} onChange={setHarnessSubagentDraft} />}
+          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || Boolean(settingsError) || busy || (selectedSettingsRuntime?.kind === "harness" && harnessSubagentDraft.enabled && !(harnessSubagentDraft.providerId && harnessSubagentDraft.model))}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}&assistantSettings=open`); }}>Full Assistant settings</button>}</div>
           {settingsBusy && <p role="status">{!api ? "Connect to Core to load Butler settings." : !engagement ? "Choose a project to load Butler settings." : "Loading Butler settings…"}</p>}
           {settingsStatus && <p role="status">{settingsStatus}</p>}
           {settingsError && <p role="alert">{settingsError}</p>}
@@ -2620,6 +2695,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <div className={styles.contextItems}>{butlerDrafts.map((item, index) => <div className={styles.contextItem} key={`${item.source.kind}:${item.source.id ?? ""}:${index}`}><details><summary>{item.source.label}{item.truncated ? " · shortened" : ""}</summary><p>{item.text}</p></details><button type="button" className="icon-button subtle" aria-label={`Remove ${item.source.label} from Butler context`} title={`Remove ${item.source.label}`} disabled={busy} onClick={() => context?.removeButlerDraft(index)}><X size={16} /></button></div>)}</div>
     </section>}
     {context?.butlerDraftNotice && <div className={styles.contextNotice} role="status"><span>{context.butlerDraftNotice}</span><button type="button" className="icon-button subtle" aria-label="Dismiss Butler context notice" title="Dismiss Butler context notice" onClick={() => context.clearButlerDraftNotice()}><X size={16} /></button></div>}
+    {sessionId && engagement && <ButlerSubagentActivity rows={subagentRows}
+      subagentsHref={`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}&drawer=subagents`}
+      onOpen={(href) => { setHidden(true); onNavigate(href); }} />}
     {showTurnStatus && <section className={styles.turnStatus} data-state={pendingStatusError ? "error" : needsReview ? "attention" : "working"} aria-label="Butler activity">
       <span className={styles.turnStatusDot} aria-hidden="true" />
       <div className={styles.turnStatusText}>

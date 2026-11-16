@@ -102,6 +102,21 @@
 .turnSteps summary { display: flex; align-items: center; min-height: 44px; width: fit-content; cursor: pointer; }
 .turnSteps ol { max-height: 120px; overflow: auto; margin: 0 0 4px; padding-left: 18px; }
 .turnSteps li + li { margin-top: 3px; }
+.subagentActivity { min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface-raised, var(--surface)); }
+.subagentActivityHeading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.subagentActivityHeading .turnStatusDot { margin-top: 0; }
+.subagentActivity[data-state="done"] .turnStatusDot { background: var(--green, var(--blue)); }
+.subagentActivityHeading strong { flex: 1; min-width: 0; font-size: .82rem; font-weight: 600; }
+.subagentActivityHeading a { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; color: var(--blue); font-size: .75rem; text-decoration: none; }
+.subagentActivity ul { margin: 2px 0 0; padding: 0 0 0 15px; list-style: none; }
+.subagentActivity li { display: flex; gap: 8px; min-width: 0; font-size: .75rem; line-height: 1.6; }
+.subagentActivity li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagentActivity li small { flex: 0 0 auto; color: var(--muted-strong, var(--muted)); font-size: .72rem; }
+.subagentActivity li small[data-tone="done"] { color: var(--green, var(--muted)); }
+.subagentActivity li small[data-tone="attention"] { color: var(--orange, var(--danger, var(--text))); }
+.subagentToggle { display: flex; gap: 8px; align-items: flex-start; }
+.subagentToggle span { display: grid; gap: 2px; }
+.subagentToggle small { color: var(--muted-strong, var(--muted)); }
 .composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
 @media (max-height: 520px) {

@@ -2117,6 +2117,14 @@ class SubagentService:
                 "subagents need a selected runtime and model",
                 rule="subagents.runtime_model",
             )
+        # Butler delegates its own Core work, so its children run in Butler
+        # mode. Only a provider turn carries Butler's Core tools.
+        butler_child = parent_session.metadata.get("control_assistant") is True
+        if butler_child and harness_id:
+            raise ToolNotPermitted(
+                "Butler subagents run on a provider model so they keep Butler's Core tools",
+                rule="subagents.runtime_model",
+            )
         if harness_id:
             (
                 await self.validate_harness_setting(
@@ -2218,6 +2226,7 @@ class SubagentService:
                 "subagent_parent_session_id": parent_session.id,
                 "subagent_parent_turn_id": parent_turn.id,
                 "planning_enabled": parent_request["planning_enabled"],
+                **({"control_assistant": True} if butler_child else {}),
                 **({"delegated_plan_context": plan_context} if plan_context else {}),
             },
         )
@@ -2297,6 +2306,7 @@ class SubagentService:
                     provider_id=provider_id,
                     engagement_id=parent_session.engagement_id,
                     session_id=child_session.id,
+                    control_assistant=butler_child,
                     model=model,
                     messages=[
                         ChatRequestMessage(
@@ -2670,11 +2680,13 @@ class SubagentService:
             )
             prepared = None
         else:
+            child = await self.store.get(ChatSession, record.child_session_id)
             prepared = await self.chat.prepare_async(
                 ChatCompletionRequest(
                     provider_id=provider_id or "",
                     engagement_id=record.engagement_id,
                     session_id=record.child_session_id,
+                    control_assistant=child.metadata.get("control_assistant") is True,
                     model=model,
                     messages=[
                         ChatRequestMessage(

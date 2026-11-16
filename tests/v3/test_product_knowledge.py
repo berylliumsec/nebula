@@ -1154,3 +1154,13 @@ def test_browser_harness_guidance_retains_tools_without_attack_recipes(monkeypat
     )
     assert 'allowed_risk_classes=["passive"]' in guidance
     assert "Other risk classes and credential grants are refused" in guidance
+
+
+def test_product_help_explains_butler_subagent_delegation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler busy one request at a time delegate subagents reply right away"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "delegate longer work to subagents" in text
+    assert "running at once" in text and "butler mode" in text

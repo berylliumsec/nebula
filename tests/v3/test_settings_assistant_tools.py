@@ -58,7 +58,7 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 25
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 28
     assert any(item["id"] == "butler-check-interval" for item in result["settings"])
     assert any(item["id"] == "typesafe" for item in result["settings"])
     assert (
@@ -535,3 +535,8 @@ async def test_control_session_lookup_is_authenticated_and_project_scoped(tmp_pa
 
 
 pytestmark = pytest.mark.anyio
+
+
+def test_butler_subagents_setting_opens_butler_settings():
+    destinations = {item[0]: item[2] for item in SETTING_DESTINATIONS}
+    assert destinations["butler-subagents"] == "butler-settings"
