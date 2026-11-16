@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter, useLocation } from "react-router-dom";
@@ -52,6 +53,16 @@ function unmatchedCoreResponse(input: RequestInfo | URL) {
   if (pathname.endsWith("/storage")) {
     return new Response(JSON.stringify({ sources: [], devices: [], volumes: [], incidents: [], actions: [], dispatches: [] }), { status: 200 });
   }
+  if (pathname.includes("/memory-budgets")) {
+    return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+  }
+  if (pathname.endsWith("/host-pressure")) {
+    const t = { cpu: 0.8, memory: 0.8, load: 0.8, io: 0.8 };
+    return new Response(JSON.stringify({ host_id: "host-1", host_name: "test", revision: 1, saved_thresholds: t, effective_thresholds: t, readings: { cpu: 0.1, memory: 0.1, load: 0.1, io: 0 }, pressure_metric: null, waiting: false, reason: null, concurrency: { provider_limit: 60, background_limit: 58, active: 0, active_background: 0 } }), { status: 200 });
+  }
+  if (pathname.endsWith("/runtime/identity")) {
+    return new Response(JSON.stringify({ core_id: "core-test", principal_id: "operator" }), { status: 200 });
+  }
   if (pathname.endsWith("/goal")) {
     return new Response(JSON.stringify({ detail: "Goal not found" }), { status: 404 });
   }
@@ -76,6 +87,7 @@ describe("Nebula workspace", () => {
 
   it("exposes every primary workspace destination", async () => {
     renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     for (const label of ["Workbench", "Findings", "Reports", "Projects", "Settings"]) {
       expect(screen.getByRole("link", { name: label })).toBeVisible();
     }
@@ -124,8 +136,9 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   });
 
-  it("defaults to Quiet Lens and preserves the selected shell preference", () => {
+  it("defaults to Quiet Lens and preserves the selected shell preference", async () => {
     const firstRender = renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     expect(document.documentElement).toHaveAttribute("data-theme", "quiet-lens");
     expect(document.querySelector(".app-shell")).toHaveClass("quiet-lens-shell");
     expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
@@ -136,6 +149,7 @@ describe("Nebula workspace", () => {
     firstRender.unmount();
     localStorage.setItem("nebula.theme", "light");
     const lightRender = renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
     expect(localStorage.getItem("nebula.theme")).toBe("light");
@@ -143,6 +157,7 @@ describe("Nebula workspace", () => {
 
     localStorage.setItem("nebula.theme", "dark");
     const darkRender = renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
     expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
     expect(localStorage.getItem("nebula.theme")).toBe("dark");
@@ -150,6 +165,7 @@ describe("Nebula workspace", () => {
 
     localStorage.setItem("nebula.theme", "zero-light");
     renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     expect(document.documentElement).toHaveAttribute("data-theme", "zero-light");
     expect(document.documentElement.style.colorScheme).toBe("light");
     expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
@@ -165,6 +181,7 @@ describe("Nebula workspace", () => {
   it("navigates with the keyboard command palette", async () => {
     const user = userEvent.setup();
     renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     await user.keyboard("{Control>}k{/Control}");
     const search = screen.getByRole("textbox", { name: "Search pages, actions, and settings" });
     await user.type(search, "provider");
@@ -195,6 +212,7 @@ describe("Nebula workspace", () => {
   it("opens Appearance from universal search, saves Light, and restores the preference", async () => {
     const user = userEvent.setup();
     const firstRender = renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     await user.keyboard("{Control>}k{/Control}");
     await user.type(screen.getByRole("textbox", { name: "Search pages, actions, and settings" }), "light theme");
     await user.click(screen.getByRole("option", { name: /Appearance and theme/ }));
@@ -212,15 +230,17 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("renders the Zero shell without the removed context deck", () => {
+  it("renders the Zero shell without the removed context deck", async () => {
     localStorage.setItem("nebula.theme", "zero-dark");
     const firstRender = renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
 
     firstRender.unmount();
     localStorage.setItem("nebula.theme", "light");
     renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     expect(screen.queryByRole("region", { name: "Zero Layer context" })).not.toBeInTheDocument();
     expect(document.querySelector(".app-shell")).not.toHaveClass("zero-layer-shell");
   });
@@ -229,6 +249,7 @@ describe("Nebula workspace", () => {
     localStorage.setItem("nebula.theme", "dark");
     const user = userEvent.setup();
     renderApp();
+    await screen.findByRole("complementary", { name: "Primary navigation" });
     await user.click(screen.getByRole("button", { name: "Hide sidebar" }));
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBeVisible();
     expect(localStorage.getItem("nebula.sidebar.collapsed")).toBe("true");
@@ -1440,6 +1461,8 @@ describe("Nebula workspace", () => {
 
   it("refreshes operator revisions after activation before editing the former active profile", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z" };
+    let releaseActivation = () => {};
+    const activationHeld = new Promise<void>((resolve) => { releaseActivation = resolve; });
     let profiles: Array<typeof entity & { id: string; revision: number; display_name: string; email: string | null; role: string; active: boolean; activated_at: string | null; metadata: Record<string, unknown> }> = [
       { ...entity, id: "operator-alice", revision: 1, display_name: "Alice Analyst", email: "alice@example.test", role: "Lead", active: true, activated_at: entity.updated_at, metadata: {} },
       { ...entity, id: "operator-bob", revision: 1, display_name: "Bob Reviewer", email: null, role: "Reviewer", active: false, activated_at: null, metadata: {} },
@@ -1448,6 +1471,7 @@ describe("Nebula workspace", () => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
       if (url.pathname.endsWith("/operator-profiles/operator-bob/activate")) {
+        await activationHeld;
         profiles = [
           { ...profiles[1], revision: 2, active: true, activated_at: "2026-07-12T12:00:00Z", updated_at: "2026-07-12T12:00:00Z" },
           { ...profiles[0], revision: 2, active: false, updated_at: "2026-07-12T12:00:00Z" },
@@ -1470,7 +1494,13 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
 
     await user.click(await screen.findByRole("button", { name: "Activate" }));
-    await user.click(await screen.findByRole("button", { name: "Edit Alice Analyst" }));
+    // Activation changes both profiles' revisions: no row can be edited
+    // from the stale list while it is in flight.
+    expect(screen.getByRole("button", { name: "Edit Alice Analyst" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit Bob Reviewer" })).toBeDisabled();
+    releaseActivation();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit Alice Analyst" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Edit Alice Analyst" }));
     const dialog = screen.getByRole("dialog", { name: "Edit operator" });
     const role = within(dialog).getByRole("textbox", { name: "Role" });
     await user.clear(role);
@@ -1805,7 +1835,7 @@ describe("Nebula workspace", () => {
     expect(await screen.findByText("No provider profiles")).toBeVisible();
     const deleteCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-anthropic") && init?.method === "DELETE");
     expect(new Headers(deleteCall?.[1]?.headers).get("If-Match")).toBe("5");
-  });
+  }, 15_000);
 
   it("adds a note section to a report and saves an operator-reviewed AI transform", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };

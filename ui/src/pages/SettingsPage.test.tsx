@@ -57,6 +57,7 @@ vi.mock("../components/TypeSafeIntegrationSettings", () => ({ TypeSafeIntegratio
 vi.mock("../components/EngagementPolicySettings", () => ({ EngagementPolicySettings: () => null }));
 vi.mock("../components/ReleaseSettingsPanel", () => ({ ReleaseSettingsPanel: () => null }));
 vi.mock("../components/HostCpuBudgetSettings", () => ({ HostCpuBudgetSettings: () => null }));
+vi.mock("../components/MemoryBudgetSettings", () => ({ MemoryBudgetSettings: () => null }));
 vi.mock("../components/DevicePairingSettings", () => ({ DevicePairingSettings: () => null }));
 vi.mock("../components/ProviderHealthCard", () => ({ ProviderHealthCard: ({ provider, onEdit }: { provider: { name: string }; onEdit: (provider: unknown) => void }) => <button type="button" onClick={() => onEdit(provider)}>Edit {provider.name}</button> }));
 vi.mock("../components/CompactSettingsList", () => ({ CompactSettingsList: () => <div>Compact settings list</div> }));
