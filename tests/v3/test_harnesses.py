@@ -5043,9 +5043,7 @@ async def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         listed_unattached = next(
             item for item in sessions.json() if item["id"] == unattached_session.id
         )
-        assert listed_unattached["display_name"] == (
-            "Unattached synthetic analysis"
-        )
+        assert listed_unattached["display_name"] == ("Unattached synthetic analysis")
         stored_session = await client.get(
             f"/api/v1/harness-sessions/{body['harness_session_id']}", headers=headers
         )
