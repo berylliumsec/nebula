@@ -209,7 +209,7 @@ def command_specs(
         ToolSpec(
             name="research_result_catalog",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="List indexed, skipped, and incomplete artifacts for a durable research result handle.",
+            description="Legacy artifact listing for a durable research result. For a new result, call research_result_describe(handle), then research_result_query using its advertised collections and fields, and research_result_read on a returned match_id.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -225,7 +225,7 @@ def command_specs(
         ToolSpec(
             name="research_result_search",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="Search a durable research result by literal text or supported typed filters.",
+            description="Legacy literal or typed-filter search. For Recon, Atlas, and simulation results, call research_result_describe(handle), then research_result_query with an advertised collection, fields, and links; read selected evidence with research_result_read.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -252,15 +252,88 @@ def command_specs(
         ToolSpec(
             name="research_result_read",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="Read one hash-bound research result match with at most five context lines.",
+            description="Read one hash-bound research result match. Use fields to select exact values; otherwise context_lines returns source context. Match IDs come from research_result_query or research_result_search.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string", "minLength": 1, "maxLength": 160},
                     "match_id": {"type": "string", "minLength": 1, "maxLength": 100},
                     "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
+                    "fields": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "maxItems": 32,
+                    },
                 },
                 "required": ["handle", "match_id"],
+                "additionalProperties": False,
+            },
+            output_schema=common_output,
+            risk_class=RiskClass.LOCAL_READ,
+            budget_class="artifact_query",
+        ),
+        ToolSpec(
+            name="research_result_describe",
+            parallelism=ParallelismPolicy.SAFE_READ,
+            description="Describe queryable collections, fields, relationships, counts, and coverage for one terminal research result. Start here with the handle from its completion receipt; then query only the collection and fields the task needs.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "collection": {"type": "string", "minLength": 1},
+                },
+                "required": ["handle"],
+                "additionalProperties": False,
+            },
+            output_schema=common_output,
+            risk_class=RiskClass.LOCAL_READ,
+            budget_class="artifact_query",
+        ),
+        ToolSpec(
+            name="research_result_query",
+            parallelism=ParallelismPolicy.SAFE_READ,
+            description="Query one terminal research result. First call research_result_describe(handle) and use its exact collection, fields, operators, and links. where predicates support only advertised eq/in operators; related_to follows one advertised link. Select only needed fields. If more matches exist, continue with the returned cursor. Zero matches prove absence only when coverage and index_status are complete.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "collection": {"type": "string", "minLength": 1},
+                    "where": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string", "minLength": 1},
+                                "op": {"type": "string", "enum": ["eq", "in"]},
+                                "value": {},
+                            },
+                            "required": ["field", "op", "value"],
+                            "additionalProperties": False,
+                        },
+                        "maxItems": 16,
+                    },
+                    "related_to": {
+                        "type": "object",
+                        "properties": {
+                            "match_id": {"type": "string", "minLength": 1},
+                            "relation": {"type": "string", "minLength": 1},
+                            "direction": {
+                                "type": "string",
+                                "enum": ["outgoing", "incoming"],
+                            },
+                        },
+                        "required": ["match_id", "relation", "direction"],
+                        "additionalProperties": False,
+                    },
+                    "select": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "maxItems": 32,
+                    },
+                    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "cursor": {"type": ["string", "null"], "maxLength": 8192},
+                },
+                "required": ["handle", "collection"],
                 "additionalProperties": False,
             },
             output_schema=common_output,
