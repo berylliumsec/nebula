@@ -146,7 +146,9 @@ class ResearchResultReceipt(BaseModel):
     status: str = Field(min_length=1, max_length=32)
     version: str | None = Field(default=None, max_length=80)
     coverage: str | dict[str, Any] = Field(default_factory=dict)
-    collections: list[ResearchResultCollectionReceipt] = Field(default_factory=list, max_length=64)
+    collections: list[ResearchResultCollectionReceipt] = Field(
+        default_factory=list, max_length=64
+    )
     first_call: dict[str, Any] | None = None
     query_steps: list[str] = Field(default_factory=list, max_length=8)
     query_required: bool

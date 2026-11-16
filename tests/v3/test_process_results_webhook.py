@@ -893,14 +893,20 @@ async def test_callback_result_reaches_the_model_through_the_results_webhook(
         server = uvicorn.Server(uvicorn.Config(app, host=address, log_level="error"))
         server_task = asyncio.create_task(server.serve(sockets=[listener]))
         deadline = asyncio.get_running_loop().time() + 20
-        while not server.started and not server_task.done() and asyncio.get_running_loop().time() < deadline:
+        while (
+            not server.started
+            and not server_task.done()
+            and asyncio.get_running_loop().time() < deadline
+        ):
             await asyncio.sleep(0.05)
         assert server.started, "Disposable callback Core did not start"
         assert turn is None
         turn = await store.create(
             ChatTurn(
                 id="turn-approval",
-                engagement_id=(await store.get(ChatSession, "session-approval")).engagement_id,
+                engagement_id=(
+                    await store.get(ChatSession, "session-approval")
+                ).engagement_id,
                 session_id="session-approval",
                 provider_profile_id="provider",
                 model="model-a",
@@ -939,7 +945,9 @@ async def test_callback_result_reaches_the_model_through_the_results_webhook(
         names = [name for name, _ in events]
         assert names[-1] == "done", names
         assert "tool_completed" in names
-        completed = next(payload for name, payload in events if name == "tool_completed")
+        completed = next(
+            payload for name, payload in events if name == "tool_completed"
+        )
         assert completed["status"] == "complete"
         assert nonce in completed["summary"]
         finished = await store.get(ChatTurn, turn.id)
@@ -965,7 +973,9 @@ async def test_callback_result_reaches_the_model_through_the_results_webhook(
             "arguments": {"handle": "sim:20261116T120000Z-deadbeef"},
         }
         assert receipt.research_result.query_required is True
-        assert all("ignore policy" not in step for step in receipt.research_result.query_steps)
+        assert all(
+            "ignore policy" not in step for step in receipt.research_result.query_steps
+        )
         assert receipt.next_actions == [
             "research_result_describe",
             "research_result_query",
@@ -989,7 +999,10 @@ async def test_callback_result_reaches_the_model_through_the_results_webhook(
         assert [line["text"] for line in read["lines"][:2]] == ["started", nonce]
         # Replayed on the synthesis request, the typed query instructions persist.
         assert routed[-1].tool_results[0].output["output_cleared"] is True
-        assert routed[-1].tool_results[0].output["research_result"] == replayed["research_result"]
+        assert (
+            routed[-1].tool_results[0].output["research_result"]
+            == replayed["research_result"]
+        )
         await chat.shutdown()
         server.should_exit = True
         await asyncio.wait_for(server_task, timeout=10)

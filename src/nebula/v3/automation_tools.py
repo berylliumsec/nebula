@@ -317,7 +317,10 @@ def command_specs(
                         "properties": {
                             "match_id": {"type": "string", "minLength": 1},
                             "relation": {"type": "string", "minLength": 1},
-                            "direction": {"type": "string", "enum": ["outgoing", "incoming"]},
+                            "direction": {
+                                "type": "string",
+                                "enum": ["outgoing", "incoming"],
+                            },
                         },
                         "required": ["match_id", "relation", "direction"],
                         "additionalProperties": False,

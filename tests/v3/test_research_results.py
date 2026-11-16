@@ -76,7 +76,9 @@ def test_adapter_rejects_invalid_input_before_starting_process(arguments: dict) 
     run.assert_not_called()
 
 
-def test_adapter_passes_query_first_arguments_as_single_typed_values(tmp_path: Path) -> None:
+def test_adapter_passes_query_first_arguments_as_single_typed_values(
+    tmp_path: Path,
+) -> None:
     service = ResearchResultService(tmp_path / "python")
     payload = {"handle": HANDLE, "matches": [], "cursor": None}
     completed = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
@@ -93,12 +95,18 @@ def test_adapter_passes_query_first_arguments_as_single_typed_values(tmp_path: P
         "text": "memory corruption",
         "cursor": "page-token",
     }
-    with patch("nebula.v3.research_results.subprocess.run", return_value=completed) as run:
+    with patch(
+        "nebula.v3.research_results.subprocess.run", return_value=completed
+    ) as run:
         assert service.query("query", arguments) == payload
     argv = run.call_args.args[0]
     assert argv[3] == "query"
-    assert argv[argv.index("--where") + 1] == json.dumps(arguments["where"], separators=(",", ":"))
-    assert argv[argv.index("--related-to") + 1] == json.dumps(arguments["related_to"], separators=(",", ":"))
+    assert argv[argv.index("--where") + 1] == json.dumps(
+        arguments["where"], separators=(",", ":")
+    )
+    assert argv[argv.index("--related-to") + 1] == json.dumps(
+        arguments["related_to"], separators=(",", ":")
+    )
     assert argv[argv.index("--select") + 1] == '["severity","summary"]'
     assert argv[argv.index("--text") + 1] == "memory corruption"
     assert argv[argv.index("--cursor") + 1] == "page-token"
@@ -107,10 +115,17 @@ def test_adapter_passes_query_first_arguments_as_single_typed_values(tmp_path: P
 def test_adapter_accepts_describe_and_projected_read(tmp_path: Path) -> None:
     service = ResearchResultService(tmp_path / "python")
     completed = subprocess.CompletedProcess([], 0, json.dumps({"handle": HANDLE}), "")
-    with patch("nebula.v3.research_results.subprocess.run", return_value=completed) as run:
+    with patch(
+        "nebula.v3.research_results.subprocess.run", return_value=completed
+    ) as run:
         service.query("describe", {"handle": HANDLE, "collection": "findings"})
     assert run.call_args.args[0][3] == "describe"
-    with patch("nebula.v3.research_results.subprocess.run", return_value=completed) as run:
-        service.query("read", {"handle": HANDLE, "match_id": "1:deadbeefdeadbeef", "fields": ["summary"]})
+    with patch(
+        "nebula.v3.research_results.subprocess.run", return_value=completed
+    ) as run:
+        service.query(
+            "read",
+            {"handle": HANDLE, "match_id": "1:deadbeefdeadbeef", "fields": ["summary"]},
+        )
     argv = run.call_args.args[0]
     assert argv[argv.index("--fields") + 1] == '["summary"]'

@@ -116,9 +116,13 @@ class ResearchResultService:
                     or related_to.get("direction") not in {"outgoing", "incoming"}
                 ):
                     raise ValueError("invalid research result relationship")
-                command.extend(("--related-to", json.dumps(related_to, separators=(",", ":"))))
+                command.extend(
+                    ("--related-to", json.dumps(related_to, separators=(",", ":")))
+                )
             selected = arguments.get("select") or []
-            if not isinstance(selected, list) or any(not isinstance(field, str) or not field for field in selected):
+            if not isinstance(selected, list) or any(
+                not isinstance(field, str) or not field for field in selected
+            ):
                 raise ValueError("invalid research result projection")
             command.extend(("--select", json.dumps(selected, separators=(",", ":"))))
             text = arguments.get("text")
@@ -144,7 +148,9 @@ class ResearchResultService:
                 raise ValueError("invalid research result context")
             command.extend(("--match-id", match_id, "--context-lines", str(context)))
             fields = arguments.get("fields") or []
-            if not isinstance(fields, list) or any(not isinstance(field, str) or not field for field in fields):
+            if not isinstance(fields, list) or any(
+                not isinstance(field, str) or not field for field in fields
+            ):
                 raise ValueError("invalid research result field selection")
             if fields:
                 command.extend(("--fields", json.dumps(fields, separators=(",", ":"))))

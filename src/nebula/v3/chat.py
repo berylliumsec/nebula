@@ -428,7 +428,11 @@ if TYPE_CHECKING:
 def _compact_research_coverage(value: str | Mapping[str, Any]) -> str | dict[str, Any]:
     """Keep only small scalar coverage facts from untrusted callback metadata."""
     if isinstance(value, str):
-        return value[:40] if value in {"complete", "incomplete", "retrieval_failed"} else "incomplete"
+        return (
+            value[:40]
+            if value in {"complete", "incomplete", "retrieval_failed"}
+            else "incomplete"
+        )
     compact: dict[str, Any] = {}
     for key, item in value.items():
         if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", key):
@@ -13831,12 +13835,18 @@ class ChatService:
             research_result=research_result,
             next_actions=(
                 (
-                    ["research_result_describe", "research_result_query", "research_result_read"]
+                    [
+                        "research_result_describe",
+                        "research_result_query",
+                        "research_result_read",
+                    ]
                     if research_result.query_required
                     else ["research_result_describe"]
                 )
                 if research_result is not None
-                else ["tool_output.search", "tool_output.read"] if refs else []
+                else ["tool_output.search", "tool_output.read"]
+                if refs
+                else []
             ),
         )
 
@@ -13845,7 +13855,11 @@ class ChatService:
     ) -> ResearchResultReceipt | None:
         """Project only validated routing metadata from the posted output artifact."""
         identifier = execution.metadata.get("results_output_artifact_id")
-        if not isinstance(identifier, str) or not identifier or self.artifact_store is None:
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or self.artifact_store is None
+        ):
             return None
         try:
             artifact = await self.store.get(Artifact, identifier)
@@ -13855,7 +13869,9 @@ class ChatService:
             if len(raw) > MAX_CALLBACK_RESEARCH_RESULT_ARTIFACT_BYTES:
                 return None
             value = json.loads(raw)
-            if not isinstance(value, dict) or not isinstance(value.get("research_result"), dict):
+            if not isinstance(value, dict) or not isinstance(
+                value.get("research_result"), dict
+            ):
                 return None
             candidate = ResearchResultReceipt.model_validate(value["research_result"])
         except (ValueError, TypeError, json.JSONDecodeError, NotFoundError):
@@ -17578,7 +17594,6 @@ class ChatService:
         engagement_id: str,
         provider: ModelProvider,
     ) -> RuntimeToolComponents:
-
         async def searcher(
             engagement: str, query: str, allow_local_only: bool, budget: int
         ) -> HarnessKnowledgeSearchResult:
