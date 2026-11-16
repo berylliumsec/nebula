@@ -8,9 +8,9 @@ from sqlalchemy import select
 
 from nebula.v3.database import RuntimeProcessRow
 from nebula.v3.memory_budget import MemoryBudgetService
-from nebula.v3.memory_policy import GIB, MemoryAdministratorLimits, MemoryBudgetError
+from nebula.v3.memory_policy import GIB, MemoryAdministratorLimits
 from nebula.v3.release_store import ReleaseIntegrityError
-from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_coordination import CoordinationConflict, OperationRejected
 from nebula.v3.runtime_memory import RuntimeMemoryAdmission
 from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_runtime_coordination import location as location
@@ -173,7 +173,8 @@ async def test_paired_browser_repairs_memory_before_real_api_admission(recovery)
     root, client = recovery.root, recovery.client
     identity = await client.get("/api/v1/runtime/identity", headers=AUTH)
     assert identity.status_code == 200 and identity.json()["principal_id"] == "operator"
-    with pytest.raises(MemoryBudgetError, match="Core reserve"):
+    # Admission reports the budget refusal as a retryable rejection (#1022).
+    with pytest.raises(OperationRejected, match="Core reserve"):
         await root.prepare_api("v1")
     offer = await invite(client)
     paired = await client.post("/api/v1/auth/pairings/redeem", json=redeem(offer))
