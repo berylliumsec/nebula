@@ -11,6 +11,7 @@ from nebula.v3.database import (
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
     RuntimeCapacityReservationRow,
+    RuntimeCommandRow,
     RuntimeInstanceRow,
     RuntimeResourceRow,
 )
@@ -28,7 +29,10 @@ from nebula.v3.domain import (
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.process_identity import process_origin
 from nebula.v3.runtime_chat_stream import RuntimeChatJournal, SEGMENT_END
-from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_coordination import (
+    STORAGE_REPORT_COMMAND,
+    CoordinationConflict,
+)
 from nebula.v3.runtime_orphan_recovery import reconcile_dead_project
 from tests.v3.test_chat import _profile
 from tests.v3.test_deployment_lifecycle import (
@@ -292,3 +296,120 @@ async def test_unrelated_capacity_is_not_released_by_process_death(orphan, kind)
         assert (
             await sql.get(RuntimeCapacityReservationRow, "unconfirmed-capacity")
         ).state == "held"
+
+
+async def test_dead_owner_releases_harness_goal_claims_and_fails_its_requests(orphan):
+    """A crash during goal-driven harness work must not hold recovery forever."""
+    value = orphan
+    session = await value.store.create(
+        ChatSession(
+            engagement_id="one",
+            title="Synthetic harness goal",
+            provider_profile_id=value.session.provider_profile_id,
+            model="synthetic",
+        )
+    )
+    now = utc_now()
+    goal = await value.store.create(
+        ChatGoal(
+            engagement_id="one",
+            session_id=session.id,
+            objective="Synthetic harness recovery",
+            completion_criteria=["Recovery verifies"],
+            status="running",
+            execution_claim_id="harness-turn",
+            execution_owner_id="harness-runtime",
+            execution_claimed_at=now,
+        )
+    )
+    claimed = {}
+    # A running goal turn, and an earlier one whose interruption kept its claim.
+    for name, status in (("harness-turn", "routing"), ("ended", "interrupted")):
+        claimed[name] = await value.store.create(
+            ChatTurn(
+                id=name,
+                engagement_id="one",
+                session_id=session.id,
+                goal_id=goal.id,
+                backend="harness",
+                model="synthetic",
+                status=status,
+                execution_claim_id=name,
+                execution_owner_id="harness-runtime",
+                execution_claimed_at=now,
+            )
+        )
+
+    def command(identity, sequence, state, *, name="http.invoke/v1", owned=True):
+        return RuntimeCommandRow(
+            id=identity,
+            project_id="one",
+            actor_id="operator",
+            idempotency_key=identity,
+            sequence=sequence,
+            name=name,
+            lane="work",
+            payload={},
+            payload_hash="0" * 64,
+            accepted_at_ms=0,
+            state=state,
+            runtime_id=value.lease.runtime_id if owned else None,
+            fencing_token=value.lease.fencing_token if owned else None,
+        )
+
+    async with value.coordinator.database.session() as sql:
+        sql.add(command("running-request", 1, "running"))
+        sql.add(command("earlier-uncertain", 2, "uncertain", owned=False))
+        sql.add(command("storage-report", 3, "running", name=STORAGE_REPORT_COMMAND))
+        sql.add(command("queued-request", 4, "queued", owned=False))
+    await value.expire()
+    result = await value.reconcile()
+    assert sorted(result["released_claim_ids"]) == sorted([goal.id, *claimed])
+    assert result["settled_command_ids"] == ["running-request", "earlier-uncertain"]
+    assert result["effects_replayed"] is False
+    for name, turn in claimed.items():
+        saved = await value.store.get(ChatTurn, name)
+        assert saved.execution_claim_id is None and saved.execution_owner_id is None
+        # The harness runtime's own startup settles the unfinished turn.
+        assert saved.status == turn.status
+    saved_goal = await value.store.get(ChatGoal, goal.id)
+    assert saved_goal.execution_claim_id is None
+    async with value.coordinator.database.session() as sql:
+        for identity, state in (
+            ("running-request", "failed"),
+            ("earlier-uncertain", "failed"),
+            ("storage-report", "running"),
+            ("queued-request", "queued"),
+        ):
+            row = await sql.get(RuntimeCommandRow, identity)
+            assert row.state == state
+        failed = await sql.get(RuntimeCommandRow, "running-request")
+        assert failed.result["interrupted_by_runtime_stop"] is True
+        assert failed.result["previous_state"] == "running"
+        await sql.delete(await sql.get(RuntimeCommandRow, "storage-report"))
+        await sql.flush()
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+    assert await value.reconcile() == result
+
+
+async def test_missing_death_proof_keeps_harness_claims_and_requests(orphan):
+    value = orphan
+    turn = await value.store.create(
+        ChatTurn(
+            engagement_id="one",
+            session_id=value.session.id,
+            backend="harness",
+            model="synthetic",
+            status="routing",
+            execution_claim_id="live-harness-turn",
+            execution_owner_id="harness-runtime",
+            execution_claimed_at=utc_now(),
+        )
+    )
+    await value.expire(stop=False)
+    with pytest.raises(CoordinationConflict):
+        await value.reconcile()
+    saved = await value.store.get(ChatTurn, turn.id)
+    assert saved.execution_claim_id == "live-harness-turn"

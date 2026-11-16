@@ -54,8 +54,12 @@ Provider/background capacity is released only for the exact dead incarnation
 and provider admission token; tool and CPU reservations retain their own evidence.
 Already paused or blocked goals retain their holds. Unknown tool or hook effects
 remain in their original ledgers and require operator review; recovery never
-declares those effects successful or automatically replays them. Other pinned
-resources, uncertain durable commands and unconfirmed approvals continue to hold
+declares those effects successful or automatically replays them. Harness goal
+claims held by the dead owner are released, so the new worker's harness startup
+interrupts those turns and pauses their goals as after any restart; a resumed
+goal may repeat a step whose effect was never recorded. Durable requests the dead
+owner was running, and earlier uncertain ones, fail without retry and answer
+their clients. Other pinned resources and unconfirmed approvals continue to hold
 admission until their own outcomes are reconciled.
 
 Durable, source-fence-specific deployment operations prepare a replacement of the
