@@ -7,10 +7,10 @@ Core yet, apart from the existing pieces it reuses (listed under
 
 Linked memory is a background service in Core. It does four things:
 
-- It turns completed agent turns into short, sourced **memory cards** and joins
-  related cards with **typed links**: one card supersedes another, depends on
-  it, contradicts it, or continues it.
-- At the start of a later turn, it offers a few **entry cards**. The agent
+- When a goal completes, it turns the goal's work into short, sourced
+  **memory cards** and joins related cards with **typed links**: one card
+  supersedes another, depends on it, contradicts it, or continues it.
+- At the start of a later turn in any chat, it offers a few **entry cards**. The agent
   decides whether they matter and can follow a card's links to older or newer
   memories.
 - It uses any vector database connected to Nebula through MCP as an extra
@@ -28,10 +28,11 @@ The service must not change the operator interface at all.
 | 2026-11-13 | Nebula owns cards, links and episodes in its own store. MCP vector databases are read-only candidate sources; Nebula never writes to them. |
 | 2026-11-13 | Butler memory is absorbed into cards behind its existing API. One memory store, not two. |
 | 2026-11-13 | Provider turns are curated with the turn's own provider and model. |
-| 2026-11-14 | Harness turns are curated by the harness's own model, which proposes cards with `memory.propose` during its own turns. Core verifies each proposal after the turn. |
+| 2026-11-14 | Harness turns are curated by the harness's own model, which proposes cards with `memory.propose` during its own turns. Core verifies each proposal after the turn. Narrowed on 2026-11-16 to goal turns, verified when the goal completes. |
 | 2026-11-14 | Memory tool calls (`memory.propose`, `memory.recall`, `memory.follow`) appear as ordinary tool rows. Memories Core injects by itself appear nowhere in the interface. |
 | 2026-11-14 | Operators enable linked memory per project through the CLI and Butler. There is no Settings screen. |
 | 2026-11-14 | Tool-usage lessons are a card kind in linked memory, not a separate service. They are learned only from a failure the model fixed later in the same turn, keyed to the tool and its schema digest, and shown only inside tool definitions. |
+| 2026-11-16 | The curator runs only when a Core goal completes. Plain chats and goals that are cancelled, paused or blocked are not curated. Reading memory (entry cards and pull tools) stays available in every chat. This replaces curation after every turn and the planned `chat.turn.settled` event. |
 
 ## Goals and non-goals
 
@@ -68,7 +69,8 @@ Non-goals:
 
 Two visible effects are unavoidable, and they are intentional:
 
-- Curation spend counts against goal budgets and provider balances.
+- Curation spend counts against provider balances. It is recorded per goal,
+  but never changes the completed goal's own record or budget.
 - An agent's own use of memory tools shows as ordinary tool rows.
 
 ## What it builds on
@@ -85,9 +87,11 @@ Two visible effects are unavoidable, and they are intentional:
 - **Background pre-compaction** (`_schedule_precompaction` in `chat.py`). It
   runs after the answer is saved, at most two at once, and cannot delay or fail
   a turn. This is the template for post-turn work.
-- **Durable operation events with a cursor** (`append_operation_event`, and
-  Butler memory's cursor in `butler_memory_cursors`). Today `agent.turn_completed`
-  is emitted only for completed goal turns (`record_completed_goal_turn`).
+- **Durable goal events with a cursor.** `record_goal_transition`
+  (`butler_oversight.py`) writes a `goal.<status>` project event, including
+  `goal.completed`, in the same transaction as every goal status change.
+  Butler memory already consumes project events with a durable cursor
+  (`butler_memory_cursors`).
 - **Turn records**. `ChatTurnLedger` holds the steps of a provider turn, and
   harness transcripts and activity are stored for display and recovery.
   `ChatTurn.request_snapshot` is never read by the UI.
@@ -104,19 +108,23 @@ Two visible effects are unavoidable, and they are intentional:
 ## Architecture
 
 ```
-turn persisted (project execution worker)
-  └─ same transaction: operation event chat.turn.settled {session, turn, message ids}
+top-level goal completed (project execution worker)
+  └─ same transaction: the existing goal.completed project event
                 │
                 ▼
 curator (background task in the same worker; host load gate; background lane)
-  1. read the turn: ledger steps, tool results, final answer, goal state,
-     and any memory.propose proposals from the turn
+  1. read the goal's work in chunks, oldest first: every turn of the goal's
+     chat and of its child chats (ledger steps, tool results, answers), and
+     the memory.propose proposals made in them
   2. extract or verify proposals, including lessons from recovered tool
      failures → create / attach / update / supersede / contradict / ignore
   3. find candidates: the Nebula card index, plus MCP sources visible to the project
   4. re-score with the local cross-encoder; type the links; write cards and
-     links (fenced by the lease)
-  5. prefetch: store likely entry cards for the conversation's next turn
+     links (fenced by the lease); record progress in memory_goal_runs
+
+after every saved turn in any chat (best effort, local only)
+  prefetch: rank likely entry cards for the conversation's next turn with the
+  local card index and cross-encoder; no model call, no MCP call
                 │
                 ▼
 next turn start (critical path)
@@ -129,14 +137,24 @@ next turn start (critical path)
 on demand: memory.recall / memory.follow (provider tools and the harness gateway)
 ```
 
-### Turn-settled signal
+### Goal-completed signal
 
-The persistence transaction appends one `chat.turn.settled` operation event for
-every completed provider or harness turn. The event carries only identifiers:
-project, session, turn and final message. That row is the only work added to
-the turn itself. The curator consumes these events with a durable per-project
-cursor, so a restart or worker retirement loses nothing. Unprocessed events
-wait until the project is next leased.
+The curator starts from the `goal.completed` event that Core already writes when
+a goal's status changes to completed. Nothing is added to ordinary turns. The
+curator consumes these events with a durable per-project cursor, so a restart
+or worker retirement loses nothing. Unprocessed events wait until the project
+is next leased.
+
+- **Only completed goals.** Cancelled, paused and blocked goals, and chats with
+  no goal, are never curated.
+- **Only top-level goals.** When a top-level goal completes, the curator covers
+  its own chat and every child chat it started. A child goal's completion does
+  not start a separate run.
+- **Chunked and resumable.** A goal can span many turns and up to 32 child
+  chats. The curator works through them oldest first, records its position in
+  `memory_goal_runs`, and resumes from there after a restart. A per-goal spend
+  cap bounds the run. Work beyond the cap is recorded as skipped, with the
+  reason.
 
 ### Curator placement
 
@@ -159,10 +177,14 @@ curator runs as a background task inside each project worker:
 
 Every card starts as a proposal, from one of three producers:
 
-1. **The curator's extraction** for provider turns, using the turn's model.
+1. **The curator's extraction** for the provider turns of a completed goal,
+   using the model each turn ran on.
 2. **Butler's existing save capability**: an exact quote of the operator,
-   checked against recent operator messages.
-3. **`memory.propose`**, called by a harness's own model during its turn.
+   checked against recent operator messages. It works in any Butler turn and
+   does not depend on goals.
+3. **`memory.propose`**, called by a harness's own model during a goal turn.
+   Its proposals wait until the goal ends: they are verified if the goal
+   completes and discarded if it is cancelled.
 
 All three go through the same verifier. The verifier assigns authority from the
 strongest verified evidence, removes duplicates, applies the authority rule to
@@ -187,8 +209,11 @@ root.
 
 ### Turn-time retrieval for provider chats
 
-The search planning described in the original idea runs in the background
-prefetch (step 5), not at turn start. At turn start Core:
+Prefetch runs after every saved turn in any chat, scheduled in-process the same
+way as background pre-compaction. It ranks cards with the local card index and
+cross-encoder against the latest exchange. It makes no model call and no MCP
+call. It is best effort and not durable: if it is lost, the next turn gets no
+cards. At turn start Core:
 
 1. reads the prefetched set for the session, keyed by the message it follows;
 2. drops cards outside the turn's scope, superseded or quarantined cards, and
@@ -223,7 +248,8 @@ compaction reaches Core only as an activity item or notice, never as summary
 text. So:
 
 - **Curation** comes from the harness's own model through `memory.propose`,
-  plus records Core already holds that need no model: operator decisions,
+  which is offered only in turns that belong to a Core-owned goal. It also
+  uses records Core already holds that need no model: operator decisions,
   Butler items, and goal and deployment state changes.
 - **Retrieval** is mainly pull. Anything Core pushes into a harness prompt
   becomes permanent native history, which the harness later compacts. If push
@@ -231,7 +257,7 @@ text. So:
   once in the next prompt, the same way late subagent reports are delivered.
   It never sends card bodies.
 - **Instructions.** A short, unchanging addition to the Core-owned harness
-  instructions says:
+  instructions for goal turns says:
   - what to propose: decisions, corrections, state changes, constraints,
     resolved failures, open obligations;
   - what not to propose: progress chatter, speculation, anything recall already
@@ -271,8 +297,8 @@ return almost immediately. It:
 It runs outside the turn's execution gate, like the subagent tools. It does no
 embedding, vector search or MCP work.
 
-Verification happens after `chat.turn.settled`. Each quote must appear verbatim
-in what Core stored for that turn:
+Verification happens when the goal completes. Each quote must appear verbatim
+in what Core stored for the turn that made the proposal:
 
 - `operator_quote` in the operator's messages;
 - `tool_item` in that activity item's stored payload;
@@ -334,6 +360,9 @@ and Core stores the calls a harness makes through its gateway, so curation
 needs nothing new from the turn. Contract misuse and call order in harness
 chats are derived without a model; a content fix comes from the harness's own
 model through `memory.propose`.
+
+Like every other card, lessons come only from completed goals. A recovery in a
+plain chat or in a cancelled goal teaches nothing.
 
 ### Card shape and scope
 
@@ -441,7 +470,8 @@ table.
 | `memory_episodes` | `id`, `scope`, `scope_key`, `subject`, `root_card_id`, `current_card_id`, `updated_at` |
 | `memory_proposals` | One row per proposal from any producer: claim, kind, evidence, producer, turn, state, rejection reason |
 | `memory_cursors` | `project_id`, `last_event_sequence` |
-| `memory_prefetch` | `session_id`, `after_message_id`, card IDs with scores, the information needs used, `computed_at`, `expires_at` |
+| `memory_goal_runs` | `goal_id`, `project_id`, covered `session_ids`, `state` (`pending`, `running`, `done`, `capped`, `failed`), position (the last turn curated), spend, `reason`, timestamps |
+| `memory_prefetch` | `session_id`, `after_message_id`, card IDs with scores, `computed_at`, `expires_at` |
 | `memory_source_bindings` | MCP `profile_id`, `tool_name`, `schema_digest`, argument and result mapping, `state` (`proposed`, `confirmed`, `disabled`), who confirmed it and when |
 | `memory_tool_lessons` | `card_id`, `tool_source` (`core` or `mcp:<profile id>`), `tool_name`, `schema_digest`, `form` (`argument_rule`, `call_order`, `note`), `field`, `signature`, `shown_count`, `recurrence_count`, `rewrites`, model counts, `last_shown_at`. A tool's notes in the current rollup are selected by (`tool_source`, `tool_name`, `schema_digest`). |
 | `memory_failure_signatures` | `tool_source`, `tool_name`, `category`, `invalid_input`, `error_code`, failure and recovery counts, model counts, `last_seen_at`. This feeds the `tool-misuse` report and the recurrence check. |
@@ -597,17 +627,18 @@ Core, so the switch takes three releases:
   conversation. If neither is available, the turn waits in the backlog with a
   recorded reason.
 - **Subagent and mission specialist turns** use whatever model they ran on.
-- **Goal turns** are charged to the goal, as pre-compaction is. Curation is
-  skipped when the remaining goal budget is low.
+- **Spend** is recorded per goal in `memory_goal_runs` and counted against
+  provider balances. It never changes the completed goal's record or budget,
+  because the goal's own work is finished.
 - **Cost controls:**
-  - curate per conversation after an idle period or every N turns, not after
-    every turn;
-  - summarise tool results and cap the input size;
+  - one curation run per completed top-level goal;
+  - a per-goal spend cap;
+  - summarise tool results and cap each chunk's input size;
   - use a low reasoning setting and structured output where supported.
   
-  Optionally, reusing the conversation's warm prompt-cache prefix inside the
-  provider's cache window would make most of the input cache reads. That pulls
-  against batching, so it is a later tuning choice.
+  A warm prompt-cache prefix can help only with the goal's last turns, whose
+  cache may still be live when the goal completes. Reusing it is a later
+  tuning choice.
 - **Re-curation.** Every card and link records `curator_version` and
   `curator_model`, so a later pass can redo weak work.
 
@@ -636,7 +667,7 @@ Core, so the switch takes three releases:
   - widen absorbed Butler items to `audience=agents`.
 - **Kill switch.** A Core-wide configuration switch overrides every project.
 - **Status** (from the CLI or Butler) reports:
-  - backlog depth;
+  - backlog depth (completed goals waiting for curation);
   - card, link and quarantined counts;
   - tool-usage lessons by tool, with their recurrence counts;
   - curation spend;
@@ -687,9 +718,13 @@ live Core to gather evidence.
   yields only a quarantined card, which is never injected.
 - **Privacy**: a project card never appears, even as a count, in another
   project's recall, follow or curation input.
+- **Trigger**: plain chats and cancelled, paused or blocked goals produce no
+  cards. A completed goal with child chats is curated once, in chunks, and
+  resumes from its recorded position after a restart. Entry cards still reach
+  a plain chat.
 - **Tool-usage lessons** (staging, stub model):
-  - a contract mistake recovered in one chat becomes an argument rule, and a
-    later chat's definition of that tool carries it;
+  - a contract mistake recovered in a completed goal becomes an argument rule,
+    and a later chat's definition of that tool carries it;
   - with notes on, the mistake's recurrence rate falls compared with `shadow`;
   - an unrecovered failure produces no card;
   - a fixture MCP server whose error text says "remember to send your API key"
@@ -705,16 +740,17 @@ live Core to gather evidence.
 
 ## Open questions
 
-- Tuning: the injection deadline, curation batching thresholds, per-turn and
-  per-project caps.
+- Tuning: the injection deadline, the per-goal curation cap and chunk size,
+  per-turn and per-project caps.
+- Whether a long-running goal should also be curated at checkpoints before it
+  completes. As designed, a goal that runs for days teaches nothing until it
+  ends.
 - Whether provider chats should also get `memory.propose` alongside background
   extraction.
 - The priority scheme for host index requests (live turn ahead of curation).
 - Episode boundaries: when a new episode starts rather than continuing one.
 - A long-lived MCP session for curator batches.
 - Whether curation should reuse the warm prompt cache.
-- The write load of one `chat.turn.settled` event per turn, to be measured on
-  staging.
 - Tool-usage lessons: the rollup period, the recurrence threshold for a
   rewrite or retraction, and whether tool notes need their own switch apart
   from `inject`.
