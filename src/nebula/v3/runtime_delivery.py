@@ -43,6 +43,7 @@ from .runtime_coordination import (
     RuntimeCoordination,
 )
 from .runtime_ipc import RuntimeIpcError
+from .runtime_routes import recovery_control
 from .runtime_vault import RuntimeVault
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
@@ -397,6 +398,17 @@ class RuntimeDelivery:
             # share the same content-addressed payload; publish it again.
             await asyncio.to_thread(self.vault.put, raw, purpose=purpose)
         return receipt
+
+    async def peek_intent(self, payload: dict, actor: str) -> HttpIntent:
+        """Read a queued command's saved intent without claiming it."""
+        if set(payload) != {"format", "request_reference"} or payload["format"] != 1:
+            raise RuntimeIpcError("unsupported durable HTTP request format")
+        raw = await asyncio.to_thread(
+            self.vault.get,
+            payload["request_reference"],
+            purpose=self._intent_purpose(actor),
+        )
+        return HttpIntent.model_validate_json(raw)
 
     async def request(self, command: ClaimedCommand) -> tuple[HttpIntent, str]:
         async with self.coordination.database.session() as session:
@@ -771,6 +783,38 @@ class DurableHttpRunner:
         command = await self.delivery.coordination.claim_next(lease, lane=lane)
         if command is None:
             return False
+        await self._run_claimed(lease, command)
+        return True
+
+    async def run_recovery_control(self, lease: ProjectLease) -> bool:
+        """Run the oldest queued control that is safe while restoration is held.
+
+        Other queued controls keep their place until the project activates;
+        work is never claimed here. Each candidate is classified from its saved
+        intent, then claimed by ID under fence, so a concurrent owner or a
+        duplicate claim leaves it untouched.
+        """
+        coordination = self.delivery.coordination
+        for command_id, name, payload, actor in await coordination.queued_controls(
+            lease
+        ):
+            if name != HTTP_INVOKE_COMMAND:
+                continue
+            try:
+                intent = await self.delivery.peek_intent(payload, actor)
+            except (CoordinationConflict, RuntimeIpcError, OSError, ValueError):
+                # diagnostic-expected: an unreadable intent stays queued; its normal owner reports it after activation.
+                continue
+            if not recovery_control(intent.method, intent.path, intent.body()):
+                continue
+            command = await coordination.claim_control(lease, command_id)
+            if command is None:
+                continue
+            await self._run_claimed(lease, command)
+            return True
+        return False
+
+    async def _run_claimed(self, lease: ProjectLease, command: ClaimedCommand) -> None:
         try:
             with execution_context(lease):
                 await self._invoke(lease, command)
@@ -798,7 +842,6 @@ class DurableHttpRunner:
             raise
         if command.name == STORAGE_REPORT_COMMAND:
             await self._prune_storage_reports(lease)
-        return True
 
     async def _prune_storage_reports(self, lease: ProjectLease) -> None:
         """Keep finished storage reports bounded, at most once a minute."""

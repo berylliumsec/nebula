@@ -23,6 +23,7 @@ from .runtime_coordination import (
     HEARTBEAT_SECONDS,
     LeaseLost,
     ProjectLease,
+    RecoveryBlocked,
     REPORT_LANE,
 )
 from .runtime_delivery import DurableHttpRunner, RuntimeDelivery
@@ -46,6 +47,10 @@ ACTIVE_WINDOW_SECONDS = 30.0
 SAFETY_CLAIM_SECONDS = 30.0
 PROBE_FAILURE_MAX_SECONDS = 5.0
 MAX_FAILURE_CHARS = 1000
+# While restoration or activation is held, pause and stop are looked for at
+# this cadence; held recovery rechecks its blockers at the retry cadence.
+RECOVERY_CONTROL_SECONDS = 0.5
+RECOVERY_RETRY_SECONDS = 1.0
 
 
 def failure_summary(error: BaseException) -> str:
@@ -254,6 +259,7 @@ class ProjectExecution:
         self.cleanup_complete = False
         self.quiesce_proof = None
         self.failure: str | None = None
+        self.recovery_blockers: list[str] = []
         context.rpc.register("execution.attach/v1", self.attach)
         context.rpc.register("execution.status/v1", self.status)
         context.rpc.register("execution.activate/v1", self.activate)
@@ -294,6 +300,7 @@ class ProjectExecution:
             "cleanup_complete": self.cleanup_complete,
             "quiesce_checkpoint": self.quiesce_proof,
             "failure": self.failure,
+            "recovery_blockers": list(self.recovery_blockers),
         }
 
     async def quiesce(self, payload):
@@ -437,11 +444,135 @@ class ProjectExecution:
                 )
         return await self.status({})
 
+    async def _recovery_controls(self, lease, until: asyncio.Event, applied=None):
+        """Run recovery-safe pause and stop until ``until`` or worker stop.
+
+        Only controls classified as recovery-safe are claimed; work and every
+        other control stay queued for the activated application.
+        """
+        from .runtime_recovery_controls import recovery_control_runner
+
+        async with recovery_control_runner(self.context, lease) as runner:
+            while not self._stop.is_set() and not until.is_set():
+                try:
+                    with execution_context(lease):
+                        delivered = await runner.run_recovery_control(lease)
+                except LeaseLost:
+                    # diagnostic-expected: ordinary lease loss fences the project and stops this worker.
+                    self.state = "fenced"
+                    self._stop.set()
+                    return
+                except Exception as error:
+                    # The runner already recorded the command as uncertain.
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.command.uncertain",
+                        "A command needs explicit reconciliation.",
+                        error,
+                        stage="delivery",
+                    )
+                    delivered = False
+                if delivered:
+                    if applied is not None:
+                        await applied()
+                    continue
+                stop_wait = asyncio.ensure_future(self._stop.wait())
+                until_wait = asyncio.ensure_future(until.wait())
+                try:
+                    await asyncio.wait(
+                        [stop_wait, until_wait],
+                        timeout=RECOVERY_CONTROL_SECONDS,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    stop_wait.cancel()
+                    until_wait.cancel()
+                    await asyncio.gather(stop_wait, until_wait, return_exceptions=True)
+
+    async def _hold_for_recovery(self, lease) -> bool:
+        """Wait until granted recovery can prepare; pause and stop still run.
+
+        Returns False when the worker stopped first. The project application
+        is not constructed while held: its restoration needs a prepared
+        recovery checkpoint, which unresolved effects prevent.
+        """
+        coordinator = self.context.coordinator
+        pending = getattr(coordinator, "pending_recovery_operation", None)
+        if pending is None:
+            return True
+        operation_id = await pending(lease)
+        if operation_id is None:
+            return True
+
+        async def prepare() -> bool:
+            try:
+                await coordinator.prepare_recovery(lease, operation_id=operation_id)
+            except RecoveryBlocked as blocked:
+                # diagnostic-expected: held recovery reports these blockers in worker status and retries.
+                self.recovery_blockers = blocked.blockers
+                return False
+            self.recovery_blockers = []
+            return True
+
+        if await prepare():
+            return True
+        self.state, self.recovery_operation_id = "recovering", operation_id
+        # Set once preparation succeeds or its retry fails; either ends the hold.
+        settled = asyncio.Event()
+        outcome: list[BaseException | bool] = []
+
+        async def retry():
+            try:
+                while not self._stop.is_set():
+                    stop_wait = asyncio.ensure_future(self._stop.wait())
+                    try:
+                        await asyncio.wait(
+                            [stop_wait], timeout=RECOVERY_RETRY_SECONDS
+                        )
+                    finally:
+                        stop_wait.cancel()
+                        await asyncio.gather(stop_wait, return_exceptions=True)
+                    if self._stop.is_set():
+                        return
+                    await self._recheck(lease)
+                    # A cheap blocker read first; the full checkpoint scan
+                    # runs only once nothing is known to block it.
+                    status = await coordinator.recovery_status(lease.project_id)
+                    if status is not None and status.get("blockers"):
+                        self.recovery_blockers = list(status["blockers"])
+                        continue
+                    if await prepare():
+                        outcome.append(True)
+                        return
+            except Exception as error:
+                outcome.append(error)
+            finally:
+                settled.set()
+
+        # diagnostic-expected: the preparation retry is joined below and its error is raised to the lifetime.
+        retrying = asyncio.create_task(retry(), name="nebula-project-recovery-hold")
+        try:
+            await self._recovery_controls(lease, settled)
+        finally:
+            if self._stop.is_set() or not settled.is_set():
+                retrying.cancel()
+            await asyncio.gather(retrying, return_exceptions=True)
+        if outcome and isinstance(outcome[0], BaseException):
+            raise outcome[0]
+        if self._stop.is_set() or outcome != [True]:
+            return False
+        self.state = "starting"
+        return True
+
     async def _lifetime(self, lease):
         tasks: list[asyncio.Task] = []
         self.context.restore_cleanup_completed = False
         try:
             with execution_context(lease):
+                if not await self._hold_for_recovery(lease):
+                    # Nothing project-owned was constructed while held.
+                    self.context.restore_cleanup_completed = True
+                    return
                 async with self.application_factory(self.context, lease) as app:
                     async with self.context.coordinator.coordination.fenced(lease):
                         pass
@@ -465,6 +596,33 @@ class ProjectExecution:
                         activate_wait = asyncio.create_task(self._activate.wait())
                         # diagnostic-expected: this Event waiter is cancelled and joined in the immediately enclosing finally.
                         stop_wait = asyncio.create_task(self._stop.wait())
+                        controls = None
+                        if self.recovery_operation_id is not None:
+
+                            async def reprepare():
+                                # A control changed project state after its
+                                # checkpoint; prepare again so verification
+                                # compares the state the operator left.
+                                try:
+                                    digest = await self.context.coordinator.prepare_recovery(
+                                        lease, operation_id=self.recovery_operation_id
+                                    )
+                                except RecoveryBlocked as blocked:
+                                    # diagnostic-expected: held recovery reports these blockers in worker status.
+                                    self.recovery_blockers = blocked.blockers
+                                    return
+                                self.recovery_blockers = []
+                                self.restored_checkpoint_digest = digest
+                                if handoff_agent is not None:
+                                    handoff_agent.restored_digest = digest
+
+                            # diagnostic-expected: the recovery control loop records its failures and is stopped and joined before activation.
+                            controls = asyncio.create_task(
+                                self._recovery_controls(
+                                    lease, self._activate, applied=reprepare
+                                ),
+                                name="nebula-project-recovery-controls",
+                            )
                         try:
                             while (
                                 not self._activate.is_set() and not self._stop.is_set()
@@ -481,6 +639,10 @@ class ProjectExecution:
                             await asyncio.gather(
                                 activate_wait, stop_wait, return_exceptions=True
                             )
+                            if controls is not None:
+                                # Let a control in flight finish its outcome
+                                # before producers can start.
+                                await asyncio.gather(controls, return_exceptions=True)
                         if self._stop.is_set():
                             return
                         from .runtime_project_handoff import activation_allowed
@@ -799,7 +961,7 @@ class ProjectExecution:
                     project_runtime_unavailable_body(
                         "Project execution is reconnecting; accepted work remains saved",
                         "starting"
-                        if self.state in {"unassigned", "prepared"}
+                        if self.state in {"unassigned", "prepared", "recovering"}
                         else "closing",
                     ),
                     status_code=503,

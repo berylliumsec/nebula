@@ -719,7 +719,9 @@ def create_api_worker(
             raise HTTPException(
                 422, "The request cannot be represented as a bounded durable command"
             ) from None
-        lane = command_lane(intent.path)
+        # The goal action route holds pause and start in one path; the saved
+        # body decides, so a pause is a control and start/resume stay work.
+        lane = command_lane(intent.path, method=intent.method, body=intent.body())
         if (intent.method, intent.path) in {
             ("POST", "/api/v1/work/import"),
             ("PATCH", "/api/v1/work/projects"),

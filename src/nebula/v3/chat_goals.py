@@ -799,8 +799,21 @@ class ChatGoalService:
         return GoalHandoffCreated(session=target, goal=goal, source_goal=updated)
 
     async def write(
-        self, session_id: str, body: GoalWrite, *, allow_pending_recovery: bool = False
+        self,
+        session_id: str,
+        body: GoalWrite,
+        *,
+        allow_pending_recovery: bool = False,
+        retain_execution_claim: bool = False,
     ) -> ChatGoal:
+        """Apply one goal action.
+
+        ``retain_execution_claim`` is for a pause while project recovery is
+        held: the claim names an interrupted owner's step whose effect is
+        unknown, so pausing must not erase it. Recovery reconciles it.
+        """
+        if retain_execution_claim and body.action != "pause":
+            raise ConflictError("only a pause can run while project recovery is held")
         goal = await self.get(session_id)
         if body.expected_revision != goal.revision:
             raise ConflictError(
@@ -830,6 +843,18 @@ class ChatGoalService:
                 "execution_claim_id": None,
                 "execution_claimed_at": None,
             }
+            if retain_execution_claim:
+                for field in (
+                    "execution_owner_id",
+                    "execution_claim_id",
+                    "execution_claimed_at",
+                ):
+                    del changes[field]
+                if goal.execution_claim_id is not None:
+                    changes["blocked_reason"] = body.reason or (
+                        "Paused while project recovery is held. Its interrupted "
+                        "step is unresolved and needs reconciliation before resuming."
+                    )
             propagate = ChatGoalStatus.PAUSED
         elif body.action == "resume":
             if goal.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:

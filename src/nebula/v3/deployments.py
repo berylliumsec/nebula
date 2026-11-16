@@ -53,6 +53,7 @@ from .runtime_coordination import (
     LeaseLost,
     OperationRejected,
     ProjectLease,
+    RecoveryBlocked,
     RuntimeCoordination,
     STORAGE_REPORT_COMMAND,
     ShutdownBlocked,
@@ -816,6 +817,7 @@ class DeploymentCoordinator:
             (EntityRow.kind == "chat_schedules")
             & EntityRow.payload["enabled"].as_boolean().is_(True)
         )
+
         conditions.append(
             (EntityRow.kind == "approvals")
             & EntityRow.payload["continuation"]["adapter_status"]
@@ -834,6 +836,21 @@ class DeploymentCoordinator:
             query = query.where(EntityRow.engagement_id == project_id)
         blockers.extend(
             kind + " " + identity + " needs a safe pause or outcome"
+            for identity, kind in await session.execute(query.limit(101))
+        )
+        # A pause or stop recorded during recovery keeps the interrupted
+        # owner's claim: its effect is unresolved whatever the status says.
+        query = select(EntityRow.id, EntityRow.kind).where(
+            EntityRow.kind.in_(("chat_turns", "chat_goals")),
+            EntityRow.payload["execution_claim_id"].as_string().is_not(None),
+        )
+        if project_id is not None:
+            query = query.where(EntityRow.engagement_id == project_id)
+        blockers.extend(
+            kind
+            + " "
+            + identity
+            + " retains an execution claim requiring reconciliation"
             for identity, kind in await session.execute(query.limit(101))
         )
         return blockers
@@ -2099,6 +2116,20 @@ class DeploymentCoordinator:
                 "checkpoint_digest": checkpoint_digest(row.checkpoint),
             }
 
+    async def pending_recovery_operation(self, lease: ProjectLease) -> str | None:
+        """The unverified recovery this exact incarnation was granted, if any."""
+        async with self.database.session() as session:
+            return await session.scalar(
+                select(RuntimeRecoveryRow.operation_id)
+                .where(
+                    RuntimeRecoveryRow.project_id == lease.project_id,
+                    RuntimeRecoveryRow.target_runtime_id == lease.runtime_id,
+                    RuntimeRecoveryRow.target_fencing_token == lease.fencing_token,
+                    RuntimeRecoveryRow.phase.in_(("held", "prepared")),
+                )
+                .limit(1)
+            )
+
     async def prepare_recovery(self, lease: ProjectLease, *, operation_id: str) -> str:
         from .runtime_project_handoff import snapshot_project_checkpoint
         from .runtime_checkpoint_generation import assert_checkpoint_generation
@@ -2128,7 +2159,7 @@ class DeploymentCoordinator:
                 session, lease.project_id, lease.runtime_id
             )
             if blockers:
-                raise CoordinationConflict("; ".join(blockers[:10]))
+                raise RecoveryBlocked(blockers)
             row.checkpoint = {
                 "format": "nebula.project-recovery/v1",
                 "operation_id": operation_id,

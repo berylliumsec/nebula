@@ -637,7 +637,11 @@ class RuntimeSupervisor:
             raise CoordinationConflict("The original recovery grant changed")
         status = await self._recovery_status(lease)
         if status.get("state") in {"unassigned", "starting"} and phase != "verified":
-            await self._recovery_grant(row, check_blockers=True)
+            # Attach even while effects are unresolved: the worker holds its
+            # restoration (nothing is constructed or activated) but runs the
+            # operator's pause and stop. Verification below still requires
+            # every blocker to be resolved.
+            await self._recovery_grant(row)
             await self.attach_execution(
                 lease.project_id,
                 lease.runtime_id,
@@ -881,7 +885,8 @@ class RuntimeSupervisor:
                 if binding is not None and (
                     lease is None
                     or binding != asdict(lease)
-                    or status.get("state") not in {"starting", "prepared", "ready"}
+                    or status.get("state")
+                    not in {"starting", "recovering", "prepared", "ready"}
                 ):
                     raise CoordinationConflict(
                         "This execution process already ended its project grant; "
@@ -917,7 +922,8 @@ class RuntimeSupervisor:
                                 "Execution attachment does not match the committed grant"
                             )
                         if status.get("state") == "ready" or (
-                            allow_prepared and status.get("state") == "prepared"
+                            allow_prepared
+                            and status.get("state") in {"prepared", "recovering"}
                         ):
                             return lease
                         if status.get("state") != "starting":
