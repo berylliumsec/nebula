@@ -235,6 +235,8 @@ RETRIEVAL_TOOL_NAMES = frozenset(
         "research_result_catalog",
         "research_result_search",
         "research_result_read",
+        "research_result_describe",
+        "research_result_query",
         "workspace.search",
         "workspace.find",
         "workspace.read",

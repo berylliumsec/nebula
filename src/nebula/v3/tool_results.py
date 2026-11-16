@@ -127,6 +127,33 @@ class ToolOutputPreview(BaseModel):
     text: str
 
 
+class ResearchResultCollectionReceipt(BaseModel):
+    """Untrusted callback collection hints, reduced to bounded identifiers."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(min_length=1, max_length=120)
+    count: int | None = Field(default=None, ge=0)
+
+
+class ResearchResultReceipt(BaseModel):
+    """Validated routing metadata for a typed, query-first result artifact."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_: Literal["apple-rnd.queryable-result.v1"] = Field(alias="schema")
+    handle: str = Field(min_length=1, max_length=160)
+    status: str = Field(min_length=1, max_length=32)
+    version: str | None = Field(default=None, max_length=80)
+    coverage: str | dict[str, Any] = Field(default_factory=dict)
+    collections: list[ResearchResultCollectionReceipt] = Field(
+        default_factory=list, max_length=64
+    )
+    first_call: dict[str, Any] | None = None
+    query_steps: list[str] = Field(default_factory=list, max_length=8)
+    query_required: bool
+
+
 class ToolParserReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -196,6 +223,7 @@ class ToolResultReceipt(BaseModel):
     status: ToolResultStatus
     exit_code: int | None = None
     summary: str | None = Field(default=None, max_length=1_000)
+    research_result: ResearchResultReceipt | None = None
     observations: list[ToolObservation] = Field(default_factory=list, max_length=100)
     timing: ToolTimingReceipt = Field(default_factory=ToolTimingReceipt)
     artifacts: list[ToolArtifactRef] = Field(default_factory=list, max_length=12)

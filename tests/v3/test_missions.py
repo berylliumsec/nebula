@@ -199,6 +199,17 @@ class RecordingProvider(ModelProvider):
         return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
+async def wait_for_event(event: threading.Event, timeout: float) -> bool:
+    """Wait for a thread event without blocking the loop the provider runs on."""
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not event.is_set():
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
 class BlockingProvider(ModelProvider):
     def __init__(self, profile):
         super().__init__(_config(profile))
@@ -244,14 +255,14 @@ def _app(tmp_path, provider, *, max_active_missions=4):
     return app, store, service
 
 
-def _wait_for_status(client, run_id, expected, timeout=8):
+async def _wait_for_status(client, run_id, expected, timeout=8):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = client.get(f"/api/v1/runs/{run_id}", headers=_auth())
+        response = await client.get(f"/api/v1/runs/{run_id}", headers=_auth())
         assert response.status_code == 200
         if response.json()["status"] == expected:
             return response.json()
-        time.sleep(0.02)
+        await asyncio.sleep(0.02)
     raise AssertionError(
         f"run {run_id} did not reach {expected}: {response.json()['status']}"
     )
@@ -981,7 +992,7 @@ async def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path
         assert queued["budget"]["max_tool_calls"] is None
         assert queued["budget"]["max_delegation_depth"] == 0
 
-        completed = _wait_for_status(client, queued["id"], "complete")
+        completed = await _wait_for_status(client, queued["id"], "complete")
         assert completed["completed_at"] is not None
         assert completed["metadata"] == {
             "name": "Bounded scope review",
@@ -1072,7 +1083,7 @@ async def test_api_mission_defaults_to_unlimited_duration(tmp_path):
         assert response.status_code == 202, response.text
         queued = response.json()
         assert queued["budget"]["max_duration_seconds"] is None
-        assert _wait_for_status(client, queued["id"], "complete")["status"] == (
+        assert (await _wait_for_status(client, queued["id"], "complete"))["status"] == (
             "complete"
         )
 
@@ -1129,7 +1140,7 @@ async def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path)
         assert retried["supervisor_model"] == "security-model"
         assert retried["metadata"]["retry_of_run_id"] == original.id
         assert retried["metadata"]["stages"] == original.metadata["stages"]
-        _wait_for_status(client, retried["id"], "complete")
+        await _wait_for_status(client, retried["id"], "complete")
 
     assert (await store.get(AgentRun, original.id)).status == RunStatus.INTERRUPTED
 
@@ -1155,7 +1166,7 @@ async def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
         )
         assert started.status_code == 202
         run_id = started.json()["id"]
-        assert provider.started.wait(timeout=5)
+        assert await wait_for_event(provider.started, 5)
         waiting_call = await store.create(
             ToolCall(
                 engagement_id=engagement.id,
@@ -1174,7 +1185,7 @@ async def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
 
         assert stopped.status_code == 200
         assert stopped.json()["status"] == "cancelled"
-        assert provider.cancelled.wait(timeout=2)
+        assert await wait_for_event(provider.cancelled, 2)
         assert run_id not in service.active_run_ids
         tasks = [
             task for task in (await store.list_entities(Task)) if task.run_id == run_id
@@ -1268,7 +1279,7 @@ async def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(
             json=_start_payload(engagement, profile),
         )
         assert first.status_code == 202
-        assert provider.started.wait(timeout=5)
+        assert await wait_for_event(provider.started, 5)
         capacity = await client.post(
             "/api/v1/missions",
             headers=_auth(),
@@ -1304,7 +1315,7 @@ async def test_background_provider_failure_is_durable(tmp_path):
             json=_start_payload(engagement, profile),
         )
         run_id = response.json()["id"]
-        failed = _wait_for_status(client, run_id, "failed")
+        failed = await _wait_for_status(client, run_id, "failed")
         assert failed["completed_at"] is not None
         assert [event.event_type for event in (await store.replay_events(run_id))][
             -2:
@@ -1365,7 +1376,7 @@ async def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(
             json=_start_payload(engagement, profile),
         )
         run_id = response.json()["id"]
-        assert provider.started.wait(timeout=5)
+        assert await wait_for_event(provider.started, 5)
 
     run = await store.get(AgentRun, run_id)
     assert run.status not in {
@@ -1634,7 +1645,7 @@ async def test_reposting_an_approval_decision_resumes_a_stranded_run(tmp_path):
         )
         assert second.status_code == 200
         assert second.json()["status"] == "approved"
-        _wait_for_status(client, run.id, "complete")
+        await _wait_for_status(client, run.id, "complete")
         assert stats["resumed"] == 1
 
 
@@ -2018,7 +2029,7 @@ async def test_mission_command_approval_decision_resumes_the_run(tmp_path):
 
         assert decision.status_code == 200
         assert decision.json()["status"] == "approved"
-        _wait_for_status(client, run.id, "complete")
+        await _wait_for_status(client, run.id, "complete")
         assert stats["resumed"] == 1
         assert (await store.get(AgentRun, run.id)).status == RunStatus.COMPLETE
 

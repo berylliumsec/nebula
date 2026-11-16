@@ -1,11 +1,11 @@
 from __future__ import annotations
+import asyncio
 from nebula.v3.async_utils import async_any
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
 
-import threading
 from datetime import timedelta
 
 import pytest
@@ -265,29 +265,29 @@ async def test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound
     (await scenario())
 
 
-async def test_global_chat_settings_read_runs_outside_event_loop(tmp_path, monkeypatch):
+async def test_global_chat_settings_read_awaits_the_async_work_read(
+    tmp_path, monkeypatch
+):
+    # #939 (831d0d0) replaced the read_in_worker thread offload with an async
+    # store read on the event loop; the operation now awaits the work read.
     _, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
-    read_threads = []
+    reads = []
 
-    def read_settings(project_id, session_id):
-        read_threads.append(threading.get_ident())
+    async def read_settings(project_id, session_id):
+        reads.append((project_id, session_id))
         return {"session_id": session_id}
 
     monkeypatch.setattr(scheduled._work, "chat_settings", read_settings)
 
-    async def scenario():
-        loop_thread = threading.get_ident()
-        result = await scheduled.invoke(
-            {
-                "operation": "nebula.global.chat_settings",
-                "arguments": {"project_id": project.id, "session_id": chat.id},
-            },
-            change=False,
-        )
-        assert result["session_id"] == chat.id
-        assert read_threads and read_threads[0] != loop_thread
-
-    (await scenario())
+    result = await scheduled.invoke(
+        {
+            "operation": "nebula.global.chat_settings",
+            "arguments": {"project_id": project.id, "session_id": chat.id},
+        },
+        change=False,
+    )
+    assert result["session_id"] == chat.id
+    assert reads == [(project.id, chat.id)]
 
 
 async def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
@@ -1257,12 +1257,21 @@ async def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_
             change=True,
         )
         assert resumed["goal"]["status"] == "running"
+        # The resumed goal's turn claims execution in the background, which
+        # bumps the goal revision; act on the goal Core holds after that.
+        for _ in range(500):
+            claimed = await store.get(ChatGoal, goal.id)
+            if claimed.execution_claim_id is not None:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("resumed goal turn never claimed execution")
         paused = await scheduled.invoke(
             {
                 "operation": "nebula.work.goal_action",
                 "arguments": {
                     "session_id": chat.id,
-                    "expected_revision": resumed["goal"]["revision"],
+                    "expected_revision": claimed.revision,
                     "action": "pause",
                     "reason": "Synthetic pause",
                 },

@@ -40,7 +40,7 @@ class ResearchResultService:
         )
 
     def query(self, action: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        if action not in {"catalog", "search", "read"}:
+        if action not in {"catalog", "search", "read", "describe", "query"}:
             raise ValueError("unknown research result operation")
         handle = arguments.get("handle")
         if not isinstance(handle, str) or HANDLE.fullmatch(handle) is None:
@@ -83,6 +83,58 @@ class ResearchResultService:
                 if not isinstance(cursor, str) or len(cursor) > 8192:
                     raise ValueError("invalid research result cursor")
                 command.extend(("--cursor", cursor))
+        elif action == "describe":
+            collection = arguments.get("collection")
+            if collection is not None:
+                if not isinstance(collection, str) or not collection:
+                    raise ValueError("invalid research result collection")
+                command.extend(("--collection", collection))
+        elif action == "query":
+            collection = arguments.get("collection")
+            if not isinstance(collection, str) or not collection:
+                raise ValueError("research result query requires a collection")
+            command.extend(("--collection", collection))
+            where = arguments.get("where") or []
+            if not isinstance(where, list):
+                raise ValueError("invalid research result predicates")
+            for predicate in where:
+                if (
+                    not isinstance(predicate, dict)
+                    or not isinstance(predicate.get("field"), str)
+                    or predicate.get("op") not in {"eq", "in"}
+                    or "value" not in predicate
+                ):
+                    raise ValueError("invalid research result predicate")
+            command.extend(("--where", json.dumps(where, separators=(",", ":"))))
+            related_to = arguments.get("related_to")
+            if related_to is not None:
+                if (
+                    not isinstance(related_to, dict)
+                    or not isinstance(related_to.get("match_id"), str)
+                    or MATCH_ID.fullmatch(related_to["match_id"]) is None
+                    or not isinstance(related_to.get("relation"), str)
+                    or related_to.get("direction") not in {"outgoing", "incoming"}
+                ):
+                    raise ValueError("invalid research result relationship")
+                command.extend(
+                    ("--related-to", json.dumps(related_to, separators=(",", ":")))
+                )
+            selected = arguments.get("select") or []
+            if not isinstance(selected, list) or any(
+                not isinstance(field, str) or not field for field in selected
+            ):
+                raise ValueError("invalid research result projection")
+            command.extend(("--select", json.dumps(selected, separators=(",", ":"))))
+            text = arguments.get("text")
+            if text is not None:
+                if not isinstance(text, str) or not 1 <= len(text) <= 4096:
+                    raise ValueError("invalid literal query")
+                command.extend(("--text", text))
+            cursor = arguments.get("cursor")
+            if cursor is not None:
+                if not isinstance(cursor, str) or len(cursor) > 8192:
+                    raise ValueError("invalid research result cursor")
+                command.extend(("--cursor", cursor))
         elif action == "read":
             match_id = arguments.get("match_id")
             if not isinstance(match_id, str) or MATCH_ID.fullmatch(match_id) is None:
@@ -95,6 +147,13 @@ class ResearchResultService:
             ):
                 raise ValueError("invalid research result context")
             command.extend(("--match-id", match_id, "--context-lines", str(context)))
+            fields = arguments.get("fields") or []
+            if not isinstance(fields, list) or any(
+                not isinstance(field, str) or not field for field in fields
+            ):
+                raise ValueError("invalid research result field selection")
+            if fields:
+                command.extend(("--fields", json.dumps(fields, separators=(",", ":"))))
         result = subprocess.run(
             command, capture_output=True, text=True, check=False, timeout=900
         )
