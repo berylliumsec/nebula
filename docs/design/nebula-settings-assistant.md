@@ -1100,9 +1100,11 @@ Butler's saved **Subagents** switch and child runtime, effort, and active-child
 limit also apply to scheduled background checks once the operator has saved a
 choice. Butler's default delegation for a provider runtime applies only to direct
 conversations; an unattended check does not delegate until the operator turns the
-switch on and saves. A disabled switch remains off; children may use either a
-provider or a harness through Nebula's subagent tools. Vendor-native delegation
-is not enabled by this setting for background checks.
+switch on and saves. A disabled switch remains off; children run in Butler mode
+on a provider model through Nebula's subagent tools, and a harness child saved
+before that rule makes a background check run without subagents (diagnostic
+`butler.recovery.harness_subagent_skipped`). Vendor-native delegation is not
+enabled by this setting for background checks.
 
 ## Butler subagents in direct conversations
 
