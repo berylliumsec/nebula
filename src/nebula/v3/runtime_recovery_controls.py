@@ -58,14 +58,17 @@ def recovery_control_app(store: NebulaStore, *, operator_token: str) -> FastAPI:
         try:
             body = GoalWrite.model_validate_json(await request.body())
         except ValidationError as error:
+            # diagnostic-expected: an invalid saved request is answered 422 and recorded as the command's failed outcome.
             return JSONResponse({"detail": error.errors()}, status_code=422)
         if body.action != "pause":
             return refusal(409, RECOVERY_HELD_DETAIL)
         try:
             goal = await goals.write(session_id, body, retain_execution_claim=True)
         except NotFoundError as error:
+            # diagnostic-expected: a missing goal is answered 404 and recorded as the command's failed outcome.
             return refusal(404, str(error))
         except ConflictError as error:
+            # diagnostic-expected: a refused pause is answered 409 and recorded as the command's failed outcome.
             return refusal(409, str(error))
         return JSONResponse(goal.model_dump(mode="json"))
 
@@ -76,6 +79,7 @@ def recovery_control_app(store: NebulaStore, *, operator_token: str) -> FastAPI:
         try:
             turn = await store.get(ChatTurn, turn_id)
         except NotFoundError as error:
+            # diagnostic-expected: a missing response is answered 404 and recorded as the command's failed outcome.
             return refusal(404, str(error))
         if turn.status in _ENDED:
             # A repeated stop changes nothing.
@@ -108,6 +112,7 @@ def recovery_control_app(store: NebulaStore, *, operator_token: str) -> FastAPI:
                     expected_revision=turn.revision,
                 )
             except ConflictError as error:
+                # diagnostic-expected: a stop that lost a revision race is answered 409 and recorded as failed.
                 return refusal(409, str(error))
             return JSONResponse(
                 {
@@ -142,12 +147,11 @@ def recovery_control_app(store: NebulaStore, *, operator_token: str) -> FastAPI:
                     expected_revision=turn.revision,
                 )
         except ConflictError as error:
+            # diagnostic-expected: a stop the admission state refused is answered 409 and recorded as failed.
             return refusal(409, str(error))
         return JSONResponse(_turn_view(cancelled, applied=True))
 
-    @app.api_route(
-        "/api/v1/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE"]
-    )
+    @app.api_route("/api/v1/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE"])
     async def held(path: str):
         return refusal(409, RECOVERY_HELD_DETAIL)
 
@@ -194,4 +198,3 @@ async def recovery_control_runner(context, lease: ProjectLease) -> AsyncIterator
     finally:
         await finish_cleanup(store.event_history.close())
         await finish_cleanup(database.dispose())
-

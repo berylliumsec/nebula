@@ -526,9 +526,7 @@ class ProjectExecution:
                 while not self._stop.is_set():
                     stop_wait = asyncio.ensure_future(self._stop.wait())
                     try:
-                        await asyncio.wait(
-                            [stop_wait], timeout=RECOVERY_RETRY_SECONDS
-                        )
+                        await asyncio.wait([stop_wait], timeout=RECOVERY_RETRY_SECONDS)
                     finally:
                         stop_wait.cancel()
                         await asyncio.gather(stop_wait, return_exceptions=True)
@@ -545,6 +543,7 @@ class ProjectExecution:
                         outcome.append(True)
                         return
             except Exception as error:
+                # diagnostic-expected: the hold re-raises this error into the project lifetime, which records the failure.
                 outcome.append(error)
             finally:
                 settled.set()
@@ -604,8 +603,11 @@ class ProjectExecution:
                                 # checkpoint; prepare again so verification
                                 # compares the state the operator left.
                                 try:
-                                    digest = await self.context.coordinator.prepare_recovery(
-                                        lease, operation_id=self.recovery_operation_id
+                                    digest = (
+                                        await self.context.coordinator.prepare_recovery(
+                                            lease,
+                                            operation_id=self.recovery_operation_id,
+                                        )
                                     )
                                 except RecoveryBlocked as blocked:
                                     # diagnostic-expected: held recovery reports these blockers in worker status.

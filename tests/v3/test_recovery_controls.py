@@ -185,12 +185,15 @@ def test_goal_pause_is_control_and_start_resume_are_work():
     assert recovery_control("PUT", "/api/v1/chat/turns/t/cancel", b"") is False
 
 
-async def test_pause_and_stop_run_while_recovery_is_blocked(recovery):
+async def test_pause_and_stop_run_while_recovery_is_blocked(recovery):  # noqa: F811 (fixture)
     value = recovery
     goal, queued, claimed = await held_project(value)
     lease = await value.begin()
     pause = await submit(
-        value, "pause", GOAL.format("held-session"), {"expected_revision": goal.revision, "action": "pause"}
+        value,
+        "pause",
+        GOAL.format("held-session"),
+        {"expected_revision": goal.revision, "action": "pause"},
     )
     stop = await submit(value, "stop", f"/api/v1/chat/turns/{queued.id}/cancel")
     stop_claimed = await submit(
@@ -247,7 +250,10 @@ async def test_pause_and_stop_run_while_recovery_is_blocked(recovery):
 
     # A repeated request returns its saved receipt; nothing runs twice.
     again = await submit(
-        value, "pause", GOAL.format("held-session"), {"expected_revision": goal.revision, "action": "pause"}
+        value,
+        "pause",
+        GOAL.format("held-session"),
+        {"expected_revision": goal.revision, "action": "pause"},
     )
     assert again.command_id == pause.command_id
     revision = (await value.store.get(ChatGoal, goal.id)).revision
@@ -257,18 +263,19 @@ async def test_pause_and_stop_run_while_recovery_is_blocked(recovery):
     # Shutdown reports the retained claims rather than calling them paused.
     async with value.database.session() as session:
         shutdown = await value.coordinator._shutdown_blockers(session, "one")
-    assert any(
-        goal.id in item and "execution claim" in item for item in shutdown
-    )
+    assert any(goal.id in item and "execution claim" in item for item in shutdown)
     assert lease == value.execution.lease
 
 
-async def test_stale_owner_cannot_claim_a_control(recovery):
+async def test_stale_owner_cannot_claim_a_control(recovery):  # noqa: F811 (fixture)
     value = recovery
     goal, _, _ = await held_project(value)
     lease = await value.begin()
     pause = await submit(
-        value, "pause", GOAL.format("held-session"), {"expected_revision": goal.revision, "action": "pause"}
+        value,
+        "pause",
+        GOAL.format("held-session"),
+        {"expected_revision": goal.revision, "action": "pause"},
     )
     with pytest.raises(LeaseLost):
         await value.coordination.claim_control(value.old, pause.command_id)
@@ -286,12 +293,15 @@ async def test_stale_owner_cannot_claim_a_control(recovery):
     assert (await value.store.get(ChatGoal, goal.id)).status == "running"
 
 
-async def test_held_worker_activates_only_after_blockers_resolve(recovery):
+async def test_held_worker_activates_only_after_blockers_resolve(recovery):  # noqa: F811 (fixture)
     value = recovery
     goal, queued, claimed = await held_project(value)
     await value.begin()
     pause = await submit(
-        value, "pause", GOAL.format("held-session"), {"expected_revision": goal.revision, "action": "pause"}
+        value,
+        "pause",
+        GOAL.format("held-session"),
+        {"expected_revision": goal.revision, "action": "pause"},
     )
     supervisor = value.new_supervisor()
     await supervisor.advance_project_handoffs()
@@ -363,7 +373,9 @@ async def test_restart_recovery_keeps_operator_recovery_pause_and_stop(tmp_path)
         retain_execution_claim=True,
     )
     assert marked.status == "paused" and OPERATOR_RECOVERY_PAUSE in marked.metadata
-    await _interrupted_turn(store, {"required": False, "cause": "core_restart"}, goal.id)
+    await _interrupted_turn(
+        store, {"required": False, "cause": "core_restart"}, goal.id
+    )
 
     service = ChatService(store)
     assert await service.resume_turns_stopped_by_core() == []
