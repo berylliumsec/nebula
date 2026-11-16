@@ -409,3 +409,25 @@ async def test_unauthenticated_traffic_cannot_deny_an_operator_stop(supervised):
             finally:
                 for writer in writers:
                     writer.close()
+
+
+async def test_liveness_answers_without_credentials_database_or_worker(
+    supervised, monkeypatch
+):
+    root = supervised.supervisor
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("liveness must not touch the database or a worker")
+
+    monkeypatch.setattr(root.coordinator.database, "health", forbidden)
+    monkeypatch.setattr(root.bootstrap, "api_state", forbidden)
+    monkeypatch.setattr(root.authentication, "device_for_token", forbidden)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=root.app), base_url="http://fixture"
+    ) as client:
+        response = await client.get(
+            "/api/v1/health/live", headers={"Cookie": "nebula_device=synthetic"}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"status": "alive"}
+        assert response.headers["cache-control"] == "no-store"

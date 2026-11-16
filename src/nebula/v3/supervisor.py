@@ -220,6 +220,14 @@ class RuntimeSupervisor:
         self.shared_services.host_settings.mount(api, authentication, self.proxy)
         mount_runtime_identity(api, self.store, authentication)
 
+        @api.get("/api/v1/health/live")
+        async def liveness():
+            # Reachability only: no credential lookup, database session or
+            # worker call, so a busy Core still answers its viewers.
+            return JSONResponse(
+                {"status": "alive"}, headers={"Cache-Control": "no-store"}
+            )
+
         @api.get("/api/v1/health", dependencies=[Depends(authentication.require_auth)])
         async def health():
             return JSONResponse(
