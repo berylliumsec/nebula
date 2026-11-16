@@ -629,7 +629,7 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", {name: "Save"}));
     expect(await screen.findByText("Saved. Applies to Butler’s next message and scheduled check.")).toBeInTheDocument();
     expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 3,
-      {harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue"});
+      {harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue", allowSubagents: false});
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Continue{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenLastCalledWith(expect.objectContaining({
       harnessReasoningEffort: "max", harnessCyberAccessProgram: "daybreakBlue",
@@ -671,7 +671,7 @@ describe("NebulaControlAssistant", () => {
     await user.click(screen.getByRole("button", {name: "Save"}));
     expect(screen.getByText("Saved for Butler’s first message and scheduled check.")).toBeInTheDocument();
     expect(updateChatAssistantConfig).toHaveBeenCalledWith("control", 1,
-      { harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue" });
+      { harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue", allowSubagents: false });
     await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Start work{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenCalledWith(expect.objectContaining({
       controlAssistant: true, harnessReasoningEffort: "high", harnessCyberAccessProgram: "daybreakBlue",

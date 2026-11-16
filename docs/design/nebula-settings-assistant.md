@@ -126,6 +126,7 @@ Settings assistant and the complete destination catalog.
 | Configure Butler Voice | The catalog opens Butler's compact Voice timeout control; the assistant can discover the authenticated Core-wide Voice settings route and report a change only after Core read-back | Core Voice settings | Tool unit, component and real Core |
 | Manage Nebula-wide Butler instructions | The catalog opens the editable BUTLER.md Markdown code editor above the Settings popup after Core loads the file. The full Settings page retains its file row and preview; upload opens a draft. The API checks the loaded digest before saving and the UI reads Core back before confirming | Core data directory and durable Butler global clock | Tool unit, component and real Core browser |
 | Set Butler model and effort | The catalog opens Butler settings. Full Assistant settings opens Butler's saved conversation with its Assistant settings panel visible. Core saves the selected effort on Butler's chat; the next direct turn and each new scheduled harness check use that saved choice. An unset effort uses the model's advertised default | Core Assistant settings and harness session | Core unit, component and real Core |
+| Let Butler delegate to subagents | The catalog opens Butler settings. **Delegate longer work to subagents** is on by default for a provider runtime until the operator saves a choice; **Running at once** is optional (empty means no limit). On a harness runtime the operator turns on Subagents and picks a provider model. Butler answers quick requests itself, starts a subagent for each multi-step or independent item, replies without waiting, and posts each report into its conversation. The panel shows a compact strip of working and finished subagents, links to Butler's Subagents drawer, and adds reports as Core posts them without reopening. Children run in Butler mode on a provider model with Butler's Core tools and approvals, appear under Butler in the sidebar, and report browser actions instead of requesting them | Core Assistant settings, `ChatSubagent` records and Butler's transcript | Core unit, component, browser and real Core |
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets. In Workbench conversations, chats Butler creates appear below Butler; older recovery chats use their linked Core goal as ownership evidence. Search reveals matching children, and a selected child remains open after reload | Core sessions, goal metadata, turns, queues and runs; URL for selection | Tool unit, component, browser and real Core |
@@ -1096,9 +1097,27 @@ both backends and is excluded from automatic on-demand discovery.
 Background recovery starts one worker per eligible case, so a slow check-in does
 not block other cases. Existing provider and harness capacity limits still apply.
 Butler's saved **Subagents** switch and child runtime, effort, and active-child
-limit also apply to scheduled background checks. A disabled switch remains off;
-children may use either a provider or a harness through Nebula's subagent tools.
-Vendor-native delegation is not enabled by this setting for background checks.
+limit also apply to scheduled background checks once the operator has saved a
+choice. Butler's default delegation for a provider runtime applies only to direct
+conversations; an unattended check does not delegate until the operator turns the
+switch on and saves. A disabled switch remains off; children may use either a
+provider or a harness through Nebula's subagent tools. Vendor-native delegation
+is not enabled by this setting for background checks.
+
+## Butler subagents in direct conversations
+
+Butler handles one response at a time. To stay responsive, Butler on a provider
+runtime delegates multi-step or independent items to subagents, tells the
+operator what it started, and ends its reply, so the next request can be sent
+while children work. Turn this off in Butler settings with **Delegate longer
+work to subagents**; set **Running at once** to cap concurrent children. Each
+child runs in Butler mode on a provider model, with Butler's Core tools and the
+project's approvals, and posts its report into Butler's conversation when it
+finishes. The Butler panel lists working and finished children above the
+composer and adds each report as Core posts it. Finished rows clear on the next
+request. **Subagents** opens Butler's saved conversation with its Subagents
+drawer, where a child can be read, messaged or stopped. Children cannot request
+browser actions; they report what needs the operator instead.
 
 Open **Butler scheduled activity** in Oversight, expand **Check transcript**, then
 choose **Open investigation and subagents** to inspect the case's saved chat,

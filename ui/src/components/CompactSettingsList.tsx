@@ -39,6 +39,7 @@ export const settingIcons: Record<string, LucideIcon> = {
   "settings.butler-effort": Bot,
   "settings.butler-activity": Activity,
   "settings.butler-voice": Activity,
+  "settings.butler-subagents": Bot,
   "settings.usage": Activity,
   "settings.setup": SquareTerminal,
   "settings.providers": Bot,

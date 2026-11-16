@@ -70,6 +70,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["butler", "voice", "gpt-live", "pause", "mute", "timeout", "cost", "seconds"],
   },
   {
+    id: "settings.butler-subagents",
+    label: "Butler subagents",
+    description: "Let Butler hand longer or independent work to subagents and reply right away; set how many run at once",
+    category: "Models",
+    scope: "Project",
+    target: "butler-settings",
+    keywords: ["butler", "subagents", "delegate", "delegation", "parallel", "multithreaded", "concurrent", "background", "busy", "queue", "one at a time", "running at once", "limit"],
+  },
+  {
     id: "settings.usage",
     label: "Usage and credits",
     description: "See Codex and Grok credits separately from included usage, plus other balances and Nebula activity",
