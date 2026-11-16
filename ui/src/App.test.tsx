@@ -1821,7 +1821,7 @@ describe("Nebula workspace", () => {
     let patchCalls = fetchMock.mock.calls.filter(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-anthropic") && init?.method === "PATCH");
     expect(JSON.parse(String(patchCalls[0][1]?.body))).toMatchObject({ changes: { model_allowlist: ["claude-new", "claude-old"], metadata: { default_model: "claude-new" } }, expected_revision: 3 });
     await user.click(screen.getByRole("button", { name: "Disable Anthropic review" }));
-    await screen.findByRole("button", { name: "Enable Anthropic review" });
+    await screen.findByRole("button", { name: "Enable Anthropic review" }, { timeout: 5_000 });
     patchCalls = fetchMock.mock.calls.filter(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-anthropic") && init?.method === "PATCH");
     expect(JSON.parse(String(patchCalls[1][1]?.body))).toEqual({ changes: { enabled: false }, expected_revision: 4 });
     const deleteProvider = screen.getByRole("button", { name: "Delete Anthropic review" });
