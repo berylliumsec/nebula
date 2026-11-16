@@ -1,28 +1,27 @@
 {
-  "change_digest": "96ed1a043bccafd29da1478a6efdc2543eaa968aff60ed18cec2d85e5697296c",
-  "reviewed_by": "Claude (py-test-rot); selection reviewed against the diff by the implementing agent; repairs made by a subagent and re-verified locally",
-  "reason": "Test-only repair of eight tests/v3 files left stale by #939's async storage move (helpers wrapping asyncio.run inside async tests, synchronous stubs Core now awaits, awaits inside generator expressions, scripted vendor fakes whose constructors became async create()). Stale expectations updated with cited commits: report sign-off PDF needs a memory-managed runner since 64e0379 (test stands in at the PDF builder seam; content assertions unchanged); scripted Grok writes system_prompt.txt since cea8b38, in an isolated home.",
-  "exclusions": "No product code changes. These files were red on main and never selected; each now passes locally 3 runs in a row (94 tests). Other red files are repaired in separate area PRs. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
+  "change_digest": "d1d774657bdf7ec4d0890218152b96b6a3ea7299686dbd13f38598b10340c7f6",
+  "reviewed_by": "Claude (py-test-rot chat group); selection reviewed against the diff by the implementing agent; remaining behavioural failures bisected by a separate subagent",
+  "reason": "Test-only repair of seven chat/context suites left stale by #939's async storage move: helpers wrapping asyncio.run in async tests made async, un-awaited store calls and service.prepare awaited, store-reading lambdas passed to _until hoisted into local async checks. A concurrent-compaction test that awaited inside asyncio.gather's list now runs concurrently again. Expectations stale since 6509bd4 (compaction target 0.60) rescaled; four async-exposed races wait for naming, precompaction, report delivery and goal turns.",
+  "exclusions": "No product code changes. These files were red on main and never selected; all pass locally (214 tests) and the bisect agent ran each previously failing test 4-8 times. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. Other red files are repaired in separate area PRs.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 94,
+    "python": 214,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_report_signoff.py",
-    "tests/v3/test_scope_import.py",
-    "tests/v3/test_session_state.py",
-    "tests/v3/test_storage_waste.py",
-    "tests/v3/test_structured_results.py",
-    "tests/v3/test_tiny_windows.py",
-    "tests/v3/test_vendor_session_recreate.py",
-    "tests/v3/test_work.py"
+    "tests/v3/test_chat_context_assembly.py",
+    "tests/v3/test_chat_final_synthesis_recovery.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_chat_reference_material.py",
+    "tests/v3/test_chat_routing_tolerance.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_context.py"
   ],
   "frontend": [],
   "native": [],
