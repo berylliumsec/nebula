@@ -262,3 +262,57 @@ async def test_health_reports_ready_only_while_the_promoted_api_answers(
     if failure == "frozen":
         health = (await client.get("/api/v1/health", headers=AUTH)).json()
         assert (health["api_ready"], health["api_state"]) == (True, "ready")
+
+
+async def test_health_tells_a_starting_or_stopping_api_from_a_held_one(recovery):
+    """Only a refused API admission sends the operator to memory recovery."""
+    from nebula.v3.database import DeploymentHostRow
+    from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
+
+    root, client = recovery.root, recovery.client
+
+    async def health():
+        response = await client.get("/api/v1/health", headers=AUTH)
+        assert response.status_code == 200
+        return response.json()
+
+    # Before admission has been tried, an unpromoted API is still starting.
+    starting = await health()
+    assert (starting["api_state"], starting["api_admission"]) == (
+        "unavailable",
+        "starting",
+    )
+
+    # Without a memory reserve, automatic admission refuses the API.
+    await recovery.managed.stage("v1", _API_WORKER)
+    automatic = RuntimeAutoAdmission(root, default_version="v1")
+    await automatic.reconcile()
+    held = await health()
+    assert (held["api_ready"], held["api_admission"]) == (False, "held")
+
+    # A saved reserve admits it; a serving API reports no admission state.
+    policy = (await client.get(MEMORY, headers=AUTH)).json()
+    saved = await client.put(
+        MEMORY,
+        headers=AUTH,
+        json={
+            "expected_revision": policy["revision"],
+            "policy": reserve_policy(policy),
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    await automatic.reconcile()
+    ready = await health()
+    assert (ready["api_state"], ready["api_admission"]) == ("ready", None)
+    assert root.bootstrap.api_admission_hold is None
+
+    # A coordinated shutdown fences the API: it is stopping, not held.
+    async with recovery.managed.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        host.shutdown_requested, host.api_runtime_id = True, None
+        await session.commit()
+    stopping = await health()
+    assert (stopping["api_state"], stopping["api_admission"]) == (
+        "unavailable",
+        "stopping",
+    )

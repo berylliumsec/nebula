@@ -106,6 +106,12 @@ class RuntimeAutoAdmission:
         self._idle_skips: dict[str, str] = {}
         self._serial = asyncio.Lock()
 
+    def _note_api_hold(self, reason: str | None) -> None:
+        """Let health tell a refused API admission from a start in progress."""
+        bootstrap = getattr(self.supervisor, "bootstrap", None)
+        if bootstrap is not None:
+            bootstrap.api_admission_hold = reason
+
     async def start(self):
         if self.task is not None:
             return
@@ -371,8 +377,10 @@ class RuntimeAutoAdmission:
                         worker.runtime_id, expected_revision=current.revision
                     )
                     self._blocked.pop("api", None)
+                    self._note_api_hold(None)
                 except Exception as error:
                     self._blocked["api"] = signature
+                    self._note_api_hold(str(error))
                     record_caught_exception(
                         "runtime",
                         "runtime.api_admission.waiting",
