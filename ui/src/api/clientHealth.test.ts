@@ -22,3 +22,20 @@ describe("ApiClient health", () => {
     expect(health.apiState).toBe(apiState);
   });
 });
+
+it.each([
+  [{ api_ready: false, api_state: "unavailable", api_admission: "starting" }, "starting"],
+  [{ api_ready: false, api_state: "unavailable", api_admission: "stopping" }, "stopping"],
+  [{ api_ready: false, api_state: "unavailable", api_admission: "held" }, "held"],
+  [{ api_ready: true, api_state: "ready", api_admission: null }, undefined],
+  [{ api_ready: false, api_state: "unavailable" }, undefined],
+])("reads why the API is unavailable: %j", async (wire, apiAdmission) => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(JSON.stringify({ status: "degraded", version: "3.0.0", mode: "team", ...wire }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+  const health = await new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock }).health();
+  expect(health.apiAdmission).toBe(apiAdmission);
+});

@@ -107,6 +107,10 @@ class RuntimePlatformError(RuntimeError):
     """The local Kali runtime or its runner cannot satisfy a request."""
 
 
+class AutomationRuntimeNotPrepared(RuntimePlatformError):
+    """No Kali automation runtime has been prepared yet: a normal setup state."""
+
+
 class ToolExecutionBroker(Protocol):
     """Shared execution boundary for native, browser, and composite brokers."""
 
@@ -750,7 +754,9 @@ class RuntimePlatform:
         (await self.store.get(Engagement, engagement_id))
         metadata = self.last_automation_runtime_metadata()
         if metadata is None:
-            raise RuntimePlatformError("prepare the Kali automation runtime first")
+            raise AutomationRuntimeNotPrepared(
+                "prepare the Kali automation runtime first"
+            )
         profile = await self.store.get(
             StoredRunnerProfile, metadata["runner_profile_id"]
         )

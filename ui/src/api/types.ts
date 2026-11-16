@@ -2947,6 +2947,8 @@ export interface HealthResponse {
   apiReady?: boolean;
   /** Whether the promoted API worker answers; "not_responding" is not a budget problem. */
   apiState?: "ready" | "not_responding" | "unavailable";
+  /** Why an unavailable API is not serving; only "held" needs operator recovery. */
+  apiAdmission?: "held" | "stopping" | "starting";
   recoveryPath?: string;
 }
 

@@ -5911,6 +5911,7 @@ export class ApiClient {
         dialect?: string;
         api_ready?: boolean;
         api_state?: "ready" | "not_responding" | "unavailable";
+        api_admission?: "held" | "stopping" | "starting" | null;
         recovery_path?: string;
         container_terminal?: "configured" | "unavailable";
         diagnostics?: { degraded?: boolean; browser_event_ingress?: "enabled" | "disabled" };
@@ -5930,6 +5931,7 @@ export class ApiClient {
       // that is not answering keeps the workspace and its reconnect handling.
       apiReady: health.api_state === undefined ? health.api_ready : health.api_state !== "unavailable",
       apiState: health.api_state,
+      apiAdmission: health.api_admission ?? undefined,
       recoveryPath: health.recovery_path,
     }));
   }

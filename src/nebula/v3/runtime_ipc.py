@@ -78,6 +78,14 @@ class ProjectRuntimeUnavailable(RuntimeIpcError):
         self.reason = reason
 
 
+class UnownedProjectRequest(LookupError):
+    """No project owns what a request references, and no worker serves host work.
+
+    Such a request resolves to the host-work owner, which never has an
+    execution worker; answering "starting" would make clients retry forever.
+    """
+
+
 # A handler that refuses with RuntimeIpcError or CoordinationConflict wrote its
 # text for operators. The server signs that reason instead of failing with a
 # bare 500, so the caller can say why. Older clients still see an error status.
