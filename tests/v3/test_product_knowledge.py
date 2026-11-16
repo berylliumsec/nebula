@@ -1164,3 +1164,13 @@ def test_product_help_explains_butler_subagent_delegation(monkeypatch):
     text = "\n".join(str(item["text"]) for item in matches).lower()
     assert "delegate longer work to subagents" in text
     assert "running at once" in text and "butler mode" in text
+
+
+def test_product_help_explains_queueing_messages_for_butler(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "queue another message while Butler is busy answering composer"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "butler queue" in text and "follow-up queue" in text
+    assert "needs review" in text

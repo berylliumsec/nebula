@@ -1771,12 +1771,13 @@
     },
     {
       "id": "ui.butler_conversation_protocol",
-      "entry_point": "Butler composer opens, streams, polls and stops its own private conversation",
+      "entry_point": "Butler composer opens, streams, follows its queued follow-ups, polls and stops its own private conversation",
       "ui_calls": [
         "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
         "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
         "ui/src/components/NebulaControlAssistant.tsx::getPendingChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::streamChat",
+        "ui/src/components/NebulaControlAssistant.tsx::followChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn",
         "ui/src/pages/SessionsPage.tsx::getControlAssistantSession",
@@ -4367,6 +4368,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/NebulaControlAssistant.tsx::followChatTurn",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/NebulaControlAssistant.tsx::getArtifactContent",
       "count": 2
     },
@@ -4428,7 +4433,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listChatMessages",
-      "count": 5
+      "count": 6
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",

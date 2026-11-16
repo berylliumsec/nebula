@@ -401,7 +401,10 @@ describe("NebulaControlAssistant", () => {
     await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
     const activity = screen.getByRole("region", { name: "Butler activity" });
     expect(activity).toHaveTextContent("Starting Butler’s response");
-    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeDisabled();
+    // While Butler works, the composer queues the next message instead of sending it.
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveAttribute("placeholder", "Queue a message for Butler…");
+    expect(screen.queryByRole("button", { name: "Send to Butler" })).not.toBeInTheDocument();
     act(() => emit({ type: "started", model: "model", turnId: "turn", sessionId: "control" }));
     act(() => emit({ type: "tool_started", turnId: "turn", toolCallId: "call", capability: "nebula.work.overview",
       displayName: "Inspect agent reports", arguments: {}, step: 1 }));
@@ -444,7 +447,7 @@ describe("NebulaControlAssistant", () => {
     expect(activity).toHaveTextContent("Working for 1m");
     fireEvent(window, new Event("online"));
     await waitFor(() => expect(activity).toHaveTextContent("Approval needed to continue"));
-    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveAttribute("placeholder", "Queue a message for Butler…");
     await user.click(screen.getByRole("button", { name: "Review" }));
     expect(onNavigate).toHaveBeenCalledWith("/projects/project/workbench?view=chat&session=control");
     await user.click(screen.getByRole("button", { name: "Show Butler" }));

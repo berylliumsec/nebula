@@ -27,7 +27,7 @@ import { assistantDestinations, assistantDestinationPath, destinationToOpen, typ
 import { projectSurface, resourcePath } from "../resourceRoutes";
 import { sha256BlobHex, sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
-import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatContentBlock, type ChatMessage, type ChatSubagentView, type ChatTurn, type ObservationSummary, type VoicePauseSeconds, type WritingTransformResponse } from "../api/types";
+import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatCompletionRequest, type ChatCompletionResponse, type ChatContentBlock, type ChatMessage, type ChatStreamEvent, type ChatSubagentView, type ChatTurn, type ObservationSummary, type VoicePauseSeconds, type WritingTransformResponse } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingNavigationCandidates, settingToOpen, themeChange, type ProjectMode, type SettingClientAction } from "./nebulaAssistantActions";
 import { saveAssistantProjectScope } from "./assistantSettingsMutations";
 import { useConfirmation } from "./DialogSystem";
@@ -59,6 +59,8 @@ import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
 import { ChatSubagentPostedResult, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, useChatSubagents, type HarnessSubagentChoice } from "./chat-subagents";
 import { ButlerSubagentActivity, butlerActivityRows, hasUnreadReport } from "./ButlerSubagentActivity";
+import { useChatQueue } from "../pages/useChatQueue";
+import { ButlerQueue } from "./ButlerQueue";
 import styles from "./NebulaControlAssistant.module.css";
 
 function readActionOutcomes(key: string): Record<string, string> {
@@ -74,6 +76,25 @@ function readActionOutcomes(key: string): Record<string, string> {
 
 function projectNameKey(name: string): string {
   return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Queue items this device added to Butler's queue, and the queued turns it has
+ * already followed. The device that queued a message applies its browser
+ * actions; a reload must not apply them twice.
+ */
+function readQueueMemory(sessionId: string): { keys: string[]; followed: string[] } {
+  try {
+    const value = JSON.parse(readStorage(`nebula.butler.queue.${sessionId}`) ?? "{}") as { keys?: unknown; followed?: unknown };
+    const strings = (items: unknown) => Array.isArray(items) ? items.filter((item): item is string => typeof item === "string") : [];
+    return { keys: strings(value.keys), followed: strings(value.followed) };
+  } catch {
+    return { keys: [], followed: [] }; // diagnostic-expected: unreadable device memory only means queued turns are not followed here
+  }
+}
+
+function writeQueueMemory(sessionId: string, memory: { keys: string[]; followed: string[] }): void {
+  writeStorage(`nebula.butler.queue.${sessionId}`, JSON.stringify({ keys: memory.keys.slice(-50), followed: memory.followed.slice(-50) }));
 }
 
 const ButlerTranscript = memo(function ButlerTranscript({ messages, api, projectId, sessionId, transcriptRef, onScroll, onOpenSetting, onNavigate, onHide, subagentResults }: {
@@ -176,6 +197,18 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [shownSubagentIds, setShownSubagentIds] = useState<ReadonlySet<string>>(() => new Set());
   const requestedReports = useRef(new Set<string>());
   const [busy, setBusy] = useState(false);
+  // A device-only command (theme, project policy) is running; Butler may also be working.
+  const [deviceBusy, setDeviceBusy] = useState(false);
+  const [queueError, setQueueError] = useState("");
+  const queueChain = useRef<Promise<void>>(Promise.resolve());
+  // Selected-context drafts already attached to a running or queued message.
+  const claimedDrafts = useRef(new Set<unknown>());
+  // Queue items this open page saw waiting to be sent. Only these may be
+  // followed after Core has already finished them (a fast reply); an item that
+  // finished while no page was watching is never replayed later.
+  const sessionQueuedKeys = useRef(new Set<string>());
+  const activeBusyRef = useRef(false);
+  const followedTurns = useRef(new Set<string>());
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyWaiting, setHistoryWaiting] = useState(false);
   const [historyRetry, setHistoryRetry] = useState(0);
@@ -227,6 +260,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     + (attentionOverview?.summary.recoveryAttention ?? 0);
   const activePendingTurn = pendingTurn?.id === settledTurnId.current ? undefined : pendingTurn;
   const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
+  activeBusyRef.current = activeBusy;
+  // Core's follow-up queue for Butler's chat; read only while the panel is open.
+  const butlerQueue = useChatQueue(api, open && sessionId && typeof api?.requestIfChanged === "function" ? sessionId : "");
   // Butler's delegated children: polled while any runs or a reply may start one.
   const butlerSubagents = useChatSubagents(api, sessionId, { enabled: open && Boolean(sessionId), live: activeBusy });
   const subagentResults = useMemo(() => new Map(butlerSubagents.subagents.flatMap((item) => item.resultMessageId ? [[item.resultMessageId, item] as const] : [])), [butlerSubagents.subagents]);
@@ -2085,9 +2121,312 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
   };
 
+  /** Butler's next-turn request for one operator message, without touching turn state. */
+  const prepareButlerRequest = async (prompt: string, hasImages: boolean, drafts: typeof butlerDrafts, aborted: () => boolean): Promise<
+    { request: ChatCompletionRequest; outgoingUser: ChatMessage; contextAttachments: Awaited<ReturnType<typeof createHashedSelectionAttachment>>[] }
+    | { error: string; imageHelp?: boolean } | undefined> => {
+    if (!api || !engagement || !runtime) return undefined;
+    let effectiveSessionId: string;
+    let effectiveConfig: ChatAssistantConfig | undefined;
+    try {
+      const saved = await getSavedSessionForTurn();
+      if (aborted()) return undefined;
+      effectiveSessionId = saved.session.id;
+      effectiveConfig = saved.config;
+    } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
+      return { error: caught instanceof Error ? caught.message : "Could not load Butler settings. Retry after reconnecting." };
+    }
+    const selectedRuntime = effectiveConfig
+      ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
+      : runtime;
+    const selectedRuntimeAcceptsImages = selectedRuntime.kind === "provider"
+      ? Boolean(providers.find((item) => item.id === selectedRuntime.id)?.capabilities?.includes("vision"))
+      : Boolean(harnesses.find((item) => item.id === selectedRuntime.id)?.modelOptions?.find((item) => item.model === selectedRuntime.model)?.imageInput);
+    if (hasImages && !selectedRuntimeAcceptsImages) {
+      return { error: "Butler's saved model changed and cannot receive images. Your attachments are still ready.", imageHelp: true };
+    }
+    const turnOptions = assistantTurnOptions(selectedRuntime, harnesses);
+    const selectedToolRuntime: ToolSharingRuntime | undefined = selectedRuntime.kind === "provider"
+      ? (() => { const profile = providers.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "provider", profile } : undefined; })()
+      : (() => { const profile = harnesses.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "harness", profile } : undefined; })();
+    let allowCloudToolResults = false;
+    if (selectedToolRuntime && !(selectedToolRuntime.kind === "provider" ? selectedToolRuntime.profile.local : selectedToolRuntime.profile.localOnly)) {
+      if (!selectedToolRuntime.profile.permitsSensitiveData) {
+        return { error: `${selectedToolRuntime.profile.name} is configured for text only. Permit project data in Settings to use settings tools.` };
+      }
+      // The profile's saved sensitive-data permission is the standing consent
+      // for this dedicated assistant; a settings instruction needs no second dialog.
+      allowCloudToolResults = true;
+    }
+    let contextAttachments;
+    try {
+      contextAttachments = await Promise.all(drafts.map(createHashedSelectionAttachment));
+    } catch (caught) {
+      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.context_attachment_failed", message: "Could not prepare selected Butler context.", outcome: "failure", stage: "context", retryable: true, exception: caught });
+      return { error: caught instanceof Error ? caught.message : "Could not prepare Butler context. Remove the selection and try again." };
+    }
+    const outgoingUser: ChatMessage = { role: "user", content: prompt,
+      ...(hasImages ? {contentBlocks: [{type: "text" as const, text: prompt}, ...pendingImages]} : {}),
+    };
+    const request: ChatCompletionRequest = {
+      controlAssistant: true,
+      engagementId: engagement.id,
+      sessionId: effectiveSessionId,
+      backend: selectedRuntime.kind,
+      providerId: selectedRuntime.kind === "provider" ? selectedRuntime.id : undefined,
+      harnessProfileId: selectedRuntime.kind === "harness" ? selectedRuntime.id : undefined,
+      model: turnOptions.model,
+      reasoningEffort: selectedRuntime.kind === "provider" ? effectiveConfig?.reasoningEffort ?? turnOptions.reasoningEffort : undefined,
+      harnessReasoningEffort: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessReasoningEffort ?? turnOptions.harnessReasoningEffort : undefined,
+      harnessServiceTier: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessServiceTier ?? turnOptions.harnessServiceTier : undefined,
+      harnessMode: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessMode : undefined,
+      harnessCyberAccessProgram: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessCyberAccessProgram : undefined,
+      mcpServerIds: effectiveConfig?.mcpServerIds,
+      hookIds: effectiveConfig?.hookIds,
+      includeKnowledge: effectiveConfig?.includeKnowledge,
+      allowCloudKnowledge: effectiveConfig?.allowCloudKnowledge,
+      allowAgentMessaging: effectiveConfig?.allowAgentMessaging,
+      allowSubagents: effectiveConfig?.allowSubagents,
+      maxActiveSubagents: effectiveConfig?.maxActiveSubagents,
+      subagentProviderId: effectiveConfig?.subagentProviderId,
+      subagentHarnessId: effectiveConfig?.subagentHarnessProfileId,
+      subagentModel: effectiveConfig?.subagentModel,
+      subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
+      messages: [outgoingUser],
+      contextAttachments: contextAttachments.length ? contextAttachments : undefined,
+      toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
+      allowCloudToolResults,
+    };
+    return { request, outgoingUser, contextAttachments };
+  };
+
+  /**
+   * Run one Butler response to its end: apply browser actions as their tool
+   * calls finish, then show the saved answer with any confirmations. Used for
+   * a message sent from this panel and for a queued one Core sent.
+   */
+  const runButlerStream = async (
+    projectId: string,
+    controller: AbortController,
+    start: (onEvent: (event: ChatStreamEvent) => void, signal: AbortSignal) => Promise<ChatCompletionResponse | undefined>,
+  ): Promise<ChatCompletionResponse | undefined> => {
+    const appliedCallIds = new Set<string>();
+    const confirmations: string[] = [];
+    const workReceipts: { url: string; content: string }[] = [];
+    let notebookIndexConnectRequested = false;
+    let linkedProjectRequested = false;
+    let reportTransformRequested = false;
+    let projectRelinkRequested = false;
+    let evidenceUploadRequested = false;
+    let sourceAddRequested = false;
+    let credentialCreateRequested = false;
+    let actionQueue = Promise.resolve();
+    const result = await start((event) => {
+      if (event.type === "started" && event.turnId) activeTurn.current.turnId = event.turnId;
+      if ("harnessTurnId" in event && event.harnessTurnId) activeTurn.current.harnessTurnId = event.harnessTurnId;
+      setTurnFeedback((current) => feedbackFromButlerEvent(current, event));
+      if (event.type === "started" || event.type === "queued") pendingPoll.current();
+      const action = settingClientAction(event, projectId);
+      if (action && event.type === "tool_completed" && !appliedCallIds.has(event.toolCallId)) {
+        appliedCallIds.add(event.toolCallId);
+        if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
+        if (action.kind === "project_create_linked") linkedProjectRequested = true;
+        if (action.kind === "report_transform_note") reportTransformRequested = true;
+        if (action.kind === "project_relink") projectRelinkRequested = true;
+        if (action.kind === "evidence_upload") evidenceUploadRequested = true;
+        if (action.kind === "source_add") sourceAddRequested = true;
+        if (action.kind === "credential_create") credentialCreateRequested = true;
+        actionQueue = actionQueue.then(async () => {
+          if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
+        });
+      }
+      const workReceipt = assistantWorkReceipt(event, projectId);
+      if (workReceipt && event.type === "tool_completed" && !appliedCallIds.has(event.toolCallId)) {
+        appliedCallIds.add(event.toolCallId);
+        workReceipts.push(workReceipt);
+      }
+    }, controller.signal);
+    await actionQueue;
+    if (result?.message) {
+      const message = result.message;
+      if (notebookIndexConnectRequested) {
+        setPendingNotebookIndex((current) => current?.kind === "notebook_index_connect"
+          && current.projectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Inspect Notebook settings before choosing an index.");
+      }
+      if (linkedProjectRequested) {
+        setPendingLinkedProject((current) => current?.sourceProjectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
+      }
+      if (reportTransformRequested) {
+        setPendingReportTransform((current) => current?.projectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Inspect Reports before requesting a transform again.");
+      }
+      if (projectRelinkRequested) {
+        setPendingProjectRelink((current) => current?.sourceProjectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Inspect the project before choosing a folder.");
+      }
+      if (evidenceUploadRequested) {
+        setPendingEvidenceUpload((current) => current?.projectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
+      }
+      if (sourceAddRequested) {
+        setPendingSourceAdd(current => current?.projectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Inspect Sources before adding a document.");
+      }
+      if (credentialCreateRequested) {
+        setPendingCredentialCreate((current) => current?.projectId === projectId && message.id
+          ? {...current, sourceMessageId: message.id} : undefined);
+        if (!message.id) setError("Butler's saved reply is unavailable. Open credential settings to enter the secret directly.");
+      }
+      settledTurnId.current = activeTurn.current.turnId;
+      setPendingTurn(undefined);
+      setAwaitingTurnResolution(false);
+      setTurnFeedback(undefined);
+      confirmations.push(...workReceipts.filter(({ url }) => !message.content.includes(url)).map(({ content }) => content));
+      if (message.id && confirmations.length && actionOutcomesKey) {
+        const outcomes = readActionOutcomes(actionOutcomesKey);
+        outcomes[message.id] = confirmations.join("\n\n");
+        writeStorage(actionOutcomesKey, JSON.stringify(Object.fromEntries(Object.entries(outcomes).slice(-50))));
+      }
+      setMessages((current) => current.some((item) => item.id && item.id === message.id)
+        ? current : [...current, message, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
+      setMemoryRefreshRevision((current) => current + 1);
+    } else if (!controller.signal.aborted) {
+      needsSavedTurnReload.current = true;
+      setAwaitingTurnResolution(typeof api?.getPendingChatTurn === "function");
+      pendingPoll.current();
+    }
+    return result;
+  };
+
+  /**
+   * Add a message to Core's follow-up queue for Butler's chat while Butler
+   * works. The composer clears at once so the next message can be typed;
+   * queue writes run one after another in the order they were sent, and a
+   * failed one restores its text if the composer is still empty.
+   */
+  const queueForButler = (prompt: string, hasImages: boolean) => {
+    const images = pendingImages;
+    const drafts = butlerDrafts.filter((item) => !claimedDrafts.current.has(item));
+    drafts.forEach((item) => claimedDrafts.current.add(item));
+    setDraft("");
+    if (hasImages) setPendingImages([]);
+    setQueueError("");
+    const restore = (message: string) => {
+      drafts.forEach((item) => claimedDrafts.current.delete(item));
+      setQueueError(message);
+      setDraft((current) => current.trim() ? current : prompt);
+      if (hasImages) setPendingImages((current) => current.length ? current : images);
+    };
+    const run = async () => {
+      const prepared = await prepareButlerRequest(prompt, hasImages, drafts, () => false);
+      if (!prepared) { restore("Butler is not ready to queue messages. Reconnect and try again."); return; }
+      if ("error" in prepared) { if (prepared.imageHelp) setImageHelp(true); restore(prepared.error); return; }
+      const queueSession = prepared.request.sessionId ?? "";
+      const key = `butler-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const memory = readQueueMemory(queueSession);
+      writeQueueMemory(queueSession, { ...memory, keys: [...memory.keys, key] });
+      sessionQueuedKeys.current.add(key);
+      if (await butlerQueue.enqueue(prepared.request, { key })) {
+        if (prepared.contextAttachments.length) context?.consumeButlerDrafts(drafts);
+        drafts.forEach((item) => claimedDrafts.current.delete(item));
+      } else {
+        const preview = prompt.length > 60 ? `${prompt.slice(0, 57)}…` : prompt;
+        restore(`“${preview}” was not queued. It is back in the composer unless you have started a new message.`);
+      }
+    };
+    queueChain.current = queueChain.current.then(run, run);
+    return queueChain.current;
+  };
+
+  // Remember which of this device's queue items this page saw waiting, even
+  // while another response streams.
+  useEffect(() => {
+    if (!sessionId || !butlerQueue.queue) return;
+    const keys = readQueueMemory(sessionId).keys;
+    for (const entry of butlerQueue.queue.items) {
+      if (keys.includes(entry.key) && ["queued", "claiming", "sending", "needs_review"].includes(entry.status)) sessionQueuedKeys.current.add(entry.key);
+    }
+  }, [sessionId, butlerQueue.queue]);
+
+  // When Core sends a message this device queued, follow that response here as
+  // if this panel had sent it, so its browser actions (settings, pickers) still
+  // apply. A short reply may already be finished; following replays it.
+  useEffect(() => {
+    if (!api || !engagement || !sessionId || abort.current || !butlerQueue.queue) return;
+    const memory = readQueueMemory(sessionId);
+    const unfollowed = butlerQueue.queue.items.filter((entry) => entry.turn_id && memory.keys.includes(entry.key)
+      && !memory.followed.includes(entry.turn_id) && !followedTurns.current.has(entry.turn_id));
+    // A reply that finished before this page queued it, or while no panel was
+    // open, is only read from the saved transcript: its browser actions are
+    // not replayed later.
+    const stale = unfollowed.filter((entry) => entry.status === "complete" && !sessionQueuedKeys.current.has(entry.key));
+    if (stale.length) {
+      stale.forEach((entry) => followedTurns.current.add(entry.turn_id!));
+      writeQueueMemory(sessionId, { ...memory, followed: [...memory.followed, ...stale.map((entry) => entry.turn_id!)] });
+      needsSavedTurnReload.current = true;
+      pendingPoll.current();
+      return;
+    }
+    const item = unfollowed.find((entry) => entry.status === "sending" || entry.status === "complete");
+    if (!item?.turn_id) return;
+    const turnId = item.turn_id;
+    followedTurns.current.add(turnId);
+    writeQueueMemory(sessionId, { ...memory, followed: [...memory.followed, turnId] });
+    const projectId = engagement.id;
+    const controller = new AbortController();
+    abort.current = controller;
+    activeTurn.current = { turnId };
+    settledTurnId.current = undefined;
+    setBusy(true);
+    setClock(Date.now());
+    const content = item.request?.messages[0]?.content;
+    const fallback: ChatCompletionRequest = { controlAssistant: true, engagementId: projectId, sessionId, messages: content ? [{ role: "user", content }] : [] };
+    const request = ++historyRead.current;
+    void (async () => {
+      // Core saved the queued message when it started the turn: show that
+      // saved copy, so the reply and any later reload never duplicate it.
+      try {
+        const history = await api.listChatMessages(sessionId, controller.signal);
+        if (!controller.signal.aborted && request === historyRead.current) {
+          const outcomes = actionOutcomesKey ? readActionOutcomes(actionOutcomesKey) : {};
+          setMessages(history.filter((entry) => entry.role === "user" || entry.role === "assistant")
+            .flatMap((entry) => entry.id && outcomes[entry.id] ? [entry, { role: "assistant" as const, content: outcomes[entry.id] }] : [entry]));
+        }
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.queued_turn_history_failed", message: "Butler's saved conversation could not be read before following a queued response.", outcome: "failure", stage: "queue", retryable: true, exception: caught });
+        if (content) setMessages((current) => current.some((entry) => entry.role === "user" && entry.content === content && !entry.id) ? current : [...current, { role: "user", content }]);
+      }
+      return runButlerStream(projectId, controller, (onEvent, signal) => api.followChatTurn(turnId, fallback, onEvent, signal));
+    })()
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.queued_turn_follow_failed", message: "A queued Butler response could not be followed.", outcome: "failure", stage: "queue", retryable: true, exception: caught });
+      })
+      .finally(() => {
+        if (abort.current === controller) abort.current = undefined;
+        if (!abort.current) {
+          activeTurn.current = {};
+          setBusy(false);
+        }
+        // Read Butler's saved transcript, which holds the queued message and reply in order.
+        needsSavedTurnReload.current = true;
+        pendingPoll.current();
+      });
+  }, [api, engagement?.id, sessionId, butlerQueue.queue, busy]);
+
   const send = async (currentText = draft) => {
     const prompt = currentText.trim() || (pendingImages.length ? "Attached image" : "");
-    if (!prompt || activeBusy || loadingHistory || uploadingImage || !pendingReady) return;
+    if (!prompt || deviceBusy || loadingHistory || uploadingImage || !pendingReady) return;
     setView("chat");
     const hasImages = pendingImages.length > 0;
     if (hasImages && !imageInputSupported) { setImageHelp(true); return; }
@@ -2097,9 +2436,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const requestedTheme = themeChange(prompt);
     if (!hasImages && requestedTheme) {
       setDraft("");
-      setError("");
-      setBusy(true);
-      setTurnFeedback(beginButlerFeedback("Changing this device’s appearance"));
+      // A running Butler turn keeps its own error until it settles.
+      if (!activeBusyRef.current) setError("");
+      setDeviceBusy(true);
+      if (!activeBusyRef.current) setTurnFeedback(beginButlerFeedback("Changing this device’s appearance"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         const confirmation = await applyDeviceTheme(requestedTheme);
@@ -2109,8 +2449,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setError(caught instanceof Error ? caught.message : "Could not change this device's theme. Check the open Appearance setting and retry.");
         setDraft(prompt);
       } finally {
-        setBusy(false);
-        setTurnFeedback(undefined);
+        setDeviceBusy(false);
+        if (!activeBusyRef.current) setTurnFeedback(undefined);
       }
       return;
     }
@@ -2122,9 +2462,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!hasImages && modeChange) {
       if (!api || !engagement) { setError("Choose a project to change its execution mode."); return; }
       setDraft("");
-      setError("");
-      setBusy(true);
-      setTurnFeedback(beginButlerFeedback("Checking the project’s execution policy"));
+      // A running Butler turn keeps its own error until it settles.
+      if (!activeBusyRef.current) setError("");
+      setDeviceBusy(true);
+      if (!activeBusyRef.current) setTurnFeedback(beginButlerFeedback("Checking the project’s execution policy"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         const confirmation = await applyProjectMode(modeChange);
@@ -2134,8 +2475,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setError(caught instanceof Error ? caught.message : "The project policy could not be changed. Check the open setting and retry.");
         setDraft(prompt);
       } finally {
-        setBusy(false);
-        setTurnFeedback(undefined);
+        setDeviceBusy(false);
+        if (!activeBusyRef.current) setTurnFeedback(undefined);
       }
       return;
     }
@@ -2144,9 +2485,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!hasImages && (scopeChange || headlessChange)) {
       if (!api || !engagement) { setError("Choose a project before changing its policy or browser session."); return; }
       setDraft("");
-      setError("");
-      setBusy(true);
-      setTurnFeedback(beginButlerFeedback("Updating the project setting"));
+      // A running Butler turn keeps its own error until it settles.
+      if (!activeBusyRef.current) setError("");
+      setDeviceBusy(true);
+      if (!activeBusyRef.current) setTurnFeedback(beginButlerFeedback("Updating the project setting"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         if (scopeChange) {
@@ -2162,8 +2504,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setError(caught instanceof Error ? caught.message : "Core could not save the setting. Retry after checking the selected project.");
         setDraft(prompt);
       } finally {
-        setBusy(false);
-        setTurnFeedback(undefined);
+        setDeviceBusy(false);
+        if (!activeBusyRef.current) setTurnFeedback(undefined);
       }
       return;
     }
@@ -2199,148 +2541,37 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       return;
     }
     if (!api || !engagement || !runtime) return;
+    // Butler handles one response at a time. While it works, a message goes
+    // into Core's follow-up queue for Butler's chat; Core sends it next.
+    if (activeBusy) { await queueForButler(prompt, hasImages); return; }
     const controller = new AbortController();
     abort.current = controller;
     setBusy(true);
     setClock(Date.now());
     setTurnFeedback(beginButlerFeedback("Preparing Butler’s conversation"));
     settledTurnId.current = undefined;
-    let effectiveSessionId: string;
-    let effectiveConfig: ChatAssistantConfig | undefined;
-    try {
-      const saved = await getSavedSessionForTurn();
-      if (controller.signal.aborted) {
-        setBusy(false);
-        setTurnFeedback(undefined);
-        if (abort.current === controller) abort.current = undefined;
-        return;
-      }
-      effectiveSessionId = saved.session.id;
-      effectiveConfig = saved.config;
-    } catch (caught) {
-      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.settings_refresh_failed", message: "The assistant's next-turn settings could not be refreshed.", outcome: "failure", stage: "settings", retryable: true, exception: caught });
-      setError(caught instanceof Error ? caught.message : "Could not load Butler settings. Retry after reconnecting.");
+    const cleanUp = (message?: string) => {
+      if (message) setError(message);
       setBusy(false);
       setTurnFeedback(undefined);
       if (abort.current === controller) abort.current = undefined;
-      return;
-    }
-    const selectedRuntime = effectiveConfig
-      ? { kind: effectiveConfig.backend, id: effectiveConfig.profileId, model: effectiveConfig.model }
-      : runtime;
-    const selectedRuntimeAcceptsImages = selectedRuntime.kind === "provider"
-      ? Boolean(providers.find((item) => item.id === selectedRuntime.id)?.capabilities?.includes("vision"))
-      : Boolean(harnesses.find((item) => item.id === selectedRuntime.id)?.modelOptions?.find((item) => item.model === selectedRuntime.model)?.imageInput);
-    if (hasImages && !selectedRuntimeAcceptsImages) {
-      setImageHelp(true);
-      setError("Butler's saved model changed and cannot receive images. Your attachments are still ready.");
-      setBusy(false);
-      setTurnFeedback(undefined);
-      if (abort.current === controller) abort.current = undefined;
-      return;
-    }
-    const turnOptions = assistantTurnOptions(selectedRuntime, harnesses);
-    const selectedToolRuntime: ToolSharingRuntime | undefined = selectedRuntime.kind === "provider"
-      ? (() => { const profile = providers.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "provider", profile } : undefined; })()
-      : (() => { const profile = harnesses.find((item) => item.id === selectedRuntime.id); return profile ? { kind: "harness", profile } : undefined; })();
-    let allowCloudToolResults = false;
-    if (selectedToolRuntime && !(selectedToolRuntime.kind === "provider" ? selectedToolRuntime.profile.local : selectedToolRuntime.profile.localOnly)) {
-      if (!selectedToolRuntime.profile.permitsSensitiveData) {
-        setError(`${selectedToolRuntime.profile.name} is configured for text only. Permit project data in Settings to use settings tools.`);
-        setBusy(false);
-        setTurnFeedback(undefined);
-        if (abort.current === controller) abort.current = undefined;
-        return;
-      }
-      // The profile's saved sensitive-data permission is the standing consent
-      // for this dedicated assistant; a settings instruction needs no second dialog.
-      allowCloudToolResults = true;
-    }
-    let contextAttachments;
-    try {
-      contextAttachments = await Promise.all(butlerDrafts.map(createHashedSelectionAttachment));
-    } catch (caught) {
-      void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.context_attachment_failed", message: "Could not prepare selected Butler context.", outcome: "failure", stage: "context", retryable: true, exception: caught });
-      setError(caught instanceof Error ? caught.message : "Could not prepare Butler context. Remove the selection and try again.");
-      setBusy(false);
-      setTurnFeedback(undefined);
-      if (abort.current === controller) abort.current = undefined;
-      return;
-    }
+    };
+    const drafts = butlerDrafts.filter((item) => !claimedDrafts.current.has(item));
+    drafts.forEach((item) => claimedDrafts.current.add(item));
+    const releaseDrafts = () => drafts.forEach((item) => claimedDrafts.current.delete(item));
+    const prepared = await prepareButlerRequest(prompt, hasImages, drafts, () => controller.signal.aborted);
+    if (!prepared || controller.signal.aborted || "error" in prepared) releaseDrafts();
+    if (!prepared || controller.signal.aborted) { cleanUp(); return; }
+    if ("error" in prepared) { if (prepared.imageHelp) setImageHelp(true); cleanUp(prepared.error); return; }
+    const { request, outgoingUser, contextAttachments } = prepared;
     activeTurn.current = {};
     setError("");
     setTurnFeedback((current) => current ? { ...current, label: "Starting Butler’s response" } : beginButlerFeedback("Starting Butler’s response"));
-    const outgoingUser: ChatMessage = { role: "user", content: prompt,
-      ...(hasImages ? {contentBlocks: [{type: "text" as const, text: prompt}, ...pendingImages]} : {}),
-    };
     setMessages((current) => [...current, outgoingUser]);
     setDraft("");
-    const appliedCallIds = new Set<string>();
-    const confirmations: string[] = [];
-    const workReceipts: { url: string; content: string }[] = [];
-    let notebookIndexConnectRequested = false;
-    let linkedProjectRequested = false;
-    let reportTransformRequested = false;
-    let projectRelinkRequested = false;
-    let evidenceUploadRequested = false;
-    let sourceAddRequested = false;
-    let credentialCreateRequested = false;
-    let actionQueue = Promise.resolve();
     try {
-      const result = await api.streamChat({
-        controlAssistant: true,
-        engagementId: engagement.id,
-        sessionId: effectiveSessionId,
-        backend: selectedRuntime.kind,
-        providerId: selectedRuntime.kind === "provider" ? selectedRuntime.id : undefined,
-        harnessProfileId: selectedRuntime.kind === "harness" ? selectedRuntime.id : undefined,
-        model: turnOptions.model,
-        reasoningEffort: selectedRuntime.kind === "provider" ? effectiveConfig?.reasoningEffort ?? turnOptions.reasoningEffort : undefined,
-        harnessReasoningEffort: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessReasoningEffort ?? turnOptions.harnessReasoningEffort : undefined,
-        harnessServiceTier: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessServiceTier ?? turnOptions.harnessServiceTier : undefined,
-        harnessMode: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessMode : undefined,
-        harnessCyberAccessProgram: selectedRuntime.kind === "harness" ? effectiveConfig?.harnessCyberAccessProgram : undefined,
-        mcpServerIds: effectiveConfig?.mcpServerIds,
-        hookIds: effectiveConfig?.hookIds,
-        includeKnowledge: effectiveConfig?.includeKnowledge,
-        allowCloudKnowledge: effectiveConfig?.allowCloudKnowledge,
-        allowAgentMessaging: effectiveConfig?.allowAgentMessaging,
-        allowSubagents: effectiveConfig?.allowSubagents,
-        maxActiveSubagents: effectiveConfig?.maxActiveSubagents,
-        subagentProviderId: effectiveConfig?.subagentProviderId,
-        subagentHarnessId: effectiveConfig?.subagentHarnessProfileId,
-        subagentModel: effectiveConfig?.subagentModel,
-        subagentReasoningEffort: effectiveConfig?.subagentReasoningEffort,
-        messages: [outgoingUser],
-        contextAttachments: contextAttachments.length ? contextAttachments : undefined,
-        toolsEnabled: effectiveConfig?.toolsEnabled ?? false,
-        allowCloudToolResults,
-      }, (event) => {
-        if (event.type === "started" && event.turnId) activeTurn.current.turnId = event.turnId;
-        if ("harnessTurnId" in event && event.harnessTurnId) activeTurn.current.harnessTurnId = event.harnessTurnId;
-        setTurnFeedback((current) => feedbackFromButlerEvent(current, event));
-        if (event.type === "started" || event.type === "queued") pendingPoll.current();
-        const action = settingClientAction(event, engagement.id);
-        if (action && event.type === "tool_completed" && !appliedCallIds.has(event.toolCallId)) {
-          appliedCallIds.add(event.toolCallId);
-          if (action.kind === "notebook_index_connect") notebookIndexConnectRequested = true;
-          if (action.kind === "project_create_linked") linkedProjectRequested = true;
-          if (action.kind === "report_transform_note") reportTransformRequested = true;
-          if (action.kind === "project_relink") projectRelinkRequested = true;
-          if (action.kind === "evidence_upload") evidenceUploadRequested = true;
-          if (action.kind === "source_add") sourceAddRequested = true;
-          if (action.kind === "credential_create") credentialCreateRequested = true;
-          actionQueue = actionQueue.then(async () => {
-            if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
-          });
-        }
-        const workReceipt = assistantWorkReceipt(event, engagement.id);
-        if (workReceipt && event.type === "tool_completed" && !appliedCallIds.has(event.toolCallId)) {
-          appliedCallIds.add(event.toolCallId);
-          workReceipts.push(workReceipt);
-        }
-      }, controller.signal);
-      await actionQueue;
+      const result = await runButlerStream(engagement.id, controller,
+        (onEvent, signal) => api.streamChat(request, onEvent, signal));
       if (result?.sessionId && storageKey) {
         localStorage.setItem(storageKey, result.sessionId);
         setSessionId(result.sessionId);
@@ -2356,62 +2587,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         });
       }
       if (result?.message) {
-        if (notebookIndexConnectRequested) {
-          setPendingNotebookIndex((current) => current?.kind === "notebook_index_connect"
-            && current.projectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Notebook settings before choosing an index.");
-        }
-        if (linkedProjectRequested) {
-          setPendingLinkedProject((current) => current?.sourceProjectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect All projects before choosing a folder.");
-        }
-        if (reportTransformRequested) {
-          setPendingReportTransform((current) => current?.projectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Reports before requesting a transform again.");
-        }
-        if (projectRelinkRequested) {
-          setPendingProjectRelink((current) => current?.sourceProjectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect the project before choosing a folder.");
-        }
-        if (evidenceUploadRequested) {
-          setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
-        }
-        if (sourceAddRequested) {
-          setPendingSourceAdd(current => current?.projectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Sources before adding a document.");
-        }
-        if (credentialCreateRequested) {
-          setPendingCredentialCreate((current) => current?.projectId === engagement.id && result.message!.id
-            ? {...current, sourceMessageId: result.message!.id} : undefined);
-          if (!result.message.id) setError("Butler's saved reply is unavailable. Open credential settings to enter the secret directly.");
-        }
         setPendingImages([]);
-        if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
-        settledTurnId.current = activeTurn.current.turnId;
-        setPendingTurn(undefined);
-        setAwaitingTurnResolution(false);
-        setTurnFeedback(undefined);
-        confirmations.push(...workReceipts.filter(({ url }) => !result.message.content.includes(url)).map(({ content }) => content));
-        if (result.message.id && confirmations.length && actionOutcomesKey) {
-          const outcomes = readActionOutcomes(actionOutcomesKey);
-          outcomes[result.message.id] = confirmations.join("\n\n");
-          writeStorage(actionOutcomesKey, JSON.stringify(Object.fromEntries(Object.entries(outcomes).slice(-50))));
-        }
-        setMessages((current) => current.some((item) => item.id && item.id === result.message!.id)
-          ? current : [...current, result.message!, ...confirmations.map((content) => ({ role: "assistant" as const, content }))]);
-        setMemoryRefreshRevision((current) => current + 1);
-      }
-      else if (!controller.signal.aborted) {
-        needsSavedTurnReload.current = true;
-        setAwaitingTurnResolution(typeof api.getPendingChatTurn === "function");
-        pendingPoll.current();
+        if (contextAttachments.length) context?.consumeButlerDrafts(drafts);
       }
     } catch (caught) {
       if (!controller.signal.aborted) {
@@ -2421,7 +2598,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.turn_failed", message: "The assistant could not answer.", outcome: "failure", stage: "turn", retryable: true, exception: caught });
         if (hasImages) {
           try {
-            const history = await api.listChatMessages(effectiveSessionId);
+            const history = await api.listChatMessages(request.sessionId!);
             const saved = history.some((message) => message.role === "user" && message.contentBlocks?.some((block) =>
               block.type === "image" && pendingImages.some((image) => image.artifactId === block.artifactId)));
             if (saved) {
@@ -2445,9 +2622,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         }
       }
     } finally {
+      releaseDrafts();
+      // A queued response this panel began following after Stop owns the turn state now.
       if (abort.current === controller) abort.current = undefined;
-      activeTurn.current = {};
-      setBusy(false);
+      if (!abort.current) {
+        activeTurn.current = {};
+        setBusy(false);
+      }
     }
   };
 
@@ -2580,7 +2761,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     return [result.message.content, ...confirmations].filter(Boolean).join("\n\n");
   };
 
-  const showTurnStatus = activeBusy || Boolean(pendingStatusError) || Boolean(sessionId && !pendingReady);
+  const showTurnStatus = activeBusy || deviceBusy || Boolean(pendingStatusError) || Boolean(sessionId && !pendingReady);
   const turnStatusLabel = pendingStatusError ? "Butler status unavailable"
     : coreState !== "online" ? "Connection lost; Butler may still be working"
     : activePendingTurn?.status === "waiting_approval" ? "Approval needed to continue"
@@ -2712,7 +2893,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       </div>
       {needsReview && engagement && sessionId && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`); }}>Review</button>}
       {pendingStatusError && <button className="button quiet" type="button" onClick={() => pendingPoll.current()}>Retry status</button>}
+      {activeBusy && canStopActive && <button className="icon-button subtle" type="button" aria-label="Stop assistant response" title="Stop Butler’s response" onClick={() => void stop()}><Square size={16} /></button>}
     </section>}
+    {sessionId && <ButlerQueue queue={butlerQueue} error={queueError} />}
     {pendingImages.length > 0 && <div className={styles.imageTray} role="list" aria-label="Butler image attachments">{pendingImages.map((block, index) => <div className={styles.imageItem} role="listitem" key={`${block.artifactId}-${index}`}>{api && <AuthenticatedChatImage api={api} block={block} className={styles.attachedImage} />}<span title={block.alt}>{block.alt}</span><button className="icon-button subtle" type="button" aria-label={`Remove ${block.alt ?? "image"}`} disabled={activeBusy} onClick={() => setPendingImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><X size={16} /></button></div>)}</div>}
     {uploadingImage && <p className={styles.imageStatus} role="status">Attaching image…</p>}
     {issuedStorageToken && issuedStorageToken.projectId === engagement?.id && <section className={`${styles.libraryHandoff} ${styles.storageToken}`} aria-label="New storage source token">
@@ -2831,9 +3014,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     {imageHelp && !imageInputSupported && <p id="butler-image-help" className={styles.imageStatus}>This Butler model cannot receive images. <button type="button" className="button quiet" onClick={() => void openImageRuntimeChoice()}>Open conversation to choose an image-capable model</button></p>}
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>
       <input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp" aria-label="Choose images for Butler" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; void attachImageFiles(files); }} />
-      <button className="icon-button subtle" type="button" aria-label="Attach image to Butler" title="Attach image to Butler" aria-describedby={imageHelp && !imageInputSupported ? "butler-image-help" : undefined} disabled={!api || !engagement || activeBusy || loadingHistory || uploadingImage || !pendingReady} onClick={() => imageInputSupported ? imageInput.current?.click() : setImageHelp(true)}><Image size={18} /></button>
-      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder="Message Butler…" disabled={activeBusy || loadingHistory || !pendingReady} />
-      {activeBusy && canStopActive ? <button className="icon-button subtle" type="button" aria-label="Stop assistant response" title="Stop Butler’s response" onClick={() => void stop()}><Square size={18} /></button> : activeBusy ? null : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage || !pendingReady}><Send size={18} /></button>}
+      <button className="icon-button subtle" type="button" aria-label="Attach image to Butler" title="Attach image to Butler" aria-describedby={imageHelp && !imageInputSupported ? "butler-image-help" : undefined} disabled={!api || !engagement || deviceBusy || loadingHistory || uploadingImage || !pendingReady} onClick={() => imageInputSupported ? imageInput.current?.click() : setImageHelp(true)}><Image size={18} /></button>
+      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder={activeBusy ? "Queue a message for Butler…" : "Message Butler…"} disabled={deviceBusy || loadingHistory || !pendingReady} />
+      {activeBusy
+        ? <button className={`button primary ${styles.queueButton}`} type="submit" aria-label="Queue message for Butler" title="Butler is working; Core sends this next" disabled={(!draft.trim() && !pendingImages.length) || deviceBusy || loadingHistory || uploadingImage || !pendingReady || !sessionId}>Queue</button>
+        : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage || !pendingReady}><Send size={18} /></button>}
     </form>
     {docked && dockFooter}
     </div>
