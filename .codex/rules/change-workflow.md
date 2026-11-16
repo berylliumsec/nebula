@@ -48,13 +48,16 @@ untested feature works.
 
 ## Core rollback snapshot retention
 
-The simulation deployer in `scripts/simulation/nebula_deployer.py` creates a
-coherent rollback snapshot before it switches Core releases. After the new Core
-passes authenticated health and serves the accepted build, retain that exact
-snapshot and delete older completed snapshots under its `rollback-backups`
-directory. Verify that exactly one completed snapshot remains and that the
-deployer state points to it. Record its path, removed names, and any cleanup
-failure in the deployment receipt. Do not delete backups from other directories.
+The legacy simulation deployer in `scripts/simulation/nebula_deployer.py`
+creates a coherent rollback snapshot before it switches Core releases.
+Supervisor-mode rolling promotion and code rollback preserve live data and do
+not create a new coherent snapshot. After a healthy legacy promotion passes
+authenticated health and serves the accepted build, retain its exact snapshot
+and delete older completed snapshots under `rollback-backups`. Verify that
+exactly one completed snapshot remains and that the deployer state points to
+it. Record its path, removed names, and any cleanup failure in the deployment
+receipt. Do not delete backups from other directories or restore a snapshot
+over continuing supervisor-owned work.
 
 Keep all state needed for a failed cutover or rollback until recovery is verified.
 A cleanup failure must be reported separately; it must not roll back a healthy

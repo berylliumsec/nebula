@@ -35,35 +35,72 @@ source digest into the Chroma product-help collection. Add a focused regression
 check so the assistant can discover and use the feature or setting. Do not call a
 browser action saved until Core or the device reports the observed result.
 
-## Coordinate Core deployments with Butler
+## Choose the Core deployment path
 
-Before restarting or replacing a running Core, enumerate the projects it serves
-and contact Butler in each project with active assistant or mission work. Find or
-create its project-scoped conversation through authenticated `GET` or `POST`
-`/api/v1/chat/control-assistant/session`, then send the deployment request through
-`POST /api/v1/chat/completions` with `control_assistant: true`. Ask Butler
-to wind down active main agents, pause running Core-owned goals and queued
-continuations it can safely pause, and report the exact projects, parent chats,
-goals, missions, and queues it changed. Butler coordinates with parent agents;
-it does not message their children directly. Keep that inventory in the
-deployment record, including which items were already paused beforehand.
+Before promoting a release, verify the live deployment mode, exact source
+release, authenticated `/api/v1/deployment/status`, and installed service
+configuration. A source checkout or `deployment_mode=supervisor` alone does not
+establish that the running processes can survive a rolling deployment.
 
-Wait for Butler's turn to finish, then read the authoritative Core state and
-verify the pause results before restarting. Recheck for newly active work at the
-restart boundary. If a native harness goal, mission, or in-flight turn has no
-safe pause control, let it reach a safe stopping point or defer deployment and
-report the blocker. Do not silently substitute stop, cancel, or approval for
-pause, and do not treat Butler's acknowledgement alone as proof of state change.
+For a compatible supervisor-mode promotion, ordinary provider chat turns do not
+need to stop or pause before deployment starts. The deployer replaces only the
+foreground supervisor, preserves execution workers, promotes the API, and then
+requests per-project handoffs. A source worker lets admitted provider turns
+finish, holds new root admissions, and parks queued turns for restoration. The
+project can remain `finishing` until its admitted turns end; do not cancel a
+turn to force transfer. Before host activation, verify that the *deployed source*
+supports retained workers and bounded host-service reconnect, the service uses
+`KillMode=process` and `ExitType=main`, migrations are additive and release
+manifests compatible, and both execution versions support project handoff and
+any participant restoration that the project requires.
 
-After the new or restored Core passes deployment health checks, contact the same
-project Butler sessions and ask it to resume only the exact work it paused for
-this deployment. Have Butler read fresh state and revisions first, then verify the
-result in Core. Preserve work that was paused before the deployment; leave work
-blocked by an approval, limit, or uncertain effect paused and report it for
-operator resolution. Never put Core authentication secrets in the deployment
-record or PR.
+A live harness or vendor session, mission, terminal, notebook, debug session,
+unconfirmed effect, or other non-restorable resource can pin its project to the
+old worker. Keep that worker and report the exact blocker. The deployer may
+return `waiting_for_handoffs` or `api_promoted_execution_staged`; these are
+partial promotions. Read Core's project phases, owners, resident versions, and
+blockers before claiming completion. A third execution version can remain
+staged until an older one retires. If the public listener is not held across
+the supervisor swap, report the client connection gap and verify stream
+reconnect and durable turn state before claiming viewer continuity.
 
-After a healthy Core promotion, keep only the current coherent rollback snapshot
-under `rollback-backups`. Verify the retained path matches the deployer state,
-record the removed snapshots, and report any incomplete cleanup. Never delete the
-current rollback snapshot or prune during an unverified cutover.
+### Coordinate a stop or required project wind-down with Butler
+
+Use this procedure for a legacy or whole-Core stop, a non-additive migration,
+the first promotion from a source lacking the rolling safeguards above, or a
+pinned project whose old execution version must retire. For a whole-Core stop,
+enumerate all projects it serves. For a required project wind-down, enumerate
+the affected projects. Contact Butler in each project with active assistant or
+mission work. Find or create its project-scoped conversation through
+authenticated `GET` or `POST` `/api/v1/chat/control-assistant/session`, then
+send the deployment request through `POST /api/v1/chat/completions` with
+`control_assistant: true`. Ask Butler to wind down active main agents, pause
+running Core-owned goals and queued continuations it can safely pause, and
+report the exact projects, parent chats, goals, missions, and queues it changed.
+Butler coordinates with parent agents; it does not message their children
+directly. Keep that inventory in the deployment record, including which items
+were already paused beforehand.
+
+Wait for Butler's turn to finish, then read authoritative Core state and verify
+the pause results before stopping or retiring the affected processes. Recheck
+for newly active work at that boundary. If a native harness goal, mission, or
+in-flight turn has no safe pause control, let it reach a safe stopping point or
+defer the stop and report the blocker. Do not silently substitute stop, cancel,
+or approval for pause, and do not treat Butler's acknowledgement alone as proof
+of state change.
+
+After the new or restored Core passes deployment health checks, or the affected
+project's target owner is verified, contact the same project Butler sessions
+and ask them to resume only the exact work they paused for this deployment.
+Have Butler read fresh state and revisions first, then verify the result in
+Core. Preserve work that was paused before the deployment; leave work blocked
+by an approval, limit, or uncertain effect paused and report it for operator
+resolution. Never put Core authentication secrets in the deployment record or
+PR.
+
+After a healthy legacy promotion that created a coherent rollback snapshot,
+keep only the current snapshot under `rollback-backups`. Verify the retained
+path matches the deployer state, record the removed snapshots, and report any
+incomplete cleanup. Supervisor-mode code rollback preserves live data; never
+restore a snapshot over continuing work. Never delete the current rollback
+snapshot or prune during an unverified cutover.

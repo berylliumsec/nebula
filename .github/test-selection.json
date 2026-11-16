@@ -1,37 +1,20 @@
 {
-  "change_digest": "c496e89128ae79b6b947717a34d89e8cd26a4d1060724976db1104d984b41e50",
-  "reviewed_by": "Claude (py-test-rot Misc A); selection reviewed against the diff by the implementing agent; the subagent start race independently validated by a separate subagent",
-  "reason": "Product: SubagentService.start (chat_subagents.py) checked the parent's children for the same idempotency key and against the sibling limit, then awaited plans, activity, goals and the harness session before storing; since #939 those awaits yield, so concurrent starts with one key could create two children and concurrent starts could exceed the sibling limit. start() now holds a per-parent lock through the write, with the MCP catalog read before the lock. Tests: twelve tests/v3 files left stale by #939 are repaired (async stubs/helpers, off-loop sync check, restoration barrier after #1114's locked recheck, migration 0050 irreversible since #1114, report PDFs need a memory-managed runner since 64e0379). test_mcp_catalog_reads covers the race; the subagent suites cover the lock.",
-  "exclusions": "test_notebooks, test_operator_help, test_packaging and test_product_knowledge carry partial repairs but still fail on separate product issues (notebook inventory blocks the loop; help keywords; conditional imports; a docs edit moved a help passage), so they are not selected. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
+  "change_digest": "a4e8cb533b44323a58eb4543ff5f47502b023c7a23c8bdf04746fdc77227ca31",
+  "reviewed_by": "Codex; reviewed the documentation-only diff against the supervisor and legacy deployment paths",
+  "reason": "Clarify that compatible supervisor rolling promotion can start while provider turns run, that per-project handoff waits for admitted turns and retains pinned workers, and that Butler coordination and coherent rollback snapshots apply to coordinated or legacy cutovers. No runtime or operator interface behavior changes.",
+  "exclusions": "No Python, frontend, native, or Playwright tests are selected because only agent/deployment guidance changed. No Nebula LAN instance is applicable to a documentation-only change. The diff-bound selection validator and required PR checks review this plan.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 236,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/v3/test_action_broker.py",
-    "tests/v3/test_all_tool_failure_guidance.py",
-    "tests/v3/test_archived_project_deletion.py",
-    "tests/v3/test_debugger.py",
-    "tests/v3/test_diagnostics.py",
-    "tests/v3/test_execution_ai.py",
-    "tests/v3/test_execution_restoration.py",
-    "tests/v3/test_mcp_catalog_reads.py",
-    "tests/v3/test_notebook_file_index.py",
-    "tests/v3/test_performance.py",
-    "tests/v3/test_project_view_leases.py",
-    "tests/v3/test_reporting.py",
-    "tests/v3/test_butler_subagents.py",
-    "tests/v3/test_subagent_start_replay.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_subagent_delivery.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],
