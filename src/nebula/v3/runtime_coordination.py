@@ -79,6 +79,14 @@ class CoordinationConflict(RuntimeError):
     """A request conflicts with durable ownership or a previous receipt."""
 
 
+class RecoveryBlocked(CoordinationConflict):
+    """Recovery cannot prepare while these unresolved effects remain."""
+
+    def __init__(self, blockers: Sequence[str]):
+        self.blockers = list(blockers)[:100]
+        super().__init__("; ".join(self.blockers[:10]))
+
+
 class LeaseLost(CoordinationConflict):
     """The caller must stop admitting work and discard authoritative writes."""
 
@@ -838,6 +846,62 @@ class RuntimeCoordination:
                     requeue_interrupted_storage_report(row)
                 else:
                     row.state = "uncertain"
+                return None
+            row.state, row.runtime_id, row.fencing_token = (
+                "running",
+                lease.runtime_id,
+                lease.fencing_token,
+            )
+            return ClaimedCommand(
+                _receipt(row), row.name, row.payload, row.expected_revision
+            )
+
+    async def queued_controls(
+        self, lease: ProjectLease, *, limit: int = 64
+    ) -> list[tuple[str, str, dict[str, Any], str]]:
+        """Queued control commands in order, read without locks or writes.
+
+        A worker whose restoration is held uses this to find the controls it
+        may run before recovery completes. Each is still claimed under fence.
+        """
+        async with self.database.session() as session:
+            rows = await session.execute(
+                select(
+                    RuntimeCommandRow.id,
+                    RuntimeCommandRow.name,
+                    RuntimeCommandRow.payload,
+                    RuntimeCommandRow.actor_id,
+                )
+                .where(
+                    RuntimeCommandRow.project_id == lease.project_id,
+                    RuntimeCommandRow.lane == "control",
+                    RuntimeCommandRow.state == "queued",
+                )
+                .order_by(RuntimeCommandRow.sequence)
+                .limit(limit)
+            )
+            return [tuple(row) for row in rows]
+
+    async def claim_control(
+        self, lease: ProjectLease, command_id: str
+    ) -> ClaimedCommand | None:
+        """Claim one exact queued control command for this fenced owner.
+
+        Used only while restoration is held, for controls that are safe before
+        activation. It never claims work, a command another owner ran (that one
+        keeps its unresolved outcome) or anything once retirement began.
+        """
+        async with self.fenced(lease) as session:
+            ownership = await session.get(ProjectOwnershipRow, lease.project_id)
+            if ownership is not None and ownership.retirement_requested:
+                return None
+            row = await session.get(RuntimeCommandRow, command_id)
+            if (
+                row is None
+                or row.project_id != lease.project_id
+                or row.lane != "control"
+                or row.state != "queued"
+            ):
                 return None
             row.state, row.runtime_id, row.fencing_token = (
                 "running",

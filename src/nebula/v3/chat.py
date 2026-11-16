@@ -6,6 +6,7 @@ but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
+from .recovery_markers import OPERATOR_RECOVERY_PAUSE, OPERATOR_RECOVERY_STOP
 from .async_utils import MaybeAsync
 
 from .database import DatabaseBusyError, EntityRow, ProviderTurnQueueRow
@@ -3443,6 +3444,12 @@ class ChatService:
         goal = (
             (await self.store.get(ChatGoal, saved.goal_id)) if saved.goal_id else None
         )
+        if pending.request_snapshot.get(OPERATOR_RECOVERY_STOP) or (
+            goal is not None and goal.metadata.get(OPERATOR_RECOVERY_PAUSE)
+        ):
+            # The operator stopped or paused this work while recovery was
+            # held. It stays interrupted until the operator continues it.
+            return False
         if goal is not None and (
             goal.status != ChatGoalStatus.PAUSED
             or (

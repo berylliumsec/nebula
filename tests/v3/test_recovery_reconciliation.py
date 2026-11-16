@@ -123,6 +123,8 @@ async def recovery(batch):
             identity=SimpleNamespace(runtime_id="target"),
             data_root=str(batch.host.data_root),
             operator_token=SecretStr("synthetic-recovery-token"),
+            database=batch.location,
+            pool_settings=None,
         ),
         coordinator=coordinator,
         rpc=rpc_server,
@@ -193,6 +195,7 @@ async def recovery(batch):
 
     value = SimpleNamespace(
         **vars(batch),
+        context=context,
         old=old,
         execution=execution,
         begin=begin,
@@ -361,7 +364,13 @@ async def test_uncertain_effect_blocks_resume_until_explicit_outcome_without_rep
     await root.advance_project_handoffs()
     assert not value.activation_requests and not value.activations
     if phase == "held":
-        assert value.execution.state == "unassigned" and value.constructions == []
+        # The worker holds restoration: attached for pause and stop only,
+        # with nothing constructed or activated.
+        assert value.execution.state == "recovering" and value.constructions == []
+        assert any(
+            receipt.command_id in blocker
+            for blocker in value.execution.recovery_blockers
+        )
     async with value.database.session() as session:
         assert (
             await session.get(RuntimeCommandRow, receipt.command_id)
@@ -373,6 +382,9 @@ async def test_uncertain_effect_blocks_resume_until_explicit_outcome_without_rep
         result={"receipt": "Confirmed externally; never replay"},
         succeeded=True,
     )
+    if phase == "held":
+        # The held worker prepares by itself once nothing blocks it.
+        await until(lambda: value.execution.state == "prepared")
     await root.advance_project_handoffs()
     assert value.execution.state == "ready" and len(value.activations) == 1
     async with value.database.session() as session:
