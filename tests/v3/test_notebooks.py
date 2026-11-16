@@ -34,6 +34,13 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.credentials import CredentialStore
 
 
+def _policy_returning(policy):
+    async def project_policy(self, _engagement_id):
+        return policy
+
+    return project_policy
+
+
 async def _project(tmp_path):
     store = NebulaStore(tmp_path / "store.db")
     workspace = tmp_path / "workspace"
@@ -173,7 +180,8 @@ async def test_notebook_inventory_does_not_block_core_and_coalesces_scans(
     release = threading.Event()
     calls = []
 
-    def slow_list(engagement_id):
+    # Mirrors the real async walk, whose filesystem work is synchronous.
+    async def slow_list(engagement_id):
         calls.append(engagement_id)
         started.set()
         assert release.wait(2), "inventory was not released"
@@ -214,7 +222,8 @@ async def test_notebook_inventory_route_keeps_core_health_responsive(
     started = threading.Event()
     release = threading.Event()
 
-    def slow_list(self, engagement_id):
+    # Mirrors the real async walk, whose filesystem work is synchronous.
+    async def slow_list(self, engagement_id):
         started.set()
         assert release.wait(2), "inventory was not released"
         return []
@@ -301,7 +310,7 @@ async def test_package_search_respects_project_network_policy(tmp_path):
         network_enabled=False,
     )
     notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
+        "Runtime", (), {"project_policy": _policy_returning(policy)}
     )()
 
     async def scenario():
@@ -323,7 +332,7 @@ async def test_package_install_requires_host_consent(tmp_path):
         network_enabled=True,
     )
     notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
+        "Runtime", (), {"project_policy": _policy_returning(policy)}
     )()
 
     async def scenario():
@@ -341,16 +350,18 @@ async def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
     old_folder = tmp_path / "workspace"
     new_folder = tmp_path / "new-workspace"
     new_folder.mkdir()
-    notebooks.documents.workspace_resolver = lambda engagement_id: Path(
-        store.get(Engagement, engagement_id).workspace_path
-    )
+
+    async def resolve(engagement_id):
+        return Path((await store.get(Engagement, engagement_id)).workspace_path)
+
+    notebooks.documents.workspace_resolver = resolve
     policy = AutomationProjectPolicy(
         engagement_id=project.id,
         execution_mode="host",
         host_access_acknowledged=True,
     )
     notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
+        "Runtime", (), {"project_policy": _policy_returning(policy)}
     )()
     launched: list[Path] = []
 
@@ -459,7 +470,7 @@ async def test_notebook_event_stream_authenticates_and_replays_in_order(tmp_path
         "GET", url, headers={"Authorization": "Bearer test-token"}
     ) as response:
         assert response.status_code == 200
-        frames = "".join(response.iter_text())
+        frames = "".join([chunk async for chunk in response.aiter_text()])
     assert frames.index("id: 1") < frames.index("id: 2")
     assert "event: notebook" in frames
     assert '"text": "first"' in frames
@@ -471,7 +482,7 @@ async def test_mode_change_exposes_active_runs_and_waits_for_an_explicit_interru
     store, project, notebooks = await _project(tmp_path)
     policy = AutomationProjectPolicy(engagement_id=project.id, execution_mode="docker")
     notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
+        "Runtime", (), {"project_policy": _policy_returning(policy)}
     )()
     run = await store.create(
         NotebookRun(
@@ -507,7 +518,7 @@ async def test_queued_interrupt_during_kernel_start_remains_interrupted(tmp_path
         host_access_acknowledged=True,
     )
     notebooks.automation_runtime = type(
-        "Runtime", (), {"project_policy": lambda self, _: policy}
+        "Runtime", (), {"project_policy": _policy_returning(policy)}
     )()
 
     async def scenario():

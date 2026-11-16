@@ -28,6 +28,22 @@ from nebula.v3.reporting import ReportRenderError, ReportRenderService
 from nebula.v3.storage import NebulaStore
 
 
+@pytest.fixture(autouse=True)
+def memory_managed_cpu_runner(monkeypatch):
+    """Configure the protected CPU runner PDF work requires since 64e0379.
+
+    Core holds every PDF render until a memory-managed CPU runner admits it
+    (docs/design/memory-budgets.md). These tests cover rendering, export and
+    download behind that admission, so the fixture supplies the runner and
+    renders the saved snapshot off the event loop.
+    """
+
+    async def render(self, _render, snapshot):
+        return await asyncio.to_thread(self._build_pdf, snapshot)
+
+    monkeypatch.setattr(ReportRenderService, "_render_pdf_with_budget", render)
+
+
 def async_test(function):
     @wraps(function)
     def wrapped(*args, **kwargs):

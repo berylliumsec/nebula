@@ -6,7 +6,6 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -169,30 +168,22 @@ async def test_capability_entry_points_keep_storage_and_sessions_off_the_loop(
 ):
     async def scenario():
         store, project, harness, chat, _, runtime = await _setup(tmp_path)
-        _, parent, turn = _prepare(runtime, project, harness, "Inspect capabilities")
+        _, parent, turn = await _prepare(
+            runtime, project, harness, "Inspect capabilities"
+        )
         session = await store.get(HarnessSession, turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(turn_id=turn.id, task=None)
-        loop_thread = threading.get_ident()
-        entered, release = threading.Event(), threading.Event()
+        # Since #939 storage is native async on the loop rather than in read
+        # workers, so the read must yield the loop while it waits.
+        entered, release = asyncio.Event(), asyncio.Event()
         original = chat.subagents.available_capabilities
 
         async def delayed(*args, **kwargs):
-            assert threading.get_ident() != loop_thread
             entered.set()
-            assert release.wait(5), "storage blocked the event loop"
+            await asyncio.wait_for(release.wait(), 5)
             return await original(*args, **kwargs)
 
         monkeypatch.setattr(chat.subagents, "available_capabilities", delayed)
-        measuring = True
-        for method in ("get", "update", "reserve_tool_call"):
-            selected = getattr(store, method)
-
-            async def checked(*args, original=selected, **kwargs):
-                if measuring:
-                    assert threading.get_ident() != loop_thread
-                return await original(*args, **kwargs)
-
-            monkeypatch.setattr(store, method, checked)
         gateway = McpGatewaySession(
             list_tools=lambda _: {"tools": []},
             call_tool=lambda name, arguments: runtime._gateway_call(
@@ -210,16 +201,12 @@ async def test_capability_entry_points_keep_storage_and_sessions_off_the_loop(
             workspace=tmp_path,
         )
         task = asyncio.create_task(
-            (
-                await client.request(
-                    "tools/call", {"name": "subagent.capabilities", "arguments": {}}
-                )
+            client.request(
+                "tools/call", {"name": "subagent.capabilities", "arguments": {}}
             )
             if entry == "harness"
-            else (
-                await SubagentBroker(chat.subagents).execute(
-                    invocation, ScopePolicy(engagement_id=project.id)
-                )
+            else SubagentBroker(chat.subagents).execute(
+                invocation, ScopePolicy(engagement_id=project.id)
             )
         )
         try:
@@ -234,7 +221,6 @@ async def test_capability_entry_points_keep_storage_and_sessions_off_the_loop(
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
-            measuring = False
             await client.close()
             await gateway.close()
             runtime._active.clear()
@@ -252,7 +238,9 @@ async def test_gateway_capability_read_preserves_offer_and_planning_guards(
 ):
     async def scenario():
         store, project, harness, chat, _, runtime = await _setup(tmp_path)
-        _, parent, turn = _prepare(runtime, project, harness, "Inspect capabilities")
+        _, parent, turn = await _prepare(
+            runtime, project, harness, "Inspect capabilities"
+        )
         session = await store.get(HarnessSession, turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(turn_id=turn.id, task=None)
         metadata = dict(session.metadata)
@@ -312,7 +300,7 @@ async def test_child_start_skips_catalog_when_no_mcp_override_needs_validation(
             (await store.get(ProviderProfile, "provider"))
         ).answers = ["Done."]
 
-        def unexpected(*args, **kwargs):
+        async def unexpected(*args, **kwargs):
             raise AssertionError(
                 "inherited or empty selection must not read the catalog"
             )
@@ -331,9 +319,9 @@ async def test_child_start_skips_catalog_when_no_mcp_override_needs_validation(
             return "Finished."
 
         adapter.script = script
-        _, _, turn = _prepare(runtime, project, harness, "Delegate")
+        _, _, turn = await _prepare(runtime, project, harness, "Delegate")
         try:
-            await runtime.start_chat_turn(turn.id)
+            await (await runtime.start_chat_turn(turn.id))
             assert (await store.count(ChatSubagent)) == 1
             assert (await store.list_entities(ChatSubagent))[
                 0
@@ -350,7 +338,7 @@ async def test_explicit_child_mcp_selection_yields_and_rejects_foreign_profile(
 ):
     async def scenario():
         store, project, harness, chat, _, runtime = await _setup(tmp_path)
-        _, parent, _ = _prepare(runtime, project, harness, "Delegate")
+        _, parent, _ = await _prepare(runtime, project, harness, "Delegate")
         (await store.create(_profile("owned", metadata={"engagement_id": project.id})))
         (await store.create(_profile("foreign", metadata={"engagement_id": "other"})))
         assert [
@@ -359,14 +347,12 @@ async def test_explicit_child_mcp_selection_yields_and_rejects_foreign_profile(
                 "mcp_servers"
             ]
         ] == ["owned"]
-        loop_thread = threading.get_ident()
         original = chat_subagents.catalog_mcp_profiles
         observed = []
 
-        def checked(*args, **kwargs):
-            assert threading.get_ident() != loop_thread
+        async def checked(*args, **kwargs):
             observed.append(kwargs["engagement_id"])
-            return original(*args, **kwargs)
+            return await original(*args, **kwargs)
 
         monkeypatch.setattr(chat_subagents, "catalog_mcp_profiles", checked)
         invocation = ToolInvocation(
@@ -400,7 +386,7 @@ async def test_concurrent_explicit_selections_recheck_idempotency_after_worker_r
 ):
     async def scenario():
         store, project, harness, chat, _, runtime = await _setup(tmp_path)
-        _, parent, _ = _prepare(
+        _, parent, _ = await _prepare(
             runtime,
             project,
             harness,
@@ -408,14 +394,13 @@ async def test_concurrent_explicit_selections_recheck_idempotency_after_worker_r
             setting={"harness_profile_id": harness.id, "model": "gpt-test"},
         )
         (await store.create(_profile("external")))
-        entered, guard, release = [], threading.Lock(), threading.Event()
+        entered, release = [], asyncio.Event()
         original = chat_subagents.catalog_mcp_profiles
 
-        def held(*args, **kwargs):
-            with guard:
-                entered.append(True)
-            assert release.wait(5)
-            return original(*args, **kwargs)
+        async def held(*args, **kwargs):
+            entered.append(True)
+            await asyncio.wait_for(release.wait(), 5)
+            return await original(*args, **kwargs)
 
         monkeypatch.setattr(chat_subagents, "catalog_mcp_profiles", held)
         invocation = ToolInvocation(
