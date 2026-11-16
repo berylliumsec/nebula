@@ -25,7 +25,11 @@ from .butler_oversight import (
     project_state_id,
     project_stream_id,
 )
-from .diagnostics import create_diagnostic_task, record_caught_exception
+from .diagnostics import (
+    create_diagnostic_task,
+    record_caught_exception,
+    record_diagnostic,
+)
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerGlobalState,
@@ -797,6 +801,19 @@ class ButlerRecoveryAgent:
                 "max_active": config["max_active_subagents"],
                 "reasoning_effort": config["subagent_reasoning_effort"],
             }
+            if child_setting["harness_profile_id"]:
+                # Butler's children run on a provider model (#1140); a harness
+                # child saved earlier would refuse every start and fail the check.
+                child_setting = None
+                record_diagnostic(
+                    "warning",
+                    "butler",
+                    "butler.recovery.harness_subagent_skipped",
+                    "Butler's saved subagent runtime is a harness; this background check runs without subagents. Choose a provider model for Butler's subagents.",
+                    outcome="degraded",
+                    stage="recovery",
+                    metadata={"entity_id": case.engagement_id, "kind": "project"},
+                )
         if child_setting is not None:
             child_profile: HarnessProfile | ProviderProfile
             if child_setting["harness_profile_id"]:
@@ -859,7 +876,7 @@ class ButlerRecoveryAgent:
                 allow_mcp_catalog=False,
                 allow_agent_messaging=False,
                 allow_cloud_tool_results=True,
-                allow_subagents=config["allow_subagents"],
+                allow_subagents=child_setting is not None,
                 max_active_subagents=config["max_active_subagents"],
                 subagent_provider_id=config["subagent_provider_id"],
                 subagent_harness_profile_id=config["subagent_harness_profile_id"],

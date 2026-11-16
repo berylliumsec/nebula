@@ -283,6 +283,10 @@ async def test_background_runtime_matrix(
     )
     from nebula.v3.domain import HarnessProfile, HarnessSession, ProviderProfile
 
+    # Butler's children run on a provider model (#1140): a harness child saved
+    # before that rule leaves the background check without subagents.
+    delegates = enabled and child_backend == "provider"
+
     provider = RoutedProvider(
         parent=[
             _call(
@@ -338,7 +342,7 @@ async def test_background_runtime_matrix(
     platform.bind_control_assistant_work(work)
     chat.tool_platform = platform
     runtime.bind_control_assistant_work(work)
-    if not enabled:
+    if not delegates:
         provider.parent = [
             _finish("done"),
             _response(text="Checked without delegation"),
@@ -403,7 +407,7 @@ async def test_background_runtime_matrix(
     assert case is not None
 
     async def script(connection, prompt):
-        if not enabled:
+        if not delegates:
             catalog = await runtime._gateway_catalog(connection.request.session)
             assert not any(
                 item["name"] == "subagent.start" for item in catalog["tools"]
@@ -434,7 +438,7 @@ async def test_background_runtime_matrix(
         async with asyncio.timeout(20):
             result = await agent.run(case)
         assert result[1].value == parent_backend
-        if not enabled:
+        if not delegates:
             assert not await store.find_entities(
                 ChatSubagent, {}, engagement_id=project.id
             )

@@ -1,23 +1,25 @@
 {
-  "change_digest": "e76e868d1f709cb6923dca15cf9cef7ffd4a539ecaa6fb253742048f11d92a1a",
-  "reviewed_by": "Claude (early-fragment-token bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "The browser read a launcher #token= fragment only inside WorkspaceProvider's effect; routes that redirect on first render (/sessions, /agents, /missions, /work, the * catch-all) ran their child Navigate effect first and replaced the URL without the fragment, so such links opened 'Browser session expired'. runtime.ts exports captureBrowserFragmentToken() and main.tsx calls it before rendering (skipped for Tauri and Electron). Frontend: runtime.test (new regression: a startup-captured token survives a redirect that drops the fragment, plus the existing fragment-consumption tests).",
-  "exclusions": "No Python, native or Playwright selection: no Core change, and no mocked Playwright spec opens a legacy route with #token= (playwright_impact select returned no areas). Revalidated on the staging Core with the production bundle in Chromium and WebKit: /sessions, /agents, /missions, /work, an unknown path and / opened with #token= are all authorized and the token never remains in the URL.",
+  "change_digest": "322924cc2bdc4f4350209f050b946e66d9c04f9c9ad7b38018b9e0f88035d693",
+  "reviewed_by": "Claude (butler-recovery-harness-child bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
+  "reason": "#1140 made Butler's subagents run on a provider model (chat_subagents subagents.runtime_model guard; settings refuse a harness child), but a configuration saved before it can still name a harness child. ButlerRecoveryAgent then offered subagent tools whose every start was refused, failing a harness recovery. butler_recovery.py now leaves delegation off for a saved harness child, records butler.recovery.harness_subagent_skipped, and sets allow_subagents only when a usable child runtime exists. tests/v3/test_butler_concurrent_recovery.py's runtime matrix (red on main since #1140) now expects no delegation for a harness child; test_butler_subagents and test_butler_recovery cover the touched paths.",
+  "exclusions": "No UI, native or Playwright change; docs/design/nebula-settings-assistant.md only corrects the background-check note. The behaviour needs a Butler recovery case with a pre-#1140 harness child config, which the synthetic recovery suite reproduces; it was not driven on the staging Core. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 0,
-    "frontend": 8,
+    "python": 42,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/api/runtime.test.ts"
+  "python": [
+    "tests/v3/test_butler_concurrent_recovery.py",
+    "tests/v3/test_butler_subagents.py",
+    "tests/v3/test_butler_recovery.py"
   ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "checks": []
