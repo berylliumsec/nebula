@@ -18,6 +18,7 @@ from nebula.v3.database import (
     RuntimeInstanceRow,
 )
 from nebula.v3.domain import ChatGoal, ChatSession, ChatTurn, utc_now
+from nebula.v3.recovery_markers import OPERATOR_RECOVERY_PAUSE, OPERATOR_RECOVERY_STOP
 from nebula.v3.runtime_coordination import LeaseLost
 from nebula.v3.runtime_delivery import HttpIntent, RuntimeDelivery
 from nebula.v3.runtime_routes import command_lane, forwarding_lane, recovery_control
@@ -216,6 +217,7 @@ async def test_pause_and_stop_run_while_recovery_is_blocked(recovery):
     assert paused.status == "paused"
     assert paused.execution_claim_id == "claim-from-dead-owner"
     assert "unresolved" in paused.blocked_reason
+    assert OPERATOR_RECOVERY_PAUSE in paused.metadata
     assert (await command(value, pause)).state == "succeeded"
     # A queued response that never reached an owner stops cleanly.
     assert (await value.store.get(ChatTurn, queued.id)).status == "cancelled"
@@ -224,11 +226,14 @@ async def test_pause_and_stop_run_while_recovery_is_blocked(recovery):
         assert admission.state == "cancelled"
     assert (await command(value, stop)).state == "succeeded"
     # A response the dead owner started is not declared stopped: its effect
-    # is unknown. The refusal is a recorded failure, and nothing changed.
+    # is unknown, so status and claim stay. The stop itself is saved so
+    # restart recovery will not continue it.
     unresolved = await value.store.get(ChatTurn, claimed.id)
-    assert unresolved.status == "routing" and unresolved.revision == claimed.revision
-    refused = await command(value, stop_claimed)
-    assert refused.state == "failed" and refused.result == {"http_status": 409}
+    assert unresolved.status == "routing"
+    assert unresolved.execution_claim_id == "claim-from-dead-owner"
+    assert unresolved.request_snapshot[OPERATOR_RECOVERY_STOP]
+    saved = await command(value, stop_claimed)
+    assert saved.state == "succeeded" and saved.result == {"http_status": 202}
 
     # Ordinary work and controls that need the application stay held.
     assert (await command(value, resume)).state == "queued"
@@ -329,3 +334,69 @@ async def test_held_worker_activates_only_after_blockers_resolve(recovery):
     async with value.database.session() as session:
         remaining = await value.coordinator._shutdown_blockers(session, "one")
     assert remaining and all(queued.id in item for item in remaining)
+
+
+async def test_restart_recovery_keeps_operator_recovery_pause_and_stop(tmp_path):
+    from nebula.v3.chat import ChatService
+    from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+    from nebula.v3.domain import ChatTurnStatus
+    from nebula.v3.recovery_markers import OPERATOR_RECOVERY_PAUSE
+    from nebula.v3.storage import ConflictError
+    from tests.v3.test_chat_stream_follow import _conversation, _interrupted_turn
+
+    store = await _conversation(tmp_path)
+    goals = ChatGoalService(store)
+    goal = await goals.create(
+        "chat", GoalCreate(objective="Continue", completion_criteria=["Done"])
+    )
+    goal = await goals.write(
+        "chat", GoalWrite(expected_revision=goal.revision, action="start")
+    )
+    # Restart recovery paused it first; the operator's recovery pause then
+    # marks it, without changing anything else.
+    goal = await goals.write(
+        "chat", GoalWrite(expected_revision=goal.revision, action="pause")
+    )
+    marked = await goals.write(
+        "chat",
+        GoalWrite(expected_revision=goal.revision, action="pause"),
+        retain_execution_claim=True,
+    )
+    assert marked.status == "paused" and OPERATOR_RECOVERY_PAUSE in marked.metadata
+    await _interrupted_turn(store, {"required": False, "cause": "core_restart"}, goal.id)
+
+    service = ChatService(store)
+    assert await service.resume_turns_stopped_by_core() == []
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.INTERRUPTED
+    assert (await store.get(ChatGoal, goal.id)).status == "paused"
+    with pytest.raises(ConflictError, match="operator paused"):
+        await goals.write_latest("chat", "resume", allow_pending_recovery=True)
+    # Only the operator's own resume continues it, and it clears the mark.
+    current = await store.get(ChatGoal, goal.id)
+    resumed = await goals.write(
+        "chat", GoalWrite(expected_revision=current.revision, action="resume")
+    )
+    assert resumed.status == "running"
+    assert OPERATOR_RECOVERY_PAUSE not in resumed.metadata
+    await store.event_history.close()
+    await store.database.dispose()
+
+
+async def test_restart_recovery_keeps_an_operator_recovery_stop(tmp_path):
+    from nebula.v3.chat import ChatService
+    from nebula.v3.domain import ChatTurnStatus
+    from nebula.v3.recovery_markers import OPERATOR_RECOVERY_STOP
+    from tests.v3.test_chat_stream_follow import _conversation, _interrupted_turn
+
+    store = await _conversation(tmp_path)
+    turn = await _interrupted_turn(store, {"required": False, "cause": "core_restart"})
+    await store.update(
+        ChatTurn,
+        turn.id,
+        {"request_snapshot": {**turn.request_snapshot, OPERATOR_RECOVERY_STOP: "t"}},
+        expected_revision=turn.revision,
+    )
+    assert await ChatService(store).resume_turns_stopped_by_core() == []
+    assert (await store.get(ChatTurn, turn.id)).status == ChatTurnStatus.INTERRUPTED
+    await store.event_history.close()
+    await store.database.dispose()

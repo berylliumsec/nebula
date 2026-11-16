@@ -24,7 +24,8 @@ from pydantic import ValidationError
 from .database import Database, ProviderTurnQueueRow
 from .database_pool import PoolSettings
 from .async_utils import finish_cleanup
-from .domain import ChatTurn, ChatTurnStatus, utc_now
+from .domain import ChatBackend, ChatTurn, ChatTurnStatus, utc_now
+from .recovery_markers import OPERATOR_RECOVERY_STOP
 from .runtime_coordination import ProjectLease
 from .runtime_delivery import DurableHttpRunner, RuntimeDelivery
 from .runtime_vault import RuntimeVault
@@ -79,17 +80,44 @@ def recovery_control_app(store: NebulaStore, *, operator_token: str) -> FastAPI:
         if turn.status in _ENDED:
             # A repeated stop changes nothing.
             return JSONResponse(_turn_view(turn, applied=False))
-        if (
-            turn.status != ChatTurnStatus.QUEUED
-            or turn.execution_claim_id is not None
-            or turn.harness_turn_id
-        ):
-            # It reached an owner that is now gone. Nothing runs it here, and
-            # stopping cannot show what it already did.
+        if turn.harness_turn_id or turn.backend != ChatBackend.PROVIDER:
+            # Harness recovery owns its own continuation; nothing here can
+            # make that stop take effect, so the request is refused.
             return refusal(
                 409,
-                "This response started under the interrupted owner and its effect "
-                "is unresolved; reconcile project recovery, then stop or review it",
+                "This harness response is held with project recovery; "
+                "reconcile recovery, then stop it",
+            )
+        if turn.status != ChatTurnStatus.QUEUED or turn.execution_claim_id is not None:
+            # It reached an owner that is now gone. Nothing runs it here and a
+            # stop cannot show what it already did, so its status and claim
+            # stay for reconciliation. The stop is saved so that restart
+            # recovery does not continue it once the project activates.
+            if turn.request_snapshot.get(OPERATOR_RECOVERY_STOP):
+                return JSONResponse(_turn_view(turn, applied=False))
+            try:
+                marked = await store.update(
+                    ChatTurn,
+                    turn.id,
+                    {
+                        "request_snapshot": {
+                            **turn.request_snapshot,
+                            OPERATOR_RECOVERY_STOP: utc_now().isoformat(),
+                        }
+                    },
+                    expected_revision=turn.revision,
+                )
+            except ConflictError as error:
+                return refusal(409, str(error))
+            return JSONResponse(
+                {
+                    **_turn_view(marked, applied=True),
+                    "detail": "Stop saved: Core will not continue this response. "
+                    "Its earlier effect is unresolved and still needs recovery "
+                    "reconciliation.",
+                    "effect": "unresolved",
+                },
+                status_code=202,
             )
         try:
             async with store.transaction() as transaction:

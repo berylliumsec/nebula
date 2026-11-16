@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .recovery_markers import OPERATOR_RECOVERY_PAUSE
 from .async_utils import MaybeAsync, call_async
 
 from datetime import datetime
@@ -822,6 +823,19 @@ class ChatGoalService:
         now = utc_now()
         changes: dict = {}
         propagate: ChatGoalStatus | None = None
+        marked = {**goal.metadata, OPERATOR_RECOVERY_PAUSE: now.isoformat()}
+        if (
+            retain_execution_claim
+            and goal.status == ChatGoalStatus.PAUSED
+            and OPERATOR_RECOVERY_PAUSE not in goal.metadata
+        ):
+            # Restart recovery paused it; keep it paused through activation.
+            return await self.store.update(
+                ChatGoal,
+                goal.id,
+                {"metadata": marked},
+                expected_revision=goal.revision,
+            )
         if body.action == "start":
             if goal.status != ChatGoalStatus.DRAFT:
                 raise ConflictError("only a draft goal can be started")
@@ -844,6 +858,7 @@ class ChatGoalService:
                 "execution_claimed_at": None,
             }
             if retain_execution_claim:
+                changes["metadata"] = marked
                 for field in (
                     "execution_owner_id",
                     "execution_claim_id",
@@ -919,6 +934,16 @@ class ChatGoalService:
                 "blocked_reason": None,
                 "consecutive_stalls": 0,
             }
+            if OPERATOR_RECOVERY_PAUSE in goal.metadata:
+                if allow_pending_recovery:
+                    raise ConflictError(
+                        "the operator paused this goal during project recovery"
+                    )
+                changes["metadata"] = {
+                    key: value
+                    for key, value in goal.metadata.items()
+                    if key != OPERATOR_RECOVERY_PAUSE
+                }
         elif body.action == "cancel":
             if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
                 raise ConflictError("goal is already terminal")
@@ -979,7 +1004,11 @@ class ChatGoalService:
                     if propagate is not None:
                         (
                             await self._propagate_parent_stop(
-                                transaction, children, propagate, now
+                                transaction,
+                                children,
+                                propagate,
+                                now,
+                                operator_recovery_pause=retain_execution_claim,
                             )
                         )
                 return updated
@@ -1252,6 +1281,8 @@ class ChatGoalService:
         children: list[ChatGoal],
         status: ChatGoalStatus,
         now: datetime,
+        *,
+        operator_recovery_pause: bool = False,
     ) -> None:
         for child in children:
             if child.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
@@ -1279,6 +1310,16 @@ class ChatGoalService:
                             "Parent goal paused; child work is paused."
                             if status == ChatGoalStatus.PAUSED
                             else child.blocked_reason
+                        ),
+                        **(
+                            {
+                                "metadata": {
+                                    **child.metadata,
+                                    OPERATOR_RECOVERY_PAUSE: now.isoformat(),
+                                }
+                            }
+                            if operator_recovery_pause
+                            else {}
                         ),
                     },
                     expected_revision=child.revision,
