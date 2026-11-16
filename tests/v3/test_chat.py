@@ -4978,7 +4978,7 @@ async def test_persist_turn_inputs_retries_against_a_session_written_during_prep
                 include_knowledge=False,
             )
         )
-        session_id = (await service.complete(first)).session_id
+        session_id = (await _complete_and_name(service, first)).session_id
         assert session_id is not None
 
         # A Core-side writer (naming task, subagent report, popup keepalive)

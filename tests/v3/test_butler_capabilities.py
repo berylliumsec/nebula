@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 from nebula.v3.async_utils import async_any
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
@@ -1256,12 +1257,21 @@ async def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_
             change=True,
         )
         assert resumed["goal"]["status"] == "running"
+        # The resumed goal's turn claims execution in the background, which
+        # bumps the goal revision; act on the goal Core holds after that.
+        for _ in range(500):
+            claimed = await store.get(ChatGoal, goal.id)
+            if claimed.execution_claim_id is not None:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("resumed goal turn never claimed execution")
         paused = await scheduled.invoke(
             {
                 "operation": "nebula.work.goal_action",
                 "arguments": {
                     "session_id": chat.id,
-                    "expected_revision": resumed["goal"]["revision"],
+                    "expected_revision": claimed.revision,
                     "action": "pause",
                     "reason": "Synthetic pause",
                 },
