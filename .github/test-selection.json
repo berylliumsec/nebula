@@ -1,23 +1,28 @@
 {
-  "change_digest": "322924cc2bdc4f4350209f050b946e66d9c04f9c9ad7b38018b9e0f88035d693",
-  "reviewed_by": "Claude (butler-recovery-harness-child bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "#1140 made Butler's subagents run on a provider model (chat_subagents subagents.runtime_model guard; settings refuse a harness child), but a configuration saved before it can still name a harness child. ButlerRecoveryAgent then offered subagent tools whose every start was refused, failing a harness recovery. butler_recovery.py now leaves delegation off for a saved harness child, records butler.recovery.harness_subagent_skipped, and sets allow_subagents only when a usable child runtime exists. tests/v3/test_butler_concurrent_recovery.py's runtime matrix (red on main since #1140) now expects no delegation for a harness child; test_butler_subagents and test_butler_recovery cover the touched paths.",
-  "exclusions": "No UI, native or Playwright change; docs/design/nebula-settings-assistant.md only corrects the background-check note. The behaviour needs a Butler recovery case with a pre-#1140 harness child config, which the synthetic recovery suite reproduces; it was not driven on the staging Core. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
+  "change_digest": "96ed1a043bccafd29da1478a6efdc2543eaa968aff60ed18cec2d85e5697296c",
+  "reviewed_by": "Claude (py-test-rot); selection reviewed against the diff by the implementing agent; repairs made by a subagent and re-verified locally",
+  "reason": "Test-only repair of eight tests/v3 files left stale by #939's async storage move (helpers wrapping asyncio.run inside async tests, synchronous stubs Core now awaits, awaits inside generator expressions, scripted vendor fakes whose constructors became async create()). Stale expectations updated with cited commits: report sign-off PDF needs a memory-managed runner since 64e0379 (test stands in at the PDF builder seam; content assertions unchanged); scripted Grok writes system_prompt.txt since cea8b38, in an isolated home.",
+  "exclusions": "No product code changes. These files were red on main and never selected; each now passes locally 3 runs in a row (94 tests). Other red files are repaired in separate area PRs. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 42,
+    "python": 94,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_concurrent_recovery.py",
-    "tests/v3/test_butler_subagents.py",
-    "tests/v3/test_butler_recovery.py"
+    "tests/v3/test_report_signoff.py",
+    "tests/v3/test_scope_import.py",
+    "tests/v3/test_session_state.py",
+    "tests/v3/test_storage_waste.py",
+    "tests/v3/test_structured_results.py",
+    "tests/v3/test_tiny_windows.py",
+    "tests/v3/test_vendor_session_recreate.py",
+    "tests/v3/test_work.py"
   ],
   "frontend": [],
   "native": [],
