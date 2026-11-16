@@ -13874,7 +13874,12 @@ class ChatService:
             ):
                 return None
             candidate = ResearchResultReceipt.model_validate(value["research_result"])
-        except (ValueError, TypeError, json.JSONDecodeError, NotFoundError):
+        except (
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            NotFoundError,
+        ):  # diagnostic-expected: malformed or unavailable optional metadata is omitted from the model receipt
             return None
         if RESEARCH_RESULT_HANDLE.fullmatch(candidate.handle) is None:
             return None
