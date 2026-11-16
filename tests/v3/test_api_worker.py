@@ -19,7 +19,11 @@ from nebula.v3.domain import Engagement, PairedDeviceSession, utc_now
 from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_coordination import RuntimeCoordination
 from nebula.v3.runtime_delivery import DurableHttpRunner, RuntimeDelivery
-from nebula.v3.runtime_ipc import ProjectRuntimeUnavailable, RuntimeIpcError
+from nebula.v3.runtime_ipc import (
+    ProjectRuntimeUnavailable,
+    RuntimeIpcError,
+    UnownedProjectRequest,
+)
 from nebula.v3.runtime_vault import RuntimeVault
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_runtime_coordination import location as location
@@ -511,6 +515,42 @@ async def test_project_read_without_a_ready_worker_is_a_retryable_503(
     assert body["reason"] == reason
     assert body["retryable"] is True
     assert "saved request" not in body["detail"]
+
+
+async def test_read_that_no_project_owns_is_a_definitive_404(
+    boundary, location, tmp_path
+):
+    # An unknown or deleted ID resolves to host work, which never has a
+    # worker: answering "starting" made viewers retry forever.
+    async def upstream_for(_scope):
+        raise UnownedProjectRequest("Nothing in this Core matches this request")
+
+    store = NebulaStore(Database(location, bootstrap=False, pool_settings=_POOL))
+    delivery = RuntimeDelivery(
+        RuntimeCoordination(store.database), RuntimeVault(tmp_path / "read-only")
+    )
+    app = create_api_worker(
+        store,
+        delivery,
+        operator_token=_TOKEN,
+        project_for=None,
+        upstream_for=upstream_for,
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://synthetic.test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/runs/deleted-run/events",
+                headers={"Authorization": "Bearer " + _TOKEN},
+            )
+    finally:
+        await app.state.viewer_proxy.close()
+        await store.event_history.close()
+        await store.database.dispose()
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+    assert "retry-after" not in response.headers
 
 
 async def test_other_private_channel_failures_keep_their_nonretryable_body(

@@ -43,6 +43,7 @@ from .runtime_http import HttpUpstream, RuntimeHttpProxy
 from .runtime_ipc import (
     ProjectRuntimeUnavailable,
     RuntimeIpcError,
+    UnownedProjectRequest,
     project_runtime_unavailable_body,
     project_runtime_unavailable_headers,
 )
@@ -213,6 +214,14 @@ def create_api_worker(
     async def unavailable(_request, _error):
         return JSONResponse(
             {"detail": "Accepted request is unavailable"}, status_code=404
+        )
+
+    @app.exception_handler(UnownedProjectRequest)
+    async def unowned(_request, _error):
+        # An unknown or deleted ID: definitive, so clients stop retrying.
+        return JSONResponse(
+            {"detail": "Not found. It may have been deleted.", "code": "not_found"},
+            status_code=404,
         )
 
     @app.exception_handler(RuntimeIpcError)
