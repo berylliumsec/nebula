@@ -16570,9 +16570,11 @@ class HarnessRuntimeService:
         if engagement.scope_policy_id:
             scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             limit = min(limit, scope.max_concurrency)
-        gate = asyncio.Semaphore(max(1, limit))
-        self._gateway_execution_gates[turn.id] = gate
-        return gate
+        # The reads above yield: a concurrent caller may have stored the gate
+        # meanwhile, and both must share one so the limit holds.
+        return self._gateway_execution_gates.setdefault(
+            turn.id, asyncio.Semaphore(max(1, limit))
+        )
 
     async def _gateway_target_gate(
         self,
