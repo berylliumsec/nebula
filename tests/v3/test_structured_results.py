@@ -2,7 +2,6 @@ from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -52,9 +51,9 @@ async def fixture(tmp_path):
     return store, TestClient(app, raise_server_exceptions=False)
 
 
-def publish(client, payload, **extra):
+async def publish(client, payload, **extra):
     body = {"title": "A result", "result": payload, **extra}
-    return client.post("/projects/project/structured-results", json=body)
+    return await client.post("/projects/project/structured-results", json=body)
 
 
 async def test_any_json_value_publishes_and_reads_back_unchanged(tmp_path):
@@ -68,7 +67,7 @@ async def test_any_json_value_publishes_and_reads_back_unchanged(tmp_path):
         True,
         None,
     ]:
-        created = publish(client, payload)
+        created = await publish(client, payload)
         assert created.status_code == 201, created.text
         identity = created.json()["result"]["id"]
         read = await client.get(f"/projects/project/structured-results/{identity}")
@@ -79,7 +78,7 @@ async def test_any_json_value_publishes_and_reads_back_unchanged(tmp_path):
 
 async def test_stats_describe_shape_without_interpreting_it(tmp_path):
     _, client = await fixture(tmp_path)
-    created = publish(client, {"rows": [{"a": 1}, {"a": 2}], "note": None})
+    created = await publish(client, {"rows": [{"a": 1}, {"a": 2}], "note": None})
     stats = created.json()["result"]["stats"]
     assert stats["root_type"] == "object"
     assert stats["top_level_count"] == 2
@@ -93,14 +92,14 @@ async def test_deeply_nested_payload_is_inspected_without_recursion(tmp_path):
     deep: object = "leaf"
     for _ in range(MAX_RESULT_DEPTH - 1):
         deep = {"next": deep}
-    created = publish(client, deep)
+    created = await publish(client, deep)
     assert created.status_code == 201, created.text
     assert created.json()["result"]["stats"]["max_depth"] == MAX_RESULT_DEPTH - 1
 
     deeper: object = "leaf"
     for _ in range(MAX_RESULT_DEPTH + 5):
         deeper = {"next": deeper}
-    refused = publish(client, deeper)
+    refused = await publish(client, deeper)
     assert refused.status_code == 422
     assert "nests deeper" in refused.json()["detail"]
 
@@ -133,7 +132,7 @@ def test_a_structure_that_refers_into_itself_is_refused_not_walked_forever():
 
 async def test_hints_are_stored_beside_the_result_and_never_merged_into_it(tmp_path):
     _, client = await fixture(tmp_path)
-    created = publish(
+    created = await publish(
         client,
         {"name": "host-1"},
         hints={"titleField": "name", "future_key": {"anything": True}},
@@ -154,7 +153,7 @@ async def test_hints_are_stored_beside_the_result_and_never_merged_into_it(tmp_p
 
 async def test_summaries_stay_light_and_preview_only_top_level_scalars(tmp_path):
     _, client = await fixture(tmp_path)
-    publish(
+    await publish(
         client,
         {
             "status": "unknown-state",
@@ -179,8 +178,8 @@ async def test_summaries_stay_light_and_preview_only_top_level_scalars(tmp_path)
 
 async def test_results_list_newest_first_and_are_scoped_to_their_project(tmp_path):
     store, client = await fixture(tmp_path)
-    first = publish(client, {"n": 1}, title="First").json()["result"]["id"]
-    second = publish(client, {"n": 2}, title="Second").json()["result"]["id"]
+    first = (await publish(client, {"n": 1}, title="First")).json()["result"]["id"]
+    second = (await publish(client, {"n": 2}, title="Second")).json()["result"]["id"]
     assert [
         row["id"]
         for row in (await client.get("/projects/project/structured-results")).json()
@@ -302,7 +301,7 @@ async def test_progress_snapshots_form_one_ordered_stream(tmp_path):
     store, client = await fixture(tmp_path)
     tool = PublishResultTool(store)
 
-    def snapshot(title, payload, stream="refactor-auth"):
+    async def snapshot(title, payload, stream="refactor-auth"):
         invocation = ToolInvocation(
             engagement_id="project",
             run_id="run",
@@ -311,19 +310,19 @@ async def test_progress_snapshots_form_one_ordered_stream(tmp_path):
             workspace=tmp_path,
             arguments={"title": title, "result": payload, "stream": stream},
         )
-        return asyncio.run(tool.execute(invocation, runner=None)).output
+        return (await tool.execute(invocation, runner=None)).output
 
-    first = snapshot(
+    first = await snapshot(
         "Read the handler", {"language": "python", "code": "def login():\n    pass"}
     )
-    second = snapshot(
+    second = await snapshot(
         "Mapped the call graph",
         {
             "nodes": [{"id": "login"}],
             "edges": [{"source": "login", "target": "verify"}],
         },
     )
-    other = snapshot("Unrelated work", {"note": "separate"}, stream="docs")
+    other = await snapshot("Unrelated work", {"note": "separate"}, stream="docs")
 
     assert (first["stream"], first["sequence"]) == ("refactor-auth", 1)
     assert second["sequence"] == 2
@@ -351,7 +350,7 @@ async def test_progress_snapshots_form_one_ordered_stream(tmp_path):
 async def test_the_newest_results_are_the_first_page(tmp_path):
     _, client = await fixture(tmp_path)
     for index in range(5):
-        publish(client, {"index": index}, title=f"Result {index}")
+        await publish(client, {"index": index}, title=f"Result {index}")
     page = (await client.get("/projects/project/structured-results?limit=2")).json()
     assert [row["title"] for row in page] == ["Result 4", "Result 3"]
     later = (
@@ -384,7 +383,7 @@ async def running_goal(store, objective="Refactor the auth handler"):
     )
 
 
-def snapshot(store, goal, title="Step", payload=None, stream="ignored-by-core"):
+async def snapshot(store, goal, title="Step", payload=None, stream="ignored-by-core"):
     tool = PublishResultTool(store, goal)
     invocation = ToolInvocation(
         engagement_id="project",
@@ -398,7 +397,7 @@ def snapshot(store, goal, title="Step", payload=None, stream="ignored-by-core"):
             "stream": stream,
         },
     )
-    return asyncio.run(tool.execute(invocation, runner=None)).output
+    return (await tool.execute(invocation, runner=None)).output
 
 
 async def test_a_goals_snapshots_join_its_own_series_whatever_the_model_passes(
@@ -407,8 +406,10 @@ async def test_a_goals_snapshots_join_its_own_series_whatever_the_model_passes(
     store, client = await fixture(tmp_path)
     goal = await running_goal(store)
 
-    first = snapshot(store, goal, title="Read the handler")
-    second = snapshot(store, goal, title="Mapped the callers", stream="something-else")
+    first = await snapshot(store, goal, title="Read the handler")
+    second = await snapshot(
+        store, goal, title="Mapped the callers", stream="something-else"
+    )
 
     # Core owns the series: the model cannot split or merge one by accident.
     assert (first["stream"], first["sequence"]) == (goal.id, 1)

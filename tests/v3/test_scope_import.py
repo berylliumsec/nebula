@@ -2,7 +2,6 @@ from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
-import asyncio
 import base64
 import json
 from types import SimpleNamespace
@@ -403,17 +402,15 @@ async def _structured_profile(store):
     )
 
 
-def _create_import(service, engagement_id, profile_id, data: bytes):
-    return asyncio.run(
-        service.create(
-            engagement_id=engagement_id,
-            provider_id=profile_id,
-            model="model-1",
-            filename="scope.txt",
-            data=data,
-            media_type="text/plain",
-            cloud_confirmed=False,
-        )
+async def _create_import(service, engagement_id, profile_id, data: bytes):
+    return await service.create(
+        engagement_id=engagement_id,
+        provider_id=profile_id,
+        model="model-1",
+        filename="scope.txt",
+        data=data,
+        media_type="text/plain",
+        cloud_confirmed=False,
     )
 
 
@@ -433,7 +430,7 @@ async def test_scope_import_splits_an_oversized_section_into_bounded_chunks(tmp_
     data = (line * 1200).encode()
     assert 80_000 < len(data) < MAX_SCOPE_TEXT
 
-    created = _create_import(service, engagement.id, profile.id, data)
+    created = await _create_import(service, engagement.id, profile.id, data)
 
     assert created.status == ScopeImportStatus.READY
     assert len(provider.requests) >= 3
@@ -533,7 +530,7 @@ async def test_scope_import_flags_a_cidr_whose_host_bits_were_masked(tmp_path):
         store=store, artifact_store=artifacts, provider_factory=lambda _: provider
     )
 
-    created = _create_import(
+    created = await _create_import(
         service,
         engagement.id,
         profile.id,
@@ -584,7 +581,7 @@ async def test_scope_import_warns_when_an_allowed_target_covers_an_exclusion(tmp
         store=store, artifact_store=artifacts, provider_factory=lambda _: provider
     )
 
-    created = _create_import(
+    created = await _create_import(
         service,
         engagement.id,
         profile.id,

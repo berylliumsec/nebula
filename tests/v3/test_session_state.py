@@ -231,6 +231,10 @@ async def test_projection_reloads_session_identity_and_removes_cache_on_deletion
         assert (await database.scalar(select(SessionProjectionRow))) is None
 
 
+async def _closed() -> None:
+    """Runtime shutdown awaits close() on every saved connection."""
+
+
 async def test_idle_transport_and_transport_exit_are_not_inferred_from_active_turn(
     tmp_path,
 ):
@@ -247,7 +251,7 @@ async def test_idle_transport_and_transport_exit_are_not_inferred_from_active_tu
             expected_revision=turn.revision,
         )
     )
-    connection = SimpleNamespace(connection_state="connected")
+    connection = SimpleNamespace(connection_state="connected", close=_closed)
     runtime._connections[chat.harness_session_id] = connection
     alive = await session_state(store, chat, runtime)
     assert alive["execution"] == "complete"
@@ -266,7 +270,7 @@ async def test_catchup_pending_does_not_overwrite_connection_revision(tmp_path):
     _, store, runtime, _, _, owner = await fixture(tmp_path)
     chat = await store.get(ChatSession, owner.session_id)
     runtime._connections[chat.harness_session_id] = SimpleNamespace(
-        connection_state="connected"
+        connection_state="connected", close=_closed
     )
     before = await session_state(store, chat, runtime)
     assert (await session_projection(store, chat))["pending"] == before["pending"]

@@ -61,7 +61,14 @@ class Conversation:
     """One Nebula chat on a real runtime service; ``restart`` mimics a Core restart."""
 
     @classmethod
-    async def create(cls, tmp_path: Path, kind: HarnessKind, adapter: HarnessAdapter):
+    async def create(
+        cls,
+        tmp_path: Path,
+        kind: HarnessKind,
+        adapter: HarnessAdapter,
+        *,
+        home_directory: Path | None = None,
+    ):
         self = cls.__new__(cls)
         self.tmp_path = tmp_path
         self.adapter = adapter
@@ -77,6 +84,7 @@ class Conversation:
                 executable="/bin/true",
                 default_model="model-a",
                 privacy={"local_only": True, "permits_sensitive_data": True},
+                home_directory=str(home_directory) if home_directory else None,
             )
         )
         self.service = self._service()
@@ -106,9 +114,11 @@ class Conversation:
             mcp_server_ids=[],
         )
         self.chat_id = chat.id
-        await asyncio.wait_for(
-            self.service.start_chat_turn(turn.id), timeout=TURN_DEADLINE_SECONDS
-        )
+
+        async def run_turn() -> None:
+            await (await self.service.start_chat_turn(turn.id))
+
+        await asyncio.wait_for(run_turn(), timeout=TURN_DEADLINE_SECONDS)
         owner = await self.store.get(ChatTurn, owner.id)
         answer = (
             (await self.store.get(ChatMessage, owner.final_message_id)).content
@@ -184,11 +194,20 @@ async def assert_not_recreated(
 AGENT_SOURCE = r"""
 import asyncio
 import json
+import os
 import sys
 
 script = json.load(open(sys.argv[1]))
 log = open(sys.argv[2], "a", buffering=1)
 prompts = list(script["prompts"])
+
+
+def system_prompt(session_id):
+    # Grok writes the session's system head to its account home before the
+    # session opens, and rewrites the retained head when it loads a session.
+    folder = os.path.join(script["home"], "sessions", "scripted", session_id)
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "system_prompt.txt")
 
 
 async def main():
@@ -224,11 +243,20 @@ async def main():
                 }
             )
         elif method == "session/new":
+            rules = (message["params"].get("_meta") or {}).get("rules")
+            if rules is not None:
+                with open(system_prompt(script["session_id"]), "w") as head:
+                    head.write(rules)
             send({"id": message["id"], "result": {"sessionId": script["session_id"]}})
         elif method == "session/load":
             if script.get("load_error"):
                 send({"id": message["id"], "error": script["load_error"]})
             else:
+                path = system_prompt(message["params"]["sessionId"])
+                if os.path.exists(path):
+                    retained = open(path).read()
+                    with open(path, "w") as head:
+                        head.write(retained)
                 send({"id": message["id"], "result": {}})
         elif method == "session/prompt":
             text = prompts.pop(0) if prompts else ""
@@ -256,18 +284,18 @@ asyncio.run(main())
 class ScriptedGrokAdapter(GrokAcpAdapter):
     """The real Grok adapter; only the ``grok agent stdio`` process is scripted."""
 
-    @classmethod
-    async def create(cls, workdir: Path):
-        self = cls.__new__(cls)
+    def __init__(self, workdir: Path) -> None:
         workdir.mkdir(parents=True, exist_ok=True)
         self.agent_path = workdir / "scripted_acp_agent.py"
         self.agent_path.write_text(AGENT_SOURCE)
         self.script_path = workdir / "agent_script.json"
         self.log_path = workdir / "agent_log.jsonl"
-        return self
+        # The account home Grok keeps its sessions in, never the host's ~/.grok.
+        self.home = workdir / "grok-home"
+        self.home.mkdir(exist_ok=True)
 
     def script(self, **script: Any) -> None:
-        self.script_path.write_text(json.dumps(script))
+        self.script_path.write_text(json.dumps({"home": str(self.home), **script}))
         self.log_path.write_text("")
 
     async def _connect(self, *_args: Any, **_kwargs: Any) -> _AcpRpc:
@@ -308,7 +336,9 @@ class ScriptedGrokAdapter(GrokAcpAdapter):
 async def _grok_first_turn(tmp_path: Path) -> tuple[Conversation, ScriptedGrokAdapter]:
     adapter = ScriptedGrokAdapter(tmp_path / "agent")
     adapter.script(session_id="sess-1", prompts=["FIRST ANSWER"])
-    conversation = await Conversation.create(tmp_path, HarnessKind.GROK_ACP, adapter)
+    conversation = await Conversation.create(
+        tmp_path, HarnessKind.GROK_ACP, adapter, home_directory=adapter.home
+    )
     turn, answer = await conversation.send("FIRST QUESTION")
     assert turn.status == HarnessTurnStatus.COMPLETE, turn.error
     assert answer == "FIRST ANSWER"
@@ -345,7 +375,7 @@ async def test_grok_session_that_cannot_be_loaded_continues_on_a_fresh_session(
 ) -> None:
     async def scenario() -> None:
         conversation, adapter = await _grok_first_turn(tmp_path)
-        first_session_id = conversation.chat().harness_session_id
+        first_session_id = (await conversation.chat()).harness_session_id
         assert first_session_id is not None
         adapter.script(
             session_id="sess-2", prompts=["SECOND ANSWER", "THIRD ANSWER"], **refusal
@@ -390,7 +420,7 @@ async def test_grok_load_failures_other_than_not_found_keep_the_saved_session(
 ) -> None:
     async def scenario() -> None:
         conversation, adapter = await _grok_first_turn(tmp_path)
-        first_session_id = conversation.chat().harness_session_id
+        first_session_id = (await conversation.chat()).harness_session_id
         assert first_session_id is not None
         adapter.script(session_id="sess-2", prompts=["SECOND"], load_error=load_error)
 
@@ -477,17 +507,15 @@ class ScriptedClaudeCli(claude_agent_sdk.Transport):
     ``initialize``.
     """
 
-    @classmethod
-    async def create(
-        cls,
+    def __init__(
+        self,
         *,
         session_id: str,
         answer: str,
         refusal: str | None = None,
         stderr: Callable[[str], None] | None = None,
         mcp_servers: list[str] | None = None,
-    ):
-        self = cls.__new__(cls)
+    ) -> None:
         self.session_id = session_id
         self.answer = answer
         self.refusal = refusal
@@ -496,7 +524,6 @@ class ScriptedClaudeCli(claude_agent_sdk.Transport):
         self.prompts: list[str] = []
         self._out: asyncio.Queue[Any] = asyncio.Queue()
         self._ready = False
-        return self
 
     async def connect(self) -> None:
         self._ready = True
@@ -573,14 +600,11 @@ class ScriptedClaudeCli(claude_agent_sdk.Transport):
 class ClaudeCliPlan:
     """Decides what each spawned CLI does, from the options the adapter built."""
 
-    @classmethod
-    async def create(cls):
-        self = cls.__new__(cls)
+    def __init__(self) -> None:
         self.refusal: str | None = None
         self.answers = ["FIRST ANSWER"]
         self.session_ids = ["claude-session-1"]
         self.spawned: list[tuple[str | None, ScriptedClaudeCli]] = []
-        return self
 
     def client(self, *, options: Any) -> Any:
         resume = options.resume
@@ -683,15 +707,12 @@ async def test_claude_cli_failures_other_than_a_missing_conversation_keep_the_se
 class ScriptedCodexRpc:
     """The Codex app-server requests the adapter and connection make."""
 
-    @classmethod
-    async def create(cls, plan: CodexPlan):
-        self = cls.__new__(cls)
+    def __init__(self, plan: CodexPlan) -> None:
         self.plan = plan
         self.events: asyncio.Queue[Any] = asyncio.Queue()
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.running_turns: dict[str, str] = {}
         self.connection_state = "connected"
-        return self
 
     async def request(self, method: str, params: dict[str, Any]) -> Any:
         self.calls.append((method, params))
@@ -750,23 +771,17 @@ class ScriptedCodexRpc:
 
 
 class CodexPlan:
-    @classmethod
-    async def create(cls):
-        self = cls.__new__(cls)
+    def __init__(self) -> None:
         self.resume_error: dict[str, Any] | None = None
         self.start_error: dict[str, Any] | None = None
         self.thread_ids = ["thread-1"]
         self.answers = ["FIRST ANSWER"]
         self.rpcs: list[ScriptedCodexRpc] = []
-        return self
 
 
 class ScriptedCodexAdapter(CodexAppServerAdapter):
-    @classmethod
-    async def create(cls, plan: CodexPlan):
-        self = cls.__new__(cls)
+    def __init__(self, plan: CodexPlan) -> None:
         self.plan = plan
-        return self
 
     async def _connect(self, *_args: Any, **_kwargs: Any) -> Any:
         rpc = ScriptedCodexRpc(self.plan)
@@ -840,7 +855,7 @@ async def test_codex_recreates_the_thread_once_even_when_the_fresh_thread_fails(
         assert turn.status == HarnessTurnStatus.INTERRUPTED
         assert "model provider unavailable" in (turn.error or "")
         assert turn.harness_session_id != first_session_id
-        assert conversation.chat().harness_session_id == turn.harness_session_id
+        assert (await conversation.chat()).harness_session_id == turn.harness_session_id
         assert _thread_methods(plan) == [
             "thread/start",
             "thread/resume",

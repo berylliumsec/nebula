@@ -74,7 +74,7 @@ async def _command_artifacts(
     ]
 
 
-def _run_command(tmp_path: Path, command: str):
+async def _run_command(tmp_path: Path, command: str):
     async def scenario():
         manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
         (await create_tool_chat(store, engagement))
@@ -97,11 +97,11 @@ def _run_command(tmp_path: Path, command: str):
         [execution] = await store.list_entities(CommandExecution)
         return store, artifacts, engagement, call, execution, result
 
-    return asyncio.run(scenario())
+    return await scenario()
 
 
 async def test_a_command_stream_redaction_leaves_unchanged_is_stored_once(tmp_path):
-    store, artifacts, engagement, call, execution, result = _run_command(
+    store, artifacts, engagement, call, execution, result = await _run_command(
         tmp_path, "echo storage-waste-marker"
     )
 
@@ -129,7 +129,7 @@ async def test_a_command_stream_redaction_leaves_unchanged_is_stored_once(tmp_pa
 
 
 async def test_a_command_stream_with_a_secret_keeps_a_separate_redacted_copy(tmp_path):
-    store, artifacts, engagement, call, execution, _result = _run_command(
+    store, artifacts, engagement, call, execution, _result = await _run_command(
         tmp_path, "echo password=hunter2hunter2"
     )
 
@@ -319,20 +319,22 @@ async def test_a_process_tool_keeps_both_streams_even_when_one_is_empty(tmp_path
 
 
 async def _ledger_rows(store: NebulaStore, turn_id: str) -> tuple[int, int]:
+    counts: list[int] = []
     async with store.database.session() as session:
-        return tuple(  # type: ignore[return-value]
-            int(
-                (
-                    await session.scalar(
-                        select(func.count())
-                        .select_from(table)
-                        .where(table.turn_id == turn_id)
+        for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
+            counts.append(
+                int(
+                    (
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(table)
+                            .where(table.turn_id == turn_id)
+                        )
                     )
+                    or 0
                 )
-                or 0
             )
-            for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow)
-        )
+    return counts[0], counts[1]
 
 
 async def _conversation_with_ledger(
@@ -474,8 +476,8 @@ async def test_grok_turn_counts_ignored_notifications_instead_of_storing_each(tm
         store, engagement, profile, service = await _grok_runtime(
             tmp_path, MemoryGrokAdapter(rpc)
         )
-        _chat, _owner, turn = _chat_turn(service, engagement, profile, "question")
-        await service.start_chat_turn(turn.id)
+        _chat, _owner, turn = await _chat_turn(service, engagement, profile, "question")
+        await (await service.start_chat_turn(turn.id))
 
         events = (await service.activity_events(turn.id)).events
         notices = [event.summary for event in events if event.type == "notice"]
@@ -515,8 +517,8 @@ async def test_ignored_notification_names_are_bounded(tmp_path):
         store, engagement, profile, service = await _grok_runtime(
             tmp_path, MemoryGrokAdapter(rpc)
         )
-        _chat, _owner, turn = _chat_turn(service, engagement, profile, "question")
-        await service.start_chat_turn(turn.id)
+        _chat, _owner, turn = await _chat_turn(service, engagement, profile, "question")
+        await (await service.start_chat_turn(turn.id))
         completed = next(
             event
             for event in (await service.activity_events(turn.id)).events
@@ -547,20 +549,18 @@ async def test_mission_turn_activity_replays_only_that_turns_rows(tmp_path):
             model="test-model",
         )
     )
-    first, second = (
-        (
-            await store.create(
-                HarnessTurn(
-                    engagement_id=engagement.id,
-                    harness_session_id=session.id,
-                    origin=HarnessTurnOrigin.MISSION,
-                    run_id="mission-run",
-                    prompt=prompt,
-                )
+    first, second = [
+        await store.create(
+            HarnessTurn(
+                engagement_id=engagement.id,
+                harness_session_id=session.id,
+                origin=HarnessTurnOrigin.MISSION,
+                run_id="mission-run",
+                prompt=prompt,
             )
         )
         for prompt in ("first", "second")
-    )
+    ]
     for index in range(3):
         for turn in (first, second):
             (
