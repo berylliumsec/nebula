@@ -46,17 +46,9 @@ pytestmark = pytest.mark.anyio
 
 
 async def _fixture(tmp_path):
-    # The execution fixture's stub resolver is synchronous; the service
+    # The execution fixture's stub resolver is already async and the service
     # awaits it.
-    result = await _sync_fixture(tmp_path)
-    platform = result[5].tool_platform
-    sync_resolve = platform.resolve_operator_runtime
-
-    async def resolve(engagement_id, language, *, network):
-        return sync_resolve(engagement_id, language, network=network)
-
-    platform.resolve_operator_runtime = resolve
-    return result
+    return await _sync_fixture(tmp_path)
 
 
 def _in_frame(name: str) -> bool:

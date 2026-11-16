@@ -39,6 +39,7 @@ pytestmark = [
 _SETTINGS = PoolSettings(5, 12, 5, 2)
 _TOKEN = "synthetic-operator-private-bootstrap-token"
 _API_WORKER = "from nebula.v3.runtime_worker import main\nmain()\n"
+_SOURCE = str(Path(__file__).resolve().parents[2] / "src")
 
 
 @pytest.fixture
@@ -142,6 +143,11 @@ async def managed(location, tmp_path):
                 "#!"
                 + sys.executable
                 + "\n"
+                # The detached environment removes PYTHONPATH; pin the source
+                # under test so a venv without an installed package still runs it.
+                + "import sys\nsys.path.insert(0, "
+                + repr(_SOURCE)
+                + ")\n"
                 + (program if program is not None else _WORKER)
             ).encode(),
             features=features,
