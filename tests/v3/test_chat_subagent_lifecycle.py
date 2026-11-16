@@ -13,6 +13,7 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import inspect
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,8 +58,22 @@ from tests.v3.test_chat_subagents import (
     _request,
     _response,
     _setup,
-    _until,
 )
+
+
+async def _until(predicate, timeout: float = 5.0) -> None:
+    """Poll a predicate that may read the async store."""
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        outcome = predicate()
+        if inspect.isawaitable(outcome):
+            outcome = await outcome
+        if outcome:
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition was not reached in time")
+        await asyncio.sleep(0.01)
 
 
 async def _session(
@@ -190,13 +205,19 @@ async def test_failed_parent_stops_its_running_subagents_and_says_why(
             _request(project, content="Split the work.", allow_subagents=True)
         )
         parent_turn_id = await chat.start_provider_turn(prepared)
-        await _until(lambda: bool(store.list_entities(ChatSubagent)))
+
+        async def _check_193():
+            return bool(await store.list_entities(ChatSubagent))
+
+        await _until(_check_193)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status != ChatSubagentStatus.RUNNING
-            )
-        )
+
+        async def _check_196():
+            return (
+                await store.get(ChatSubagent, record.id)
+            ).status != ChatSubagentStatus.RUNNING
+
+        await _until(_check_196)
 
         parent = await store.get(ChatTurn, parent_turn_id)
         assert parent.status == ChatTurnStatus.FAILED
@@ -208,12 +229,18 @@ async def test_failed_parent_stops_its_running_subagents_and_says_why(
         child_turn = await store.get(ChatTurn, record.child_turn_id)
         assert child_turn.status == ChatTurnStatus.CANCELLED
         assert not chat.has_active_provider_turn(child_turn.id)
+
         # The conversation (and a goal resumed later) sees why it stopped.
-        posted = [
-            item
-            for item in (await _messages(store, parent.session_id))
-            if item.metadata.get("kind") == "subagent_result"
-        ]
+        # The report posts after the stop is saved, so wait for it.
+        async def posted_reports():
+            return [
+                item
+                for item in (await _messages(store, parent.session_id))
+                if item.metadata.get("kind") == "subagent_result"
+            ]
+
+        await _until(posted_reports)
+        posted = await posted_reports()
         assert [item.metadata["subagent_status"] for item in posted] == ["stopped"]
         assert "delegating response failed" in posted[0].content
         provider.child_gate.set()
@@ -816,14 +843,20 @@ async def test_goal_token_budget_stops_subagents_while_they_spend(
             )
         )
         (await chat.start_provider_turn(prepared))
-        await _until(lambda: bool(store.list_entities(ChatSubagent)))
+
+        async def _check_819():
+            return bool(await store.list_entities(ChatSubagent))
+
+        await _until(_check_819)
         (record,) = await store.list_entities(ChatSubagent)
-        await _until(
-            lambda: (
-                store.get(ChatSubagent, record.id).status
-                in {ChatSubagentStatus.STOPPED, ChatSubagentStatus.FAILED}
-            )
-        )
+
+        async def _check_822():
+            return (await store.get(ChatSubagent, record.id)).status in {
+                ChatSubagentStatus.STOPPED,
+                ChatSubagentStatus.FAILED,
+            }
+
+        await _until(_check_822)
 
         stopped = await store.get(ChatSubagent, record.id)
         assert "budget" in (stopped.error or "")

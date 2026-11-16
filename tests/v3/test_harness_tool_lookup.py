@@ -121,13 +121,20 @@ async def test_pending_lookup_work_is_bounded_by_active_calls(
                 (
                     statement,
                     parameters,
-                    cursor.connection.execute(
+                    conn.exec_driver_sql(
                         "EXPLAIN QUERY PLAN " + statement, parameters
                     ).fetchall(),
                 )
             )
-            cursor.connection.set_progress_handler(lambda: steps.append(1) or 0, 100)
-            progress_connections.append(cursor.connection)
+            # The listener runs inside SQLAlchemy's async bridge, so the
+            # aiosqlite driver call is awaited through the adapter.
+            adapted = conn.connection.dbapi_connection
+            adapted.await_(
+                adapted.driver_connection.set_progress_handler(
+                    lambda: steps.append(1) or 0, 100
+                )
+            )
+            progress_connections.append(adapted.driver_connection)
 
     try:
         baseline_steps = None
@@ -158,7 +165,7 @@ async def test_pending_lookup_work_is_bounded_by_active_calls(
                 ] == [f"active-{index}" for index in range(4)]
             finally:
                 for connection in progress_connections:
-                    connection.set_progress_handler(None, 0)
+                    await connection.set_progress_handler(None, 0)
                 progress_connections.clear()
                 event.remove(
                     store.database.engine.sync_engine, "before_cursor_execute", capture
