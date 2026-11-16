@@ -1,22 +1,23 @@
 {
-  "change_digest": "a4e8cb533b44323a58eb4543ff5f47502b023c7a23c8bdf04746fdc77227ca31",
-  "reviewed_by": "Codex; reviewed the documentation-only diff against the supervisor and legacy deployment paths",
-  "reason": "Clarify that compatible supervisor rolling promotion can start while provider turns run, that per-project handoff waits for admitted turns and retains pinned workers, and that Butler coordination and coherent rollback snapshots apply to coordinated or legacy cutovers. No runtime or operator interface behavior changes.",
-  "exclusions": "No Python, frontend, native, or Playwright tests are selected because only agent/deployment guidance changed. No Nebula LAN instance is applicable to a documentation-only change. The diff-bound selection validator and required PR checks review this plan.",
+  "reviewed_by": "Codex Nebula queryable research result implementation; callback cause independently validated by notifier worker and supervisor",
+  "reason": "Additive provider-tool schema and adapter tests prove describe/query/read argument validation; one webhook-to-provider regression proves typed receipt projection, instruction sanitization, durable receipt equality, and replay. The callback journey runs through the actual results route on a disposable authenticated Core bound to a non-loopback LAN address.",
+  "exclusions": "Select only tests/v3/test_research_results.py and the named callback receipt regression in tests/v3/test_process_results_webhook.py. Exclude the other 13 callback lifecycle tests and all unrelated suites. No UI, browser layout, or physical-device behavior changes.",
   "python_browser": false,
   "python_node": false,
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "expected_tests": {
-    "python": 0,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_research_results.py",
+    "tests/v3/test_process_results_webhook.py::test_callback_result_reaches_the_model_through_the_results_webhook"
+  ],
   "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": []
+  "checks": [],
+  "change_digest": ""
 }

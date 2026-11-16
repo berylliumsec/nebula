@@ -94,6 +94,7 @@ from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .runtime_capacity import RuntimeCapacity
 from .execution_scope import current_execution_lease
 from .runtime_coordination import LeaseLost
+from .research_results import HANDLE as RESEARCH_RESULT_HANDLE
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .butler_reporting_tools import REPORT_TOOL_NAMES, report_components
 from .chat_goal_tools import (
@@ -402,6 +403,7 @@ from .tool_results import (
     ArtifactKind,
     ToolArtifactRef,
     ToolResultReceipt,
+    ResearchResultReceipt,
     ToolResultStatus,
     ToolTimingReceipt,
     artifact_ref,
@@ -421,6 +423,21 @@ if TYPE_CHECKING:
     from .chat_goals import ChatGoalService
     from .chat_schedules import ChatScheduleService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
+
+
+def _compact_research_coverage(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep only small scalar coverage facts from untrusted callback metadata."""
+    compact: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", key):
+            continue
+        if (isinstance(item, (bool, int, float)) and not isinstance(item, complex)) or (
+            isinstance(item, str) and len(item) <= 160
+        ):
+            compact[key] = item
+        if len(compact) >= 32:
+            break
+    return compact
 
 
 class ChatError(RuntimeError):
@@ -2481,6 +2498,28 @@ def _cleared_tool_result(
         "artifact_ids": artifact_ids[:12],
         "note": note,
     }
+    if isinstance(output, dict) and isinstance(output.get("research_result"), dict):
+        # Keep the compact typed descriptor that tells the model how to resume
+        # a query-first result after older tool output is cleared for context.
+        try:
+            research_result = ResearchResultReceipt.model_validate(
+                output["research_result"]
+            )
+        except ValueError:  # diagnostic-expected: malformed history fails closed
+            research_result = None
+        if research_result is not None:
+            receipt["research_result"] = research_result.model_dump(
+                mode="json", by_alias=True
+            )
+            receipt["next_actions"] = [
+                "research_result_describe",
+                "research_result_query",
+                "research_result_read",
+            ]
+            receipt["note"] += (
+                " The typed research-result handle and query steps remain in this "
+                "receipt; start with research_result_describe."
+            )
     # A cleared lookup keeps what it found, so its receipt still answers.
     found = lookup_identifiers(
         entry.get("name"), entry.get("arguments"), entry.get("provider_result")
@@ -13708,6 +13747,28 @@ class ChatService:
             else "The command reported failure without a summary."
         )
         refs = await self._callback_artifact_refs(execution)
+        research_result = await self._callback_research_result(execution)
+        if research_result is not None:
+            handle = research_result.handle
+            summary = (
+                f"A typed research result is ready for targeted retrieval. First call "
+                f"research_result_describe({{handle: {json.dumps(handle)}}}); then call "
+                "research_result_query with one advertised collection and only the "
+                "fields or relationship needed. Use returned match_id values with "
+                "research_result_read. Continue with a returned cursor when present. "
+                "A zero-match result proves absence only when coverage and index status "
+                f"are complete. {summary}"
+            )[:1_000]
+            research_result = research_result.model_copy(
+                update={
+                    "first_call": {"tool": "research_result_describe", "handle": handle},
+                    "query_steps": [
+                        "Call research_result_describe with this handle.",
+                        "Query the advertised collection with only needed fields or links.",
+                        "Read selected evidence using match_id values returned by the query.",
+                    ],
+                }
+            )
         warnings: list[str] = []
         if (
             execution.metadata.get("results_stdout")
@@ -13744,8 +13805,49 @@ class ChatService:
             ),
             artifacts=refs,
             warnings=warnings,
-            next_actions=["tool_output.search", "tool_output.read"] if refs else [],
+            research_result=research_result,
+            next_actions=(
+                ["research_result_describe", "research_result_query", "research_result_read"]
+                if research_result is not None
+                else ["tool_output.search", "tool_output.read"] if refs else []
+            ),
         )
+
+    async def _callback_research_result(
+        self, execution: CommandExecution
+    ) -> ResearchResultReceipt | None:
+        """Project only validated routing metadata from the posted output artifact."""
+        identifier = execution.metadata.get("results_output_artifact_id")
+        if not isinstance(identifier, str) or not identifier or self.artifact_store is None:
+            return None
+        try:
+            artifact = await self.store.get(Artifact, identifier)
+            raw = self.artifact_store.read(artifact)
+            if len(raw) > 64 * 1024:
+                return None
+            value = json.loads(raw)
+            if not isinstance(value, dict) or not isinstance(value.get("research_result"), dict):
+                return None
+            candidate = ResearchResultReceipt.model_validate(value["research_result"])
+        except (ValueError, TypeError, json.JSONDecodeError, NotFoundError):
+            return None
+        if candidate.status.lower() not in {"complete", "completed", "success", "succeeded"}:
+            return None
+        if RESEARCH_RESULT_HANDLE.fullmatch(candidate.handle) is None:
+            return None
+        candidate = candidate.model_copy(
+            update={
+                "coverage": _compact_research_coverage(candidate.coverage),
+                "collections": [
+                    item.model_copy(update={"count": item.count})
+                    for item in candidate.collections[:32]
+                ],
+                # Ignore callback-supplied instructions; these are fixed by Core.
+                "first_call": {},
+                "query_steps": [],
+            }
+        )
+        return candidate
 
     async def _callback_artifact_refs(
         self, execution: CommandExecution
