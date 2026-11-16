@@ -1,23 +1,36 @@
 {
-  "reviewed_by": "Codex Nebula queryable research result implementation; callback cause independently validated by notifier worker and supervisor",
-  "reason": "Additive provider-tool schema and adapter tests prove describe/query/read argument validation; one webhook-to-provider regression proves typed receipt projection, instruction sanitization, durable receipt equality, and replay. The callback journey runs through the actual results route on a disposable authenticated Core bound to a non-loopback LAN address.",
-  "exclusions": "Select only tests/v3/test_research_results.py and the named callback receipt regression in tests/v3/test_process_results_webhook.py. Exclude the other 13 callback lifecycle tests and all unrelated suites. No UI, browser layout, or physical-device behavior changes.",
+  "change_digest": "d8ac2b327cad107ff0f58aa472ba54ee8a4bde8d39e03f6043e53c17f80ae0ca",
+  "reviewed_by": "Claude (py-test-rot Butler/chat group); selection reviewed against the diff by the implementing agent; repairs made by a subagent and re-verified locally",
+  "reason": "Test-only repair of Butler, chat and settings-assistant suites left stale by #939's async move (un-awaited calls, synchronous stubs Core awaits, awaits in generator expressions, portal.call and blocking Event.wait in async tests, done-callbacks that need draining). Stale expectations cite their change: #939 (chat settings read on the loop; harness-to-provider switch deferred until active work ends), #974 (mid-response MCP selection and metadata), #958 (host pressure operations), 64e0379 (memory settings tools), #935 (reworded guidance), cea8b38 (planning guidance in standing instructions), #945 (recovery agent as a harness turn), 7c1db8e (idle chat's harness switch binds when saved).",
+  "exclusions": "test_missions.py carries its repairs but is not selected: missions and harness turns wait on host pressure and flake on a heavily loaded host. test_butler_workflow_registry still fails on two unreviewed UI API signatures (holdProjectView/releaseProjectView from 99d065e) missing from docs/design/butler-workflow-registry.json; that is a registry gap, not test rot, and is left for its own change. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
   "python_browser": false,
   "python_node": false,
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "expected_tests": {
-    "python": 8,
+    "python": 282,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_research_results.py",
-    "tests/v3/test_process_results_webhook.py::test_callback_result_reaches_the_model_through_the_results_webhook"
+    "tests/v3/test_butler_capabilities.py",
+    "tests/v3/test_butler_instructions.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_decisions.py",
+    "tests/v3/test_chat_planning.py",
+    "tests/v3/test_chat_schedules.py",
+    "tests/v3/test_chat_switch_performance.py",
+    "tests/v3/test_chat_workspace.py",
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_goal_handoff.py",
+    "tests/v3/test_mission_checkpoint_retention.py",
+    "tests/v3/test_settings_assistant_tools.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": [],
-  "change_digest": "ce3f00a85c7b613a52af2815fa09f6ec9549684a5773383246ea1a13b7dac37b"
+  "checks": []
 }
