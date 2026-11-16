@@ -201,6 +201,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [deviceBusy, setDeviceBusy] = useState(false);
   const [queueError, setQueueError] = useState("");
   const queueChain = useRef<Promise<void>>(Promise.resolve());
+  // Selected-context drafts already attached to a running or queued message.
+  const claimedDrafts = useRef(new Set<unknown>());
+  // Queue items this open page saw waiting to be sent. Only these may be
+  // followed after Core has already finished them (a fast reply); an item that
+  // finished while no page was watching is never replayed later.
+  const sessionQueuedKeys = useRef(new Set<string>());
+  const activeBusyRef = useRef(false);
   const followedTurns = useRef(new Set<string>());
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyWaiting, setHistoryWaiting] = useState(false);
@@ -253,6 +260,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     + (attentionOverview?.summary.recoveryAttention ?? 0);
   const activePendingTurn = pendingTurn?.id === settledTurnId.current ? undefined : pendingTurn;
   const activeBusy = busy || Boolean(activePendingTurn) || awaitingTurnResolution;
+  activeBusyRef.current = activeBusy;
   // Core's follow-up queue for Butler's chat; read only while the panel is open.
   const butlerQueue = useChatQueue(api, open && sessionId && typeof api?.requestIfChanged === "function" ? sessionId : "");
   // Butler's delegated children: polled while any runs or a reply may start one.
@@ -2114,7 +2122,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   };
 
   /** Butler's next-turn request for one operator message, without touching turn state. */
-  const prepareButlerRequest = async (prompt: string, hasImages: boolean, aborted: () => boolean): Promise<
+  const prepareButlerRequest = async (prompt: string, hasImages: boolean, drafts: typeof butlerDrafts, aborted: () => boolean): Promise<
     { request: ChatCompletionRequest; outgoingUser: ChatMessage; contextAttachments: Awaited<ReturnType<typeof createHashedSelectionAttachment>>[] }
     | { error: string; imageHelp?: boolean } | undefined> => {
     if (!api || !engagement || !runtime) return undefined;
@@ -2153,7 +2161,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
     let contextAttachments;
     try {
-      contextAttachments = await Promise.all(butlerDrafts.map(createHashedSelectionAttachment));
+      contextAttachments = await Promise.all(drafts.map(createHashedSelectionAttachment));
     } catch (caught) {
       void logDiagnostic({ level: "error", eventCode: "interface.nebula_assistant.context_attachment_failed", message: "Could not prepare selected Butler context.", outcome: "failure", stage: "context", retryable: true, exception: caught });
       return { error: caught instanceof Error ? caught.message : "Could not prepare Butler context. Remove the selection and try again." };
@@ -2307,32 +2315,47 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
    */
   const queueForButler = (prompt: string, hasImages: boolean) => {
     const images = pendingImages;
-    const drafts = butlerDrafts;
+    const drafts = butlerDrafts.filter((item) => !claimedDrafts.current.has(item));
+    drafts.forEach((item) => claimedDrafts.current.add(item));
     setDraft("");
     if (hasImages) setPendingImages([]);
     setQueueError("");
     const restore = (message: string) => {
+      drafts.forEach((item) => claimedDrafts.current.delete(item));
       setQueueError(message);
       setDraft((current) => current.trim() ? current : prompt);
       if (hasImages) setPendingImages((current) => current.length ? current : images);
     };
     const run = async () => {
-      const prepared = await prepareButlerRequest(prompt, hasImages, () => false);
+      const prepared = await prepareButlerRequest(prompt, hasImages, drafts, () => false);
       if (!prepared) { restore("Butler is not ready to queue messages. Reconnect and try again."); return; }
       if ("error" in prepared) { if (prepared.imageHelp) setImageHelp(true); restore(prepared.error); return; }
       const queueSession = prepared.request.sessionId ?? "";
       const key = `butler-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const memory = readQueueMemory(queueSession);
       writeQueueMemory(queueSession, { ...memory, keys: [...memory.keys, key] });
+      sessionQueuedKeys.current.add(key);
       if (await butlerQueue.enqueue(prepared.request, { key })) {
         if (prepared.contextAttachments.length) context?.consumeButlerDrafts(drafts);
+        drafts.forEach((item) => claimedDrafts.current.delete(item));
       } else {
-        restore("The message could not be queued. Your text is back in the composer.");
+        const preview = prompt.length > 60 ? `${prompt.slice(0, 57)}…` : prompt;
+        restore(`“${preview}” was not queued. It is back in the composer unless you have started a new message.`);
       }
     };
     queueChain.current = queueChain.current.then(run, run);
     return queueChain.current;
   };
+
+  // Remember which of this device's queue items this page saw waiting, even
+  // while another response streams.
+  useEffect(() => {
+    if (!sessionId || !butlerQueue.queue) return;
+    const keys = readQueueMemory(sessionId).keys;
+    for (const entry of butlerQueue.queue.items) {
+      if (keys.includes(entry.key) && ["queued", "claiming", "sending", "needs_review"].includes(entry.status)) sessionQueuedKeys.current.add(entry.key);
+    }
+  }, [sessionId, butlerQueue.queue]);
 
   // When Core sends a message this device queued, follow that response here as
   // if this panel had sent it, so its browser actions (settings, pickers) still
@@ -2340,9 +2363,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   useEffect(() => {
     if (!api || !engagement || !sessionId || abort.current || !butlerQueue.queue) return;
     const memory = readQueueMemory(sessionId);
-    const item = butlerQueue.queue.items.find((entry) => entry.turn_id && memory.keys.includes(entry.key)
-      && (entry.status === "sending" || entry.status === "complete")
+    const unfollowed = butlerQueue.queue.items.filter((entry) => entry.turn_id && memory.keys.includes(entry.key)
       && !memory.followed.includes(entry.turn_id) && !followedTurns.current.has(entry.turn_id));
+    // A reply that finished before this page queued it, or while no panel was
+    // open, is only read from the saved transcript: its browser actions are
+    // not replayed later.
+    const stale = unfollowed.filter((entry) => entry.status === "complete" && !sessionQueuedKeys.current.has(entry.key));
+    if (stale.length) {
+      stale.forEach((entry) => followedTurns.current.add(entry.turn_id!));
+      writeQueueMemory(sessionId, { ...memory, followed: [...memory.followed, ...stale.map((entry) => entry.turn_id!)] });
+      needsSavedTurnReload.current = true;
+      pendingPoll.current();
+      return;
+    }
+    const item = unfollowed.find((entry) => entry.status === "sending" || entry.status === "complete");
     if (!item?.turn_id) return;
     const turnId = item.turn_id;
     followedTurns.current.add(turnId);
@@ -2355,17 +2389,35 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setBusy(true);
     setClock(Date.now());
     const content = item.request?.messages[0]?.content;
-    if (content) setMessages((current) => [...current, { role: "user", content }]);
     const fallback: ChatCompletionRequest = { controlAssistant: true, engagementId: projectId, sessionId, messages: content ? [{ role: "user", content }] : [] };
-    void runButlerStream(projectId, controller, (onEvent, signal) => api.followChatTurn(turnId, fallback, onEvent, signal))
+    const request = ++historyRead.current;
+    void (async () => {
+      // Core saved the queued message when it started the turn: show that
+      // saved copy, so the reply and any later reload never duplicate it.
+      try {
+        const history = await api.listChatMessages(sessionId, controller.signal);
+        if (!controller.signal.aborted && request === historyRead.current) {
+          const outcomes = actionOutcomesKey ? readActionOutcomes(actionOutcomesKey) : {};
+          setMessages(history.filter((entry) => entry.role === "user" || entry.role === "assistant")
+            .flatMap((entry) => entry.id && outcomes[entry.id] ? [entry, { role: "assistant" as const, content: outcomes[entry.id] }] : [entry]));
+        }
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.queued_turn_history_failed", message: "Butler's saved conversation could not be read before following a queued response.", outcome: "failure", stage: "queue", retryable: true, exception: caught });
+        if (content) setMessages((current) => current.some((entry) => entry.role === "user" && entry.content === content && !entry.id) ? current : [...current, { role: "user", content }]);
+      }
+      return runButlerStream(projectId, controller, (onEvent, signal) => api.followChatTurn(turnId, fallback, onEvent, signal));
+    })()
       .catch((caught: unknown) => {
         if (controller.signal.aborted) return;
         void logDiagnostic({ level: "warning", eventCode: "interface.nebula_assistant.queued_turn_follow_failed", message: "A queued Butler response could not be followed.", outcome: "failure", stage: "queue", retryable: true, exception: caught });
       })
       .finally(() => {
         if (abort.current === controller) abort.current = undefined;
-        activeTurn.current = {};
-        setBusy(false);
+        if (!abort.current) {
+          activeTurn.current = {};
+          setBusy(false);
+        }
         // Read Butler's saved transcript, which holds the queued message and reply in order.
         needsSavedTurnReload.current = true;
         pendingPoll.current();
@@ -2384,9 +2436,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     const requestedTheme = themeChange(prompt);
     if (!hasImages && requestedTheme) {
       setDraft("");
-      setError("");
+      // A running Butler turn keeps its own error until it settles.
+      if (!activeBusyRef.current) setError("");
       setDeviceBusy(true);
-      if (!activeBusy) setTurnFeedback(beginButlerFeedback("Changing this device’s appearance"));
+      if (!activeBusyRef.current) setTurnFeedback(beginButlerFeedback("Changing this device’s appearance"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         const confirmation = await applyDeviceTheme(requestedTheme);
@@ -2397,7 +2450,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setDraft(prompt);
       } finally {
         setDeviceBusy(false);
-        if (!activeBusy) setTurnFeedback(undefined);
+        if (!activeBusyRef.current) setTurnFeedback(undefined);
       }
       return;
     }
@@ -2409,9 +2462,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!hasImages && modeChange) {
       if (!api || !engagement) { setError("Choose a project to change its execution mode."); return; }
       setDraft("");
-      setError("");
+      // A running Butler turn keeps its own error until it settles.
+      if (!activeBusyRef.current) setError("");
       setDeviceBusy(true);
-      if (!activeBusy) setTurnFeedback(beginButlerFeedback("Checking the project’s execution policy"));
+      if (!activeBusyRef.current) setTurnFeedback(beginButlerFeedback("Checking the project’s execution policy"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         const confirmation = await applyProjectMode(modeChange);
@@ -2422,7 +2476,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setDraft(prompt);
       } finally {
         setDeviceBusy(false);
-        if (!activeBusy) setTurnFeedback(undefined);
+        if (!activeBusyRef.current) setTurnFeedback(undefined);
       }
       return;
     }
@@ -2431,9 +2485,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!hasImages && (scopeChange || headlessChange)) {
       if (!api || !engagement) { setError("Choose a project before changing its policy or browser session."); return; }
       setDraft("");
-      setError("");
+      // A running Butler turn keeps its own error until it settles.
+      if (!activeBusyRef.current) setError("");
       setDeviceBusy(true);
-      if (!activeBusy) setTurnFeedback(beginButlerFeedback("Updating the project setting"));
+      if (!activeBusyRef.current) setTurnFeedback(beginButlerFeedback("Updating the project setting"));
       setMessages((current) => [...current, { role: "user", content: prompt }]);
       try {
         if (scopeChange) {
@@ -2450,7 +2505,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         setDraft(prompt);
       } finally {
         setDeviceBusy(false);
-        if (!activeBusy) setTurnFeedback(undefined);
+        if (!activeBusyRef.current) setTurnFeedback(undefined);
       }
       return;
     }
@@ -2501,7 +2556,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setTurnFeedback(undefined);
       if (abort.current === controller) abort.current = undefined;
     };
-    const prepared = await prepareButlerRequest(prompt, hasImages, () => controller.signal.aborted);
+    const drafts = butlerDrafts.filter((item) => !claimedDrafts.current.has(item));
+    drafts.forEach((item) => claimedDrafts.current.add(item));
+    const releaseDrafts = () => drafts.forEach((item) => claimedDrafts.current.delete(item));
+    const prepared = await prepareButlerRequest(prompt, hasImages, drafts, () => controller.signal.aborted);
+    if (!prepared || controller.signal.aborted || "error" in prepared) releaseDrafts();
     if (!prepared || controller.signal.aborted) { cleanUp(); return; }
     if ("error" in prepared) { if (prepared.imageHelp) setImageHelp(true); cleanUp(prepared.error); return; }
     const { request, outgoingUser, contextAttachments } = prepared;
@@ -2529,7 +2588,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       if (result?.message) {
         setPendingImages([]);
-        if (contextAttachments.length) context?.consumeButlerDrafts(butlerDrafts);
+        if (contextAttachments.length) context?.consumeButlerDrafts(drafts);
       }
     } catch (caught) {
       if (!controller.signal.aborted) {
@@ -2563,9 +2622,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         }
       }
     } finally {
+      releaseDrafts();
+      // A queued response this panel began following after Stop owns the turn state now.
       if (abort.current === controller) abort.current = undefined;
-      activeTurn.current = {};
-      setBusy(false);
+      if (!abort.current) {
+        activeTurn.current = {};
+        setBusy(false);
+      }
     }
   };
 

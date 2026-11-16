@@ -4433,7 +4433,7 @@
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listChatMessages",
-      "count": 5
+      "count": 6
     },
     {
       "key": "ui/src/components/NebulaControlAssistant.tsx::listEngagements",

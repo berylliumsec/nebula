@@ -1,4 +1,6 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamEvent } from "../api/types";
@@ -112,6 +114,44 @@ describe("Butler queue", () => {
     await waitFor(() => expect(within(list).getByRole("status")).toHaveTextContent("2 queued"));
   });
 
+  it("does not attach the running message's selected context to a queued one", async () => {
+    const user = userEvent.setup();
+    const queue = coreQueue();
+    const streamChat = vi.fn()
+      .mockResolvedValueOnce({ sessionId: "control", backend: "provider", providerId: "local-provider", model: "model", message: { id: "a1", role: "assistant", content: "The goal needs another turn." } })
+      .mockImplementationOnce((_request: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+        onEvent({ type: "started", model: "model", turnId: "turn-2", sessionId: "control" } as ChatStreamEvent);
+        return new Promise(() => undefined);
+      });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(butler), getControlAssistantSession: vi.fn().mockResolvedValue(butler),
+        getChatAssistantConfig: vi.fn().mockResolvedValue({ sessionId: "control", revision: 2, settings: config }),
+        listChatMessages: vi.fn().mockResolvedValue([]), streamChat, ...queue },
+      engagement: { id: "project", name: "Project" }, providers, harnesses: [],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<MemoryRouter><WorkbenchDraftProvider><DialogProvider><ThemeProvider>
+      <NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} />
+    </ThemeProvider></DialogProvider></WorkbenchDraftProvider></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "What happened?{enter}");
+    const answer = await screen.findByText("The goal needs another turn.");
+    const range = document.createRange();
+    range.selectNodeContents(answer);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    fireEvent.pointerUp(answer);
+    await user.click(screen.getByRole("button", { name: "Add context to chat" }));
+    await user.type(composer, "Use that detail.{enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
+    expect(streamChat.mock.calls[1][0].contextAttachments).toHaveLength(1);
+    await waitFor(() => expect(composer).toHaveAttribute("placeholder", "Queue a message for Butler…"));
+    await user.type(composer, "Then check the queue.{enter}");
+    await waitFor(() => expect(queue.writes).toHaveLength(1));
+    expect((queue.writes[0].request as Record<string, unknown>).context_attachments ?? []).toEqual([]);
+  });
+
   it("follows a queued response Core sent and applies its browser action", async () => {
     const onOpenSetting = vi.fn();
     const queue = coreQueue({ revision: 3, paused: false, items: [item({ status: "sending", turn_id: "queued-turn", request: { messages: [{ role: "user", content: "Open appearance settings." }] } })] });
@@ -146,6 +186,21 @@ describe("Butler queue", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Open Butler" }));
     await waitFor(() => expect(queue.requestIfChanged).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(followChatTurn).not.toHaveBeenCalled();
+    expect(onOpenSetting).not.toHaveBeenCalled();
+  });
+
+  it("reads an older finished queued reply from the transcript without replaying its actions", async () => {
+    const onOpenSetting = vi.fn();
+    // This device queued it in an earlier page; Core finished it while no panel followed.
+    localStorage.setItem("nebula.butler.queue.control", JSON.stringify({ keys: ["k1"], followed: [] }));
+    const queue = coreQueue({ revision: 4, paused: false, items: [item({ status: "complete", turn_id: "old-turn", request: undefined })] });
+    const followChatTurn = vi.fn();
+    const listChatMessages = vi.fn().mockResolvedValue([{ id: "old-answer", role: "assistant", content: "Opened Appearance earlier." }]);
+    renderButler({ ...queue, followChatTurn, listChatMessages, getPendingChatTurn: vi.fn().mockResolvedValue(undefined) }, onOpenSetting);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open Butler" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("nebula.butler.queue.control") ?? "{}").followed).toEqual(["old-turn"]));
+    expect(await screen.findByText("Opened Appearance earlier.")).toBeInTheDocument();
     expect(followChatTurn).not.toHaveBeenCalled();
     expect(onOpenSetting).not.toHaveBeenCalled();
   });

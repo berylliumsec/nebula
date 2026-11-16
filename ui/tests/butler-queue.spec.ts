@@ -321,7 +321,8 @@ test("assistant upgrade Butler queues messages while it works and follows them o
       await expect(transcript.getByText(PROMPTS.open)).toBeVisible();
       await expect(queueList).toHaveCount(0, {timeout: 30_000});
       expect(stub.prompts().filter(prompt => prompt.includes(PROMPTS.dropped))).toEqual([]);
-      expect((await readQueue()).items.filter(item => !["complete", "cancelled"].includes(item.status))).toEqual([]);
+      // Core settles the sent item shortly after its turn ends.
+      await expect.poll(async () => (await readQueue()).items.filter(item => !["complete", "cancelled"].includes(item.status)).length, {timeout: 30_000}).toBe(0);
 
       expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
