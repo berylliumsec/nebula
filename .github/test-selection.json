@@ -1,21 +1,22 @@
 {
-  "change_digest": "7cdcb42855576a911a5af31c2976bf93b5a7065f125cc4aca0f07571047fd432",
-  "reviewed_by": "Claude (capabilities-not-prepared bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "execution-capabilities recorded six ERROR caught_failure_002 entries per read when the Kali automation runtime was never prepared, an expected setup state already reported in the response detail. resolve_operator_runtime now raises AutomationRuntimeNotPrepared (a RuntimePlatformError subclass, runtime_platform.py) and ExecutionService.capabilities reports it only in the detail; other runtime faults are still recorded. tests/v3/test_executions.py gains the regression and its stub platform becomes async (8 tests had been failing since #939).",
-  "exclusions": "The exception is raised only from resolve_operator_runtime; other callers catch RuntimePlatformError and keep their behaviour since the new class subclasses it. No UI, settings, catalog, product knowledge or native change, so frontend, Playwright and native are empty. Revalidated on the staging Core: repeated reads keep the same detail and add no errors.",
+  "change_digest": "64447b47673b85e7f7bce9a168003a56b648e80c3ec563b83835977ad8705dc8",
+  "reviewed_by": "Claude (unknown-id-404 bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
+  "reason": "A project read whose references match nothing (unknown or deleted run, execution, handoff, tool call, /projects/{unknown}/...) resolves to the host-work owner, which never has an execution worker, yet RuntimeRouting.upstream_for answered ProjectRuntimeUnavailable 'starting', so viewers retried forever. upstream_for now raises UnownedProjectRequest (runtime_ipc.py) for an unowned host-work request and the API worker maps it to 404 code not_found (api_worker.py). project_for and host-work writes are unchanged. Python: routing (new unknown-ID regression; existing host-work and project-state tests) and API worker (new 404 mapping next to the 503 mapping tests).",
+  "exclusions": "Both files also pass their PostgreSQL variants locally (79 passed with NEBULA_TEST_POSTGRES_URL). No UI change: the client already treats a non-503 error as a failed read rather than a project-runtime wait. No settings, catalog, product knowledge or native change. Revalidated on the staging Core: a sweep of 185 GET routes has no 5xx left except the long-lived /work/events stream, unknown IDs answer 404 and real chat and project reads answer 200.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 9,
+    "python": 79,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_executions.py"
+    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_api_worker.py"
   ],
   "frontend": [],
   "native": [],

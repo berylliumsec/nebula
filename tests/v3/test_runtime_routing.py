@@ -15,7 +15,11 @@ from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import ChatSession
 from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS
 from nebula.v3.runtime_delivery import HttpIntent
-from nebula.v3.runtime_ipc import ProjectRuntimeUnavailable, RuntimeIpcError
+from nebula.v3.runtime_ipc import (
+    ProjectRuntimeUnavailable,
+    RuntimeIpcError,
+    UnownedProjectRequest,
+)
 from nebula.v3.runtime_http import PrivateRuntimeHttp, RuntimeHttpProxy
 from nebula.v3.runtime_routing import RuntimeRouting
 from tests.v3.test_runtime_coordination import cluster as cluster
@@ -172,6 +176,25 @@ async def test_unavailable_project_reads_say_whether_core_is_bringing_a_worker(
     with pytest.raises(ProjectRuntimeUnavailable) as closing:
         await routing.upstream_for(read)
     assert closing.value.reason == "closing"
+
+
+async def test_unknown_ids_are_not_found_instead_of_a_worker_starting_forever(
+    cluster, tmp_path
+):
+    (first, _), _stores, _clock = cluster
+    routing = RuntimeRouting(first, tmp_path / "private")
+    for path in (
+        "/api/v1/runs/00000000-0000-4000-8000-000000000000/events",
+        "/api/v1/projects/00000000-0000-4000-8000-000000000000/relations",
+        "/api/v1/handoffs/deleted",
+    ):
+        with pytest.raises(UnownedProjectRequest):
+            await routing.upstream_for({"path": path, "method": "GET"})
+    # Host work itself still routes there for writes.
+    assert (
+        await routing.project_for(intent("/api/v1/settings/defaults"))
+        == GLOBAL_EXECUTION_PROJECT
+    )
 
 
 async def test_controller_reference_follows_resource_project_instead_of_global(

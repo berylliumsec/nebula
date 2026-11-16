@@ -29,7 +29,12 @@ from .runtime_coordination import (
 )
 from .runtime_delivery import HttpIntent
 from .runtime_http import HttpUpstream
-from .runtime_ipc import ProjectRuntimeUnavailable, RuntimeCredentials, RuntimeIpcError
+from .runtime_ipc import (
+    ProjectRuntimeUnavailable,
+    RuntimeCredentials,
+    RuntimeIpcError,
+    UnownedProjectRequest,
+)
 from .runtime_routes import forwarding_lane
 from .runtime_view_leases import live_view_lease
 
@@ -254,6 +259,10 @@ class RuntimeRouting:
                     reason="closing",
                 )
             now = await self.coordination._clock_ms(session)
+            if owner is None and project == GLOBAL_EXECUTION_PROJECT:
+                # Nothing the request references belongs to a project (an
+                # unknown or deleted ID), and host work has no worker to start.
+                raise UnownedProjectRequest("Nothing in this Core matches this request")
             if owner is None or owner.runtime_id is None:
                 reason, detail = await self._admission_reason(session, project)
                 raise ProjectRuntimeUnavailable(
