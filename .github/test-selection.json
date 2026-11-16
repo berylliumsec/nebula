@@ -1,21 +1,21 @@
 {
-  "change_digest": "64447b47673b85e7f7bce9a168003a56b648e80c3ec563b83835977ad8705dc8",
-  "reviewed_by": "Claude (unknown-id-404 bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "A project read whose references match nothing (unknown or deleted run, execution, handoff, tool call, /projects/{unknown}/...) resolves to the host-work owner, which never has an execution worker, yet RuntimeRouting.upstream_for answered ProjectRuntimeUnavailable 'starting', so viewers retried forever. upstream_for now raises UnownedProjectRequest (runtime_ipc.py) for an unowned host-work request and the API worker maps it to 404 code not_found (api_worker.py). project_for and host-work writes are unchanged. Python: routing (new unknown-ID regression; existing host-work and project-state tests) and API worker (new 404 mapping next to the 503 mapping tests).",
-  "exclusions": "Both files also pass their PostgreSQL variants locally (79 passed with NEBULA_TEST_POSTGRES_URL). No UI change: the client already treats a non-503 error as a failed read rather than a project-runtime wait. No settings, catalog, product knowledge or native change. Revalidated on the staging Core: a sweep of 185 GET routes has no 5xx left except the long-lived /work/events stream, unknown IDs answer 404 and real chat and project reads answer 200.",
+  "change_digest": "0bb833c58906f67d6c7e45a341d9fa3268bafbf799d4c097691b663241f21f44",
+  "reviewed_by": "Claude (proxy-identity-encoding bug loop); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
+  "reason": "RuntimeHttpProxy forwarded requests on a pooled httpx client that adds its own Accept-Encoding when the viewer sent none, so the project worker's GZipMiddleware compressed bodies of 1 KiB or more and the proxy forwarded the raw gzip bytes to clients that never negotiated it (curl, reqwest without gzip). The proxy now sends Accept-Encoding: identity upstream when the viewer sent none, and stops forwarding upstream date/server headers, which uvicorn repeated once per hop. Python: runtime_http (new regression: no-negotiation viewer gets plain JSON, gzip viewer still gets gzip, upstream server header dropped) and the API worker suite that wraps the same proxy.",
+  "exclusions": "tests/v3/test_runtime_routing.py also passes locally (113 passed across the three files with PostgreSQL variants) but routing is unchanged, so it is not selected. Python's urllib sends Accept-Encoding: identity itself, so the deploy gate and deployer scripts were not affected. No UI, settings, catalog, product knowledge or native change. Revalidated on the staging Core: curl without Accept-Encoding gets plain JSON with one date and server header; curl --compressed, Chromium and WebKit still get gzip and decode it.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 79,
+    "python": 89,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_routing.py",
+    "tests/v3/test_runtime_http.py",
     "tests/v3/test_api_worker.py"
   ],
   "frontend": [],
