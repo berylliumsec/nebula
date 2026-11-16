@@ -114,4 +114,74 @@ describe("Core reachability monitoring", () => {
     expect(api.health).toHaveBeenCalledTimes(3);
     expect(fail).toHaveBeenCalledTimes(1);
   });
+
+  describe("with liveness and traffic evidence", () => {
+    type Health = (signal?: AbortSignal) => Promise<HealthResponse>;
+    type Liveness = (signal?: AbortSignal) => Promise<void>;
+    const monitored = (overrides: {health?: Health; liveness?: Liveness; lastReachableAt?: () => number} = {}) => ({
+      health: vi.fn<Health>(overrides.health ?? (async () => healthy)),
+      liveness: vi.fn<Liveness>(overrides.liveness ?? (async () => undefined)),
+      lastReachableAt: overrides.lastReachableAt ?? (() => 0),
+    });
+
+    it("sends no probe while the workspace's own requests are answered", async () => {
+      const api = monitored({lastReachableAt: () => Date.now()});
+      const update = vi.fn(), fail = vi.fn();
+      renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
+      await advance(25_000);
+      expect(api.liveness).not.toHaveBeenCalled();
+      expect(api.health).not.toHaveBeenCalled();
+      await advance(5_000);
+      expect(api.health).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledWith(healthy);
+    });
+
+    it("probes liveness when idle and reads full health only every thirty seconds", async () => {
+      const api = monitored();
+      const update = vi.fn(), fail = vi.fn();
+      renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
+      await advance(25_000);
+      expect(api.liveness).toHaveBeenCalledTimes(5);
+      expect(api.health).not.toHaveBeenCalled();
+      await advance(5_000);
+      expect(api.health).toHaveBeenCalledTimes(1);
+      expect(fail).not.toHaveBeenCalled();
+    });
+
+    it("keeps polling full health while Core reports its API not ready", async () => {
+      const api = monitored({health: async () => ({...healthy, apiReady: false})});
+      const update = vi.fn(), fail = vi.fn();
+      renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
+      await advance(30_000);
+      expect(api.health).toHaveBeenCalledTimes(1);
+      await advance(10_000);
+      expect(api.health).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not report a busy Core as lost when only full health times out", async () => {
+      const api = monitored({health: () => new Promise<HealthResponse>(() => undefined)});
+      const update = vi.fn(), fail = vi.fn();
+      renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
+      await advance(120_000);
+      expect(api.health.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(api.health.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(fail).not.toHaveBeenCalled();
+    });
+
+    it("reports loss after three failed liveness probes and recovers through full health", async () => {
+      const api = monitored({liveness: async () => { throw new Error("unreachable"); }});
+      const update = vi.fn(), fail = vi.fn();
+      renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
+      await advance(5_000);
+      await advance(1_000);
+      expect(fail).not.toHaveBeenCalled();
+      await advance(1_000);
+      expect(api.liveness).toHaveBeenCalledTimes(3);
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(api.health).not.toHaveBeenCalled();
+      await advance(5_000);
+      expect(api.health).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledWith(healthy);
+    });
+  });
 });

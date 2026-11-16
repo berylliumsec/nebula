@@ -1873,6 +1873,8 @@
         "ui/src/state/WorkspaceContext.tsx::getToken",
         "ui/src/state/WorkspaceContext.tsx::health",
         "ui/src/state/useCoreConnectionMonitor.ts::health",
+        "ui/src/state/useCoreConnectionMonitor.ts::lastReachableAt",
+        "ui/src/state/useCoreConnectionMonitor.ts::liveness",
         "ui/src/components/CodeEditorPanel.tsx::getToken",
         "ui/src/components/ContainerTerminalPanel.tsx::getToken"
       ],
@@ -6029,6 +6031,14 @@
     },
     {
       "key": "ui/src/state/useCoreConnectionMonitor.ts::health",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/useCoreConnectionMonitor.ts::lastReachableAt",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/useCoreConnectionMonitor.ts::liveness",
       "count": 1
     }
   ]

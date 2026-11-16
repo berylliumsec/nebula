@@ -5079,10 +5079,44 @@ export class ApiClient {
   /** Project reads waiting for a retired or starting project worker. */
   readonly projectRuntime = new ProjectRuntimeRecovery((path, signal) => this.probeProjectRuntime(path, signal));
 
+  /** When Core last answered any request; see lastReachableAt(). */
+  private lastReachable = 0;
+
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.tokenSource = options.token;
-    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.fetchImpl = async (input, init) => {
+      const response = await fetchImpl(input, init);
+      // Any answer below 500 proves Core is reachable; gateway and overload
+      // statuses do not.
+      if (response.status < 500) this.lastReachable = Date.now();
+      return response;
+    };
+  }
+
+  /**
+   * Epoch milliseconds of the last response Core answered, or 0. Ordinary
+   * traffic is reachability evidence, so the connection monitor need not poll.
+   */
+  lastReachableAt(): number {
+    return this.lastReachable;
+  }
+
+  /**
+   * Cheap reachability probe. Core answers without authentication, a database
+   * session or a worker call, so a busy Core is not reported as lost. An older
+   * Core without the route answers 404, which still proves it is reachable.
+   */
+  async liveness(signal?: AbortSignal): Promise<void> {
+    const response = await this.fetchImpl(`${this.baseUrl}/health/live`, {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    });
+    await response.body?.cancel().catch(() => { /* diagnostic-expected: the status alone answers the probe. */ });
+    if (response.status >= 500) throw new Error(`Nebula Core liveness probe returned ${response.status}.`);
   }
 
   /**
