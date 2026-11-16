@@ -33,7 +33,9 @@ Project runtime recovery is a Core lifecycle operation, not a memory-budget
 setting. An expired project process can leave chat delivery unavailable while
 the host API is healthy. Core automatically reconciles positively dead owners
 and uses durable recovery receipts; unknown tool effects require review, and
-pre-existing paused goals stay paused. Butler must not suggest raising budgets,
+pre-existing paused goals stay paused. A harness goal interrupted by a dead owner
+comes back paused with its claim released, and resuming it may repeat its last
+step; requests that owner was running fail without retry. Butler must not suggest raising budgets,
 clearing ownership, replaying an uncertain operation or restarting all of Core
 as a substitute for reading deployment status and the recorded recovery outcome.
 There is no new Settings destination or browser-side recovery mutation.

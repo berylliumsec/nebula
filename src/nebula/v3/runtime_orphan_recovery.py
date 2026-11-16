@@ -12,6 +12,7 @@ from .database import (
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
     RuntimeCapacityReservationRow,
+    RuntimeCommandRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeResourceRow,
@@ -19,6 +20,7 @@ from .database import (
 from .deployments import DeploymentCoordinator
 from .domain import (
     ChatBackend,
+    ChatGoal,
     ChatTurn,
     ChatTurnStatus,
     NativeHookExecution,
@@ -28,10 +30,27 @@ from .domain import (
 from .process_identity import process_origin, same_process
 from .runtime_chat_stream import RuntimeChatJournal
 from .runtime_capacity import RuntimeCapacity
-from .runtime_coordination import CoordinationConflict, ProjectLease
+from .runtime_coordination import (
+    STORAGE_REPORT_COMMAND,
+    CoordinationConflict,
+    ProjectLease,
+)
 from .storage import NebulaStore, StoreTransaction
 
 MAX_ORPHAN_ROWS = 100
+MAX_HARNESS_CLAIMS = 1000
+# Claims the harness runtime stamps on a goal turn and its goal. Its own
+# restart settlement (HarnessRuntimeService.startup) interrupts the turn and
+# pauses the goal, but only once the project activates; a claim left here
+# would hold that activation forever.
+HARNESS_CLAIM_OWNER = "harness-runtime"
+# A request the dead owner was running is failed, not retried: the operator
+# accepts that its effect may have partly happened.
+INTERRUPTED_COMMAND_RESULT = {
+    "http_status": 503,
+    "detail": "The project worker stopped while this request ran. It was not retried and may have partly applied.",
+    "interrupted_by_runtime_stop": True,
+}
 
 
 async def reconcile_dead_project(
@@ -161,6 +180,12 @@ async def reconcile_dead_project(
                     transaction=transaction,
                 )
                 interrupted.append(turn.id)
+            released_claims = await _release_harness_claims(
+                session, transaction, expected_owner.project_id
+            )
+            settled_commands = await _settle_interrupted_commands(
+                session, expected_owner
+            )
             closed = []
             for resource in resources:
                 turn_id = resource.checkpoint.get("turn_id")
@@ -269,6 +294,8 @@ async def reconcile_dead_project(
                 "closed_resource_ids": closed,
                 "settled_admission_ids": settled,
                 "released_capacity_ids": released_capacity,
+                "released_claim_ids": released_claims,
+                "settled_command_ids": settled_commands,
                 "effects_replayed": False,
             }
             session.add(
@@ -282,3 +309,80 @@ async def reconcile_dead_project(
             return result
     finally:
         await store.event_history.close()
+
+
+async def _release_harness_claims(session, transaction, project_id: str) -> list[str]:
+    """Clear the dead owner's harness goal claims; their effects are not replayed.
+
+    Recovery holds while any conversation work keeps a claim, and only the
+    harness runtime's own restart settlement clears these, after activation.
+    Releasing them here (whatever the turn's status: interrupted and cancelled
+    goal turns can keep theirs) lets recovery verify; the new worker's startup
+    then interrupts the unfinished turns and pauses their goals as after any
+    Core restart.
+    """
+    await session.flush()
+    rows = list(
+        await session.scalars(
+            select(EntityRow)
+            .where(
+                EntityRow.engagement_id == project_id,
+                EntityRow.kind.in_((ChatTurn.entity_kind, ChatGoal.entity_kind)),
+                EntityRow.payload["execution_owner_id"].as_string()
+                == HARNESS_CLAIM_OWNER,
+                EntityRow.payload["execution_claim_id"].as_string().is_not(None),
+            )
+            .order_by(EntityRow.kind, EntityRow.id)
+            .limit(MAX_HARNESS_CLAIMS + 1)
+        )
+    )
+    if len(rows) > MAX_HARNESS_CLAIMS:
+        raise CoordinationConflict(
+            "Too many claimed harness responses; retain work for operator review"
+        )
+    released = []
+    for row in rows:
+        model = ChatTurn if row.kind == ChatTurn.entity_kind else ChatGoal
+        await transaction.update(
+            model,
+            row.id,
+            {
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
+            },
+            expected_revision=row.revision,
+        )
+        released.append(row.id)
+    return released
+
+
+async def _settle_interrupted_commands(session, owner: ProjectLease) -> list[str]:
+    """Fail requests the dead owner left running, and earlier uncertain ones.
+
+    No worker runs them again, so each answers its waiting client as failed
+    instead of holding recovery for an outcome nobody can supply. Storage
+    reports keep their own requeue in ``begin_recovery``.
+    """
+    rows = list(
+        await session.scalars(
+            select(RuntimeCommandRow)
+            .where(
+                RuntimeCommandRow.project_id == owner.project_id,
+                RuntimeCommandRow.name != STORAGE_REPORT_COMMAND,
+                (
+                    (RuntimeCommandRow.state == "uncertain")
+                    | (
+                        (RuntimeCommandRow.state == "running")
+                        & (RuntimeCommandRow.runtime_id == owner.runtime_id)
+                        & (RuntimeCommandRow.fencing_token == owner.fencing_token)
+                    )
+                ),
+            )
+            .order_by(RuntimeCommandRow.sequence)
+        )
+    )
+    for row in rows:
+        row.result = {**INTERRUPTED_COMMAND_RESULT, "previous_state": row.state}
+        row.state = "failed"
+    return [row.id for row in rows]
