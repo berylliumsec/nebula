@@ -109,9 +109,15 @@ async def test_relinquish_keeps_verification_outside_its_audit_to_expiry_boundar
     entered, release = asyncio.Event(), asyncio.Event()
     original = runtime.coordination.coordination._check
 
+    locked_sessions = set()
+
     async def barrier(session, lease, *, lock):
         await original(session, lease, lock=lock)
-        if not lock and not entered.is_set():
+        if lock:
+            locked_sessions.add(id(session))
+        # Pause at the recheck inside relinquishment's locked transaction, not at
+        # the unlocked checkpoint scan that precedes it since #1114.
+        elif id(session) in locked_sessions and not entered.is_set():
             entered.set()
             await release.wait()
 

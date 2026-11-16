@@ -243,7 +243,7 @@ async def _committed_intent(store, broker, *, core_mutation_committed: bool, key
     project, source = await _source(store)
     device = await _device(store, name=f"Mac {key}")
     ref = ResourceRef(project_id=project.id, kind=ResourceKind.SOURCE, id=source.id)
-    device = broker.heartbeat(
+    device = await broker.heartbeat(
         device.id,
         DeviceCapabilitySnapshot(
             platform="macos",
@@ -252,7 +252,7 @@ async def _committed_intent(store, broker, *, core_mutation_committed: bool, key
             expected_revision=device.revision,
         ),
     )
-    intent = broker.create(
+    intent = await broker.create(
         ActionIntentCreateRequest(
             project_id=project.id,
             resources=[ref],
@@ -262,13 +262,13 @@ async def _committed_intent(store, broker, *, core_mutation_committed: bool, key
             idempotency_key=key,
         )
     )
-    intent = broker.claim(
+    intent = await broker.claim(
         intent.id,
         ActionIntentClaimRequest(
             device_id=device.id, expected_revision=intent.revision
         ),
     )
-    intent = broker.prepare(
+    intent = await broker.prepare(
         intent.id,
         ActionIntentPrepareRequest(
             device_id=device.id,
@@ -276,7 +276,7 @@ async def _committed_intent(store, broker, *, core_mutation_committed: bool, key
             preflight_succeeded=True,
         ),
     )
-    intent = broker.commit(
+    intent = await broker.commit(
         intent.id,
         ActionIntentCommitRequest(
             expected_revision=intent.revision,

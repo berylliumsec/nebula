@@ -62,11 +62,15 @@ def test_host_capacity_help_explains_saved_deferral_and_recovery():
         for match in matches
         if match.article.article_id == "host-capacity"
     )
-    assert "starts automatically" in article.body
+    # Host pressure became saved, configurable thresholds in 8c49457 and #958
+    # (0d95449): Butler reads host_pressure, and the old sampler wording is gone.
+    assert "queues new work" in article.body
+    assert "permits admission" in article.body
+    assert "persist across restarts" in article.body
     assert "nebula.settings.api_request" in article.body
     assert "nebula.work.host_load" in article.body
-    assert "nebula.global.host_load" in article.body
-    assert "sample age" in article.body
+    assert "nebula.global.host_pressure" in article.body
+    assert "Unknown metrics do not count as pressure" in article.body
 
 
 def test_operator_help_search_requires_product_or_failure_intent_and_ranks_details():
