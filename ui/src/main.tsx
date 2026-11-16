@@ -13,7 +13,7 @@ import {
   logDiagnostic,
   nativeDiagnosticSettings,
 } from "./diagnostics";
-import { isElectronRuntime, isTauriRuntime } from "./api/runtime";
+import { captureBrowserFragmentToken, isElectronRuntime, isTauriRuntime } from "./api/runtime";
 import { ThemeProvider } from "./state/ThemeContext";
 import { installZoomShortcuts } from "./state/uiZoom";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
@@ -55,6 +55,9 @@ void logDiagnostic({
   outcome: "started",
   stage: "bootstrap",
 });
+
+// Before any route can redirect away from the launcher's #token= fragment.
+captureBrowserFragmentToken();
 
 createRoot(root).render(
   <StrictMode>

@@ -84,6 +84,16 @@ function consumeBrowserFragmentToken(): string | undefined {
   return browserRuntimeToken;
 }
 
+/**
+ * Read a launcher `#token=` before the first render. Routes may redirect on
+ * their first render (legacy paths, unknown paths), and a redirect drops the
+ * fragment before the workspace resolves its runtime.
+ */
+export function captureBrowserFragmentToken(): void {
+  if (isTauriRuntime() || isElectronRuntime()) return;
+  consumeBrowserFragmentToken();
+}
+
 export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
