@@ -1,25 +1,30 @@
 {
-  "change_digest": "23f290417864fbdd66bd11e697209a8bab09d6136c27c4cb42b0ac5955714d95",
-  "reviewed_by": "Claude (harness crash recovery); selection reviewed against the diff by the implementing agent, root cause independently validated by a separate subagent",
-  "reason": "A project worker that lost its lease during goal-driven harness work left the replacement's recovery held forever: reconcile_dead_project settled only provider turns, so harness goal claims (execution_owner_id harness-runtime) and the dead owner's running/uncertain durable commands became recovery blockers that only HarnessRuntimeService.startup or an unwired resolve_uncertain could clear, and startup runs only after recovery verifies. runtime_orphan_recovery.py now releases those harness claims (any turn status) and fails the dead owner's running requests plus earlier uncertain ones without retry (storage reports keep their begin_recovery requeue), recording both in the orphans_reconciled receipt. The operator accepts that a resumed goal may repeat a step. test_runtime_orphan_recovery.py adds the harness/command case and the no-death-proof case; the other files cover recovery holds, controls, reconciliation.",
-  "exclusions": "No UI, native or Playwright change: the UI already renders interrupted turns and paused goals. Real-Core check ran on a loopback scratch Core from this branch with an inert fake Codex app-server (goal turn claimed, ownership row lock forced LeaseLost; recovery verified in 2 s with released_claim_ids, goal paused, resume worked, transcript read 200); the non-loopback LAN bind was refused by this agent's permission policy, so the LAN-origin gate is not met. Locally, test_runtime_reconciliation (worker spawn), the PostgreSQL variants of two test_recovery_controls tests fail identically on unmodified origin/main in this environment; both were green in recently merged CI selections. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. tests/v3/test_product_knowledge.py is not selected: test_product_search_finds_headless_core_and_paired_butler_cli is already red on main (fails locally at f9d7c96~1, f9d7c96 and origin/main, and failed in this PR's first CI run) and is unrelated to the two reworded recovery paragraphs; build_product_knowledge.py --verify passes on the regenerated index (453 passages).",
+  "change_digest": "908434b2ffb15446b41aa8e5b4cde2ca3b208f3d829b6695d36925bfe08ccf77",
+  "reviewed_by": "Claude (py-test-rot harness group); selection reviewed against the diff by the implementing agent; the gateway gate race independently validated by a separate subagent",
+  "reason": "Product: HarnessRuntimeService._gateway_execution_gate (harnesses.py) checked for a turn's gate, then awaited the run, project and scope reads before storing a new semaphore; since #939 those reads yield, so overlapping calls could each store their own gate and run gateway action calls past the concurrency limit. The gate is stored with setdefault so every caller shares the first. Tests: eleven harness/Claude/Grok/native-hook suites left stale by #939 are repaired (constructors back to __init__, awaited prepare_chat and turn tasks, async predicates and stubs, asyncio.sleep, the aiosqlite plan capture) with stale expectations citing cea8b38, #572 and #1125; the unattached-session fixture uses a neutral synthetic name.",
+  "exclusions": "test_harnesses.py is selected only for the gate regression: two of its tests (catalog changes keeping the same native thread) conflict with cea8b38's standing-instruction design and await an owner decision. test_chat_subagent_lifecycle.py passes but its process sometimes hangs at exit on unclosed aiosqlite threads, so it is not selected yet. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 117,
+    "python": 163,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_recovery_controls.py",
-    "tests/v3/test_runtime_recovery.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_runtime_reconciliation.py"
+    "tests/v3/test_claude_harness_turn_cost.py",
+    "tests/v3/test_claude_harness_turns.py",
+    "tests/v3/test_grok_acp_compliance.py",
+    "tests/v3/test_harness_activity_cost.py",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_harness_leftovers.py",
+    "tests/v3/test_harness_tool_lookup.py",
+    "tests/v3/test_native_hook_turn_ends.py",
+    "tests/v3/test_native_hooks.py",
+    "tests/v3/test_harnesses.py::test_chat_gateway_serializes_concurrent_action_calls"
   ],
   "frontend": [],
   "native": [],
