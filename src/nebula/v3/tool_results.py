@@ -145,10 +145,11 @@ class ResearchResultReceipt(BaseModel):
     handle: str = Field(min_length=1, max_length=160)
     status: str = Field(min_length=1, max_length=32)
     version: str | None = Field(default=None, max_length=80)
-    coverage: dict[str, Any] = Field(default_factory=dict)
+    coverage: str | dict[str, Any] = Field(default_factory=dict)
     collections: list[ResearchResultCollectionReceipt] = Field(default_factory=list, max_length=64)
-    first_call: dict[str, str] = Field(default_factory=dict)
+    first_call: dict[str, Any] | None = None
     query_steps: list[str] = Field(default_factory=list, max_length=8)
+    query_required: bool
 
 
 class ToolParserReceipt(BaseModel):
@@ -220,7 +221,6 @@ class ToolResultReceipt(BaseModel):
     status: ToolResultStatus
     exit_code: int | None = None
     summary: str | None = Field(default=None, max_length=1_000)
-    research_result: ResearchResultReceipt | None = None
     research_result: ResearchResultReceipt | None = None
     observations: list[ToolObservation] = Field(default_factory=list, max_length=100)
     timing: ToolTimingReceipt = Field(default_factory=ToolTimingReceipt)

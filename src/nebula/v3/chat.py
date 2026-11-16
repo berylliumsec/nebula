@@ -425,8 +425,10 @@ if TYPE_CHECKING:
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
 
 
-def _compact_research_coverage(value: Mapping[str, Any]) -> dict[str, Any]:
+def _compact_research_coverage(value: str | Mapping[str, Any]) -> str | dict[str, Any]:
     """Keep only small scalar coverage facts from untrusted callback metadata."""
+    if isinstance(value, str):
+        return value[:40] if value in {"complete", "incomplete", "retrieval_failed"} else "incomplete"
     compact: dict[str, Any] = {}
     for key, item in value.items():
         if not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", key):
@@ -438,6 +440,9 @@ def _compact_research_coverage(value: Mapping[str, Any]) -> dict[str, Any]:
         if len(compact) >= 32:
             break
     return compact
+
+
+MAX_CALLBACK_RESEARCH_RESULT_ARTIFACT_BYTES = 256 * 1024
 
 
 class ChatError(RuntimeError):
@@ -2511,11 +2516,15 @@ def _cleared_tool_result(
             receipt["research_result"] = research_result.model_dump(
                 mode="json", by_alias=True
             )
-            receipt["next_actions"] = [
-                "research_result_describe",
-                "research_result_query",
-                "research_result_read",
-            ]
+            receipt["next_actions"] = (
+                [
+                    "research_result_describe",
+                    "research_result_query",
+                    "research_result_read",
+                ]
+                if research_result.query_required
+                else ["research_result_describe"]
+            )
             receipt["note"] += (
                 " The typed research-result handle and query steps remain in this "
                 "receipt; start with research_result_describe."
@@ -13748,11 +13757,12 @@ class ChatService:
         )
         refs = await self._callback_artifact_refs(execution)
         research_result = await self._callback_research_result(execution)
-        if research_result is not None:
+        if research_result is not None and research_result.query_required:
             handle = research_result.handle
+            first_call = json.dumps({"handle": handle}, separators=(",", ":"))
             summary = (
                 f"A typed research result is ready for targeted retrieval. First call "
-                f"research_result_describe({{handle: {json.dumps(handle)}}}); then call "
+                f"research_result_describe({first_call}); then call "
                 "research_result_query with one advertised collection and only the "
                 "fields or relationship needed. Use returned match_id values with "
                 "research_result_read. Continue with a returned cursor when present. "
@@ -13761,7 +13771,11 @@ class ChatService:
             )[:1_000]
             research_result = research_result.model_copy(
                 update={
-                    "first_call": {"tool": "research_result_describe", "handle": handle},
+                    "first_call": {
+                        "tool": "research_result_describe",
+                        "arguments": {"handle": handle},
+                    },
+                    "query_required": True,
                     "query_steps": [
                         "Call research_result_describe with this handle.",
                         "Query the advertised collection with only needed fields or links.",
@@ -13769,6 +13783,15 @@ class ChatService:
                     ],
                 }
             )
+        elif research_result is not None:
+            handle = research_result.handle
+            first_call = json.dumps({"handle": handle}, separators=(",", ":"))
+            summary = (
+                "The typed result receipt reports retrieval_failed. Call "
+                f"research_result_describe({first_call}) to inspect "
+                "the available index status. Do not treat missing query results as "
+                f"evidence of absence. {summary}"
+            )[:1_000]
         warnings: list[str] = []
         if (
             execution.metadata.get("results_stdout")
@@ -13807,7 +13830,11 @@ class ChatService:
             warnings=warnings,
             research_result=research_result,
             next_actions=(
-                ["research_result_describe", "research_result_query", "research_result_read"]
+                (
+                    ["research_result_describe", "research_result_query", "research_result_read"]
+                    if research_result.query_required
+                    else ["research_result_describe"]
+                )
                 if research_result is not None
                 else ["tool_output.search", "tool_output.read"] if refs else []
             ),
@@ -13823,15 +13850,15 @@ class ChatService:
         try:
             artifact = await self.store.get(Artifact, identifier)
             raw = self.artifact_store.read(artifact)
-            if len(raw) > 64 * 1024:
+            # Callback output is bounded before persistence, but its stored
+            # pretty-printed JSON can be larger than the posted compact form.
+            if len(raw) > MAX_CALLBACK_RESEARCH_RESULT_ARTIFACT_BYTES:
                 return None
             value = json.loads(raw)
             if not isinstance(value, dict) or not isinstance(value.get("research_result"), dict):
                 return None
             candidate = ResearchResultReceipt.model_validate(value["research_result"])
         except (ValueError, TypeError, json.JSONDecodeError, NotFoundError):
-            return None
-        if candidate.status.lower() not in {"complete", "completed", "success", "succeeded"}:
             return None
         if RESEARCH_RESULT_HANDLE.fullmatch(candidate.handle) is None:
             return None
@@ -13843,7 +13870,7 @@ class ChatService:
                     for item in candidate.collections[:32]
                 ],
                 # Ignore callback-supplied instructions; these are fixed by Core.
-                "first_call": {},
+                "first_call": None,
                 "query_steps": [],
             }
         )
