@@ -7,6 +7,7 @@ from tests.v3.async_test_support import (
 
 import asyncio
 import contextlib
+import inspect
 import json
 import time
 
@@ -167,9 +168,13 @@ async def _attach_running_goal(store, prepared):
 
 async def _poll(read, *, timeout: float = 5.0):
     deadline = time.monotonic() + timeout
-    while not (value := read()) and time.monotonic() < deadline:
+    while True:
+        value = read()
+        if inspect.isawaitable(value):
+            value = await value
+        if value or time.monotonic() >= deadline:
+            return value
         await asyncio.sleep(0.02)
-    return value
 
 
 async def test_stop_hook_failure_is_a_warning_naming_the_hook_not_the_stop(
@@ -893,13 +898,15 @@ async def test_a_hook_running_when_the_turn_ends_never_stays_running(
         else:
             await service.shutdown()
         (hook_dir / "release").touch()
-        await _poll(
-            lambda: [
+
+        async def settled_hook():
+            return [
                 item
-                for item in started_hook()
+                for item in await started_hook()
                 if item.exit_code == 0 or item.late_outcome is not None
             ]
-        )
+
+        await _poll(settled_hook)
         await asyncio.sleep(0.2)
         await service.shutdown()
         turn = await store.get(ChatTurn, turn_id)

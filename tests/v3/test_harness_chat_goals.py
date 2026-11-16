@@ -1623,6 +1623,9 @@ async def test_goal_resume_uses_saved_next_harness_in_same_chat(
                 privacy=profile.privacy,
             )
         )
+        # Core's chat service owns runtime switches for its store.
+        chat_service = ChatService(store, workspace_resolver=lambda _: tmp_path)
+        chat_service.runtime_switcher.harness_runtime = runtime
         goals = ChatGoalService(store, runtime)
         created = await _new_goal(goals, step_budget=1)
         session_id = created.session.id
@@ -1650,8 +1653,11 @@ async def test_goal_resume_uses_saved_next_harness_in_same_chat(
             ),
             expected_revision=chat.revision,
         )
-        assert saved.harness_session_id == old_harness_id
-        assert saved.harness_profile_id == profile.id
+        # Since #939 a blocked goal leaves the chat idle, so the selected
+        # harness is bound to the same chat at once rather than at resume.
+        assert saved.id == session_id
+        assert saved.harness_session_id != old_harness_id
+        assert saved.harness_profile_id == next_profile.id
 
         (
             await goals.write(

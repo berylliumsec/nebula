@@ -50,6 +50,7 @@ AGENT_SOURCE = r"""
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 script = json.load(open(sys.argv[1]))
 log = open(sys.argv[2], "a", buffering=1)
@@ -142,8 +143,21 @@ async def main():
                     },
                 }
             )
-        elif method == "session/new":
-            send({"id": message["id"], "result": {"sessionId": "sess-1"}})
+        elif method in {"session/new", "session/load"}:
+            # Like Grok, write the session's system head before answering so
+            # Nebula can read back its standing instructions.
+            rules = (message["params"].get("_meta") or {}).get("rules")
+            head = Path(script["grok_home"], "sessions", "account", "sess-1")
+            head.mkdir(parents=True, exist_ok=True)
+            head_file = head / "system_prompt.txt"
+            if rules is not None:
+                head_file.write_text(rules)
+            elif head_file.exists():
+                head_file.write_text(head_file.read_text())
+            if method == "session/new":
+                send({"id": message["id"], "result": {"sessionId": "sess-1"}})
+            else:
+                send({"id": message["id"], "result": {}})
         elif method == "session/prompt":
             await queue.put((message["id"], message["params"]))
         elif method == "session/cancel":
@@ -163,8 +177,12 @@ class ScriptedGrokAdapter(GrokAcpAdapter):
         workdir.mkdir(parents=True, exist_ok=True)
         self.agent_path = workdir / "scripted_acp_agent.py"
         self.agent_path.write_text(AGENT_SOURCE)
+        self.grok_home = workdir / "grok-home"
+        self.grok_home.mkdir(exist_ok=True)
         self.script_path = workdir / "agent_script.json"
-        self.script_path.write_text(json.dumps(script))
+        self.script_path.write_text(
+            json.dumps({**script, "grok_home": str(self.grok_home)})
+        )
         self.log_path = workdir / "agent_log.jsonl"
 
     async def _connect(self, *_args: Any, **_kwargs: Any) -> _AcpRpc:
@@ -285,6 +303,8 @@ async def _runtime(tmp_path: Path, adapter: HarnessAdapter, *, native=None):
             executable="/bin/true",
             default_model="grok-test",
             privacy={"local_only": True, "permits_sensitive_data": True},
+            # Standing-instruction readback reads the account's session data.
+            home_directory=str(getattr(adapter, "grok_home", "")) or None,
         )
     )
     if native is not None:
@@ -303,8 +323,10 @@ async def _runtime(tmp_path: Path, adapter: HarnessAdapter, *, native=None):
     return store, engagement, profile, service
 
 
-def _chat_turn(service, engagement, profile, prompt, chat_id=None, session_id=None):
-    return service.prepare_chat(
+async def _chat_turn(
+    service, engagement, profile, prompt, chat_id=None, session_id=None
+):
+    return await service.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -438,14 +460,14 @@ async def test_next_prompt_waits_for_the_stopped_prompt_and_drops_its_late_updat
     async def scenario() -> None:
         adapter = ScriptedGrokAdapter(LATE_UPDATES_AFTER_CANCEL, tmp_path / "agent")
         store, engagement, profile, service = await _runtime(tmp_path, adapter)
-        chat, _owner, first = _chat_turn(service, engagement, profile, "first")
+        chat, _owner, first = await _chat_turn(service, engagement, profile, "first")
         task = await service.start_chat_turn(first.id)
         await adapter.wait_for_log(
             lambda entry: "turn one starts" in json.dumps(entry.get("out", {}))
         )
         await _stop(service, task, first.id)
 
-        _chat, owner, second = _chat_turn(
+        _chat, owner, second = await _chat_turn(
             service,
             engagement,
             profile,
@@ -453,7 +475,7 @@ async def test_next_prompt_waits_for_the_stopped_prompt_and_drops_its_late_updat
             chat_id=chat.id,
             session_id=(await store.get(HarnessTurn, first.id)).harness_session_id,
         )
-        await service.start_chat_turn(second.id)
+        await (await service.start_chat_turn(second.id))
 
         assert (
             await store.get(HarnessTurn, second.id)
@@ -512,12 +534,12 @@ async def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path
         store, engagement, profile, service = await _runtime(
             tmp_path, adapter, native=HarnessNativeCapabilities(skills=True)
         )
-        chat, _owner, first = _chat_turn(service, engagement, profile, "first")
+        chat, _owner, first = await _chat_turn(service, engagement, profile, "first")
         task = await service.start_chat_turn(first.id)
         await _wait_status(store, first.id, {HarnessTurnStatus.WAITING_APPROVAL})
         await _stop(service, task, first.id)
 
-        _chat, owner, second = _chat_turn(
+        _chat, owner, second = await _chat_turn(
             service,
             engagement,
             profile,
@@ -525,7 +547,7 @@ async def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path
             chat_id=chat.id,
             session_id=(await store.get(HarnessTurn, first.id)).harness_session_id,
         )
-        await service.start_chat_turn(second.id)
+        await (await service.start_chat_turn(second.id))
 
         assert adapter.reply(700) == {"result": {"outcome": {"outcome": "cancelled"}}}
         answers = [entry for entry in adapter.log() if _inbound(None, 700)(entry)]
@@ -668,8 +690,8 @@ async def test_truncating_stop_reasons_keep_the_partial_answer_marked_incomplete
         store, engagement, profile, service = await _runtime(
             tmp_path, MemoryGrokAdapter(rpc)
         )
-        _chat, owner, turn = _chat_turn(service, engagement, profile, "question")
-        await service.start_chat_turn(turn.id)
+        _chat, owner, turn = await _chat_turn(service, engagement, profile, "question")
+        await (await service.start_chat_turn(turn.id))
 
         saved = await _final_text(store, owner.id)
         assert saved is not None
@@ -705,8 +727,8 @@ async def test_refusal_is_an_error_and_not_a_verified_completion(tmp_path):
         store, engagement, profile, service = await _runtime(
             tmp_path, MemoryGrokAdapter(rpc)
         )
-        _chat, owner, turn = _chat_turn(service, engagement, profile, "question")
-        await service.start_chat_turn(turn.id)
+        _chat, owner, turn = await _chat_turn(service, engagement, profile, "question")
+        await (await service.start_chat_turn(turn.id))
 
         saved = await store.get(HarnessTurn, turn.id)
         assert saved.status == HarnessTurnStatus.INTERRUPTED
