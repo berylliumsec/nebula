@@ -740,7 +740,8 @@ class ButlerRecoveryAgent:
         if resume:
             return await self._wait_for_turn(case, case.investigation_turn_ids[-1])
         parent = await self._butler_session(case.engagement_id)
-        config = await chat_assistant_config(self.store, parent)
+        # An unattended investigation delegates only on an explicit choice.
+        config = await chat_assistant_config(self.store, parent, butler_default=False)
         profile_id, model = config["profile_id"], config["model"]
         backend = ChatBackend(config["backend"])
         if not isinstance(profile_id, str) or not isinstance(model, str):

@@ -73,9 +73,13 @@ class ChatAssistantConfigPatch(NebulaModel):
 
 
 async def chat_assistant_config(
-    store: NebulaStore, session: ChatSession
+    store: NebulaStore, session: ChatSession, *, butler_default: bool = True
 ) -> dict[str, Any]:
-    """Read Core's saved next-turn choice, or derive the last effective turn."""
+    """Read Core's saved next-turn choice, or derive the last effective turn.
+
+    ``butler_default=False`` reads only what was saved, for unattended work
+    that must not delegate unless the operator explicitly chose it.
+    """
 
     metadata = session.metadata
     saved = metadata.get("assistant_config")
@@ -123,7 +127,33 @@ async def chat_assistant_config(
     }
     if isinstance(saved, dict):
         current.update({key: value for key, value in saved.items() if key in current})
+    if (
+        butler_default
+        and butler_delegates_by_default(session)
+        and current["backend"] == "provider"
+    ):
+        current["allow_subagents"] = True
     return current
+
+
+def is_main_butler(session: ChatSession) -> bool:
+    """Butler's own conversation, not a recovery case or one of its subagents."""
+
+    return (
+        session.metadata.get("control_assistant") is True
+        and not session.parent_session_id
+        and not session.metadata.get("butler_recovery_case_id")
+    )
+
+
+def butler_delegates_by_default(session: ChatSession) -> bool:
+    """Butler on a provider model delegates to subagents until told otherwise.
+
+    Older saved settings recorded ``allow_subagents: false`` without an
+    operator choice, so only ``butler_allow_subagents`` counts as one.
+    """
+
+    return is_main_butler(session) and "butler_allow_subagents" not in session.metadata
 
 
 async def validate_chat_assistant_selection(
@@ -235,6 +265,12 @@ async def validate_chat_assistant_selection(
         )
         for hook_id in selected["hook_ids"]:
             snapshot_native_hook(hook_id, catalog)
+    if (
+        selected["allow_subagents"]
+        and selected["subagent_harness_profile_id"]
+        and session.metadata.get("control_assistant") is True
+    ):
+        raise ValueError("Butler subagents need a provider model")
     if selected["allow_subagents"] and (
         backend == "harness"
         or selected["subagent_provider_id"]
@@ -307,11 +343,22 @@ async def update_chat_assistant_config(
         selected["subagent_provider_id"] = None
     if ("backend" in changes or "profile_id" in changes) and "model" not in changes:
         raise ValueError("choose a listed model when changing runtime")
+    if (
+        butler_delegates_by_default(session)
+        and "allow_subagents" not in changes
+        and selected["backend"] == "harness"
+        and not selected["subagent_provider_id"]
+    ):
+        # The provider default does not carry over to a harness, whose
+        # subagents need an explicit provider model.
+        selected["allow_subagents"] = False
     await validate_chat_assistant_selection(
         store, session, selected, workspace_resolver=workspace_resolver
     )
     backend = selected["backend"]
     metadata = {**session.metadata, "assistant_config": selected}
+    if is_main_butler(session) and "allow_subagents" in changes:
+        metadata["butler_allow_subagents"] = selected["allow_subagents"]
     for key in (
         "mcp_server_ids",
         "excluded_mcp_server_ids",

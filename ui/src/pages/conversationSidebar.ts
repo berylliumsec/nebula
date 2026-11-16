@@ -51,7 +51,8 @@ export function groupSidebarConversations(
   // Butler-created main chat can still own its own subagent conversations.
   const butlerByProject = new Map<string, ChatSessionSummary>();
   for (const session of sessions) {
-    if (!session.isControlAssistant) continue;
+    // Butler's own subagents also run in Butler mode; they are not its chat.
+    if (!session.isControlAssistant || session.isSubagent) continue;
     const current = butlerByProject.get(session.engagementId);
     if (!current || (current.archivedAt && !session.archivedAt)
       || (Boolean(current.archivedAt) === Boolean(session.archivedAt) && Date.parse(session.updatedAt) > Date.parse(current.updatedAt))) {

@@ -43,6 +43,7 @@ async def active_control_assistant_session(
             if item.metadata.get("control_assistant") is True
             and not item.metadata.get("butler_recovery_case_id")
             and item.metadata.get("archived_at") is None
+            and not item.parent_session_id
         ),
         None,
     )

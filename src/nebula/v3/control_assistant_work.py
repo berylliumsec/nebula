@@ -904,6 +904,7 @@ class ControlAssistantWork:
                     for item in matches
                     if item.metadata.get("control_assistant") is True
                     and item.metadata.get("archived_at") is None
+                    and not item.parent_session_id
                 ),
                 None,
             )

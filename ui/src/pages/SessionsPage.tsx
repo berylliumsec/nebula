@@ -2131,8 +2131,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (parent) owners.push(parent.id);
     const butlerChild = selected.isButlerInitiated ? selected : parent?.isButlerInitiated ? parent : undefined;
     if (butlerChild) {
-      const butler = savedConversations.find(item => item.engagementId === butlerChild.engagementId && item.isControlAssistant && !item.archivedAt)
-        ?? savedConversations.find(item => item.engagementId === butlerChild.engagementId && item.isControlAssistant);
+      const isButler = (item: ChatSessionSummary) => item.engagementId === butlerChild.engagementId && item.isControlAssistant && !item.isSubagent;
+      const butler = savedConversations.find(item => isButler(item) && !item.archivedAt)
+        ?? savedConversations.find(isButler);
       if (butler) {
         owners.push(butler.id);
         if (butlerChild.archivedAt) setExpandedButlerArchives(current => current.has(butler.id) ? current : new Set([...current, butler.id]));
