@@ -466,6 +466,49 @@ async def test_verified_client_address_survives_forwarding_without_public_spoof_
         await proxy.close()
 
 
+async def test_viewer_without_accept_encoding_gets_an_uncompressed_body():
+    """The pooled client's own gzip offer must not reach the upstream."""
+    from starlette.middleware.gzip import GZipMiddleware
+
+    key = secrets.token_bytes(32)
+    app = FastAPI()
+    app.add_middleware(GZipMiddleware, minimum_size=16)
+    seen: list[str | None] = []
+
+    @app.get("/large")
+    async def large(request: Request):
+        seen.append(request.headers.get("accept-encoding"))
+        return JSONResponse({"text": "x" * 4096}, headers={"server": "upstream"})
+
+    async def select(_scope):
+        return HttpUpstream("unix:///fixture.sock", key)
+
+    proxy = RuntimeHttpProxy(
+        select,
+        transport_factory=lambda _endpoint: httpx.ASGITransport(
+            app=PrivateRuntimeHttp(app, key)
+        ),
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy), base_url="http://public"
+        ) as client:
+            del client.headers["accept-encoding"]
+            async with client.stream("GET", "/large") as plain:
+                body = b"".join([chunk async for chunk in plain.aiter_raw()])
+            assert plain.headers.get("content-encoding") is None
+            assert body.startswith(b'{"text":')
+            # Upstream date and server headers are not repeated downstream.
+            assert "upstream" not in plain.headers.get_list("server")
+            # A viewer that negotiates gzip still gets it end to end.
+            negotiated = await client.get("/large", headers={"Accept-Encoding": "gzip"})
+            assert negotiated.headers["content-encoding"] == "gzip"
+            assert negotiated.json() == {"text": "x" * 4096}
+        assert seen == ["identity", "gzip"]
+    finally:
+        await proxy.close()
+
+
 async def test_closing_proxy_prevents_client_recreation_during_teardown(monkeypatch):
     key = secrets.token_bytes(32)
     app = FastAPI()

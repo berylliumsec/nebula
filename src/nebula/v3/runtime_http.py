@@ -661,6 +661,10 @@ class RuntimeHttpProxy:
             for name, value in headers
             if name.lower() not in excluded and not name.lower().startswith(_PREFIX)
         ]
+        if not any(name.lower() == b"accept-encoding" for name, _ in outgoing):
+            # The pooled client would otherwise offer its own gzip, and the
+            # compressed bytes are forwarded raw to a viewer that never asked.
+            outgoing.append((b"accept-encoding", b"identity"))
         outgoing.extend(
             internal_headers(
                 target.credential,
@@ -709,7 +713,8 @@ class RuntimeHttpProxy:
                 stream = StreamingResponse(
                     response.aiter_raw(), status_code=response.status_code
                 )
-                excluded = _hop_headers(response.headers.raw)
+                # This server sends its own date and server headers.
+                excluded = _hop_headers(response.headers.raw) | {b"date", b"server"}
                 stream.raw_headers = [
                     (name.lower(), value)
                     for name, value in response.headers.raw
