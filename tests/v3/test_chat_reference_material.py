@@ -15,7 +15,6 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
-import asyncio
 import json
 
 import nebula.v3.chat as chat_module
@@ -70,8 +69,10 @@ async def _knowledge_chat(tmp_path, provider: FakeProvider | None = None):
     return store, service, engagement, profile, provider
 
 
-def _ask(service, profile, content, *, engagement_id=None, session_id=None, **fields):
-    prepared = service.prepare(
+async def _ask(
+    service, profile, content, *, engagement_id=None, session_id=None, **fields
+):
+    prepared = await service.prepare(
         ChatCompletionRequest(
             engagement_id=engagement_id,
             session_id=session_id,
@@ -80,7 +81,7 @@ def _ask(service, profile, content, *, engagement_id=None, session_id=None, **fi
             **fields,
         )
     )
-    return prepared, asyncio.run(service.complete(prepared))
+    return prepared, await service.complete(prepared)
 
 
 async def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
@@ -90,10 +91,10 @@ async def test_reference_material_leaves_the_instructions_byte_identical_across_
 
     # The first message matches Nebula's operator help and the project
     # document; the second matches only the document.
-    first_prepared, first = _ask(
+    first_prepared, first = await _ask(
         service, profile, HELP_QUESTION, engagement_id=engagement.id
     )
-    second_prepared, second = _ask(
+    second_prepared, second = await _ask(
         service, profile, PORT_QUESTION, session_id=first.session_id
     )
 
@@ -178,7 +179,7 @@ async def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_pa
     provider = ScriptedTurnProvider(profile.id)
     service = ChatService(store, provider_factory=lambda _: provider)
 
-    prepared, completion = _ask(
+    prepared, completion = await _ask(
         service,
         profile,
         HELP_QUESTION,
@@ -322,7 +323,8 @@ async def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
     assert prepared.reference_material == reference
     assert prepared.context_snapshot is not None
     sent = prepared.model_request
-    assert sent.messages[-1].content.startswith(f"{PORT_QUESTION}\n\n{HEADING}")
+    # The whole history may compact; the memory then leads this message.
+    assert f"{PORT_QUESTION}\n\n{HEADING}" in sent.messages[-1].content
     assert estimate_model_request(sent) + reserve <= limits.target_input_tokens
     assert [item.source_id for item in prepared.citations] == ["source-a"]
 
@@ -350,7 +352,19 @@ async def test_a_context_rejection_reassembles_the_request_with_the_same_materia
         ],
     }
     profile = await store.create(ProviderProfile.model_validate(payload))
-    provider = ContextRejectingProvider(profile.id)
+
+    class RoomyRouteProvider(ContextRejectingProvider):
+        # The 60% target leaves the help article no room in a 3,500-token
+        # route's knowledge allowance (a fifth of the target).
+        async def openrouter_route_limits(self, model):
+            return [
+                route.model_copy(
+                    update={"context_window": 5_000, "max_input_tokens": 4_500}
+                )
+                for route in await super().openrouter_route_limits(model)
+            ]
+
+    provider = RoomyRouteProvider(profile.id)
     provider.config.default_model = "author/model-a"
     provider.config.model_allowlist = ["author/model-a"]
     service = ChatService(store, provider_factory=lambda _: provider)

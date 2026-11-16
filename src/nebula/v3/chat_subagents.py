@@ -1092,6 +1092,10 @@ class SubagentService:
         # updates itself, so they are not steered into the turn as well.
         self._harness_waits: dict[str, int] = {}
         self._steer_locks: dict[str, asyncio.Lock] = {}
+        # One start at a time per parent conversation: the idempotency and
+        # sibling-limit checks read state that the start's own write changes,
+        # and the start awaits in between (store, plans, harness sessions).
+        self._start_locks: dict[str, asyncio.Lock] = {}
         # Step counts and last steps of finished rounds, which never change.
         self._finished_steps: OrderedDict[
             tuple[str, str, str], tuple[int, list[dict[str, Any]]]
@@ -2012,6 +2016,47 @@ class SubagentService:
         reasoning_effort: str | None = None,
         capabilities: dict[str, Any] | None = None,
     ) -> ChatSubagent:
+        if not invocation.chat_turn_id:
+            raise ToolNotPermitted(
+                "subagents require a chat turn", rule="subagents.chat_turn"
+            )
+        # The catalog read can wait on a worker; it stays outside the lock so
+        # one slow read does not hold up the parent's other starts.
+        # Inherited and empty selections need no global catalog validation.
+        available_mcp_ids = (
+            await self._available_mcp_ids(invocation.chat_turn_id)
+            if isinstance(capabilities, dict) and capabilities.get("mcp_server_ids")
+            else []
+        )
+        parent_turn = await self.store.get(ChatTurn, invocation.chat_turn_id)
+        key = parent_turn.session_id
+        lock = self._start_locks.setdefault(key, asyncio.Lock())
+        try:
+            async with lock:
+                return await self._start_unlocked(
+                    invocation,
+                    task=task,
+                    name=name,
+                    context=context,
+                    reasoning_effort=reasoning_effort,
+                    capabilities=capabilities,
+                    available_mcp_ids=available_mcp_ids,
+                )
+        finally:
+            if not lock.locked() and self._start_locks.get(key) is lock:
+                del self._start_locks[key]
+
+    async def _start_unlocked(
+        self,
+        invocation: ToolInvocation,
+        *,
+        task: str,
+        name: str | None,
+        context: str | None,
+        reasoning_effort: str | None = None,
+        capabilities: dict[str, Any] | None = None,
+        available_mcp_ids: list[str],
+    ) -> ChatSubagent:
         from .chat import ChatCompletionRequest, ChatRequestMessage
 
         # Every refusal below comes before anything is stored, so each one
@@ -2020,14 +2065,8 @@ class SubagentService:
             raise ToolNotPermitted(
                 "subagents require a chat turn", rule="subagents.chat_turn"
             )
-        # Read before taking the admission snapshot: yielding later would let
-        # concurrent starts bypass sibling limits or duplicate an idempotency key.
-        # Inherited and empty selections need no global catalog validation.
-        available_mcp_ids = (
-            await self._available_mcp_ids(invocation.chat_turn_id)
-            if isinstance(capabilities, dict) and capabilities.get("mcp_server_ids")
-            else []
-        )
+        # start() holds the parent's start lock, so the sibling and idempotency
+        # checks below stay valid until this start is stored.
         parent_turn = await self.store.get(ChatTurn, invocation.chat_turn_id)
         parent_session = await self.store.get(ChatSession, parent_turn.session_id)
         depth = await self.depth(parent_session)

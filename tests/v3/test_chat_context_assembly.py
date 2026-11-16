@@ -144,8 +144,8 @@ def _history(count: int, repeat: int = 180) -> list[str]:
     ]
 
 
-def _send(service, session, profile, content, **fields):
-    prepared = service.prepare(
+async def _send(service, session, profile, content, **fields):
+    prepared = await service.prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -154,7 +154,7 @@ def _send(service, session, profile, content, **fields):
             **fields,
         )
     )
-    asyncio.run(service.complete(prepared))
+    await service.complete(prepared)
     return prepared
 
 
@@ -197,23 +197,21 @@ async def test_first_turn_keeps_capacity_reserved_for_unused_archive_tools(
     assert required + reserved < limits.input_capacity
     assert required + reserved + archive_reserve > limits.input_capacity
 
-    def assemble(current):
-        return asyncio.run(
-            service._model_context(
-                profile=profile,
-                provider=provider,
-                model="model-a",
-                requested_output_tokens=None,
-                messages=[current],
-                stored_messages=[],
-                session=session if durable_session else None,
-                instructions=instructions,
-                reserved_tokens=reserved,
-                archive_reserved_tokens=archive_reserve,
-            )
+    async def assemble(current):
+        return await service._model_context(
+            profile=profile,
+            provider=provider,
+            model="model-a",
+            requested_output_tokens=None,
+            messages=[current],
+            stored_messages=[],
+            session=session if durable_session else None,
+            instructions=instructions,
+            reserved_tokens=reserved,
+            archive_reserved_tokens=archive_reserve,
         )
 
-    messages, sent_instructions, _, snapshot, _ = assemble(message)
+    messages, sent_instructions, _, snapshot, _ = await assemble(message)
     assert messages == [message]
     assert sent_instructions == instructions
     assert snapshot is None
@@ -221,7 +219,7 @@ async def test_first_turn_keeps_capacity_reserved_for_unused_archive_tools(
 
     oversized = message.model_copy(update={"content": message.content + " x" * 300})
     with pytest.raises(chat_module.ContextCapacityError, match="current message"):
-        assemble(oversized)
+        await assemble(oversized)
 
 
 async def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
@@ -234,7 +232,7 @@ async def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path)
     # Each turn asks about a different archived message, so each retrieves
     # different originals: they must not disturb anything before them.
     for codename in ("copperwolf", "duskowl", "emberlynx"):
-        _send(service, session, profile, f"What did we find about {codename}?")
+        await _send(service, session, profile, f"What did we find about {codename}?")
 
     assert len(_compactions(provider)) > 0
     first, second, third = _turn_requests(provider)
@@ -278,7 +276,7 @@ async def test_butler_reuses_saved_provider_history_and_compaction_after_restart
         expected_revision=session.revision,
     )
 
-    _send(
+    await _send(
         service,
         session,
         profile,
@@ -291,7 +289,7 @@ async def test_butler_reuses_saved_provider_history_and_compaction_after_restart
     )
 
     restarted = ChatService(store, provider_factory=lambda _: provider)
-    _send(
+    await _send(
         restarted,
         (await store.get(ChatSession, session.id)),
         profile,
@@ -337,7 +335,7 @@ async def test_messages_between_the_boundary_and_the_tail_are_never_silently_dro
                     engagement_id=session.engagement_id,
                     session_id=session.id,
                     kind="question",
-                    text=f"Open question {index}: " + ("which scope applies? " * 189),
+                    text=f"Open question {index}: " + ("which scope applies? " * 140),
                 )
             )
         )
@@ -389,10 +387,10 @@ async def test_a_covered_message_edited_in_place_is_compacted_again(tmp_path):
         lambda provider_id: ReportingProvider(provider_id),
         history=_history(12),
     )
-    first = _send(service, session, profile, "Summarise the evidence.")
+    first = await _send(service, session, profile, "Summarise the evidence.")
     compactions = len(_compactions(provider))
     assert compactions > 0
-    second = _send(service, session, profile, "And the next step?")
+    second = await _send(service, session, profile, "And the next step?")
     assert len(_compactions(provider)) == compactions
     assert second.context_snapshot.id == first.context_snapshot.id
 
@@ -405,7 +403,7 @@ async def test_a_covered_message_edited_in_place_is_compacted_again(tmp_path):
             expected_revision=covered.revision,
         )
     )
-    third = _send(service, session, profile, "Which host again?")
+    third = await _send(service, session, profile, "Which host again?")
 
     # Same message ids, different content: the memory no longer stands for
     # the transcript, so it is rebuilt from the edited original.
@@ -545,10 +543,13 @@ async def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path
     store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id, ratio=0.75),
-        history=_history(4),
+        history=_history(4, repeat=120),
     )
 
-    prepared = _send(service, session, profile, "First question")
+    prepared = await _send(service, session, profile, "First question")
+    # Naming is best-effort background work with its own session write.
+    if service._naming_tasks:
+        await asyncio.gather(*tuple(service._naming_tasks))
     after = await store.get(ChatSession, session.id)
     record = after.metadata["context_calibration"]
     assert record["runtimes"] == [
@@ -568,7 +569,7 @@ async def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path
     )
 
     provider.ratio = 0.4
-    second = _send(service, session, profile, "Second question")
+    second = await _send(service, session, profile, "Second question")
     latest = await store.get(ChatSession, session.id)
     # The accounting rides the turn's own session write: none of its own.
     assert latest.revision == after.revision + 1
@@ -703,7 +704,12 @@ async def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path)
         history=_history(12),
     )
 
-    _send(service, session, profile, "thanks")
+    await _send(service, session, profile, "thanks")
+    # Let the background compaction this turn may start settle first.
+    await asyncio.gather(
+        *(item.task for item in service._precompactions.values() if item.task),
+        return_exceptions=True,
+    )
     # No goal: no objective is sent at all.
     assert "objective" not in json.loads(_compactions(provider)[0].messages[0].content)
 
@@ -729,7 +735,7 @@ async def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path)
             )
         )
     before = len(_compactions(provider))
-    _send(service, session, profile, "ok", goal_id=goal.id, stream=True)
+    await _send(service, session, profile, "ok", goal_id=goal.id, stream=True)
     compaction = _compactions(provider)[before]
     assert (
         json.loads(compaction.messages[0].content)["objective"]

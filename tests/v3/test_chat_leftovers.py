@@ -97,11 +97,10 @@ UNREADABLE_FRAMES = pytest.mark.parametrize(
 )
 
 
-def _stream(service: ChatService, prepared: Any) -> list[tuple[str, dict[str, Any]]]:
-    async def collect() -> list[tuple[str, dict[str, Any]]]:
-        return [item async for item in service.stream(prepared)]
-
-    return asyncio.run(collect())
+async def _stream(
+    service: ChatService, prepared: Any
+) -> list[tuple[str, dict[str, Any]]]:
+    return [item async for item in service.stream(prepared)]
 
 
 @UNREADABLE_FRAMES
@@ -124,7 +123,7 @@ async def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_cal
         broker,
     )
 
-    events = _stream(service, prepared)
+    events = await _stream(service, prepared)
 
     shown = "".join(payload["delta"] for name, payload in events if name == "delta")
     thought = "".join(

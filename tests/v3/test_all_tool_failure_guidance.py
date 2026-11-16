@@ -171,7 +171,11 @@ async def test_notebook_path_refusal_explains_actual_path_rule_before_execution(
 
 async def test_security_read_refusal_names_session_prerequisite():
     runtime = SecurityToolsRuntime.__new__(SecurityToolsRuntime)
-    runtime._active = lambda _: None
+
+    async def no_active_session(_):
+        return None
+
+    runtime._active = no_active_session
     with pytest.raises(GuidedToolError) as caught:
         (await runtime.call_tool("project", "traffic", {}))
     snapshot = next(
@@ -358,10 +362,10 @@ async def test_gateway_preserves_guided_error_and_actual_offered_usage():
         def __init__(self):
             pass
 
-        def _active_gateway_turn(self, session_id):
+        async def _active_gateway_turn(self, session_id):
             return None
 
-        def _gateway_catalog(self, session, params=None, *, turn=None):
+        async def _gateway_catalog(self, session, params=None, *, turn=None):
             return {
                 "tools": [
                     {

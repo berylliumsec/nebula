@@ -102,6 +102,8 @@ async def test_sql_fingerprints_errors_expanding_parameters_and_source_privacy(
 ):
     database = Database(tmp_path / "sql.db", bootstrap=False)
     try:
+        # Since #939 SQL timing starts once the database is initialized.
+        await database.initialize()
         async with database.engine.connect() as connection:
             (await connection.execute(select(literal("canary-secret-a")))).all()
             (await connection.execute(select(literal("canary-secret-b")))).all()
@@ -225,15 +227,17 @@ def test_event_loop_lag_measures_lateness_and_stops_its_timer(monkeypatch):
         return handle
 
     loop = SimpleNamespace(time=lambda: now[0], call_at=call_at)
-    monkeypatch.setattr(asyncio, "get_running_loop", lambda: loop)
-    monitor = EventLoopLagMonitor(performance)
-    monitor.start()
-    assert scheduled[0][0] == 11
-    now[0] = 11.4
-    scheduled[0][1]()
-    assert _operations(performance)["runtime.event_loop_lag"]["max_ms"] == 400
-    monitor.stop()
-    assert scheduled[-1][2].cancelled
+    # Restore the real loop lookup before the shared async cleanup fixture runs.
+    with monkeypatch.context() as patch:
+        patch.setattr(asyncio, "get_running_loop", lambda: loop)
+        monitor = EventLoopLagMonitor(performance)
+        monitor.start()
+        assert scheduled[0][0] == 11
+        now[0] = 11.4
+        scheduled[0][1]()
+        assert _operations(performance)["runtime.event_loop_lag"]["max_ms"] == 400
+        monitor.stop()
+        assert scheduled[-1][2].cancelled
 
 
 async def test_long_stream_lifetime_does_not_create_a_slow_response(monkeypatch):
@@ -285,6 +289,11 @@ async def test_api_authentication_correlation_route_privacy_and_polling_exclusio
 
     @app.get("/api/v1/performance-fixture/{item}")
     async def read_fixture(item: str):
+        # Since #939 storage reads are native async; only remaining synchronous
+        # work goes through the bounded read workers, whose phases still count.
+        from nebula.v3.read_workers import read_in_worker
+
+        await read_in_worker(sorted, [item])
         return await store.list_entities(Engagement)
 
     try:

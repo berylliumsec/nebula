@@ -339,7 +339,9 @@ def test_lease_tables_are_additive_and_downgrade_to_the_previous_schema(tmp_path
 
     engine = create_engine(f"sqlite:///{tmp_path / 'lease.db'}", future=True)
     try:
-        _run_migration(engine, command.upgrade, "head")
+        # 0050 is deliberately irreversible since #1114 (81bf481), so exercise
+        # the lease migration's own downgrade from its revision, then reach head.
+        _run_migration(engine, command.upgrade, "0049_project_view_leases")
         tables = set(inspect(engine).get_table_names())
         assert {"project_view_leases", "project_admission_holds"} <= tables
         _run_migration(engine, command.downgrade, "0048_chat_scoped_admission")
@@ -347,5 +349,8 @@ def test_lease_tables_are_additive_and_downgrade_to_the_previous_schema(tmp_path
         assert not {"project_view_leases", "project_admission_holds"} & after
         assert tables - after == {"project_view_leases", "project_admission_holds"}
         _run_migration(engine, command.upgrade, "head")
+        assert {"project_view_leases", "project_admission_holds"} <= set(
+            inspect(engine).get_table_names()
+        )
     finally:
         engine.dispose()
