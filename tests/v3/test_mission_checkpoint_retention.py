@@ -56,6 +56,7 @@ from tests.v3.test_missions import (
     _profile,
     _start_payload,
     _wait_for_status,
+    wait_for_event,
 )
 from tests.v3.test_specialist_tool_batches import ScriptedRoutingProvider, _spec
 
@@ -560,7 +561,7 @@ async def test_restart_recovery_is_unchanged_by_checkpoint_pruning(tmp_path, cra
 # -- Service cleanup -------------------------------------------------------
 
 
-def _leave_checkpoints(path, thread_ids):
+async def _leave_checkpoints(path, thread_ids):
     """Rows a Core before this fix left behind: two checkpoints per thread."""
 
     async def write():
@@ -574,7 +575,7 @@ def _leave_checkpoints(path, thread_ids):
                 await saver.aput(_config(thread_id), first, loop, {})
                 await saver.aput(_config(thread_id, first["id"]), second, loop, {})
 
-    asyncio.run(write())
+    await write()
 
 
 async def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
@@ -606,7 +607,9 @@ async def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
         (await run(RunStatus.WAITING_APPROVAL, origin="cli")),
     ]
     path = tmp_path / "mission-checkpoints.db"
-    _leave_checkpoints(path, [item.id for item in finished + resumable] + ["no-run"])
+    await _leave_checkpoints(
+        path, [item.id for item in finished + resumable] + ["no-run"]
+    )
 
     async def scenario():
         service = MissionService(store, checkpoint_path=path)
@@ -657,7 +660,7 @@ async def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
         )
         assert started.status_code == 202
         run_id = started.json()["id"]
-        assert provider.started.wait(timeout=5)
+        assert await wait_for_event(provider.started, 5)
         assert _rows(path, run_id)[0] == 1
         # A run parked on an operator decision has no worker; its checkpoint
         # is all that is left of it.
@@ -671,7 +674,7 @@ async def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
                 metadata={"origin": "api", "waiting_approval": True},
             )
         )
-        _leave_checkpoints(path, [waiting.id])
+        await _leave_checkpoints(path, [waiting.id])
 
         for target in (run_id, waiting.id):
             stopped = await client.post(
@@ -680,7 +683,7 @@ async def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
                 json={"reason": "Operator ended the review"},
             )
             assert stopped.status_code == 200
-            _wait_for_status(client, target, "cancelled")
+            await _wait_for_status(client, target, "cancelled")
 
     assert _rows(path, run_id) == (0, 0)
     assert _rows(path, waiting.id) == (0, 0)

@@ -1431,9 +1431,11 @@ async def test_restart_keeps_terminal_tool_status_without_a_receipt_unknown(tmp_
         item["recovered_from_restart_unknown"] for item in recovered.tool_history
     )
     assert all(
-        (await store.get(ToolCall, call_id)).status
-        in {ToolCallStatus.FAILED, ToolCallStatus.CANCELLED}
-        for call_id in ("failed-without-receipt", "cancelled-after-start")
+        status in {ToolCallStatus.FAILED, ToolCallStatus.CANCELLED}
+        for status in [
+            (await store.get(ToolCall, call_id)).status
+            for call_id in ("failed-without-receipt", "cancelled-after-start")
+        ]
     )
 
 
@@ -3643,6 +3645,8 @@ async def test_durable_session_rejects_divergent_or_forged_history(
         "tools_enabled": False,
         "initial_title_state": "generated",
         "mcp_server_ids": [],
+        "mcp_context_mode": "always_loaded",
+        "excluded_mcp_server_ids": [],
         "hook_ids": [],
         # Recorded even when unset: "the model's own default" is a choice the
         # operator can return to, so it has to round-trip as one.
@@ -3729,6 +3733,8 @@ async def test_existing_session_cursor_and_messages_roll_back_together(
         "tools_enabled": False,
         "initial_title_state": "generated",
         "mcp_server_ids": [],
+        "mcp_context_mode": "always_loaded",
+        "excluded_mcp_server_ids": [],
         "hook_ids": [],
         # Recorded even when unset: "the model's own default" is a choice the
         # operator can return to, so it has to round-trip as one.
@@ -4884,9 +4890,13 @@ async def test_persist_turn_inputs_refuses_a_waiting_callback_turn(tmp_path):
     service = ChatService(
         store, provider_factory=lambda _: FakeProvider(profile.id, local=True)
     )
+
     # The turn parked between prepare_async's pending_turn check and the
     # persist; the write-time guard must catch it on its own.
-    service.pending_turn = lambda session_id: None
+    async def _no_pending_turn(session_id):
+        return None
+
+    service.pending_turn = _no_pending_turn
 
     with pytest.raises(ChatHistoryConflict, match="already has an active response"):
         (
@@ -4968,7 +4978,7 @@ async def test_persist_turn_inputs_retries_against_a_session_written_during_prep
                 include_knowledge=False,
             )
         )
-        session_id = (await service.complete(first)).session_id
+        session_id = (await _complete_and_name(service, first)).session_id
         assert session_id is not None
 
         # A Core-side writer (naming task, subagent report, popup keepalive)

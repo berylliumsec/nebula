@@ -16,6 +16,7 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompactionError, ChatCompletionRequest, ChatService
 from nebula.v3.domain import (
+    utc_now,
     AgentRun,
     ContextMemory,
     ContextOwnerType,
@@ -378,10 +379,11 @@ async def test_chat_image_upload_preview_and_arbitrary_message_fork(
     original_transaction = store.transaction
     fork_transactions = 0
 
-    async def count_fork_transaction():
+    def count_fork_transaction(**kwargs):
+        # store.transaction is an async context manager factory: return it unentered.
         nonlocal fork_transactions
         fork_transactions += 1
-        return original_transaction()
+        return original_transaction(**kwargs)
 
     monkeypatch.setattr(store, "transaction", count_fork_transaction)
     latest_side = await client.post(
@@ -1372,10 +1374,12 @@ async def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert cleared.json()["metadata"]["allow_subagents"] is False
     assert cleared.json()["metadata"]["max_active_subagents"] is None
     # Everything else about the conversation still waits for the response.
+    # (#974 made a provider chat's MCP selection a next-turn setting, so hooks
+    # stand in for a selection that still waits.)
     selections = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
-        json={"reasoning_effort": "low", "mcp_server_ids": []},
+        json={"reasoning_effort": "low", "hook_ids": []},
     )
     assert selections.status_code == 409
     assert "response is active" in selections.json()["detail"]
@@ -1554,10 +1558,13 @@ async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
             status=ChatTurnStatus.ROUTING,
         )
     )
+    # #939 (831d0d0) replaced the harness_not_idle refusal with a deferred
+    # activation: the switch is compatible and waits for active work to end.
     active = await client.post(endpoint, headers=_auth(), json=request)
     assert active.status_code == 200, active.text
-    assert active.json()["reason_code"] == "harness_not_idle"
-    assert "active response" in active.json()["reason"]
+    assert active.json()["compatible"] is True
+    assert active.json()["activation"] == "after_active_work"
+    assert "current response" in active.json()["activation_reason"]
     (await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE}))
     queue = await store.create(
         ChatQueue(
@@ -1567,8 +1574,8 @@ async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
         )
     )
     queued = await client.post(endpoint, headers=_auth(), json=request)
-    assert queued.json()["reason_code"] == "harness_not_idle"
-    assert "queued follow-ups" in queued.json()["reason"]
+    assert queued.json()["activation"] == "after_active_work"
+    assert "saved follow-ups" in queued.json()["activation_reason"]
     (await store.update(ChatQueue, queue.id, {"items": []}))
     (
         await store.create(
@@ -1578,12 +1585,15 @@ async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
                 objective="Still working",
                 completion_criteria=["Done"],
                 status=ChatGoalStatus.RUNNING,
+                execution_owner_id="core-worker",
+                execution_claim_id="goal-turn-claim",
+                execution_claimed_at=utc_now(),
             )
         )
     )
     running = await client.post(endpoint, headers=_auth(), json=request)
-    assert running.json()["reason_code"] == "harness_not_idle"
-    assert "Pause the running goal" in running.json()["reason"]
+    assert running.json()["activation"] == "after_active_work"
+    assert "goal turn" in running.json()["activation_reason"]
     assert (await store.get(ChatSession, session.id)).backend == ChatBackend.HARNESS
 
 
@@ -2057,7 +2067,7 @@ async def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_
     profile = await store.create(
         ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
     )
-    parent, other, child = (
+    parent, other, child = [
         (
             await store.create(
                 ChatSession(
@@ -2078,7 +2088,7 @@ async def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_
                 {"parent_session_id": "parent", "metadata": {"subagent_id": "sub"}},
             ),
         )
-    )
+    ]
     (
         await store.create(
             ChatSubagent(

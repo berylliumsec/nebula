@@ -109,9 +109,9 @@ async def test_sources_must_be_exact_and_forks_keep_applicable_provenance(tmp_pa
             },
         )
     ).status_code == 200
-    before = queue.chat.fork_session("s", before_message_id="source")
+    before = await queue.chat.fork_session("s", before_message_id="source")
     assert (await decision_snapshot(store, before.id, "p")) == []
-    after = queue.chat.fork_session("s", through_message_id="source")
+    after = await queue.chat.fork_session("s", through_message_id="source")
     copied = await decision_snapshot(store, after.id, "p")
     assert copied[0]["source_message_id"] == "source"
     assert copied[0]["id"] != "d"

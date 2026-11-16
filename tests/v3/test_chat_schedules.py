@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
+from nebula.v3.async_utils import drain_callback_tasks
 from nebula.v3.chat import ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.chat_schedules import (
@@ -236,6 +237,8 @@ async def _fire_and_settle(service: ChatService) -> None:
         if runtime.task is not None and not runtime.task.done()
     ]:
         await asyncio.gather(*pending, return_exceptions=True)
+    # The schedule records its outcome from an async done callback.
+    await drain_callback_tasks()
 
 
 async def test_due_schedule_runs_a_goal_turn(tmp_path):
@@ -578,8 +581,8 @@ async def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
         await asyncio.wait_for(provider.entered.wait(), 5)
 
     async with TestClient(create_app(store, auth_token="test-token")) as client:
-        client.portal.call(services[0].fire_due_schedules)
-        client.portal.call(entered)
+        await services[0].fire_due_schedules()
+        await entered()
         started = await ChatScheduleService(store).get("session")
         assert started.last_status == "started"
         turn_id = started.last_turn_id
@@ -595,6 +598,7 @@ async def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
         # The follow route attaches to this runtime (its gate) and streams the
         # frames it produces from here on.
         assert services[0].has_provider_turn_stream(turn_id)
+        turn_task = services[0]._active_provider_turns[turn_id].task
 
         async def follow_while_it_runs():
             frames: list[dict] = []
@@ -609,13 +613,17 @@ async def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
             await asyncio.wait_for(follower, 5)
             return frames
 
-        frames = client.portal.call(follow_while_it_runs)
+        frames = await follow_while_it_runs()
 
         types = [frame["type"] for frame in frames]
         assert types[0] == "queued" and "admitted" in types
         assert types[-1] == "done"
         assert frames[-1]["message"]["content"].startswith("Evidence-backed answer")
         assert {frame["epoch"] for frame in frames} == {frames[0]["epoch"]}
+        # The schedule records its outcome from the turn task's async done
+        # callback, after the stream's final frame.
+        await asyncio.wait_for(asyncio.gather(turn_task, return_exceptions=True), 5)
+        await drain_callback_tasks()
         assert (
             await ChatScheduleService(store).get("session")
         ).last_status == "complete"
