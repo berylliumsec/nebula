@@ -73,6 +73,7 @@ from .storage import (
     revise_latest,
 )
 from .runtime_platform import (
+    AutomationRuntimeNotPrepared,
     OperatorRuntimeResolution,
     RuntimePlatform,
     RuntimePlatformError,
@@ -348,6 +349,9 @@ class ExecutionService:
                 try:
                     (await self._resolve(engagement_id, language, network=network))
                     results[network] = None
+                except AutomationRuntimeNotPrepared as exc:
+                    # diagnostic-expected: an unprepared runtime is reported in the capability detail, not as a failure.
+                    results[network] = str(exc)
                 except (RuntimePlatformError, ExecutionServiceError) as exc:
                     record_caught_exception(
                         "executions",

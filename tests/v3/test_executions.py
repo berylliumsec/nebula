@@ -131,11 +131,11 @@ class StubExecutionPlatform:
         )
         self.image = "sha256:" + "b" * 64
 
-    def workspace_for(self, engagement_id: str):
+    async def workspace_for(self, engagement_id: str):
         del engagement_id
         return self.workspace
 
-    def resolve_operator_runtime(
+    async def resolve_operator_runtime(
         self, engagement_id: str, language: str, *, network: bool
     ) -> OperatorRuntimeResolution:
         del engagement_id, network
@@ -227,6 +227,50 @@ async def test_run_capability_requires_unrestricted_network_runtime(tmp_path):
     assert all(not runtime.scoped_network for runtime in capabilities.runtimes)
     assert all(not runtime.unrestricted_network for runtime in capabilities.runtimes)
     assert capabilities.ready is False
+
+
+async def test_unprepared_runtime_reads_as_a_capability_detail_not_a_failure(
+    tmp_path, monkeypatch
+):
+    """A Core without a prepared Kali runtime records no error on each read."""
+    from nebula.v3 import executions
+    from nebula.v3.runtime_platform import AutomationRuntimeNotPrepared
+
+    (
+        _store,
+        _artifacts,
+        engagement,
+        _policy,
+        _runner,
+        service,
+        _request,
+    ) = await _fixture(tmp_path)
+    assert service.tool_platform is not None
+    recorded: list[str] = []
+
+    def record(_feature, event_code, *_args, **_kwargs):
+        recorded.append(event_code)
+
+    async def not_prepared(engagement_id: str, language: str, *, network: bool):
+        raise AutomationRuntimeNotPrepared("prepare the Kali automation runtime first")
+
+    monkeypatch.setattr(executions, "record_caught_exception", record)
+    service.tool_platform.resolve_operator_runtime = not_prepared  # type: ignore[method-assign]
+    capabilities = await service.capabilities(engagement.id)
+
+    assert capabilities.ready is False
+    assert {runtime.detail for runtime in capabilities.runtimes} == {
+        "prepare the Kali automation runtime first"
+    }
+    assert recorded == []
+
+    # A real runtime fault is still recorded as a failure.
+    async def broken(engagement_id: str, language: str, *, network: bool):
+        raise RuntimePlatformError("egress helper unavailable")
+
+    service.tool_platform.resolve_operator_runtime = broken  # type: ignore[method-assign]
+    await service.capabilities(engagement.id)
+    assert recorded and set(recorded) == {"executions.executions.caught_failure_002"}
 
 
 @async_test
