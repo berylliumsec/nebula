@@ -146,6 +146,13 @@ function AssistantShellHandoff() {
 export function App() {
   const { api, health, reconnect } = useWorkspace();
   const location = useLocation();
+  // A start or restart is not a hold: keep the workspace's reconnect handling
+  // and send the operator to memory settings only when admission was refused.
+  if (health?.apiReady === false && (health.apiAdmission === "starting" || health.apiAdmission === "stopping")) return <main className="page" id="main-content">
+    <h1>{health.apiAdmission === "stopping" ? "Core is stopping" : "Core is starting"}</h1>
+    <p role="status">The workspace reopens when Core is ready. Saved work and unsent drafts are kept.</p>
+    <button className="button quiet" type="button" onClick={reconnect}>Check workspace availability</button>
+  </main>;
   if (health?.apiReady === false) return <main className="page" id="main-content">
     <h1>Core recovery</h1>
     <p>Core needs a memory budget before the workspace can start. Saved work remains available after recovery.</p>

@@ -9,7 +9,7 @@ from typing import Literal
 
 import httpx
 
-from .database import RuntimeReleaseRow
+from .database import DeploymentHostRow, RuntimeReleaseRow
 from .deployment_protocol import ReleaseManifest
 from .release_store import ReleaseIntegrityError, ReleaseStore
 from .runtime_coordination import CoordinationConflict
@@ -25,6 +25,9 @@ API_PROBE_TIMEOUT = 1.0
 API_PROBE_TTL = 1.0
 
 ApiState = Literal["ready", "not_responding", "unavailable"]
+# Why an unavailable API is not serving: a refused admission (for example a
+# missing memory reserve), a coordinated shutdown, or a start still in progress.
+ApiAdmission = Literal["held", "stopping", "starting"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,8 @@ class RuntimeBootstrap:
         self.coordinator, self.routing = coordinator, routing
         self.assets: RecoveryAssets | None = None
         self._probe: tuple[str, float, bool] | None = None
+        # The last refused API admission, set and cleared by automatic admission.
+        self.api_admission_hold: str | None = None
 
     async def select_release(self, version: str) -> None:
         """Select only a registered, completely verified retained bundle.
@@ -117,9 +122,21 @@ class RuntimeBootstrap:
         self._probe = (upstream.endpoint, loop.time() + API_PROBE_TTL, answered)
         return answered
 
+    async def api_admission(self) -> ApiAdmission:
+        """Why an unavailable API is not serving, so a restart is not a hold."""
+        async with self.coordinator.database.session() as session:
+            host = await session.get(DeploymentHostRow, "host")
+        if host is not None and host.shutdown_requested:
+            return "stopping"
+        return "held" if self.api_admission_hold is not None else "starting"
+
     async def health(self) -> dict:
         state = await self.api_state()
         ready = state == "ready"
+        if ready:
+            # A serving API supersedes any earlier refusal, however it was promoted.
+            self.api_admission_hold = None
+        admission = await self.api_admission() if state == "unavailable" else None
         return {
             **build_metadata(),
             **(await self.coordinator.database.health()),
@@ -132,6 +149,7 @@ class RuntimeBootstrap:
             "api_version": "v1",
             "api_ready": ready,
             "api_state": state,
+            "api_admission": admission,
             "recovery_path": RECOVERY_PATH,
             "recovery_version": self.assets.version if self.assets else None,
             # Host availability does not prove a project runtime or runner is ready.

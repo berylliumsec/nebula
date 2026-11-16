@@ -8,9 +8,9 @@ from sqlalchemy import select
 
 from nebula.v3.database import RuntimeProcessRow
 from nebula.v3.memory_budget import MemoryBudgetService
-from nebula.v3.memory_policy import GIB, MemoryAdministratorLimits, MemoryBudgetError
+from nebula.v3.memory_policy import GIB, MemoryAdministratorLimits
 from nebula.v3.release_store import ReleaseIntegrityError
-from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_coordination import CoordinationConflict, OperationRejected
 from nebula.v3.runtime_memory import RuntimeMemoryAdmission
 from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_runtime_coordination import location as location
@@ -173,7 +173,8 @@ async def test_paired_browser_repairs_memory_before_real_api_admission(recovery)
     root, client = recovery.root, recovery.client
     identity = await client.get("/api/v1/runtime/identity", headers=AUTH)
     assert identity.status_code == 200 and identity.json()["principal_id"] == "operator"
-    with pytest.raises(MemoryBudgetError, match="Core reserve"):
+    # Admission reports the budget refusal as a retryable rejection (#1022).
+    with pytest.raises(OperationRejected, match="Core reserve"):
         await root.prepare_api("v1")
     offer = await invite(client)
     paired = await client.post("/api/v1/auth/pairings/redeem", json=redeem(offer))
@@ -262,3 +263,57 @@ async def test_health_reports_ready_only_while_the_promoted_api_answers(
     if failure == "frozen":
         health = (await client.get("/api/v1/health", headers=AUTH)).json()
         assert (health["api_ready"], health["api_state"]) == (True, "ready")
+
+
+async def test_health_tells_a_starting_or_stopping_api_from_a_held_one(recovery):
+    """Only a refused API admission sends the operator to memory recovery."""
+    from nebula.v3.database import DeploymentHostRow
+    from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
+
+    root, client = recovery.root, recovery.client
+
+    async def health():
+        response = await client.get("/api/v1/health", headers=AUTH)
+        assert response.status_code == 200
+        return response.json()
+
+    # Before admission has been tried, an unpromoted API is still starting.
+    starting = await health()
+    assert (starting["api_state"], starting["api_admission"]) == (
+        "unavailable",
+        "starting",
+    )
+
+    # Without a memory reserve, automatic admission refuses the API.
+    await recovery.managed.stage("v1", _API_WORKER)
+    automatic = RuntimeAutoAdmission(root, default_version="v1")
+    await automatic.reconcile()
+    held = await health()
+    assert (held["api_ready"], held["api_admission"]) == (False, "held")
+
+    # A saved reserve admits it; a serving API reports no admission state.
+    policy = (await client.get(MEMORY, headers=AUTH)).json()
+    saved = await client.put(
+        MEMORY,
+        headers=AUTH,
+        json={
+            "expected_revision": policy["revision"],
+            "policy": reserve_policy(policy),
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    await automatic.reconcile()
+    ready = await health()
+    assert (ready["api_state"], ready["api_admission"]) == ("ready", None)
+    assert root.bootstrap.api_admission_hold is None
+
+    # A coordinated shutdown fences the API: it is stopping, not held.
+    async with recovery.managed.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        host.shutdown_requested, host.api_runtime_id = True, None
+        await session.commit()
+    stopping = await health()
+    assert (stopping["api_state"], stopping["api_admission"]) == (
+        "unavailable",
+        "stopping",
+    )

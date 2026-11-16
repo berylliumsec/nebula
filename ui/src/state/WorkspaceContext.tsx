@@ -311,7 +311,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           setHealth(nextHealth);
           if (nextHealth.apiReady === false) {
             connectionLost.current = false;
-            setCoreError("Core needs a memory budget before the workspace can start.");
+            setCoreError(nextHealth.apiAdmission === "starting" ? "Core is starting."
+              : nextHealth.apiAdmission === "stopping" ? "Core is stopping."
+              : "Core needs a memory budget before the workspace can start.");
             setWorkspaceState("degraded");
             return;
           }
