@@ -163,13 +163,9 @@ async def test_work_project_batch_links_existing_projects_and_prevents_cycles(tm
         await client.patch("/api/v1/work/projects", headers=auth, json=body)
     ).json() == {"updated": 0}
     reloaded = NebulaStore(path)
-    assert all(
-        (await reloaded.get(Engagement, child.id)).parent_engagement_id == parent.id
-        for child in children
-    )
-    assert all(
-        (await reloaded.get(Engagement, child.id)).work_enabled for child in children
-    )
+    reloaded_children = [await reloaded.get(Engagement, child.id) for child in children]
+    assert all(child.parent_engagement_id == parent.id for child in reloaded_children)
+    assert all(child.work_enabled for child in reloaded_children)
     assert not (await reloaded.get(Engagement, parent.id)).work_enabled
     cycle = await client.patch(
         "/api/v1/work/projects",

@@ -226,7 +226,7 @@ async def test_a_12k_turn_whose_replay_only_needs_folding_keeps_its_conversation
     assert not _blind(routing)
 
 
-def test_a_small_window_bounds_its_receipts_to_a_share_of_its_capacity(tmp_path):
+async def test_a_small_window_bounds_its_receipts_to_a_share_of_its_capacity(tmp_path):
     # 15% of the capacity below about 36,000 tokens, never below 2 KiB.
     assert checkpoint_byte_limit(6_692) == 1_003 * 3
     assert checkpoint_byte_limit(10_500) == 1_575 * 3
@@ -236,12 +236,12 @@ def test_a_small_window_bounds_its_receipts_to_a_share_of_its_capacity(tmp_path)
     assert checkpoint_byte_limit(128_000) == CHECKPOINT_BYTE_LIMIT
     assert checkpoint_byte_limit(1_000_000) == CHECKPOINT_BYTE_CEILING
 
-    store, turn, ledger = _ledger_turn(tmp_path)
+    store, turn, ledger = await _ledger_turn(tmp_path)
     entries = [
         _step(step, "failed" if step % 10 == 3 else "complete") for step in range(40)
     ]
     limit = checkpoint_byte_limit(7_500)
-    checkpoint = ledger._write_checkpoint(turn.id, entries, byte_limit=limit)
+    checkpoint = await ledger._write_checkpoint(turn.id, entries, byte_limit=limit)
     summary = checkpoint.summary
     assert len(_canonical(summary)) <= limit
     # What it drops it counts; the newest receipts stay.

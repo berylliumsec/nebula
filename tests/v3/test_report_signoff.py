@@ -1,3 +1,4 @@
+import contextlib
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
@@ -254,6 +255,15 @@ async def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
 
     async def render() -> tuple[ReportRender, str]:
         service = ReportRenderService(store=store, artifact_store=artifacts)
+
+        # Since 64e0379 PDF computation is held until a memory-managed CPU
+        # runner exists (tests/v3/test_memory_paths.py covers that hold). Stand
+        # in for a protected runner so this gate still proves the signed report
+        # renders to a real PDF.
+        async def protected_runner(render, snapshot):
+            return service._build_pdf(snapshot)
+
+        service._render_pdf_with_budget = protected_runner
         queued = await service.request_render(
             signed.id, report_revision=signed.revision
         )
@@ -355,25 +365,28 @@ async def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
 
     # The sign-off timestamp is taken right before the committing transaction
     # opens; a status change landing at that moment must still be caught by the
-    # validation that runs inside the transaction.
-    import nebula.v3.report_signoff as signoff_module
+    # validation that runs inside the transaction. The store is async now, so
+    # the change lands as the transaction opens instead of inside the sync
+    # utc_now() call.
+    real_transaction = store.transaction
+    flipping = False
 
-    real_utc_now = signoff_module.utc_now
-
-    async def flip_finding_then_now():
-        current = await store.get(Finding, flipped.id)
-        if current.status == FindingStatus.VALIDATED:
-            (
-                await store.update(
-                    Finding,
-                    flipped.id,
-                    {"status": FindingStatus.FALSE_POSITIVE},
-                    expected_revision=current.revision,
-                )
+    @contextlib.asynccontextmanager
+    async def flip_finding_then_transaction(*args, **kwargs):
+        nonlocal flipping
+        current = None if flipping else await store.get(Finding, flipped.id)
+        if current is not None and current.status == FindingStatus.VALIDATED:
+            flipping = True
+            await store.update(
+                Finding,
+                flipped.id,
+                {"status": FindingStatus.FALSE_POSITIVE},
+                expected_revision=current.revision,
             )
-        return real_utc_now()
+        async with real_transaction(*args, **kwargs) as transaction:
+            yield transaction
 
-    monkeypatch.setattr(signoff_module, "utc_now", flip_finding_then_now)
+    monkeypatch.setattr(store, "transaction", flip_finding_then_transaction)
     with pytest.raises(ConflictError, match="must be validated"):
         (
             await sign_off_report(
