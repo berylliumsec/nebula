@@ -1,43 +1,25 @@
 {
-  "change_digest": "10149628e944bfce854885e15aca7889353826fa20d38d2871f21249bbc24e5c",
-  "reviewed_by": "Claude (health-liveness) and implementing agent; reconciled for merge with origin/main",
-  "reason": "This merge combines two focused changes. The health-liveness change adds an unauthenticated, database-free /health/live endpoint and updates the UI connection monitor to use lightweight liveness checks while idle; its selected Python and frontend regressions cover authentication, supervisor behavior, and the mocked outage journeys. The main-branch orphan-recovery change releases only paired orphan claims for failed provider turns after durable tool, hook, child, and approval checks; its six selected regressions cover retained history and unsafe or mismatched durable effects. The selected Python cases are expected to collect 48 tests across SQLite and PostgreSQL where applicable.",
-  "exclusions": "Only the three exact health-liveness Python cases and six exact runtime-orphan-recovery cases are selected. The health-liveness frontend files and six existing Playwright journey entries remain selected. Other Python suites, frontend files, native tests, production Core access, and live provider or Mac operations are excluded. PostgreSQL variants use disposable CI PostgreSQL only. Python 3.11 and 3.12 are selected to retain each change's reviewed runtime coverage.",
-  "python_browser": false,
-  "python_node": false,
+  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
+  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
+  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
+  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
   "python_versions": [
-    "3.11",
     "3.12"
   ],
+  "python_browser": false,
+  "python_node": false,
   "expected_tests": {
-    "python": 48,
-    "frontend": 27,
+    "python": 4,
+    "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py::test_liveness_answers_without_credentials",
-    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
-    "tests/v3/test_supervisor.py::test_liveness_answers_without_credentials_database_or_worker",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_turn_releases_only_paired_claims_and_keeps_history",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_is_retained_while_effect_is_unconfirmed",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_requires_exact_paired_goal_claim",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_or_mismatched_approval",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_tool_call_approval",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_unsettled_or_mismatched_approval_links"
+    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
+    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
   ],
-  "frontend": [
-    "ui/src/state/useCoreConnectionMonitor.test.tsx",
-    "ui/src/api/clientHealth.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "core-connection-resilience/desktop",
-    "core-connection-resilience/mobile-chromium",
-    "core-connection-resilience/mobile-webkit",
-    "composer-draft-continuity/desktop",
-    "composer-draft-continuity/mobile-chromium",
-    "composer-draft-continuity/mobile-webkit"
-  ],
+  "playwright": [],
   "checks": []
 }
