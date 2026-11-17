@@ -21,6 +21,7 @@ from pydantic import Field, SecretStr
 from sqlalchemy import select
 
 from .database import (
+    DeploymentHostRow,
     DeploymentReceiptRow,
     ProjectOwnershipRow,
     RuntimeInstanceRow,
@@ -35,7 +36,9 @@ from .deployments import DeploymentCoordinator
 from .domain import NebulaModel
 from .diagnostics import record_diagnostic
 from .process_identity import (
+    ProcessIdentityUnavailable,
     birth_boot,
+    kill_process_session,
     origin_boot,
     origin_from_previous_boot,
     process_birth,
@@ -58,6 +61,28 @@ if TYPE_CHECKING:
 ORIGIN_MARKER = "process-origin.json"
 # A worker that died with the previous boot stops renewing within one lease.
 PREVIOUS_BOOT_LEASE_WAIT_SECONDS = LEASE_MS / 1000 + 5
+
+
+def _unresponsive_worker_grace_ms() -> int:
+    raw = os.getenv("NEBULA_V3_UNRESPONSIVE_WORKER_GRACE_SECONDS")
+    try:
+        seconds = float(raw) if raw else 15.0
+    except ValueError:
+        # diagnostic-expected: an unparseable override keeps the documented default.
+        seconds = 15.0
+    return int(min(max(seconds, 5.0), 600.0) * 1000)
+
+
+# An execution worker whose lease lapsed this long ago (on the database clock)
+# and that also fails a fresh liveness call is frozen or hung: a live worker
+# renews every five seconds on the same event loop that serves its control
+# socket, and a lapsed lease can never be renewed again, so the worker could
+# only exit. The supervisor then SIGKILLs its verified session so dead-owner
+# recovery can run. Override with NEBULA_V3_UNRESPONSIVE_WORKER_GRACE_SECONDS
+# (clamped to 5..600 s; default 15 s).
+UNRESPONSIVE_WORKER_GRACE_MS = _unresponsive_worker_grace_ms()
+# How long the liveness call may take before the worker counts as unresponsive.
+UNRESPONSIVE_WORKER_PROBE_SECONDS = 5.0
 
 
 def _private_directory(details: os.stat_result | None) -> bool:
@@ -1107,6 +1132,7 @@ class RuntimeProcessHost:
             child = self.children.get(runtime_id)
             if child is not None:
                 await asyncio.to_thread(child.wait, timeout=5)
+                self.children.pop(runtime_id, None)
             await self.coordinator.retired(identity)
             return identity
 
@@ -1255,9 +1281,133 @@ class RuntimeProcessHost:
             )
         return all(birth_boot(birth) != boot for birth in births)
 
+    def reap_exited_children(self) -> list[str]:
+        """Collect the exit status of every worker this host spawned that ended.
+
+        A worker that exits (lease lost, failed serving, killed) otherwise
+        stays a zombie of this supervisor until it exits itself.
+        """
+        reaped = []
+        for runtime_id, child in list(self.children.items()):
+            if child.poll() is not None:
+                self.children.pop(runtime_id, None)
+                if child.stdin is not None and not child.stdin.closed:
+                    child.stdin.close()
+                reaped.append(runtime_id)
+        return reaped
+
+    async def retire_unresponsive(
+        self,
+        identity: WorkerIdentity,
+        *,
+        grace_ms: int | None = None,
+    ) -> bool:
+        """SIGKILL a frozen or hung execution worker whose lease lapsed.
+
+        Only an execution incarnation recorded by this host's namespace, whose
+        runtime lease expired more than ``grace_ms`` ago on the database clock,
+        that fails a fresh authenticated liveness call, and whose pidfd-pinned
+        kernel birth still matches is killed, with its whole session. The API
+        worker and this supervisor are never signalled. Its SQL authority is
+        already gone (an expired lease can never be renewed and every
+        execution transaction checks it), so killing only ends a process that
+        could otherwise hold its project forever. Returns True once the
+        original process is gone.
+        """
+        grace = UNRESPONSIVE_WORKER_GRACE_MS if grace_ms is None else grace_ms
+        if self.closed or self.lock.descriptor is None:
+            return False
+        if self.launch_origin is None or self.launch_origin != process_origin():
+            return False
+        if identity.role != "execution" or identity.pid in (
+            os.getpid(),
+            os.getppid(),
+        ):
+            return False
+        async with self.coordinator.database.session() as session:
+            process = await session.get(RuntimeProcessRow, identity.runtime_id)
+            instance = await session.get(RuntimeInstanceRow, identity.runtime_id)
+            host = await session.get(DeploymentHostRow, "host")
+            now = await self.coordinator.coordination._clock_ms(session)
+        if (
+            process is None
+            or process.state == "retired"
+            or process.role != "execution"
+            or (process.pid, process.process_birth)
+            != (identity.pid, identity.process_birth)
+            or instance is None
+            or instance.role != "execution"
+            or (host is not None and host.api_runtime_id == identity.runtime_id)
+        ):
+            return False
+        overdue_ms = now - instance.lease_expires_at_ms
+        if overdue_ms < grace:
+            return False
+        client = await self.rpc(identity.runtime_id)
+        try:
+            observed = await client.call(
+                "worker.identity", {}, timeout=UNRESPONSIVE_WORKER_PROBE_SECONDS
+            )
+            if WorkerIdentity.model_validate(observed) == identity:
+                # It still serves; its lease watcher will stop it on its own.
+                return False
+            failure = "its control socket answered for another incarnation"
+        except (OSError, httpx.HTTPError, RuntimeIpcError) as error:
+            # diagnostic-expected: an unanswered liveness call is the evidence recorded below.
+            failure = f"its liveness call failed ({type(error).__name__})"
+        finally:
+            await client.close()
+        try:
+            signalled = kill_process_session(identity.pid, identity.process_birth)
+        except ProcessIdentityUnavailable:
+            # diagnostic-expected: an unverifiable process is never signalled; recovery keeps waiting.
+            return False
+        if signalled:
+            record_diagnostic(
+                "warning",
+                "runtime",
+                "runtime.worker.unresponsive_retired",
+                "An execution worker stopped renewing its lease and did not "
+                "answer its liveness call; Core killed it so its project can "
+                "recover.",
+                outcome="recovered",
+                stage="recovery",
+                reason_code="timeout",
+                safe_failure_cause=failure,
+                metadata={
+                    "entity_id": identity.runtime_id,
+                    "entity_type": "execution_worker",
+                    "count": signalled,
+                    "result": (
+                        f"pid {identity.pid} killed with its session: lease "
+                        f"expired {overdue_ms / 1000:.1f} s ago and {failure}"
+                    ),
+                },
+            )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5
+        while loop.time() < deadline:
+            if not same_process(identity.pid, identity.process_birth):
+                # A killed multi-threaded leader shows as a zombie before its
+                # last thread ends; join our own child once it is reapable.
+                child = self.children.get(identity.runtime_id)
+                if child is not None:
+                    try:
+                        await asyncio.to_thread(
+                            child.wait, timeout=max(0.1, deadline - loop.time())
+                        )
+                    except subprocess.TimeoutExpired:
+                        # diagnostic-expected: a later rediscovery reaps it; the original process is already gone.
+                        pass
+                self.reap_exited_children()
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:
             raise RuntimeError("rediscovery requires the active supervisor host lock")
+        self.reap_exited_children()
         async with self.coordinator.database.session() as session:
             rows = list(
                 await session.scalars(

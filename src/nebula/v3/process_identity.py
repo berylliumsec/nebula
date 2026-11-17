@@ -168,6 +168,79 @@ def launch_owner_ended(origin: str | None, pid: int, birth: str) -> bool:
     return current is not None and origin == current and not same_process(pid, birth)
 
 
+def _session_of(pid: int) -> int | None:
+    """The Linux session id of a live, non-zombie process, or None."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        # diagnostic-expected: an exited or unreadable process is not a session member.
+        return None
+    if fields[0] == "Z":
+        return None
+    return int(fields[3])
+
+
+def kill_process_session(pid: int, birth: str) -> int:
+    """SIGKILL one verified session leader and every process in its session.
+
+    Workers start with ``start_new_session``, so their session id is their
+    PID. The leader is pinned with a pidfd and its kernel birth checked
+    before anything is signalled; while it lives, no other process can take
+    its session id, so each member is matched by session and signalled
+    through its own pidfd. Members go first so none can outlive a leader
+    whose PID could then be reused. Returns the number of processes
+    signalled; 0 when the leader is already gone or not the recorded
+    incarnation. Never signals this process or its own session.
+    """
+    if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
+        raise ProcessIdentityUnavailable(
+            "forced worker retirement requires Linux pidfd support"
+        )
+    if pid in (os.getpid(), os.getppid()) or pid == os.getsid(0):
+        raise ProcessIdentityUnavailable(
+            "refusing to signal this supervisor or its own session"
+        )
+    try:
+        leader = os.pidfd_open(pid)
+    except ProcessLookupError:
+        # diagnostic-expected: the worker exited before its pidfd was opened.
+        return 0
+    try:
+        if not same_process(pid, birth):
+            return 0
+        signalled = 0
+        if _session_of(pid) == pid:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit() or int(entry) == pid:
+                    continue
+                member = int(entry)
+                if _session_of(member) != pid:
+                    continue
+                try:
+                    descriptor = os.pidfd_open(member)
+                except ProcessLookupError:
+                    # diagnostic-expected: a session member exited first.
+                    continue
+                try:
+                    # Re-read after pinning: the PID now cannot be reused.
+                    if _session_of(member) == pid:
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                        signalled += 1
+                except ProcessLookupError:
+                    # diagnostic-expected: a session member exited first.
+                    pass
+                finally:
+                    os.close(descriptor)
+        try:
+            signal.pidfd_send_signal(leader, signal.SIGKILL)
+        except ProcessLookupError:
+            # diagnostic-expected: the leader exited on its own meanwhile.
+            return signalled
+        return signalled + 1
+    finally:
+        os.close(leader)
+
+
 def signal_process(pid: int, birth: str, selected_signal: int = signal.SIGTERM) -> bool:
     if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
         # Other platforms use authenticated IPC for graceful exit. Never use a

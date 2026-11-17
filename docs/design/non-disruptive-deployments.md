@@ -79,6 +79,24 @@ abandoned and the worker stops as before. LeaseLost and any other answer from
 SQL still stop it at once, and a renewal after reconnection cannot extend a
 lease the database has already expired.
 
+A worker renews its leases on the same event loop that serves its private
+control socket, so a frozen (SIGSTOP), blocked or deadlocked loop stops both.
+Such a process stays alive but can never renew its lapsed lease or commit SQL.
+When an execution owner's runtime lease has been expired for longer than a
+grace margin on the database clock (`UNRESPONSIVE_WORKER_GRACE_MS`, default
+15 seconds, overridden with `NEBULA_V3_UNRESPONSIVE_WORKER_GRACE_SECONDS`,
+clamped to 5–600 seconds) and a fresh authenticated liveness call to it fails,
+the supervisor pins the process with a pidfd, verifies its recorded kernel
+birth, and SIGKILLs it together with every process in its session. It records
+`runtime.worker.unresponsive_retired` with the runtime, PID, overdue time and
+reason, and ordinary dead-owner recovery follows in the same pass. A process
+whose identity cannot be verified, the API worker and the supervisor are never
+signalled this way. The supervisor also reaps every worker it spawned as soon
+as it exits, so an exited worker never lingers as a zombie; a zombie already
+counts as gone for recovery. A worker whose loop keeps running while an
+application task is wedged still renews and answers, so this path does not
+retire it.
+
 Project counters never reset. Claiming requires expiry or no owner. Every
 authoritative mutation must use `fenced`, which acquires the project write lock
 and checks both leases before and after the transaction. Keep these transactions
