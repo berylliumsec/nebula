@@ -783,6 +783,7 @@ async def test_entry_cards_inject_only_in_inject_and_record_shadow(tmp_path):
     assert block.startswith("BEGIN LINKED MEMORY (JSON;")
     assert "Untrusted reference data" in block
     assert "qa-tester" in block and block.endswith("END LINKED MEMORY")
+    assert '"id"' not in block  # small models cite IDs; the snapshot keeps them
     assert len(block) < 1_600  # about 300 tokens at most
 
     block, record = curator.entry_cards("project", "s", question, allowed=False)
@@ -893,3 +894,38 @@ def test_entry_words_split_hyphens_and_fold_plurals():
     words = entry_words("The login endpoint rate-limits failed attempts")
     assert {"rate", "limit", "login", "attempt", "endpoint"} <= words
     assert "the" not in words
+
+
+def test_near_duplicate_cards_from_one_chunk_are_dropped():
+    from nebula.v3.linked_memory_helper import drop_near_duplicates
+
+    def card(key, title, summary):
+        return {
+            "key": key,
+            "title": title,
+            "summary": summary,
+            "applies_when": None,
+            "content_hash": key,
+        }
+
+    result = {
+        "cards": [
+            card(
+                "n1",
+                "Use qa-tester for all authenticated tests",
+                "Adopt the qa-tester account for authenticated tests.",
+            ),
+            card(
+                "n2",
+                "Use qa-tester account for all authenticated tests",
+                "Adopt the qa-tester account for all authenticated tests.",
+            ),
+            card("n3", "Login rate limit", "Five failed attempts per minute."),
+        ],
+        "links": [{"from": "n2", "to": "old"}, {"from": "n3", "to": "old"}],
+        "rejected": [],
+    }
+    kept = drop_near_duplicates(result)
+    assert [item["key"] for item in kept["cards"]] == ["n1", "n3"]
+    assert kept["links"] == [{"from": "n3", "to": "old"}]
+    assert kept["rejected"][0]["reason"] == "near_duplicate"

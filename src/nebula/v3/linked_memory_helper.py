@@ -396,6 +396,47 @@ def rank_candidates(
     return scored[:limit]
 
 
+def drop_near_duplicates(
+    result: dict[str, Any],
+    *,
+    vectors: dict[str, list[float]] | None = None,
+    vector_threshold: float = 0.9,
+    lexical_threshold: float = 0.75,
+) -> dict[str, Any]:
+    """Keep the first of near-identical new cards from one chunk.
+
+    A small model often states one decision twice in different words; the
+    second copy would only take an entry-card slot. Its links go with it.
+    """
+
+    kept: list[dict[str, Any]] = []
+    dropped: set[str] = set()
+    for card in result["cards"]:
+        duplicate = False
+        for earlier in kept:
+            left = (vectors or {}).get(card["content_hash"])
+            right = (vectors or {}).get(earlier["content_hash"])
+            if left is not None and right is not None:
+                duplicate = cosine(left, right) >= vector_threshold
+            else:
+                duplicate = (
+                    lexical_similarity(card_text(card), card_text(earlier))
+                    >= lexical_threshold
+                )
+            if duplicate:
+                break
+        if duplicate:
+            dropped.add(card["key"])
+            result["rejected"].append(
+                {"title": card["title"][:80], "reason": "near_duplicate"}
+            )
+        else:
+            kept.append(card)
+    result["cards"] = kept
+    result["links"] = [link for link in result["links"] if link["from"] not in dropped]
+    return result
+
+
 def similar_links(
     cards: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
@@ -592,6 +633,7 @@ def handle(state: HelperState, request: dict[str, Any]) -> dict[str, Any]:
             {card["content_hash"]: card_text(card) for card in result["cards"]}
             | {card["id"]: card_text(card) for card in candidates}
         )
+        result = drop_near_duplicates(result, vectors=vectors)
         result["links"].extend(
             similar_links(result["cards"], candidates, result["links"], vectors=vectors)
         )

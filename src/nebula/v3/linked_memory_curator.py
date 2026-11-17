@@ -489,9 +489,10 @@ class LinkedMemoryCurator:
             summary = entry["summary"]
             if len(summary) > ENTRY_SUMMARY_CHARS:
                 summary = summary[: ENTRY_SUMMARY_CHARS - 1].rstrip() + "…"
+            # No card IDs: small models cite them in answers. The turn's
+            # request snapshot keeps the IDs for audit.
             cards.append(
                 {
-                    "id": card_id,
                     "kind": entry["kind"],
                     "title": entry["title"],
                     "summary": summary,
