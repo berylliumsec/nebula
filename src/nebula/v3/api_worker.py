@@ -25,8 +25,10 @@ from starlette.responses import JSONResponse, StreamingResponse
 from .authentication import CoreAuthentication
 from .database import RuntimeCommandRow
 from .authentication_api import AuthenticationApi
+from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from .deployments import DeploymentCoordinator
 from .domain import ChatTurn
+from .project_execution_status import project_execution_waiting
 from .runtime_chat_stream import RuntimeChatJournal
 from .runtime_coordination import CoordinationConflict, ProjectRetiring, REPORT_LANE
 from .runtime_delivery import (
@@ -411,10 +413,20 @@ def create_api_worker(
     async def status_payload(command_id: str, _actor: str):
         page = await delivery.page(_actor, command_id, limit=1)
         binding = await delivery.chat_binding(_actor, command_id)
+        waiting = None
+        if (
+            page.state in {"queued", "running"}
+            and page.project_id != GLOBAL_EXECUTION_PROJECT
+        ):
+            # "queued" or "running" alone cannot tell a moment's wait from a
+            # project whose worker is gone; say why nothing is progressing.
+            async with delivery.coordination.database.session() as session:
+                waiting = await project_execution_waiting(session, page.project_id)
         return {
             "command_id": command_id,
             "project_id": page.project_id,
             "state": page.state,
+            **({"execution": waiting.model_dump()} if waiting is not None else {}),
             **(
                 {
                     "turn_id": binding.turn_id,

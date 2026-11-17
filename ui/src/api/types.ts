@@ -1908,6 +1908,8 @@ export interface ChatGoal {
   handoffSourceSessionId?: Identifier;
   handoffTargetSessionId?: Identifier;
   handoffReason?: string;
+  /** Set when a running goal is not executing because no ready worker serves its project. */
+  executionWaiting?: { reason: "starting" | "held" | "closing"; detail: string };
   revision: number;
 }
 

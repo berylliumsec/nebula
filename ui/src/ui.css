@@ -342,6 +342,7 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-panel > header small > span + span::before { content: "·"; margin-right: 8px; color: var(--border-soft); }
 .chat-goal-status { text-transform: capitalize; font-weight: 650; }
 .chat-goal-status.running { color: var(--text-strong); }
+.chat-goal-status.waiting { color: var(--text-muted); }
 .chat-goal-details { display: grid; gap: 8px; }
 .chat-goal-details[hidden] { display: none; }
 .chat-goal-objective { min-width: 0; border-top: 1px solid var(--border-soft); }

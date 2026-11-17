@@ -34,6 +34,28 @@ it("shows an explicitly estimated token total while a goal turn streams", () => 
   expect(estimateLiveTokens("streaming response")).toBeGreaterThan(0);
 });
 
+it("labels a running goal as waiting while no worker executes its project", () => {
+  const waiting: ChatGoal = {
+    ...draft,
+    status: "running",
+    executionWaiting: { reason: "starting", detail: "The project's execution worker stopped responding. Saved work continues after automatic recovery." },
+  };
+  const view = render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={waiting} onChange={vi.fn()} /></DialogProvider>);
+  const status = document.querySelector(".chat-goal-status");
+  expect(status).toHaveTextContent("waiting");
+  expect(status).toHaveClass("waiting");
+  expect(status).not.toHaveTextContent("running");
+  expect(screen.getByRole("status")).toHaveTextContent("Saved work continues after automatic recovery.");
+
+  view.rerender(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={{ ...waiting, executionWaiting: { reason: "held", detail: "Project execution is held: Synthetic blocker" } }} onChange={vi.fn()} /></DialogProvider>);
+  expect(document.querySelector(".chat-goal-status")).toHaveTextContent("held");
+  expect(screen.getByRole("status")).toHaveTextContent("Synthetic blocker");
+
+  view.rerender(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={{ ...waiting, executionWaiting: undefined }} onChange={vi.fn()} /></DialogProvider>);
+  expect(document.querySelector(".chat-goal-status")).toHaveTextContent("running");
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
 it("counts streamed goal text incrementally with the same estimate as encoding it whole", () => {
   const chunks = ["plain ascii ", "café ", "日本語 ", "emoji 🚀 ", "\u{1F9EA}", "lone \uD800 surrogate"];
   let bytes = 0;
