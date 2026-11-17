@@ -1,22 +1,24 @@
 {
-  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
-  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
-  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
+  "change_digest": "a607479fc4d2de260df53214aaca4833309e8872c43cc2a7838df4dfb6806adb",
+  "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
+  "reason": "Automatic dead-owner recovery no longer waits on every unowned execution process; it holds a project's recovery only while an unowned process still holds that project's open resource, unfinished command or held capacity. The selected tests cover an idle stray that neither blocks nor is reused, a stray holding the project's effects that still blocks, another project's leftover that does not block, and the existing lost-prepare no-replay case, on SQLite and PostgreSQL.",
+  "exclusions": "No UI, frontend, native or browser changes. The admission path is unchanged, so admission suites are not selected; tests/v3/test_admission_retry.py was run locally and passes.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
+    "tests/v3/test_runtime_auto_recovery.py::test_idle_unassigned_execution_neither_blocks_nor_is_reused",
+    "tests/v3/test_runtime_auto_recovery.py::test_unassigned_execution_holding_project_effects_blocks_recovery",
+    "tests/v3/test_runtime_auto_recovery.py::test_another_projects_leftover_does_not_block_recovery",
+    "tests/v3/test_runtime_auto_recovery.py::test_uncertain_prepare_retains_process_and_never_replays"
   ],
   "frontend": [],
   "native": [],
