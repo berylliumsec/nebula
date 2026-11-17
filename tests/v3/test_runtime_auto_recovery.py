@@ -51,6 +51,8 @@ class Management:
         self.reject_reconciliation = False
         self.change_handoff = False
         self.abort_starts = 0
+        # "after_commit" or "before_commit": lose the reconciliation reply.
+        self.lose_reconciliation = None
 
     def ledger(self):
         return self.operations
@@ -60,6 +62,26 @@ class Management:
         if action == "reconcile_project":
             if self.reject_reconciliation:
                 raise OperationRejected("OS absence could not be confirmed")
+            lost, self.lose_reconciliation = self.lose_reconciliation, None
+            if lost == "before_commit":
+                raise OSError("connection reset before the commit")
+            if lost == "after_commit":
+                from nebula.v3.database import DeploymentReceiptRow
+                from nebula.v3.runtime_coordination import ProjectLease
+                from nebula.v3.runtime_orphan_recovery import orphan_receipt_key
+
+                async with self.coordinator.coordination._write() as session:
+                    session.add(
+                        DeploymentReceiptRow(
+                            id=orphan_receipt_key(
+                                ProjectLease(**values["expected_owner"])
+                            ),
+                            action="project.orphans_reconciled",
+                            result={"reconciled": True},
+                            occurred_at_ms=1,
+                        )
+                    )
+                raise OSError("connection reset after the commit")
             return {"reconciled": True}
         if action == "prepare_execution":
             if self.abort_starts:
@@ -406,6 +428,44 @@ async def test_refused_recovery_is_asked_again_later_with_the_same_operation(
     assert recovery.management.calls[1][2] == refused.operation_id
     rows = {row.operation_id: row for row in await operations(recovery)}
     assert rows[refused.operation_id].state == "succeeded"
+
+
+async def test_reconciliation_reply_lost_after_commit_continues_recovery(recovery):
+    recovery.management.lose_reconciliation = "after_commit"
+    await recovery.automatic.reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["reconcile_project"].state == "succeeded"
+    assert rows["reconcile_project"].result["dispatch_error_type"] == "OSError"
+    assert not recovery.diagnostics
+
+
+async def test_uncertain_reconciliation_without_effect_is_asked_again(recovery):
+    recovery.management.lose_reconciliation = "before_commit"
+    await recovery.automatic.reconcile()
+    [lost] = await operations(recovery)
+    assert lost.state == "uncertain"
+    # The next tick settles it from its absent durable receipt, never by
+    # dispatching it again; the refused-operation backoff then applies.
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
+    [settled] = await operations(recovery)
+    assert settled.state == "failed" and settled.result["reconciled"] is True
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["reconcile_project"].state == "succeeded"
 
 
 async def test_unknown_unassigned_execution_is_not_reused_or_duplicated(recovery):

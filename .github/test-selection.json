@@ -1,22 +1,23 @@
 {
-  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
-  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
-  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
+  "change_digest": "48b7646e6301f8ea1d885d4edc12a769cfb1f69035468f8d7e0aafec062e434d",
+  "reviewed_by": "Claude, based on an independently validated root cause (fresh subagent) and a scratch-Core double-kill reproduction",
+  "reason": "recover_project, reconcile_project and promote_api commit their effect in one transaction with an exactly keyed durable record, but any later error recorded an uncertain receipt that reconciliation could never settle; an uncertain automatic reconcile_project held recovery forever. The ledger now settles these receipts from that record at failure time and during reconciliation, and automatic recovery reconciles instead of holding. The selected files cover the ledger, automatic recovery and orphan reconciliation on SQLite and PostgreSQL.",
+  "exclusions": "No UI, frontend, native, browser or deployer-script changes. tests/v3/test_recovery_reconciliation.py was run locally but not selected: its retained-worker process test fails identically on clean origin/main.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 242,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
+    "tests/v3/test_runtime_operations.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_runtime_orphan_recovery.py"
   ],
   "frontend": [],
   "native": [],
