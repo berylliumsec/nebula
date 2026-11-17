@@ -1,22 +1,24 @@
 {
-  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
-  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
-  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
+  "change_digest": "15239c3dc3d820e299256111fa143a73409cf51fb1db4156623165e73344ed42",
+  "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
+  "reason": "A project worker whose serving application failed now exits after recording its failure, so Core's existing dead-owner reconciliation and recovery free the project. The selected tests cover the exit after the failure receipt, the retained hold for a startup failure and for a failure while closing, and close cleanup, on SQLite and PostgreSQL.",
+  "exclusions": "No UI, frontend, native or browser changes. Process-level worker suites are not selected because locally they import the primary checkout, not this branch; the change was exercised end to end on a scratch Core. tests/v3/test_recovery_reconciliation.py::test_retained_prepared_worker_survives_host_detach_and_new_host_activates_saved_recovery fails identically on clean main locally.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
+    "tests/v3/test_execution_worker.py::test_failed_startup_is_reported_and_same_grant_does_not_retry",
+    "tests/v3/test_execution_worker.py::test_serving_project_failure_exits_the_worker_after_its_receipt",
+    "tests/v3/test_execution_worker.py::test_failure_while_closing_keeps_the_worker",
+    "tests/v3/test_execution_worker.py::test_cancelled_close_waits_for_controller_cleanup"
   ],
   "frontend": [],
   "native": [],
