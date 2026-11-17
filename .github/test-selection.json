@@ -1,23 +1,21 @@
 {
-  "change_digest": "380625e6155f2d778efcec4b0db1c89b36e828de4500baf0685cb6eb570f24b5",
-  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Global orphan-event pruning runs on the unscoped supervisor database, not on project-scoped execution workers whose transactions lock their own project_ownership row and per-runtime advisory key. Selected: the host startup regression, a new regression that a scoped worker kernel starts no prune and its heartbeat is not queued, and the existing unscoped Core startup prune regression.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changed. test_supervisor.py process-level listener tests fail identically on origin/main locally and are not selected.",
+  "change_digest": "3f12da59ff2200619c7a3b4820c6e26cb3dd37eddd4e267b49a104d002795d95",
+  "reviewed_by": "Claude, based on an independently validated root cause (fresh subagent) and a rehearsal-Core reproduction",
+  "reason": "After reconcile-superseded-manual-deployment aligns deployer state to a manually installed release, the next managed promotion failed at host activation because every previous-host and rollback-target check required that release's managed simulation-acceptance.json. The deployer now binds a reconciled manual release to the manifest and executable digests its reconciliation recorded. The deploy-resume file covers the reconciliation, the new baseline verification, tamper refusal, and unchanged managed verification.",
+  "exclusions": "Only scripts/simulation/nebula_deployer.py and its deploy-resume tests change. No Core runtime, UI, frontend, native, or browser code changes.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 5,
+    "python": 60,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_supervisor.py::test_host_history_prune_uses_unscoped_database",
-    "tests/v3/test_event_history_retention.py::test_core_startup_prunes_history_of_deleted_records",
-    "tests/v3/test_worker_event_history_prune.py"
+    "tests/test_simulation_deploy_resume.py"
   ],
   "frontend": [],
   "native": [],
