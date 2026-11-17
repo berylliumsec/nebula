@@ -59,6 +59,20 @@ INTERRUPTED_COMMAND_RESULT = {
 }
 
 
+def orphan_receipt_key(expected_owner: ProjectLease) -> str:
+    """The durable receipt that records one expired owner's reconciliation."""
+    identity = hashlib.sha256(
+        (
+            expected_owner.project_id
+            + "\0"
+            + expected_owner.runtime_id
+            + "\0"
+            + str(expected_owner.fencing_token)
+        ).encode()
+    ).hexdigest()
+    return "orphan-recovery:" + identity
+
+
 async def reconcile_dead_project(
     coordinator: DeploymentCoordinator,
     expected_owner: ProjectLease,
@@ -74,16 +88,7 @@ async def reconcile_dead_project(
             "The original process namespace cannot be verified; retain this project's work"
         )
     coordination = coordinator.coordination
-    identity = hashlib.sha256(
-        (
-            expected_owner.project_id
-            + "\0"
-            + expected_owner.runtime_id
-            + "\0"
-            + str(expected_owner.fencing_token)
-        ).encode()
-    ).hexdigest()
-    receipt_key = "orphan-recovery:" + identity
+    receipt_key = orphan_receipt_key(expected_owner)
     store = NebulaStore(coordinator.database)
     chat = ChatService(store)
     try:

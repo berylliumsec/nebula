@@ -1,26 +1,23 @@
 {
-  "change_digest": "6b83f971220543b5610c0bef9e9dc47c07dd806929e3560c69a71c002e5ad245",
-  "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
-  "reason": "The simulation deployer's host restart boundary now names chat turns held by an unavailable execution owner instead of waiting out its bound. The selected tests cover a frozen owner, a failed owner, an owner Core recovers, a pinned live owner, and the existing wait-then-stop and never-quiet activation paths.",
-  "exclusions": "Only scripts/simulation/nebula_deployer.py and its restart test change; no Core, UI, frontend, native or browser code. test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop, test_host_switch_frees_an_orphan_left_by_a_stop_timeout (same file) and test_host_process_identity_accepts_verified_onefile_child fail identically on clean main locally and are unrelated to the boundary wait.",
+  "change_digest": "48b7646e6301f8ea1d885d4edc12a769cfb1f69035468f8d7e0aafec062e434d",
+  "reviewed_by": "Claude, based on an independently validated root cause (fresh subagent) and a scratch-Core double-kill reproduction",
+  "reason": "recover_project, reconcile_project and promote_api commit their effect in one transaction with an exactly keyed durable record, but any later error recorded an uncertain receipt that reconciliation could never settle; an uncertain automatic reconcile_project held recovery forever. The ledger now settles these receipts from that record at failure time and during reconciliation, and automatic recovery reconciles instead of holding. The selected files cover the ledger, automatic recovery and orphan reconciliation on SQLite and PostgreSQL.",
+  "exclusions": "No UI, frontend, native, browser or deployer-script changes. tests/v3/test_recovery_reconciliation.py was run locally but not selected: its retained-worker process test fails identically on clean origin/main.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 6,
+    "python": 242,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_host_restart.py::test_activation_stops_the_host_only_after_chat_turns_settle",
-    "tests/test_simulation_host_restart.py::test_activation_does_not_stop_the_host_while_chat_turns_stay_active",
-    "tests/test_simulation_host_restart.py::test_restart_boundary_names_a_turn_held_by_an_unresponsive_owner",
-    "tests/test_simulation_host_restart.py::test_restart_boundary_names_a_turn_held_by_a_failed_owner",
-    "tests/test_simulation_host_restart.py::test_restart_boundary_waits_out_an_owner_that_core_recovers",
-    "tests/test_simulation_host_restart.py::test_restart_boundary_does_not_blame_a_pinned_live_owner"
+    "tests/v3/test_runtime_operations.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_runtime_orphan_recovery.py"
   ],
   "frontend": [],
   "native": [],
