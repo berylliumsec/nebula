@@ -13,6 +13,7 @@ from nebula.v3.database import (
     RuntimeCommandRow,
     RuntimeProcessRow,
     RuntimeRecoveryRow,
+    RuntimeResourceRow,
 )
 from nebula.v3.domain import ChatSession, Engagement
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
@@ -51,6 +52,8 @@ class Management:
         self.reject_reconciliation = False
         self.change_handoff = False
         self.abort_starts = 0
+        # "after_commit" or "before_commit": lose the reconciliation reply.
+        self.lose_reconciliation = None
 
     def ledger(self):
         return self.operations
@@ -60,6 +63,26 @@ class Management:
         if action == "reconcile_project":
             if self.reject_reconciliation:
                 raise OperationRejected("OS absence could not be confirmed")
+            lost, self.lose_reconciliation = self.lose_reconciliation, None
+            if lost == "before_commit":
+                raise OSError("connection reset before the commit")
+            if lost == "after_commit":
+                from nebula.v3.database import DeploymentReceiptRow
+                from nebula.v3.runtime_coordination import ProjectLease
+                from nebula.v3.runtime_orphan_recovery import orphan_receipt_key
+
+                async with self.coordinator.coordination._write() as session:
+                    session.add(
+                        DeploymentReceiptRow(
+                            id=orphan_receipt_key(
+                                ProjectLease(**values["expected_owner"])
+                            ),
+                            action="project.orphans_reconciled",
+                            result={"reconciled": True},
+                            occurred_at_ms=1,
+                        )
+                    )
+                raise OSError("connection reset after the commit")
             return {"reconciled": True}
         if action == "prepare_execution":
             if self.abort_starts:
@@ -408,12 +431,104 @@ async def test_refused_recovery_is_asked_again_later_with_the_same_operation(
     assert rows[refused.operation_id].state == "succeeded"
 
 
-async def test_unknown_unassigned_execution_is_not_reused_or_duplicated(recovery):
+async def test_reconciliation_reply_lost_after_commit_continues_recovery(recovery):
+    recovery.management.lose_reconciliation = "after_commit"
+    await recovery.automatic.reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["reconcile_project"].state == "succeeded"
+    assert rows["reconcile_project"].result["dispatch_error_type"] == "OSError"
+    assert not recovery.diagnostics
+
+
+async def test_uncertain_reconciliation_without_effect_is_asked_again(recovery):
+    recovery.management.lose_reconciliation = "before_commit"
+    await recovery.automatic.reconcile()
+    [lost] = await operations(recovery)
+    assert lost.state == "uncertain"
+    # The next tick settles it from its absent durable receipt, never by
+    # dispatching it again; the refused-operation backoff then applies.
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
+    [settled] = await operations(recovery)
+    assert settled.state == "failed" and settled.result["reconciled"] is True
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["reconcile_project"].state == "succeeded"
+
+
+async def test_idle_unassigned_execution_neither_blocks_nor_is_reused(recovery):
+    """A stray unowned worker holding nothing (an abandoned deployment target,
+    a source not yet retired) cannot block recovery of an unrelated project;
+    recovery prepares and attaches only its own ledgered target."""
     async with recovery.coordinator.database.session() as session:
         session.add(process("unknown-target"))
     await recovery.automatic.reconcile()
+    calls = recovery.management.calls
+    assert [call[0] for call in calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    assert calls[2][1]["target_runtime_id"] == "prepared-target"
+    async with recovery.coordinator.database.session() as session:
+        stray = await session.get(RuntimeProcessRow, "unknown-target")
+        assert stray is not None and stray.state == "ready"
+
+
+def stray_terminal(project_id):
+    return RuntimeResourceRow(
+        id="terminal-" + project_id,
+        project_id=project_id,
+        runtime_id="unknown-target",
+        fencing_token=1,
+        kind="terminal",
+        state="open",
+        restoration="none",
+        detail="A terminal the stray worker still holds",
+        checkpoint={},
+        updated_at_ms=1_000_000,
+    )
+
+
+async def test_unassigned_execution_holding_project_effects_blocks_recovery(
+    recovery,
+):
+    async with recovery.coordinator.database.session() as session:
+        session.add(process("unknown-target"))
+        session.add(stray_terminal("one"))
+    await recovery.automatic.reconcile()
     assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
     assert len(await operations(recovery)) == 1
+    assert "unknown-target still holds project resources" in str(
+        recovery.diagnostics[-1]
+    )
+
+
+async def test_another_projects_leftover_does_not_block_recovery(recovery):
+    """A dead former owner of another project that still holds that
+    project's effects is that project's reconciliation, not this one's."""
+    async with recovery.coordinator.database.session() as session:
+        session.add(process("unknown-target"))
+        session.add(stray_terminal("two"))
+    await recovery.automatic.reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
 
 
 @pytest.mark.parametrize("held", ["shutdown", "archived"])

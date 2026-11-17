@@ -20,10 +20,12 @@ from .database import (
     ProjectAdmissionHoldRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
+    RuntimeCapacityReservationRow,
     RuntimeCommandRow,
     RuntimeProcessRow,
     RuntimeRecoveryRow,
     RuntimeReleaseRow,
+    RuntimeResourceRow,
 )
 from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
 from .diagnostics import record_caught_exception, record_diagnostic
@@ -33,6 +35,7 @@ from .runtime_coordination import (
     pending_storage_dispatches,
     project_worker_commands,
 )
+from .runtime_operations import _DURABLE_OUTCOME_ACTIONS
 from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
 
@@ -663,23 +666,53 @@ class RuntimeAutoAdmission:
         ).hexdigest()
         return "auto-recovery:" + digest
 
-    async def _has_unassigned_execution(self) -> bool:
-        async with self.supervisor.coordinator.database.session() as session:
-            return (
-                await session.scalar(
-                    select(RuntimeProcessRow.runtime_id)
-                    .where(
-                        RuntimeProcessRow.role == "execution",
-                        RuntimeProcessRow.state.in_(("reserved", "starting", "ready")),
-                        ~RuntimeProcessRow.runtime_id.in_(
-                            select(ProjectOwnershipRow.runtime_id).where(
-                                ProjectOwnershipRow.runtime_id.is_not(None)
-                            )
-                        ),
-                    )
-                    .limit(1)
+    async def _unassigned_execution_with_effects(self, project_id: str) -> str | None:
+        """An unowned execution process that may hold this project's effects.
+
+        Recovery attaches only the worker its own ledgered preparation
+        returned, and that deterministic operation is never dispatched twice,
+        so an idle unowned worker (a prepared deployment target, a source not
+        yet retired) neither competes with nor duplicates it. Recovery of a
+        project waits only while an unowned process holds what its retirement
+        would also wait for, for that project: an open resource, an unfinished
+        command or held capacity. Another project's leftovers stay with that
+        project's own reconciliation.
+        """
+        unowned = ~RuntimeProcessRow.runtime_id.in_(
+            select(ProjectOwnershipRow.runtime_id).where(
+                ProjectOwnershipRow.runtime_id.is_not(None)
+            )
+        )
+        holds = or_(
+            RuntimeProcessRow.runtime_id.in_(
+                select(RuntimeResourceRow.runtime_id).where(
+                    RuntimeResourceRow.project_id == project_id,
+                    RuntimeResourceRow.state != "closed",
                 )
-                is not None
+            ),
+            RuntimeProcessRow.runtime_id.in_(
+                select(RuntimeCommandRow.runtime_id).where(
+                    RuntimeCommandRow.project_id == project_id,
+                    RuntimeCommandRow.state.in_(("queued", "running", "uncertain")),
+                )
+            ),
+            RuntimeProcessRow.runtime_id.in_(
+                select(RuntimeCapacityReservationRow.runtime_id).where(
+                    RuntimeCapacityReservationRow.project_id == project_id,
+                    RuntimeCapacityReservationRow.state == "held",
+                )
+            ),
+        )
+        async with self.supervisor.coordinator.database.session() as session:
+            return await session.scalar(
+                select(RuntimeProcessRow.runtime_id)
+                .where(
+                    RuntimeProcessRow.role == "execution",
+                    RuntimeProcessRow.state.in_(("reserved", "starting", "ready")),
+                    unowned,
+                    holds,
+                )
+                .limit(1)
             )
 
     async def _recovery_operation(self, owner: dict, action: str, parameters: dict):
@@ -721,10 +754,27 @@ class RuntimeAutoAdmission:
             # Saved parameters and results are authoritative, including an
             # unknown spawn outcome after a host restart.
             receipt = await ledger.status(operation_id, actor_id=_RECOVERY_ACTOR)
+            if receipt["state"] == "uncertain" and action in _DURABLE_OUTCOME_ACTIONS:
+                # Settle it from its durable record: a committed effect is
+                # succeeded; a proven absent one is failed and is asked again
+                # after the refused-operation backoff. Never re-dispatched.
+                receipt = await ledger.reconcile(operation_id, actor_id=_RECOVERY_ACTOR)
+                if receipt["state"] == "failed":
+                    raise CoordinationConflict(
+                        f"Automatic recovery operation {operation_id} had no "
+                        "committed effect; it is asked again shortly"
+                    )
         else:
-            if action == "prepare_execution" and await self._has_unassigned_execution():
+            holder = (
+                await self._unassigned_execution_with_effects(owner["project_id"])
+                if action == "prepare_execution"
+                else None
+            )
+            if holder is not None:
                 raise CoordinationConflict(
-                    "An unassigned execution process needs explicit reconciliation before automatic recovery"
+                    f"Unassigned execution process {holder} still holds project "
+                    "resources, commands or capacity and needs explicit "
+                    "reconciliation before automatic recovery"
                 )
 
             async def dispatch(name, values):
