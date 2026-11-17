@@ -61,6 +61,17 @@ INTERRUPTED_COMMAND_RESULT = {
 }
 
 
+UNMATCHED_CALLBACK_DETAIL = (
+    "Project runtime stopped while this response was continuing from a "
+    "callback whose outcome could not be matched. Review the response before "
+    "resuming; no effect has been retried."
+)
+UNCONFIRMED_ADAPTER_DETAIL = (
+    "The project worker stopped before the adapter handoff was acknowledged. "
+    "No work was replayed."
+)
+
+
 def orphan_receipt_key(expected_owner: ProjectLease) -> str:
     """The durable receipt that records one expired owner's reconciliation."""
     identity = hashlib.sha256(
@@ -153,8 +164,14 @@ async def reconcile_dead_project(
                                 )
                             ),
                             and_(
-                                EntityRow.payload["status"].as_string()
-                                == ChatTurnStatus.WAITING_CALLBACK.value,
+                                EntityRow.payload["status"]
+                                .as_string()
+                                .in_(
+                                    (
+                                        ChatTurnStatus.WAITING_CALLBACK.value,
+                                        ChatTurnStatus.WAITING_APPROVAL.value,
+                                    )
+                                ),
                                 EntityRow.payload["execution_claim_id"]
                                 .as_string()
                                 .is_not(None),
@@ -165,6 +182,18 @@ async def reconcile_dead_project(
                     .limit(MAX_ORPHAN_ROWS + 1)
                 )
             )
+            # A turn parked for a decision nobody has made yet keeps waiting:
+            # only its claim is released below. One whose approved call was
+            # resuming when the owner died is interrupted like a running turn,
+            # its started call kept as an unknown effect.
+            rows = [
+                row
+                for row in rows
+                if row.payload.get("status") != ChatTurnStatus.WAITING_APPROVAL.value
+                or not await _awaits_undecided_approval(
+                    store, ChatTurn.model_validate(row.payload)
+                )
+            ]
             resources = list(
                 await session.scalars(
                     select(RuntimeResourceRow)
@@ -192,6 +221,7 @@ async def reconcile_dead_project(
                     {"chat_turn_id": turn.id},
                     engagement_id=expected_owner.project_id,
                 )
+                unmatched_callback = None
                 if turn.status == ChatTurnStatus.WAITING_CALLBACK:
                     history = await chat._turn_history(turn)
                     pending = history[-1] if history else {}
@@ -206,21 +236,47 @@ async def reconcile_dead_project(
                         for call in calls
                     )
                     if not (waiting_subagent or unknown_tool):
-                        raise CoordinationConflict(
-                            "An orphaned command callback still requires effect reconciliation"
-                        )
+                        # A worker resuming a callback claims the turn before
+                        # it moves on, so its last step need not be the wait.
+                        # Nobody alive can finish it: interrupt it for review
+                        # like an unknown effect, never resuming it by itself.
+                        unmatched_callback = {
+                            key: pending.get(key)
+                            for key in ("tool_call_id", "process_id", "status")
+                            if isinstance(pending.get(key), str)
+                        }
                 hooks = await store.find_entities(
                     NativeHookExecution,
                     {"chat_turn_id": turn.id},
                     engagement_id=expected_owner.project_id,
                 )
-                await chat._interrupt_orphaned_turn(
+                interrupted_turn = await chat._interrupt_orphaned_turn(
                     turn,
                     calls,
                     hooks,
                     cause="Project runtime stopped",
                     transaction=transaction,
                 )
+                if unmatched_callback is not None:
+                    recovery = dict(
+                        interrupted_turn.request_snapshot.get("recovery") or {}
+                    )
+                    await transaction.update(
+                        ChatTurn,
+                        turn.id,
+                        {
+                            "error": UNMATCHED_CALLBACK_DETAIL,
+                            "request_snapshot": {
+                                **interrupted_turn.request_snapshot,
+                                "recovery": {
+                                    **recovery,
+                                    "cause": "runtime_loss",
+                                    "unmatched_callback": unmatched_callback,
+                                },
+                            },
+                        },
+                        expected_revision=interrupted_turn.revision,
+                    )
                 interrupted.append(turn.id)
             (
                 released_ended_claims,
@@ -234,7 +290,10 @@ async def reconcile_dead_project(
             settled_commands = await _settle_interrupted_commands(
                 session, expected_owner
             )
-            closed = []
+            unconfirmed_deliveries = await _mark_unconfirmed_adapter_deliveries(
+                session, transaction, expected_owner.project_id
+            )
+            closed = await _close_dead_resident_handles(session, expected_owner, now)
             for resource in resources:
                 turn_id = resource.checkpoint.get("turn_id")
                 segment = resource.checkpoint.get("segment")
@@ -246,15 +305,21 @@ async def reconcile_dead_project(
                     raise CoordinationConflict(
                         "An orphaned stream has an invalid durable identity"
                     )
-                turn = await store.get(ChatTurn, turn_id)
-                if (
-                    turn.engagement_id != expected_owner.project_id
-                    or turn.backend != ChatBackend.PROVIDER
+                streamed: ChatTurn | None
+                try:
+                    streamed = await store.get(ChatTurn, turn_id)
+                except NotFoundError:
+                    # diagnostic-expected: a stream whose turn was deleted
+                    # with its conversation has no response left to settle.
+                    streamed = None
+                if streamed is not None and (
+                    streamed.engagement_id != expected_owner.project_id
+                    or streamed.backend != ChatBackend.PROVIDER
                     or (
-                        turn.execution_claim_id is not None
-                        and turn.id not in released_ended_claims
+                        streamed.execution_claim_id is not None
+                        and streamed.id not in released_ended_claims
                     )
-                    or turn.status
+                    or streamed.status
                     in {ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING}
                 ):
                     raise CoordinationConflict(
@@ -352,6 +417,7 @@ async def reconcile_dead_project(
                 "released_failed_provider_claim_ids": released_ended_claims,
                 "goal_review_turn_ids": review_turns,
                 "settled_command_ids": settled_commands,
+                "unconfirmed_delivery_approval_ids": unconfirmed_deliveries,
                 "effects_replayed": False,
             }
             session.add(
@@ -469,6 +535,10 @@ async def _release_ended_provider_claims(
     a running goal is paused for operator review instead of continuing; the
     project itself is not held.
 
+    A turn parked for an approval is saved WAITING_APPROVAL before its claim
+    is released the same way; it keeps waiting for the operator's decision,
+    which nothing has acted on yet, so only its claim is released.
+
     Returns the released turn IDs and those whose goal was held for review.
     """
     rows = list(
@@ -480,7 +550,10 @@ async def _release_ended_provider_claims(
                 EntityRow.payload["backend"].as_string() == ChatBackend.PROVIDER.value,
                 EntityRow.payload["status"]
                 .as_string()
-                .in_([status.value for status in ENDED_TURN_STATUSES]),
+                .in_(
+                    [status.value for status in ENDED_TURN_STATUSES]
+                    + [ChatTurnStatus.WAITING_APPROVAL.value]
+                ),
                 EntityRow.payload["execution_claim_id"].as_string().is_not(None),
             )
             .order_by(EntityRow.id)
@@ -497,13 +570,14 @@ async def _release_ended_provider_claims(
     now = utc_now()
     for row in rows:
         turn = ChatTurn.model_validate(row.payload)
-        try:
-            await _require_settled_failed_turn_effects(store, turn)
-            unconfirmed = None
-        except CoordinationConflict as error:
-            # diagnostic-expected: the unconfirmed effect stays recorded and
-            # its goal is held below; only the dead owner's claim is released.
-            unconfirmed = str(error)
+        unconfirmed = None
+        if turn.status != ChatTurnStatus.WAITING_APPROVAL:
+            try:
+                await _require_settled_failed_turn_effects(store, turn)
+            except CoordinationConflict as error:
+                # diagnostic-expected: the unconfirmed effect stays recorded and
+                # its goal is held below; only the dead owner's claim is released.
+                unconfirmed = str(error)
         await transaction.update(
             ChatTurn,
             turn.id,
@@ -792,6 +866,117 @@ async def _release_harness_claims(session, transaction, project_id: str) -> list
         )
         released.append(row.id)
     return released
+
+
+async def _awaits_undecided_approval(store: NebulaStore, turn: ChatTurn) -> bool:
+    """Whether a WAITING_APPROVAL turn still only waits for its decision.
+
+    True when its exact approval is pending and none of its tool calls
+    started, so nothing acted on it. A decided approval means the worker may
+    have been resuming the approved call when it died.
+    """
+    if not turn.approval_id:
+        return False
+    try:
+        approval = await store.get(Approval, turn.approval_id)
+    except NotFoundError:
+        # diagnostic-expected: without its approval the turn is interrupted
+        # for review instead of being left parked.
+        return False
+    if (
+        approval.engagement_id != turn.engagement_id
+        or approval.chat_turn_id != turn.id
+        or approval.status != ApprovalStatus.PENDING
+    ):
+        return False
+    calls = await store.find_entities(
+        ToolCall, {"chat_turn_id": turn.id}, engagement_id=turn.engagement_id
+    )
+    return not any(
+        call.started_at is not None or call.status == ToolCallStatus.RUNNING
+        for call in calls
+        if call.approval_id == approval.id or call.id == approval.tool_call_id
+    )
+
+
+async def _mark_unconfirmed_adapter_deliveries(
+    session, transaction: StoreTransaction, project_id: str
+) -> list[str]:
+    """Record a decision whose adapter handoff never acknowledged as unknown.
+
+    The dead owner's harness adapter can no longer acknowledge it, and only a
+    new worker's harness startup would otherwise mark it, after recovery. The
+    decision is never sent again; the approval stays flagged for the operator.
+    """
+    rows = list(
+        await session.scalars(
+            select(EntityRow)
+            .where(
+                EntityRow.engagement_id == project_id,
+                EntityRow.kind == Approval.entity_kind,
+                EntityRow.payload["continuation"]["adapter_status"].as_string()
+                == "pending",
+            )
+            .order_by(EntityRow.id)
+            .limit(MAX_ORPHAN_ROWS + 1)
+        )
+    )
+    if len(rows) > MAX_ORPHAN_ROWS:
+        raise CoordinationConflict(
+            "Too many unacknowledged adapter deliveries; retain them for operator review"
+        )
+    marked = []
+    for row in rows:
+        approval = Approval.model_validate(row.payload)
+        if approval.continuation is None:
+            continue
+        continuation = approval.continuation.model_copy(
+            update={
+                "adapter_status": "unknown",
+                "adapter_detail": UNCONFIRMED_ADAPTER_DETAIL,
+                "updated_at": utc_now(),
+            }
+        )
+        await transaction.update(
+            Approval,
+            approval.id,
+            {"continuation": continuation.model_dump(mode="json")},
+            expected_revision=approval.revision,
+        )
+        marked.append(approval.id)
+    return marked
+
+
+async def _close_dead_resident_handles(
+    session, owner: ProjectLease, now: int
+) -> list[str]:
+    """Close the dead owner's handoff inventory of in-process handles.
+
+    A handoff records what its worker still holds (live handles, claims,
+    unconfirmed deliveries) as pinned resources. When that worker dies the
+    handles died with it, and each underlying record is reconciled by its own
+    path above or by the next worker's startup; the inventory rows would only
+    hold recovery forever.
+    """
+    closed = []
+    for row in await session.scalars(
+        select(RuntimeResourceRow)
+        .where(
+            RuntimeResourceRow.project_id == owner.project_id,
+            RuntimeResourceRow.runtime_id == owner.runtime_id,
+            RuntimeResourceRow.fencing_token == owner.fencing_token,
+            RuntimeResourceRow.kind == "resident_handle",
+            RuntimeResourceRow.state != "closed",
+        )
+        .order_by(RuntimeResourceRow.id)
+    ):
+        row.state = "closed"
+        row.detail = (
+            "The original runtime exited; its in-process handles ended with it."
+        )
+        row.updated_at_ms = now
+        closed.append(row.id)
+    return closed
 
 
 async def _settle_interrupted_commands(session, owner: ProjectLease) -> list[str]:

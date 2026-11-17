@@ -434,15 +434,9 @@ async def _assert_held_for_review(value, match):
             RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
         )
         assert resource.state == "closed"
-        # Only an unconfirmed harness adapter delivery keeps its own,
-        # separate recovery blocker; nothing this reconciliation owns does.
-        assert not [
-            reason
-            for reason in await value.coordinator._recovery_blockers(
-                sql, "one", value.lease.runtime_id
-            )
-            if not reason.endswith("has unconfirmed adapter delivery")
-        ]
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
     assert await value.reconcile() == result
 
 
@@ -804,7 +798,13 @@ async def test_dead_owner_interrupts_unknown_command_callback_without_replay(orp
         assert resource.state == "closed"
 
 
-async def test_dead_owner_retains_unmatched_command_callback(orphan):
+@pytest.mark.parametrize("last_step", ["missing_call", "resumed_result", "no_history"])
+async def test_dead_owner_interrupts_unmatched_callback_for_review(orphan, last_step):
+    """A claimed callback turn nobody can finish no longer holds the project.
+
+    Before, reconciliation refused forever with "An orphaned command callback
+    still requires effect reconciliation".
+    """
     value = orphan
     await value.store.update(
         ChatTurn,
@@ -812,22 +812,243 @@ async def test_dead_owner_retains_unmatched_command_callback(orphan):
         {"status": ChatTurnStatus.WAITING_CALLBACK},
         expected_revision=value.turn.revision,
     )
-    await ChatTurnLedger(value.coordinator.database).append(
+    if last_step != "no_history":
+        await ChatTurnLedger(value.coordinator.database).append(
+            value.turn.id,
+            {
+                "step": 1,
+                "tool_call_id": "missing-tool-call",
+                "name": "run_command",
+                # A resuming worker records the callback result before the
+                # turn leaves WAITING_CALLBACK.
+                "status": "waiting_callback"
+                if last_step == "missing_call"
+                else "completed",
+                "process_id": "synthetic-process",
+            },
+        )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["interrupted_turn_ids"] == [turn.id]
+    assert result["effects_replayed"] is False
+    assert turn.status == ChatTurnStatus.INTERRUPTED
+    assert turn.execution_claim_id is None and goal.execution_claim_id is None
+    assert goal.status.value == "paused"
+    recovery = turn.request_snapshot["recovery"]
+    assert recovery["cause"] == "runtime_loss"
+    assert "unmatched_callback" in recovery
+    assert "no effect has been retried" in turn.error
+    # Core never resumes it by itself; the operator reviews it.
+    assert not recoverable_after_core_restart(turn)
+    async with value.coordinator.database.session() as sql:
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+    assert await value.reconcile() == result
+
+
+async def test_dead_owner_releases_claim_of_turn_parked_for_approval(orphan):
+    """Saved WAITING_APPROVAL before the claim was released, then died."""
+    value = orphan
+    approval = await value.store.create(
+        Approval(
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            status=ApprovalStatus.PENDING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            exact_request={"synthetic": True},
+            policy_rationale="Synthetic pending approval",
+            requested_by="test",
+        )
+    )
+    await value.store.update(
+        ChatTurn,
         value.turn.id,
-        {
-            "step": 1,
-            "tool_call_id": "missing-tool-call",
-            "name": "run_command",
-            "status": "waiting_callback",
-            "process_id": "synthetic-process",
-        },
+        {"status": ChatTurnStatus.WAITING_APPROVAL, "approval_id": approval.id},
+        expected_revision=value.turn.revision,
     )
     await value.expire()
-    with pytest.raises(CoordinationConflict, match="command callback"):
-        await value.reconcile()
+
+    result = await value.reconcile()
+
     turn = await value.store.get(ChatTurn, value.turn.id)
-    assert turn.status == ChatTurnStatus.WAITING_CALLBACK
-    assert turn.execution_claim_id is not None
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["effects_replayed"] is False
+    assert result["interrupted_turn_ids"] == []
+    assert result["goal_review_turn_ids"] == []
+    assert turn.status == ChatTurnStatus.WAITING_APPROVAL
+    assert turn.execution_claim_id is None and goal.execution_claim_id is None
+    assert goal.status.value == "running"
+    assert (
+        await value.store.get(Approval, approval.id)
+    ).status == ApprovalStatus.PENDING
+    async with value.coordinator.database.session() as sql:
+        admission = await sql.get(ProviderTurnQueueRow, turn.id)
+        assert admission.state == "parked" and admission.lease_owner is None
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+
+
+async def test_dead_owner_interrupts_approved_call_it_was_resuming(orphan):
+    """The worker claims a WAITING_APPROVAL turn and runs the approved call
+    before the turn changes status; its effect is unknown, never replayed."""
+    value = orphan
+    approval = await value.store.create(
+        Approval(
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            status=ApprovalStatus.APPROVED,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            exact_request={"synthetic": True},
+            policy_rationale="Synthetic approved write",
+            requested_by="test",
+        )
+    )
+    call = await value.store.create(
+        ToolCall(
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            tool_name="workspace.write",
+            arguments={"path": "synthetic.txt"},
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            status=ToolCallStatus.RUNNING,
+            approval_id=approval.id,
+            started_at=utc_now(),
+        )
+    )
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.WAITING_APPROVAL, "approval_id": approval.id},
+        expected_revision=value.turn.revision,
+    )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["interrupted_turn_ids"] == [turn.id]
+    assert turn.status == ChatTurnStatus.INTERRUPTED
+    assert turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == [call.id]
+    assert not recoverable_after_core_restart(turn)
+    assert turn.execution_claim_id is None and goal.execution_claim_id is None
+    assert goal.status.value == "paused"
+    saved = await value.store.get(ToolCall, call.id)
+    assert saved.status == ToolCallStatus.RUNNING and saved.revision == call.revision
+    async with value.coordinator.database.session() as sql:
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+
+
+async def test_dead_owner_marks_unacknowledged_adapter_delivery_without_holding(
+    orphan,
+):
+    """A pending adapter handoff held recovery; only the next worker settled it."""
+    value = orphan
+    approval = await value.store.create(
+        Approval(
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            status=ApprovalStatus.APPROVED,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            exact_request={"synthetic": True},
+            policy_rationale="Synthetic decided approval",
+            requested_by="test",
+            continuation=ApprovalContinuation(
+                harness_turn_id="synthetic-harness-turn",
+                status="delivered",
+                adapter_handoff="transport_write",
+                adapter_status="pending",
+            ),
+        )
+    )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    saved = await value.store.get(Approval, approval.id)
+    assert result["unconfirmed_delivery_approval_ids"] == [approval.id]
+    assert saved.status == ApprovalStatus.APPROVED
+    assert saved.continuation.adapter_status == "unknown"
+    assert "No work was replayed" in saved.continuation.adapter_detail
+    async with value.coordinator.database.session() as sql:
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+    assert await value.reconcile() == result
+
+
+async def test_dead_owner_closes_its_handoff_inventory_handles(orphan):
+    """A worker that died mid-handoff left pinned handles holding recovery."""
+    value = orphan
+    async with value.coordinator.database.session() as sql:
+        for identity, state in (("live", "active"), ("contract", "uncertain")):
+            sql.add(
+                RuntimeResourceRow(
+                    id="handoff-inventory:" + identity,
+                    project_id="one",
+                    runtime_id=value.lease.runtime_id,
+                    fencing_token=value.lease.fencing_token,
+                    kind="resident_handle",
+                    state=state,
+                    restoration="pinned",
+                    detail="A live handle stays with its runtime",
+                    checkpoint={},
+                    updated_at_ms=0,
+                )
+            )
+        sql.add(
+            RuntimeResourceRow(
+                id="handoff-inventory:newer-owner",
+                project_id="one",
+                runtime_id=value.lease.runtime_id,
+                fencing_token=value.lease.fencing_token + 1,
+                kind="resident_handle",
+                state="active",
+                restoration="pinned",
+                detail="Another incarnation's handle",
+                checkpoint={},
+                updated_at_ms=0,
+            )
+        )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    assert {"handoff-inventory:live", "handoff-inventory:contract"} <= set(
+        result["closed_resource_ids"]
+    )
+    async with value.coordinator.database.session() as sql:
+        for identity in ("live", "contract"):
+            assert (
+                await sql.get(RuntimeResourceRow, "handoff-inventory:" + identity)
+            ).state == "closed"
+        assert (
+            await sql.get(RuntimeResourceRow, "handoff-inventory:newer-owner")
+        ).state == "active"
 
 
 async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):
