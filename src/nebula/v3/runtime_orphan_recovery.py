@@ -422,7 +422,32 @@ async def _require_settled_failed_turn_effects(
         ToolCallStatus.DENIED,
         ToolCallStatus.CANCELLED,
     }
+    approvals_by_id = {
+        approval.id: approval
+        for approval in await store.find_entities(
+            Approval,
+            {"chat_turn_id": turn.id},
+            engagement_id=turn.engagement_id,
+        )
+    }
+    calls_by_id = {call.id: call for call in calls}
     for call in calls:
+        if call.approval_id:
+            try:
+                approval = await store.get(Approval, call.approval_id)
+            except NotFoundError:
+                raise CoordinationConflict(
+                    "A failed provider tool call references a missing approval"
+                ) from None
+            if (
+                approval.engagement_id != turn.engagement_id
+                or approval.chat_turn_id != turn.id
+                or approval.tool_call_id != call.id
+            ):
+                raise CoordinationConflict(
+                    "A failed provider tool call references an approval for another project, turn, or call"
+                )
+            approvals_by_id[approval.id] = approval
         if call.status in safe_call_statuses:
             continue
         # A failed read has no external or persistent effect. Other failed
@@ -460,14 +485,6 @@ async def _require_settled_failed_turn_effects(
             "A failed provider turn still has unfinished child work"
         )
 
-    approvals_by_id = {
-        approval.id: approval
-        for approval in await store.find_entities(
-            Approval,
-            {"chat_turn_id": turn.id},
-            engagement_id=turn.engagement_id,
-        )
-    }
     for call in calls:
         for approval in await store.find_entities(
             Approval,
@@ -493,12 +510,50 @@ async def _require_settled_failed_turn_effects(
             approvals_by_id[approval.id] = approval
     approvals = approvals_by_id.values()
     for approval in approvals:
+        if (
+            approval.engagement_id != turn.engagement_id
+            or approval.chat_turn_id != turn.id
+        ):
+            raise CoordinationConflict(
+                "A failed provider turn references an approval for another project or turn"
+            )
+        related_call = None
+        if approval.tool_call_id:
+            related_call = calls_by_id.get(approval.tool_call_id)
+            if related_call is None:
+                try:
+                    related_call = await store.get(ToolCall, approval.tool_call_id)
+                except NotFoundError:
+                    raise CoordinationConflict(
+                        "A failed provider approval references a missing tool call"
+                    ) from None
+            if (
+                related_call.engagement_id != turn.engagement_id
+                or related_call.chat_turn_id != turn.id
+                or related_call.approval_id != approval.id
+            ):
+                raise CoordinationConflict(
+                    "A failed provider approval references another project, turn, or tool call"
+                )
+        if approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.EDITED} and (
+            related_call is None
+            or (
+                related_call.status not in safe_call_statuses
+                and not (
+                    related_call.status == ToolCallStatus.FAILED
+                    and related_call.risk_class == RiskClass.LOCAL_READ
+                )
+            )
+        ):
+            raise CoordinationConflict(
+                "A failed provider approval has no exact settled tool call"
+            )
         continuation = approval.continuation
         if approval.status == ApprovalStatus.PENDING or (
             continuation is not None
             and (
-                continuation.status == "pending"
-                or continuation.adapter_status in {"pending", "unknown"}
+                continuation.status in {"pending", "failed"}
+                or continuation.adapter_status in {"pending", "failed", "unknown"}
             )
         ):
             raise CoordinationConflict(
