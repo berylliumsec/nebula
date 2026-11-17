@@ -1118,6 +1118,7 @@ class RuntimeSupervisor:
             try:
                 await cancel_and_join(self._prune_task)
             except BaseException as error:
+                # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup after every resource is attempted.
                 failures.append(error)
         if self._handoff_task is not None and self._handoff_task is not caller:
             try:
