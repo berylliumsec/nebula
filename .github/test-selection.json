@@ -1,22 +1,23 @@
 {
-  "change_digest": "7aaf536906e3651186ebbccab24548f083b04204c7d86f52c25e143fb149dd33",
-  "reviewed_by": "Codex after independent live lock-chain root-cause validation",
-  "reason": "Global orphan-event pruning now runs on the unscoped supervisor database, not on project-scoped execution workers whose transactions lock their own lease row. CI selects the host startup regression and the existing unscoped Core startup prune regression. Simulation local tests are omitted at the operator request.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changed. No simulation-local tests or backup will be created.",
+  "change_digest": "5d6ec77014caf252ed85b730500152655ceaf5d647dca80ee2331fa2441b9b85",
+  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
+  "reason": "Global orphan-event pruning runs on the unscoped supervisor database, not on project-scoped execution workers whose transactions lock their own project_ownership row and per-runtime advisory key. Selected: the host startup regression, a new regression that a scoped worker kernel starts no prune and its heartbeat is not queued, and the existing unscoped Core startup prune regression.",
+  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changed. test_supervisor.py process-level listener tests fail identically on origin/main locally and are not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 3,
+    "python": 5,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
     "tests/v3/test_supervisor.py::test_host_history_prune_uses_unscoped_database",
-    "tests/v3/test_event_history_retention.py::test_core_startup_prunes_history_of_deleted_records"
+    "tests/v3/test_event_history_retention.py::test_core_startup_prunes_history_of_deleted_records",
+    "tests/v3/test_worker_event_history_prune.py"
   ],
   "frontend": [],
   "native": [],
