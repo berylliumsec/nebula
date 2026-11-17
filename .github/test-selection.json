@@ -1,23 +1,20 @@
 {
-  "change_digest": "835e98013bfd890cb69043ef5b6a975eebcfdcf2ea8ca5c08530251ecdffb1bc",
+  "change_digest": "19bf3599371d3ddc3d4227e333442eaac53f05a15d88208c6f61247a84ec1ddc",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Expired-owner recovery now SIGKILLs a frozen or hung execution worker (lease lapsed beyond the grace margin, failed liveness call, pidfd-verified birth, whole session) and the supervisor reaps exited worker children. Selected: the auto-recovery initiation suite, the real detached-process suite (frozen worker with a grandchild, API/responsive/unverified workers never killed, exited worker reaped), process identity, and orphan recovery, on SQLite and PostgreSQL.",
-  "exclusions": "No UI, native or Playwright layer: no operator-visible interface changed. Recovery timing was measured end to end on a fake scratch Core (SIGSTOP forever, SIGSTOP then SIGKILL, SIGSTOP then SIGCONT).",
+  "reason": "Dead-owner reconciliation (runtime_orphan_recovery.py) now releases claims on ended provider turns and unheld goal claims, pausing a goal for review only when an effect is unconfirmed, and settles every held capacity reservation of a provably dead owner. Selected: the whole orphan-recovery suite, which covers the new ended-turn, unpaired-claim, capacity and earlier-pass regressions plus the existing invariants, in SQLite and PostgreSQL.",
+  "exclusions": "No API, UI, settings or native change. Related runtime suites (reconciliation, auto-recovery, operations, capacity) were run locally against clean main with identical pre-existing failures and are not selected. Real-Core recovery was verified on a scratch Core with SIGKILL at the exact crash windows and the adapted chaos scenarios.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 199,
+    "python": 90,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_runtime_processes.py",
-    "tests/v3/test_process_identity.py",
     "tests/v3/test_runtime_orphan_recovery.py"
   ],
   "frontend": [],

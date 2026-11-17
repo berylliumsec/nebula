@@ -1,5 +1,6 @@
 """A dead process can be reconciled without replaying its interrupted effects."""
 
+import re
 from uuid import uuid4
 
 import pytest
@@ -301,7 +302,7 @@ async def test_failed_provider_turn_releases_only_paired_claims_and_keeps_histor
         "pending_approval",
     ],
 )
-async def test_failed_provider_claim_is_retained_while_effect_is_unconfirmed(
+async def test_failed_provider_claim_is_released_and_goal_held_while_effect_is_unconfirmed(
     orphan, unsafe_effect
 ):
     value = orphan
@@ -381,25 +382,11 @@ async def test_failed_provider_claim_is_retained_while_effect_is_unconfirmed(
         )
     await value.expire()
 
-    with pytest.raises(CoordinationConflict, match="unconfirmed|unfinished"):
-        await value.reconcile()
-
-    turn = await value.store.get(ChatTurn, value.turn.id)
-    goal = await value.store.get(ChatGoal, value.goal.id)
-    assert turn.status == ChatTurnStatus.FAILED
-    assert turn.execution_claim_id is not None
-    assert goal.status.value == "running"
-    assert goal.execution_claim_id == turn.execution_claim_id
-    async with value.coordinator.database.session() as sql:
-        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
-        assert not await sql.scalar(
-            select(DeploymentReceiptRow.id).where(
-                DeploymentReceiptRow.action == "project.orphans_reconciled"
-            )
-        )
+    await _assert_held_for_review(value, "unconfirmed|unfinished")
 
 
-async def test_failed_provider_claim_requires_exact_paired_goal_claim(orphan):
+async def test_dead_owner_releases_unpaired_turn_and_goal_claims(orphan):
+    """A claim held only by the dead owner can never be released by anyone else."""
     value = orphan
     await value.store.update(
         ChatTurn,
@@ -415,19 +402,102 @@ async def test_failed_provider_claim_requires_exact_paired_goal_claim(orphan):
     )
     await value.expire()
 
-    with pytest.raises(CoordinationConflict, match="exact running goal claim"):
-        await value.reconcile()
+    result = await value.reconcile()
 
-    assert (
-        await value.store.get(ChatTurn, value.turn.id)
-    ).execution_claim_id == value.turn.execution_claim_id
-    assert (
-        await value.store.get(ChatGoal, value.goal.id)
-    ).execution_claim_id == "different-claim"
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert set(result["released_failed_provider_claim_ids"]) == {turn.id, goal.id}
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id is None and goal.execution_claim_id is None
+    assert goal.status.value == "running"
+    async with value.coordinator.database.session() as sql:
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+
+
+async def _assert_held_for_review(value, match):
+    """The dead owner's claim is released; the effect record stays for review."""
+    result = await value.reconcile()
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["effects_replayed"] is False
+    assert result["goal_review_turn_ids"] == [turn.id]
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id is None and goal.execution_claim_id is None
+    assert goal.status.value == "paused"
+    assert re.search(match, goal.blocked_reason)
+    assert "no effect has been retried" in goal.blocked_reason
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state != "running"
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+        # Only an unconfirmed harness adapter delivery keeps its own,
+        # separate recovery blocker; nothing this reconciliation owns does.
+        assert not [
+            reason
+            for reason in await value.coordinator._recovery_blockers(
+                sql, "one", value.lease.runtime_id
+            )
+            if not reason.endswith("has unconfirmed adapter delivery")
+        ]
+    assert await value.reconcile() == result
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ChatTurnStatus.COMPLETE, ChatTurnStatus.CANCELLED, ChatTurnStatus.INTERRUPTED],
+)
+async def test_dead_owner_releases_ended_turn_claim_and_stream_without_replay(
+    orphan, status
+):
+    """A worker that died after saving an ended turn, before releasing its claim.
+
+    Before this, recovery refused forever with "The orphaned stream still
+    requires execution reconciliation" and the project never served again.
+    """
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": status, "content": "Saved answer"},
+        expected_revision=value.turn.revision,
+    )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["effects_replayed"] is False
+    assert result["interrupted_turn_ids"] == []
+    assert result["goal_review_turn_ids"] == []
+    assert turn.id in result["released_failed_provider_claim_ids"]
+    assert turn.status == status and turn.content == "Saved answer"
+    assert turn.execution_claim_id is None and goal.execution_claim_id is None
+    assert goal.status.value == "running"
+    frames = await value.coordinator.coordination.replay_stream(turn.id)
+    assert [frame.event_type for frame in frames] == ["error", SEGMENT_END]
+    async with value.coordinator.database.session() as sql:
+        admission = await sql.get(ProviderTurnQueueRow, turn.id)
+        assert admission.state != "running" and admission.lease_owner is None
+        assert (
+            await sql.get(RuntimeCapacityReservationRow, "provider-capacity")
+        ).state == "released"
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+    assert await value.reconcile() == result
 
 
 @pytest.mark.parametrize("reference", ["missing", "wrong_turn", "wrong_project"])
-async def test_failed_provider_claim_rejects_dangling_or_mismatched_approval(
+async def test_failed_provider_claim_holds_goal_for_dangling_or_mismatched_approval(
     orphan, reference
 ):
     value = orphan
@@ -460,34 +530,14 @@ async def test_failed_provider_claim_rejects_dangling_or_mismatched_approval(
     )
     resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
     async with value.coordinator.database.session() as sql:
-        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+        assert (await sql.get(RuntimeResourceRow, resource_id)).state != "closed"
     await value.expire()
 
-    with pytest.raises(
-        CoordinationConflict, match="references (a missing approval|an approval)"
-    ):
-        await value.reconcile()
-
-    turn = await value.store.get(ChatTurn, value.turn.id)
-    goal = await value.store.get(ChatGoal, value.goal.id)
-    assert turn.status == ChatTurnStatus.FAILED
-    assert turn.execution_claim_id == value.turn.execution_claim_id
-    assert goal.status.value == "running"
-    assert goal.execution_claim_id == value.goal.execution_claim_id
-    async with value.coordinator.database.session() as sql:
-        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
-        assert (
-            await sql.get(RuntimeResourceRow, resource_id)
-        ).state == initial_resource_state
-        assert not await sql.scalar(
-            select(DeploymentReceiptRow.id).where(
-                DeploymentReceiptRow.action == "project.orphans_reconciled"
-            )
-        )
+    await _assert_held_for_review(value, "references (a missing approval|an approval)")
 
 
 @pytest.mark.parametrize("reference", ["missing", "wrong_project", "wrong_turn"])
-async def test_failed_provider_claim_rejects_dangling_tool_call_approval(
+async def test_failed_provider_claim_holds_goal_for_dangling_tool_call_approval(
     orphan, reference
 ):
     value = orphan
@@ -539,31 +589,13 @@ async def test_failed_provider_claim_rejects_dangling_tool_call_approval(
     )
     resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
     async with value.coordinator.database.session() as sql:
-        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+        assert (await sql.get(RuntimeResourceRow, resource_id)).state != "closed"
     await value.expire()
 
-    with pytest.raises(
-        CoordinationConflict,
-        match="references (a missing approval|an approval for another project, turn, or call)",
-    ):
-        await value.reconcile()
-
-    turn = await value.store.get(ChatTurn, value.turn.id)
-    goal = await value.store.get(ChatGoal, value.goal.id)
-    assert turn.status == ChatTurnStatus.FAILED
-    assert turn.execution_claim_id == value.turn.execution_claim_id
-    assert goal.status.value == "running"
-    assert goal.execution_claim_id == value.goal.execution_claim_id
-    async with value.coordinator.database.session() as sql:
-        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
-        assert (
-            await sql.get(RuntimeResourceRow, resource_id)
-        ).state == initial_resource_state
-        assert not await sql.scalar(
-            select(DeploymentReceiptRow.id).where(
-                DeploymentReceiptRow.action == "project.orphans_reconciled"
-            )
-        )
+    await _assert_held_for_review(
+        value,
+        "references (a missing approval|an approval for another project, turn, or call)",
+    )
 
 
 @pytest.mark.parametrize(
@@ -580,7 +612,7 @@ async def test_failed_provider_claim_rejects_dangling_tool_call_approval(
         "unknown_adapter",
     ],
 )
-async def test_failed_provider_claim_rejects_unsettled_or_mismatched_approval_links(
+async def test_failed_provider_claim_holds_goal_for_unsettled_or_mismatched_approval_links(
     orphan, reference
 ):
     value = orphan
@@ -675,31 +707,13 @@ async def test_failed_provider_claim_rejects_unsettled_or_mismatched_approval_li
     )
     resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
     async with value.coordinator.database.session() as sql:
-        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+        assert (await sql.get(RuntimeResourceRow, resource_id)).state != "closed"
     await value.expire()
 
-    with pytest.raises(
-        CoordinationConflict,
-        match="references (a missing tool call|another project, turn, or tool call)|no exact settled tool call|unconfirmed approval effect",
-    ):
-        await value.reconcile()
-
-    turn = await value.store.get(ChatTurn, value.turn.id)
-    goal = await value.store.get(ChatGoal, value.goal.id)
-    assert turn.status == ChatTurnStatus.FAILED
-    assert turn.execution_claim_id == value.turn.execution_claim_id
-    assert goal.status.value == "running"
-    assert goal.execution_claim_id == value.goal.execution_claim_id
-    async with value.coordinator.database.session() as sql:
-        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
-        assert (
-            await sql.get(RuntimeResourceRow, resource_id)
-        ).state == initial_resource_state
-        assert not await sql.scalar(
-            select(DeploymentReceiptRow.id).where(
-                DeploymentReceiptRow.action == "project.orphans_reconciled"
-            )
-        )
+    await _assert_held_for_review(
+        value,
+        "references (a missing tool call|another project, turn, or tool call)|no exact settled tool call|unconfirmed approval effect",
+    )
 
 
 async def test_dead_owner_keeps_unclaimed_callback_wait(orphan):
@@ -902,33 +916,125 @@ async def test_invalid_stream_identity_rolls_back_interruption_and_receipt(orpha
         )
 
 
-@pytest.mark.parametrize("kind", ["tool", "wrong-admission", "wrong-fence"])
-async def test_unrelated_capacity_is_not_released_by_process_death(orphan, kind):
+@pytest.mark.parametrize(
+    ("kind", "reason"),
+    [
+        # Died between acquiring capacity and committing the admission, or
+        # between completing the admission and releasing the capacity.
+        ("provider-without-admission", "dead-owner-effect-ended"),
+        ("tool-unknown", "dead-owner-outcome-unknown"),
+        ("tool-ended", "dead-owner-effect-ended"),
+        ("earlier-dead-owner", "dead-owner-effect-ended"),
+    ],
+)
+async def test_dead_owner_capacity_is_settled_without_holding_recovery(
+    orphan, kind, reason
+):
+    """Recovery stayed held on "Capacity reservation ... completion evidence"."""
     value = orphan
+    request_key = "provider:abandoned-admission"
+    if kind.startswith("tool"):
+        call = await value.store.create(
+            ToolCall(
+                engagement_id="one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                tool_name="workspace.write",
+                arguments={"path": "synthetic.txt"},
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                status=ToolCallStatus.COMPLETE
+                if kind == "tool-ended"
+                else ToolCallStatus.RUNNING,
+                started_at=utc_now(),
+            )
+        )
+        request_key = "tool:" + call.id
     async with value.coordinator.database.session() as sql:
         sql.add(
             RuntimeCapacityReservationRow(
-                id="unconfirmed-capacity",
-                runtime_id=value.lease.runtime_id,
+                id="leftover-capacity",
+                runtime_id="gone-runtime"
+                if kind == "earlier-dead-owner"
+                else value.lease.runtime_id,
                 project_id="one",
                 fencing_token=value.lease.fencing_token
-                + (1 if kind == "wrong-fence" else 0),
-                request_key="tool:synthetic-admission"
-                if kind == "tool"
-                else "provider:other"
-                if kind == "wrong-admission"
-                else "provider:synthetic-admission",
-                demands={"tool": 1} if kind == "tool" else {"provider": 1},
+                - (1 if kind == "earlier-dead-owner" else 0),
+                request_key=request_key,
+                demands={"tool": 1} if kind.startswith("tool") else {"provider": 1},
                 state="held",
                 created_at_ms=0,
             )
         )
     await value.expire()
+    result = await value.reconcile()
+    async with value.coordinator.database.session() as sql:
+        row = await sql.get(RuntimeCapacityReservationRow, "leftover-capacity")
+        assert (row.state, row.release_reason) == ("released", reason)
+        assert "leftover-capacity" in result["released_capacity_ids"]
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+    if kind.startswith("tool"):
+        # The effect's own record is kept for review; nothing is replayed.
+        saved = await value.store.get(ToolCall, call.id)
+        assert saved.status == call.status and saved.revision == call.revision
+
+
+async def test_capacity_of_a_live_or_newer_owner_is_not_released(orphan, host):
+    value = orphan
+    live = await worker(host, "v1")
+    async with value.coordinator.database.session() as sql:
+        for identity, runtime, fence in (
+            ("newer-fence", value.lease.runtime_id, value.lease.fencing_token + 1),
+            ("live-earlier-owner", live, value.lease.fencing_token - 1),
+            ("other-project", value.lease.runtime_id, value.lease.fencing_token),
+        ):
+            sql.add(
+                RuntimeCapacityReservationRow(
+                    id=identity,
+                    runtime_id=runtime,
+                    project_id="two" if identity == "other-project" else "one",
+                    fencing_token=fence,
+                    request_key="provider:" + identity,
+                    demands={"provider": 1},
+                    state="held",
+                    created_at_ms=0,
+                )
+            )
+    await value.expire()
     await value.reconcile()
     async with value.coordinator.database.session() as sql:
+        for identity in ("newer-fence", "live-earlier-owner", "other-project"):
+            assert (
+                await sql.get(RuntimeCapacityReservationRow, identity)
+            ).state == "held"
+
+
+async def test_reconciled_owner_settles_capacity_left_by_an_earlier_pass(orphan):
+    """An owner reconciled before this fix keeps its receipt and is unblocked."""
+    value = orphan
+    await value.expire()
+    result = await value.reconcile()
+    async with value.coordinator.database.session() as sql:
+        sql.add(
+            RuntimeCapacityReservationRow(
+                id="left-by-earlier-pass",
+                runtime_id=value.lease.runtime_id,
+                project_id="one",
+                fencing_token=value.lease.fencing_token,
+                request_key="provider:abandoned-admission",
+                demands={"provider": 1},
+                state="held",
+                created_at_ms=0,
+            )
+        )
+    assert await value.reconcile() == result
+    async with value.coordinator.database.session() as sql:
         assert (
-            await sql.get(RuntimeCapacityReservationRow, "unconfirmed-capacity")
-        ).state == "held"
+            await sql.get(RuntimeCapacityReservationRow, "left-by-earlier-pass")
+        ).state == "released"
 
 
 async def test_dead_owner_releases_harness_goal_claims_and_fails_its_requests(orphan):
