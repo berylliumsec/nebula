@@ -3,6 +3,7 @@
 import asyncio
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import shutil
 import signal
@@ -561,3 +562,117 @@ async def test_migration_admission_checkpoint_failure_closes_and_joins_child(
     with pytest.raises(error_type, match="synthetic admission"):
         await root.migrate("v2", expected_revision=1)
     assert closed == [True] and joined == [True] and communicated == []
+
+
+def _with_grandchild(marker: Path) -> str:
+    """The inert worker, first starting a grandchild in its own session."""
+    return (
+        "import subprocess\n"
+        "_grandchild = subprocess.Popen(['sleep', '300'])\n"
+        f"open({str(marker)!r}, 'w').write(str(_grandchild.pid))\n" + _WORKER
+    )
+
+
+async def _expire_lease(managed, runtime_id, *, overdue_ms):
+    from nebula.v3.database import RuntimeInstanceRow
+
+    async with managed.database.session() as session:
+        now = await managed.coordinator.coordination._clock_ms(session)
+        row = await session.get(RuntimeInstanceRow, runtime_id)
+        row.lease_expires_at_ms = now - overdue_ms
+
+
+def _zombie(pid):
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    return stat.rsplit(")", 1)[1].split()[0] == "Z"
+
+
+async def test_frozen_execution_worker_is_killed_with_its_session_after_grace(
+    managed, tmp_path, monkeypatch
+):
+    recorded = []
+    monkeypatch.setattr(
+        "nebula.v3.runtime_processes.record_diagnostic",
+        lambda *args, **fields: recorded.append((args, fields)),
+    )
+    marker = tmp_path / "grandchild.pid"
+    await managed.stage("v1", _with_grandchild(marker))
+    identity = await managed.host.spawn("v1", "execution")
+    grandchild = int(marker.read_text())
+    grandchild_birth = process_birth(grandchild)
+    assert grandchild_birth is not None
+    os.kill(identity.pid, signal.SIGSTOP)
+    try:
+        # A live lease, or one lapsed less than the grace, keeps the process.
+        assert not await managed.host.retire_unresponsive(identity, grace_ms=15_000)
+        await _expire_lease(managed, identity.runtime_id, overdue_ms=5_000)
+        assert not await managed.host.retire_unresponsive(identity, grace_ms=15_000)
+        assert same_process(identity.pid, identity.process_birth)
+        observed = {
+            worker.runtime_id: worker for worker in await managed.host.rediscover()
+        }
+        assert observed[identity.runtime_id].process_state == "alive"
+        assert not observed[identity.runtime_id].reachable
+
+        await _expire_lease(managed, identity.runtime_id, overdue_ms=20_000)
+        assert await managed.host.retire_unresponsive(identity, grace_ms=15_000)
+    finally:
+        if same_process(identity.pid, identity.process_birth):
+            os.kill(identity.pid, signal.SIGCONT)
+    # The worker is reaped (not a zombie) and its grandchild died with it.
+    assert not Path(f"/proc/{identity.pid}").exists()
+    assert identity.runtime_id not in managed.host.children
+    async with asyncio.timeout(5):
+        while process_birth(grandchild) == grandchild_birth:
+            await asyncio.sleep(0.02)
+    observed = {worker.runtime_id: worker for worker in await managed.host.rediscover()}
+    assert observed[identity.runtime_id].process_state == "gone"
+    ((args, fields),) = recorded
+    assert args[2] == "runtime.worker.unresponsive_retired"
+    assert fields["metadata"]["entity_id"] == identity.runtime_id
+    assert fields["metadata"]["count"] == 2
+    assert "liveness call failed" in fields["safe_failure_cause"]
+
+
+async def test_responsive_api_or_unverified_worker_is_never_force_retired(managed):
+    await managed.stage("v1")
+    execution = await managed.host.spawn("v1", "execution")
+    api = await managed.host.spawn("v1", "api")
+    for identity in (execution, api):
+        await _expire_lease(managed, identity.runtime_id, overdue_ms=60_000)
+    # The execution worker still answers its liveness call.
+    assert not await managed.host.retire_unresponsive(execution, grace_ms=15_000)
+    assert same_process(execution.pid, execution.process_birth)
+    os.kill(api.pid, signal.SIGSTOP)
+    os.kill(execution.pid, signal.SIGSTOP)
+    try:
+        assert not await managed.host.retire_unresponsive(api, grace_ms=15_000)
+        assert same_process(api.pid, api.process_birth)
+        # An identity that is not this kernel incarnation is never signalled.
+        stale = execution.model_copy(update={"process_birth": "linux:other:1"})
+        assert not await managed.host.retire_unresponsive(stale, grace_ms=15_000)
+        assert same_process(execution.pid, execution.process_birth)
+    finally:
+        for identity in (execution, api):
+            os.kill(identity.pid, signal.SIGCONT)
+
+
+async def test_exited_worker_is_reaped_and_reported_gone(managed):
+    await managed.stage("v1")
+    identity = await managed.host.spawn("v1", "execution")
+    signal_process(identity.pid, identity.process_birth, signal.SIGKILL)
+    async with asyncio.timeout(5):
+        while not _zombie(identity.pid):
+            await asyncio.sleep(0.02)
+    observed = {worker.runtime_id: worker for worker in await managed.host.rediscover()}
+    assert observed[identity.runtime_id].process_state == "gone"
+    # Rediscovery collects the exit status once the last thread has ended
+    # (a killed multi-threaded leader shows as a zombie slightly earlier).
+    async with asyncio.timeout(5):
+        while Path(f"/proc/{identity.pid}").exists():
+            await managed.host.rediscover()
+            await asyncio.sleep(0.05)
+    assert identity.runtime_id not in managed.host.children

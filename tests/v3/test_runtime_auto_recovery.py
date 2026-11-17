@@ -698,3 +698,51 @@ async def test_aborted_recovery_spawn_is_retried_with_backoff(recovery):
     rows = {row.action: row for row in await operations(recovery)}
     assert rows["prepare_execution"].state == "succeeded"
     assert rows["recover_project"].state == "succeeded"
+
+
+@pytest.mark.parametrize("retired", [True, False])
+async def test_unresponsive_live_owner_is_retired_then_recovered(recovery, retired):
+    # A frozen or hung owner: its process lives but its control channel fails.
+    worker = recovery.observed[0]
+    worker.process_state, worker.reachable = "alive", False
+    worker.identity = SimpleNamespace(version="v1", role="execution")
+    asked = []
+
+    async def retire_unresponsive(identity):
+        asked.append(identity)
+        return retired
+
+    recovery.automatic.supervisor.host.retire_unresponsive = retire_unresponsive
+
+    await recovery.automatic.reconcile()
+
+    assert asked == [worker.identity]
+    calls = [call[0] for call in recovery.management.calls]
+    if retired:
+        assert calls == ["reconcile_project", "prepare_execution", "recover_project"]
+    else:
+        assert calls == []
+
+
+@pytest.mark.parametrize("variant", ["reachable", "api", "unknown"])
+async def test_reachable_api_or_unverified_owner_is_never_force_retired(
+    recovery, variant
+):
+    worker = recovery.observed[0]
+    worker.process_state = "unknown" if variant == "unknown" else "alive"
+    worker.reachable = variant == "reachable"
+    worker.identity = SimpleNamespace(
+        version="v1", role="api" if variant == "api" else "execution"
+    )
+    asked = []
+
+    async def retire_unresponsive(identity):
+        asked.append(identity)
+        return True
+
+    recovery.automatic.supervisor.host.retire_unresponsive = retire_unresponsive
+
+    await recovery.automatic.reconcile()
+
+    assert asked == []
+    assert recovery.management.calls == []
