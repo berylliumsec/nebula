@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from nebula.v3.butler_oversight import project_stream_id as oversight_stream_id
+from nebula.v3.diagnostics import configure_diagnostics, shutdown_diagnostics
 from nebula.v3.domain import (
     ChatGoal,
     ChatGoalStatus,
@@ -295,6 +296,22 @@ def test_rules_stream_id_matches_butler_oversight():
 
 
 async def test_completed_goal_is_curated_into_verified_cards(tmp_path):
+    # A real diagnostics owner: an invalid feature or field raises, as in a worker.
+    diagnostics = configure_diagnostics(
+        tmp_path / "diagnostics", watch_settings=False, level_override="debug"
+    )
+    try:
+        await _curate_completed_goal(tmp_path)
+        diagnostics.flush()
+    finally:
+        shutdown_diagnostics()
+    events = (tmp_path / "diagnostics" / "logs" / "knowledge.log").read_text()
+    assert "linked_memory.goal_run_created" in events
+    assert "linked_memory.chunk_curated" in events
+    assert "linked_memory.goal_run_done" in events
+
+
+async def _curate_completed_goal(tmp_path):
     store = await _project(tmp_path)
     await _enable(store)
     goal = await _goal_chat(store)

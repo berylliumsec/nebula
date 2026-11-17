@@ -365,8 +365,8 @@ class LinkedMemoryCurator:
             "linked_memory.goal_run_created",
             "Linked memory will curate a completed goal.",
             project_id=project_id,
-            goal_id=goal_id,
-            sessions=len(run.session_ids),
+            outcome="success",
+            metadata={"goal_id": goal_id, "sessions": len(run.session_ids)},
         )
 
     # Gates -------------------------------------------------------------------------
@@ -486,8 +486,8 @@ class LinkedMemoryCurator:
                     "linked_memory.goal_run_done",
                     "Linked memory finished curating a goal.",
                     project_id=project_id,
-                    goal_id=run.goal_id,
-                    chunks=run.chunks,
+                    outcome="success",
+                    metadata={"goal_id": run.goal_id, "chunks": run.chunks},
                 )
                 return "next"
             session, entries, position = chunk
@@ -864,18 +864,21 @@ class LinkedMemoryCurator:
             "linked_memory.chunk_curated",
             "Linked memory curated one chunk of a completed goal.",
             project_id=project_id,
-            goal_id=run.goal_id,
-            entries=len(entries),
-            proposals=int(verified.get("proposals") or 0),
-            rejected=len(verified.get("rejected") or []),
-            cards=counts["cards"],
-            attached=counts["attached"],
-            links=counts["links"],
-            superseded=counts["superseded"],
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            call_ms=int((time.monotonic() - started) * 1000),
-            embedding=prompt.get("embedding"),
+            outcome="success",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            metadata={
+                "goal_id": run.goal_id,
+                "entries": len(entries),
+                "proposals": int(verified.get("proposals") or 0),
+                "rejected": len(verified.get("rejected") or []),
+                "cards": counts["cards"],
+                "attached": counts["attached"],
+                "links": counts["links"],
+                "superseded": counts["superseded"],
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "embedding": prompt.get("embedding"),
+            },
         )
         return "next_chunk", run
 
