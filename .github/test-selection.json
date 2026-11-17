@@ -1,15 +1,15 @@
 {
-  "change_digest": "9a035db79f71892282b8397474d9172f00e494dc546dbe4764baf5c7d4b930fd",
+  "change_digest": "94abe4d7caf68b3025e374c3944f2492913ec13d917ed902d384adc821f5ab7f",
   "reviewed_by": "Implementing agent; exact recovery selection reviewed against the scoped diff",
-  "reason": "The change releases only paired orphan claims for failed provider turns after durable tool, hook, child and approval checks. Three exact recovery regressions cover preserved failed-turn history, unsafe effects, and mismatched goal claims; collection found 14 cases across SQLite and PostgreSQL.",
-  "exclusions": "Only the three named tests in test_runtime_orphan_recovery.py are selected. The rest of that module, all other Python suites, frontend/browser/native tests, production Core access, and live provider or Mac operations are excluded. PostgreSQL tests ran against a disposable localhost-only PostgreSQL 16 container with tmpfs storage; no persistent database was used.",
+  "reason": "The change releases only paired orphan claims for failed provider turns after durable tool, hook, child and approval checks. Four exact recovery regressions cover preserved failed-turn history, unsafe effects, mismatched goal claims, and dangling or cross-bound approval references; collection found 20 cases across SQLite and PostgreSQL.",
+  "exclusions": "Only the four named tests in test_runtime_orphan_recovery.py are selected. The rest of that module, all other Python suites, frontend/browser/native tests, production Core access, and live provider or Mac operations are excluded. PostgreSQL tests run against a disposable localhost-only PostgreSQL 16 container with tmpfs storage; no persistent database is used.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.11"
   ],
   "expected_tests": {
-    "python": 14,
+    "python": 20,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -17,7 +17,8 @@
   "python": [
     "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_turn_releases_only_paired_claims_and_keeps_history",
     "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_is_retained_while_effect_is_unconfirmed",
-    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_requires_exact_paired_goal_claim"
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_requires_exact_paired_goal_claim",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_or_mismatched_approval"
   ],
   "frontend": [],
   "native": [],

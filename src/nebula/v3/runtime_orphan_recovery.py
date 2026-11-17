@@ -479,8 +479,17 @@ async def _require_settled_failed_turn_effects(
         try:
             approval = await store.get(Approval, turn.approval_id)
         except NotFoundError:
-            pass
+            raise CoordinationConflict(
+                "A failed provider turn references a missing approval"
+            ) from None
         else:
+            if (
+                approval.engagement_id != turn.engagement_id
+                or approval.chat_turn_id != turn.id
+            ):
+                raise CoordinationConflict(
+                    "A failed provider turn references an approval for another project or turn"
+                )
             approvals_by_id[approval.id] = approval
     approvals = approvals_by_id.values()
     for approval in approvals:

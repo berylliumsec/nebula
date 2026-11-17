@@ -363,6 +363,66 @@ async def test_failed_provider_claim_requires_exact_paired_goal_claim(orphan):
     ).execution_claim_id == "different-claim"
 
 
+@pytest.mark.parametrize("reference", ["missing", "wrong_turn", "wrong_project"])
+async def test_failed_provider_claim_rejects_dangling_or_mismatched_approval(
+    orphan, reference
+):
+    value = orphan
+    approval_id = (
+        "missing-approval" if reference == "missing" else "mismatched-approval"
+    )
+    if reference != "missing":
+        await value.store.create(
+            Approval(
+                id=approval_id,
+                engagement_id="two" if reference == "wrong_project" else "one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=(
+                    "different-turn" if reference == "wrong_turn" else value.turn.id
+                ),
+                status=ApprovalStatus.REJECTED,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                exact_request={"synthetic": True},
+                policy_rationale="Synthetic settled approval",
+                requested_by="test",
+            )
+        )
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED, "approval_id": approval_id},
+        expected_revision=value.turn.revision,
+    )
+    resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
+    async with value.coordinator.database.session() as sql:
+        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+    await value.expire()
+
+    with pytest.raises(
+        CoordinationConflict, match="references (a missing approval|an approval)"
+    ):
+        await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id == value.turn.execution_claim_id
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id == value.goal.execution_claim_id
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
+        assert (
+            await sql.get(RuntimeResourceRow, resource_id)
+        ).state == initial_resource_state
+        assert not await sql.scalar(
+            select(DeploymentReceiptRow.id).where(
+                DeploymentReceiptRow.action == "project.orphans_reconciled"
+            )
+        )
+
+
 async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):
     value = orphan
     call = await value.store.create(
