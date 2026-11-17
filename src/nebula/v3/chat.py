@@ -2864,6 +2864,9 @@ class ChatService:
         # Background compactions by conversation id (see _schedule_precompaction).
         self._precompactions: dict[str, _Precompaction] = {}
         self._precompaction_slots = asyncio.Semaphore(_PRECOMPACTION_CONCURRENCY)
+        # Linked memory's curator (docs/design/linked-memory.md); entry cards
+        # are read from its memory only, never from storage, at turn start.
+        self.linked_memory: Any = None
         self.subagents = SubagentService(store, self)
         self.agent_messages = AgentMessageService(store)
         self.shutting_down = False
@@ -7074,6 +7077,20 @@ class ChatService:
             # Retrieved for this message, so it rides on this message rather
             # than the instructions every turn of the conversation begins with.
             reference = _reference_material(operator_help_chunks, engagement_chunks)
+            linked_memory_block, linked_memory_record = self._linked_memory_entry(
+                engagement_id,
+                request.session_id,
+                incoming[-1].content,
+                allowed=provider.config.local
+                or (
+                    profile.privacy.permits_sensitive_data
+                    and request.allow_cloud_knowledge
+                ),
+            )
+            if linked_memory_block:
+                reference = "\n\n".join(
+                    [reference or _REFERENCE_MATERIAL_HEADING, linked_memory_block]
+                )
             if request.planning_enabled:
                 instructions += (
                     "\n\nPlanning preference: Make a concise plan before substantial "
@@ -7415,6 +7432,7 @@ class ChatService:
                     "model_request": model_request.model_dump(mode="json"),
                     "operator_max_output_tokens": request.max_output_tokens,
                     "citations": [item.model_dump(mode="json") for item in citations],
+                    "linked_memory": linked_memory_record,
                     "context_usage": context_usage.model_dump(mode="json"),
                     "mcp_server_ids": [item.id for item in mcp_profiles],
                     "excluded_mcp_server_ids": list(request.excluded_mcp_server_ids),
@@ -7512,6 +7530,7 @@ class ChatService:
                     "model_request": model_request.model_dump(mode="json"),
                     "operator_max_output_tokens": request.max_output_tokens,
                     "citations": [item.model_dump(mode="json") for item in citations],
+                    "linked_memory": linked_memory_record,
                     "context_usage": context_usage.model_dump(mode="json"),
                     "include_oci_tools": False,
                     "planning_enabled": bool(request.planning_enabled),
@@ -17220,6 +17239,52 @@ class ChatService:
             project_text = ""
         return _CHAT_INSTRUCTIONS + project_text
 
+    def _linked_memory_entry(
+        self,
+        engagement_id: str | None,
+        session_id: str | None,
+        text: str,
+        *,
+        allowed: bool,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Linked memory's entry cards for this message, from memory only."""
+
+        curator = self.linked_memory
+        if curator is None or not engagement_id or not has_content(text):
+            return "", None
+        try:
+            return curator.entry_cards(engagement_id, session_id, text, allowed=allowed)
+        except Exception as error:
+            record_caught_exception(
+                "knowledge",
+                "linked_memory.entry_cards_failed",
+                "Linked memory could not offer entry cards; the turn continues without them.",
+                error,
+                stage="turn_start",
+            )
+            return "", None
+
+    def _schedule_linked_memory_prefetch(
+        self, prepared: PreparedChat, session: ChatSession
+    ) -> None:
+        curator = self.linked_memory
+        if curator is None or not prepared.engagement_id:
+            return
+        user_text = prepared.new_messages[-1].content if prepared.new_messages else ""
+        answer_text = prepared.turn.content if prepared.turn is not None else ""
+        try:
+            curator.after_turn(
+                prepared.engagement_id, session.id, user_text, answer_text
+            )
+        except Exception as error:
+            record_caught_exception(
+                "knowledge",
+                "linked_memory.prefetch_schedule_failed",
+                "Linked memory could not schedule ranking for the next turn.",
+                error,
+                stage="after_turn",
+            )
+
     def _schedule_precompaction(self, prepared: PreparedChat) -> None:
         """Compact in the background what the next turns would wait for.
 
@@ -17239,6 +17304,7 @@ class ChatService:
         session = prepared.session or prepared.pending_session
         if session is None:
             return
+        self._schedule_linked_memory_prefetch(prepared, session)
         running = self._precompactions.get(session.id)
         if running is not None and running.task is not None and not running.task.done():
             # It reads the transcript when it starts, so it covers this turn.
