@@ -312,6 +312,64 @@ async def test_failed_startup_is_reported_and_same_grant_does_not_retry(runtime)
     await until(lambda: runtime.execution.state == "failed")
     assert (await runtime.execution.attach(asdict(runtime.lease)))["state"] == "failed"
     assert calls == [runtime.lease]
+    # Nothing served yet: the failed startup keeps its hold for review.
+    assert runtime.execution.served is False
+
+
+async def test_serving_project_failure_exits_the_worker_after_its_receipt(
+    runtime, monkeypatch
+):
+    """A live failed owner keeps renewing its lease and Core recovers only
+    exited owners, so a project that was serving ends its process once its
+    failure is recorded, and dead-owner reconciliation takes over."""
+    from nebula.v3.database import DeploymentReceiptRow
+    from nebula.v3.deployments import EXECUTION_FAILED_RECEIPT
+    from sqlalchemy import select
+
+    exits = []
+
+    async def receipts():
+        async with runtime.coordination.database.session() as session:
+            return list(
+                await session.scalars(
+                    select(DeploymentReceiptRow.action).where(
+                        DeploymentReceiptRow.action == EXECUTION_FAILED_RECEIPT
+                    )
+                )
+            )
+
+    def request_exit():
+        exits.append(runtime.execution.state)
+
+    runtime.context.request_exit = request_exit
+
+    def unavailable_runner(*args, **kwargs):
+        raise RuntimeError("Synthetic failure after the project was ready")
+
+    monkeypatch.setattr(execution_worker, "DurableHttpRunner", unavailable_runner)
+    await runtime.execution.attach(asdict(runtime.lease))
+    await until(lambda: bool(exits))
+    assert runtime.execution.served is True
+    assert exits == ["failed"]
+    assert await receipts() == [EXECUTION_FAILED_RECEIPT]
+
+
+async def test_failure_while_closing_keeps_the_worker(runtime):
+    """Quiescence, retirement and shutdown own their own outcome."""
+    exits = []
+    runtime.context.request_exit = lambda: exits.append(True)
+
+    @asynccontextmanager
+    async def failing_cleanup(context, lease):
+        yield FastAPI()
+        raise RuntimeError("Synthetic cleanup failure")
+
+    runtime.execution.application_factory = failing_cleanup
+    await attach(runtime)
+    await runtime.execution.close()
+    assert runtime.execution.state == "failed"
+    assert runtime.execution.served is True
+    assert exits == []
 
 
 async def test_cancelled_close_waits_for_controller_cleanup(runtime):

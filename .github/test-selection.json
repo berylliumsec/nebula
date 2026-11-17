@@ -1,5 +1,5 @@
 {
-  "change_digest": "73f4cc16b59a050c72d606ab3c9ebb2fc8781ccd58296475aac509ef76bb84c9",
+  "change_digest": "f262971a0f50154023e75ada3cd4a647c2e91622af579bd1793797356f00a7f1",
   "reviewed_by": "Claude, based on an independently validated by-design finding and a scratch-Core reproduction",
   "reason": "Refusals for a third execution version (target_execution, the per-project prepare_execution switch, the deployment status detail and the staged deployer result) now name the projects and unowned workers that keep each resident version and how a version retires. The selected tests cover the new blocker text on SQLite and PostgreSQL, the prepare_execution refusal, the staged deployer's structured blockers, and the existing third-version staging, targeting and resume paths.",
   "exclusions": "No UI consumes /deployment/status, so no frontend, native or browser coverage. The two-version limit and handoff behaviour are unchanged, so broader deployment suites are not selected.",

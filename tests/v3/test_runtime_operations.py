@@ -777,3 +777,184 @@ async def test_missing_incarnation_retirement_is_a_definite_refusal(host):
     )
     assert receipt["state"] == "failed"
     assert receipt["result"]["error_type"] == "OperationRejected"
+
+
+async def _record_durable_effect(coordinator, action, operation_id, parameters):
+    """Commit exactly the record an action's effect commits, in its own transaction."""
+    from nebula.v3.database import DeploymentReceiptRow, RuntimeRecoveryRow
+    from nebula.v3.runtime_coordination import ProjectLease
+    from nebula.v3.runtime_orphan_recovery import orphan_receipt_key
+
+    async with coordinator.coordination._write() as session:
+        if action == "recover_project":
+            session.add(
+                RuntimeRecoveryRow(
+                    operation_id=operation_id,
+                    actor_id="operator",
+                    project_id=parameters["project_id"],
+                    revision=1,
+                    source_runtime_id="dead-source",
+                    source_fencing_token=4,
+                    target_runtime_id=parameters["target_runtime_id"],
+                    target_fencing_token=5,
+                    expected_handoff_revision=None,
+                    phase="held",
+                    checkpoint={},
+                    blockers=[],
+                    created_at_ms=1,
+                    updated_at_ms=1,
+                )
+            )
+        elif action == "reconcile_project":
+            session.add(
+                DeploymentReceiptRow(
+                    id=orphan_receipt_key(ProjectLease(**parameters["expected_owner"])),
+                    action="project.orphans_reconciled",
+                    result={"project_id": "one", "effects_replayed": False},
+                    occurred_at_ms=1,
+                )
+            )
+        else:
+            await coordinator._receipt(
+                session,
+                "api.promoted",
+                {
+                    "runtime_id": parameters["runtime_id"],
+                    "version": "v2",
+                    "revision": parameters["expected_revision"] + 1,
+                },
+            )
+
+
+_OWNER = {"project_id": "one", "runtime_id": "dead-source", "fencing_token": 4}
+_DURABLE_CASES = {
+    "recover_project": {
+        "project_id": "one",
+        "target_runtime_id": "target",
+        "expected_owner": _OWNER,
+        "expected_handoff_revision": None,
+    },
+    "reconcile_project": {"expected_owner": _OWNER},
+    "promote_api": {"runtime_id": "api-new", "expected_revision": 7},
+}
+
+
+@pytest.mark.parametrize("action", sorted(_DURABLE_CASES))
+async def test_lost_reply_after_commit_reports_the_durable_record(host, action):
+    calls = []
+
+    async def dispatch(name, values):
+        calls.append(name)
+        await _record_durable_effect(host[0], name, "committed", values)
+        raise OSError("connection reset after the commit")
+
+    args = dict(
+        operation_id="committed",
+        actor_id="operator",
+        action=action,
+        parameters=_DURABLE_CASES[action],
+        dispatch=dispatch,
+    )
+    receipt = await DeploymentOperations(host[0]).execute(**args)
+    assert receipt["state"] == "succeeded"
+    assert receipt["result"]["dispatch_error_type"] == "OSError"
+    assert receipt["result"]["confirmed_by"] in {
+        "runtime_recovery",
+        "orphan_reconciliation_receipt",
+        "api_promoted_receipt",
+    }
+    # The same ID returns the settled receipt; nothing is dispatched again.
+    assert await DeploymentOperations(host[0]).execute(**args) == receipt
+    assert calls == [action]
+
+
+@pytest.mark.parametrize("action", sorted(_DURABLE_CASES))
+async def test_lost_reply_without_commit_names_the_record_to_read(host, action):
+    async def dispatch(_name, _values):
+        raise OSError("connection reset before any commit")
+
+    receipt = await DeploymentOperations(host[0]).execute(
+        operation_id="absent",
+        actor_id="operator",
+        action=action,
+        parameters=_DURABLE_CASES[action],
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "uncertain"
+    assert receipt["result"]["durable_record"]
+
+
+@pytest.mark.parametrize("action", sorted(_DURABLE_CASES))
+async def test_uncertain_receipt_reconciles_from_its_durable_record(
+    host, monkeypatch, action
+):
+    import nebula.v3.runtime_operations as operations
+
+    parameters = _DURABLE_CASES[action]
+
+    async def dispatch(_name, _values):
+        raise OSError("connection reset; the commit outcome is unknown")
+
+    old = DeploymentOperations(host[0], owner_id="old-host")
+    args = dict(
+        operation_id="late",
+        actor_id="operator",
+        action=action,
+        parameters=parameters,
+        dispatch=dispatch,
+    )
+    assert (await old.execute(**args))["state"] == "uncertain"
+    # The original host's commit became visible after it reported the error.
+    await _record_durable_effect(host[0], action, "late", parameters)
+    fresh = DeploymentOperations(host[0], owner_id="new-host")
+    monkeypatch.setattr(operations, "same_process", lambda *args: False)
+    settled = await fresh.reconcile("late", actor_id="operator")
+    assert settled["state"] == "succeeded"
+    assert settled["result"]["reconciled"] is True
+    assert await fresh.status("late", actor_id="operator") == settled
+
+
+@pytest.mark.parametrize("action", sorted(_DURABLE_CASES))
+async def test_uncertain_receipt_without_effect_reconciles_as_failed(
+    host, monkeypatch, action
+):
+    import nebula.v3.runtime_operations as operations
+
+    async def dispatch(_name, _values):
+        raise OSError("connection reset before any commit")
+
+    old = DeploymentOperations(host[0], owner_id="old-host")
+    await old.execute(
+        operation_id="never",
+        actor_id="operator",
+        action=action,
+        parameters=_DURABLE_CASES[action],
+        dispatch=dispatch,
+    )
+    fresh = DeploymentOperations(host[0], owner_id="new-host")
+    # While the original host may still be running, nothing is settled.
+    monkeypatch.setattr(operations, "same_process", lambda *args: True)
+    with pytest.raises(CoordinationConflict, match="not confirmed gone"):
+        await fresh.reconcile("never", actor_id="operator")
+    monkeypatch.setattr(operations, "same_process", lambda *args: False)
+    assert (await fresh.reconcile("never", actor_id="operator"))["state"] == "failed"
+
+
+async def test_promotion_receipt_of_another_revision_is_not_this_request(host):
+    async def dispatch(_name, values):
+        await _record_durable_effect(
+            host[0],
+            "promote_api",
+            "other",
+            {**values, "expected_revision": values["expected_revision"] + 3},
+        )
+        raise OSError("reply lost")
+
+    receipt = await DeploymentOperations(host[0]).execute(
+        operation_id="other-revision",
+        actor_id="operator",
+        action="promote_api",
+        parameters=_DURABLE_CASES["promote_api"],
+        dispatch=dispatch,
+    )
+    assert receipt["state"] == "uncertain"

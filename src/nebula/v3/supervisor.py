@@ -10,6 +10,7 @@ from builtins import BaseExceptionGroup
 from dataclasses import asdict, replace
 import hashlib
 from pathlib import Path
+import threading
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket
 import httpx
@@ -30,8 +31,9 @@ from .database import (
     RuntimeRecoveryRow,
 )
 from .deployment_protocol import ReleaseManifest, WorkerIdentity
-from .diagnostics import record_caught_exception
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .deployments import _RESIDENT, checkpoint_digest
+from .event_history import pause_between_batches, prune_orphaned_event_history
 from .release_store import ReleaseStore
 from .memory_policy import MemoryBudgetError
 from .runtime_coordination import CoordinationConflict, OperationRejected, ProjectLease
@@ -183,6 +185,8 @@ class RuntimeSupervisor:
         self._operations = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._handoff_task = None
+        self._prune_stop = threading.Event()
+        self._prune_task: asyncio.Task | None = None
         self._handoff_serial = asyncio.Lock()
         self._next_process_reconciliation = 0.0
         self._activated_handoffs: set[str] = set()
@@ -387,6 +391,19 @@ class RuntimeSupervisor:
                 # diagnostic-expected: the owned handoff loop records operation failures and is cancelled and joined on detach.
                 self._handoff_task = asyncio.create_task(
                     self._handoff_loop(), name="nebula-host-handoffs"
+                )
+                # Global history maintenance uses the unscoped host database.
+                # An execution worker's scoped database locks its project lease.
+                self._prune_task = create_diagnostic_task(
+                    prune_orphaned_event_history(
+                        self.store.database,
+                        pause=pause_between_batches,
+                        stop=self._prune_stop,
+                    ),
+                    feature="storage",
+                    event_code="storage.event_history.prune",
+                    failure_message="Removing event history of deleted records stopped.",
+                    name="nebula-host-event-history-prune",
                 )
 
     async def select_recovery_release(self, version: str) -> None:
@@ -1099,6 +1116,13 @@ class RuntimeSupervisor:
 
     async def _detach_resources(self, caller):
         failures = []
+        self._prune_stop.set()
+        if self._prune_task is not None:
+            try:
+                await cancel_and_join(self._prune_task)
+            except BaseException as error:
+                # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup after every resource is attempted.
+                failures.append(error)
         if self._handoff_task is not None and self._handoff_task is not caller:
             try:
                 await cancel_and_join(self._handoff_task)
