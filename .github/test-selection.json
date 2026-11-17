@@ -1,22 +1,28 @@
 {
-  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
-  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
-  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
+  "change_digest": "73f4cc16b59a050c72d606ab3c9ebb2fc8781ccd58296475aac509ef76bb84c9",
+  "reviewed_by": "Claude, based on an independently validated by-design finding and a scratch-Core reproduction",
+  "reason": "Refusals for a third execution version (target_execution, the per-project prepare_execution switch, the deployment status detail and the staged deployer result) now name the projects and unowned workers that keep each resident version and how a version retires. The selected tests cover the new blocker text on SQLite and PostgreSQL, the prepare_execution refusal, the staged deployer's structured blockers, and the existing third-version staging, targeting and resume paths.",
+  "exclusions": "No UI consumes /deployment/status, so no frontend, native or browser coverage. The two-version limit and handoff behaviour are unchanged, so broader deployment suites are not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 11,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
+    "tests/v3/test_deployment_lifecycle.py::test_third_version_refusal_names_the_projects_pinning_each_version",
+    "tests/v3/test_deployment_lifecycle.py::test_third_execution_version_cannot_become_the_target",
+    "tests/v3/test_deployment_lifecycle.py::test_third_execution_version_stages_while_compatible_api_can_promote",
+    "tests/v3/test_runtime_operations.py::test_execution_prepare_without_reservation_is_a_failed_receipt",
+    "tests/test_staged_deployer.py::test_staged_execution_names_the_projects_pinning_each_version",
+    "tests/test_staged_deployer.py::test_third_execution_version_stays_staged",
+    "tests/test_staged_deployer.py::test_staged_promotion_resumes_once_an_older_version_retires",
+    "tests/test_staged_deployer.py::test_code_rollback_to_a_third_version_keeps_the_target"
   ],
   "frontend": [],
   "native": [],

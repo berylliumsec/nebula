@@ -338,6 +338,41 @@ async def test_third_execution_version_cannot_become_the_target(host):
     assert await worker(host, "v3") is not None
 
 
+async def test_third_version_refusal_names_the_projects_pinning_each_version(host):
+    """The operator sees which projects keep each older version resident and
+    what retires it, in the target refusal, the per-project switch refusal
+    and the deployment status detail."""
+    coordinator, _store = host
+    older = await worker(host, "v1")
+    newer = await worker(host, "v2")
+    spare = await worker(host, "v2")
+    await coordinator.coordination.claim_project("one", older)
+    await coordinator.coordination.claim_project("two", newer)
+
+    with pytest.raises(OperationRejected) as refused:
+        await coordinator.target_execution("v3")
+    message = str(refused.value)
+    assert (
+        'Version v1 is kept resident by 1 project(s): Project "Synthetic one" (one)'
+        in message
+    )
+    assert (
+        'Version v2 is kept resident by 1 project(s): Project "Synthetic two" (two)'
+        in message
+    )
+    assert f"1 unowned worker(s): {spare} (ready)" in message
+    assert "A version retires once each of its projects has moved" in message
+
+    switch = await coordinator.execution_capacity_blocker("v3")
+    assert switch.startswith("Release v3 cannot start an execution worker")
+    assert 'Project "Synthetic one" (one)' in switch
+
+    assert await worker(host, "v3") is None
+    detail = (await coordinator.status()).detail
+    assert detail.startswith("Release v3 is staged")
+    assert 'Project "Synthetic two" (two)' in detail
+
+
 async def test_pinned_project_remains_usable_while_another_transfers(host):
     coordinator, _store = host
     first, second, lease = await pair(host)

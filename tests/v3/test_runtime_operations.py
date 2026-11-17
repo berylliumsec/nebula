@@ -302,11 +302,20 @@ async def test_execution_prepare_without_reservation_is_a_failed_receipt():
     root = RuntimeSupervisor.__new__(RuntimeSupervisor)
     root.started, root.closed, root._shutdown_committed = True, False, False
     root._operations = asyncio.Lock()
-    root.coordinator = SimpleNamespace(database=SimpleNamespace(session=Session))
+
+    async def blocker(version):
+        return f"Version v1 is kept resident by 1 project(s): Apple ({version})"
+
+    root.coordinator = SimpleNamespace(
+        database=SimpleNamespace(session=Session),
+        execution_capacity_blocker=blocker,
+    )
     root.worker_admission = admit
     root.host = SimpleNamespace(spawn=spawn)
-    with pytest.raises(OperationRejected, match="remains staged"):
+    with pytest.raises(OperationRejected, match="remains staged") as refused:
         await root.prepare_execution("v2")
+    # The per-project switch refusal names what keeps the slot.
+    assert "kept resident by 1 project(s): Apple (v2)" in str(refused.value)
 
 
 async def test_code_rollback_partial_effect_is_not_a_definite_refusal():
