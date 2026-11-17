@@ -1,21 +1,31 @@
 {
-  "change_digest": "19bf3599371d3ddc3d4227e333442eaac53f05a15d88208c6f61247a84ec1ddc",
+  "change_digest": "965370d5e27e3b203ea9b6fc0e068597762c7919459d1821cefb50bb0e132960",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Dead-owner reconciliation (runtime_orphan_recovery.py) now releases claims on ended provider turns and unheld goal claims, pausing a goal for review only when an effect is unconfirmed, and settles every held capacity reservation of a provably dead owner. Selected: the whole orphan-recovery suite, which covers the new ended-turn, unpaired-claim, capacity and earlier-pass regressions plus the existing invariants, in SQLite and PostgreSQL.",
-  "exclusions": "No API, UI, settings or native change. Related runtime suites (reconciliation, auto-recovery, operations, capacity) were run locally against clean main with identical pre-existing failures and are not selected. Real-Core recovery was verified on a scratch Core with SIGKILL at the exact crash windows and the adapted chaos scenarios.",
+  "reason": "Automatic recovery replaces a prepared target that ended before it took the project with a fresh preparation under its own operation identity, and settles a preparation left uncertain by a dead host from its spawn checkpoint and process row (recording the exact unconfirmed worker's readiness first). A failed execution process now exits unless it is quiescing, relinquishing or closing, so a never-served first start, a restoration that ran a control, or one that failed after verification no longer keeps renewing a failed grant. Selected: the auto-recovery suite (dead, retired and live prepared targets; verified, unanswering and retired uncertain preparations), restoration and worker exit regressions, the held-control failure, and the recovery reconciliation cases around held, mismatched and waiting restorations, on SQLite and PostgreSQL.",
+  "exclusions": "test_retained_prepared_worker_survives_host_detach_and_new_host_activates_saved_recovery needs a pidfd-capable process host (fails locally on main too). No UI, native or Playwright layer: no operator-visible surface changed beyond existing diagnostics. All four workflows were reproduced on a fault-injected scratch Core on main (STUCK) and on this branch (PASS). No settings or settings-assistant destination changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 90,
+    "python": 124,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py"
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_execution_restoration.py",
+    "tests/v3/test_execution_worker.py::test_failed_startup_is_reported_and_same_grant_does_not_retry",
+    "tests/v3/test_execution_worker.py::test_serving_project_failure_exits_the_worker_after_its_receipt",
+    "tests/v3/test_execution_worker.py::test_failure_while_closing_keeps_the_worker",
+    "tests/v3/test_recovery_reconciliation.py::test_target_failed_before_activation_relinquishes_for_fresh_recovery",
+    "tests/v3/test_recovery_reconciliation.py::test_failed_target_that_did_not_clean_up_exits_without_relinquishing",
+    "tests/v3/test_recovery_reconciliation.py::test_waiting_transfer_is_recorded_once_per_reason",
+    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work",
+    "tests/v3/test_recovery_reconciliation.py::test_recovery_mismatch_stays_held_without_activation_or_claim",
+    "tests/v3/test_recovery_controls.py::test_held_target_that_ran_a_control_and_then_failed_exits"
   ],
   "frontend": [],
   "native": [],

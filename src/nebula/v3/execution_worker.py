@@ -934,20 +934,23 @@ class ProjectExecution:
                 self.state = "closed"
             if self.state == "failed":
                 await self._record_failure(lease)
-                if self.served and not self.closed:
+                if not self.closed:
                     self._exit_after_failure()
 
     def _exit_after_failure(self) -> None:
-        """End this process after a project that was serving failed.
+        """End this process after its project failed, served or not.
 
         The process heartbeat renews every grant this runtime holds, so a
         live process would keep the failed project's lease forever, and Core
-        recovers only owners whose process has exited. Exiting hands the
-        project to the existing dead-owner reconciliation, exactly as a crash
-        would: interrupted turns and commands are settled, unknown effects
-        stay held, and repeated failures are capped. A failure before the
-        project served, while it quiesces or while it is closing, keeps the
-        hold: its restoration, shutdown or quiescence caller owns the outcome.
+        recovers only owners whose process has exited. An execution process
+        attaches once, so a failed one can never serve again: not after a
+        first start that failed, nor after a restoration that failed before
+        or during activation, nor after an operator control it ran while
+        held. Exiting hands the project to the existing dead-owner
+        reconciliation, exactly as a crash would: interrupted turns and
+        commands are settled, unknown effects stay flagged, and repeated
+        failures back off. A failure while the worker quiesces, relinquishes
+        or closes keeps the process: that caller owns the outcome.
         """
         request_exit = getattr(self.context, "request_exit", None)
         if request_exit is None:

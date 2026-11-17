@@ -742,9 +742,12 @@ async def test_target_failed_before_activation_relinquishes_for_fresh_recovery(
     value.execution.application_factory = failing
     await value.execution.attach(asdict(lease))
     await until(lambda: value.execution.state == "failed")
+    # The failed target already asked its process to exit; while it still
+    # answers, the host also has it give the grant back at once.
+    assert exits == ["target"]
     root = value.new_supervisor()
     await root.advance_project_handoffs()
-    assert value.execution.state == "fenced" and exits == ["target"]
+    assert value.execution.state == "fenced" and exits == ["target", "target"]
     assert not value.activations and not value.activation_requests
     async with value.database.session() as session:
         owner = await session.get(ProjectOwnershipRow, "one")
@@ -790,9 +793,15 @@ async def test_target_failed_before_activation_relinquishes_for_fresh_recovery(
         assert failed.phase == "blocked"
 
 
-async def test_failed_target_that_did_not_clean_up_stays_held(recovery):
+async def test_failed_target_that_did_not_clean_up_exits_without_relinquishing(
+    recovery,
+):
+    # Unverified cleanup cannot relinquish; the target exits instead, so its
+    # lease lapses and dead-owner reconciliation recovers the project.
     value = recovery
     lease = await value.begin()
+    exits = []
+    value.context.request_exit = lambda: exits.append(lease.runtime_id)
 
     @asynccontextmanager
     async def failing(ctx, grant):
@@ -803,7 +812,7 @@ async def test_failed_target_that_did_not_clean_up_stays_held(recovery):
     await value.execution.attach(asdict(lease))
     await until(lambda: value.execution.state == "failed")
     await value.new_supervisor().advance_project_handoffs()
-    assert value.execution.state == "failed"
+    assert value.execution.state == "failed" and exits == ["target"]
     async with value.database.session() as session:
         owner = await session.get(ProjectOwnershipRow, "one")
         assert owner.lease_expires_at_ms > 0

@@ -299,7 +299,8 @@ async def test_lost_grant_fences_old_tasks_and_cannot_be_rebound(runtime):
 
 
 async def test_failed_startup_is_reported_and_same_grant_does_not_retry(runtime):
-    calls = []
+    calls, exits = [], []
+    runtime.context.request_exit = lambda: exits.append(runtime.execution.state)
 
     @asynccontextmanager
     async def unavailable(context, lease):
@@ -312,8 +313,11 @@ async def test_failed_startup_is_reported_and_same_grant_does_not_retry(runtime)
     await until(lambda: runtime.execution.state == "failed")
     assert (await runtime.execution.attach(asdict(runtime.lease)))["state"] == "failed"
     assert calls == [runtime.lease]
-    # Nothing served yet: the failed startup keeps its hold for review.
+    # Nothing served yet, and this process can never serve: an execution
+    # process attaches once. It exits so dead-owner recovery admits a fresh
+    # worker instead of the live failed owner holding the project forever.
     assert runtime.execution.served is False
+    assert exits == ["failed"]
 
 
 async def test_serving_project_failure_exits_the_worker_after_its_receipt(
