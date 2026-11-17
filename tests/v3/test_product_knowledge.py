@@ -107,6 +107,14 @@ def test_product_search_finds_enforced_memory_budgets_and_butler_actions(monkeyp
     assert any("verify_memory_job" in item["text"] for item in actions)
 
 
+def test_product_search_finds_linked_memory_and_its_butler_actions(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("linked memory shadow curation completed goals")
+    assert any(item["source"] == "docs/LINKED_MEMORY.md" for item in matches)
+    actions = search_product_knowledge("set_linked_memory expected_revision read-back")
+    assert any("set_linked_memory" in item["text"] for item in actions)
+
+
 def test_product_search_explains_search_service_memory_and_daemon_dependency(
     monkeypatch,
 ):

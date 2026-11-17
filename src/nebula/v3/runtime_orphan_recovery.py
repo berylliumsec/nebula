@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 
 from .database import (
     DeploymentReceiptRow,
@@ -133,13 +133,22 @@ async def reconcile_dead_project(
                         EntityRow.kind == ChatTurn.entity_kind,
                         EntityRow.payload["backend"].as_string()
                         == ChatBackend.PROVIDER.value,
-                        EntityRow.payload["status"]
-                        .as_string()
-                        .in_(
-                            (
-                                ChatTurnStatus.ROUTING.value,
-                                ChatTurnStatus.FINALIZING.value,
-                            )
+                        or_(
+                            EntityRow.payload["status"]
+                            .as_string()
+                            .in_(
+                                (
+                                    ChatTurnStatus.ROUTING.value,
+                                    ChatTurnStatus.FINALIZING.value,
+                                )
+                            ),
+                            and_(
+                                EntityRow.payload["status"].as_string()
+                                == ChatTurnStatus.WAITING_CALLBACK.value,
+                                EntityRow.payload["execution_claim_id"]
+                                .as_string()
+                                .is_not(None),
+                            ),
                         ),
                     )
                     .order_by(EntityRow.id)
@@ -168,6 +177,15 @@ async def reconcile_dead_project(
             interrupted = []
             for row in rows:
                 turn = ChatTurn.model_validate(row.payload)
+                if turn.status == ChatTurnStatus.WAITING_CALLBACK:
+                    history = await chat._turn_history(turn)
+                    pending = history[-1] if history else {}
+                    if pending.get("status") != "waiting_callback" or not isinstance(
+                        pending.get("subagent_wait"), dict
+                    ):
+                        raise CoordinationConflict(
+                            "An orphaned command callback still requires effect reconciliation"
+                        )
                 calls = await store.find_entities(
                     ToolCall,
                     {"chat_turn_id": turn.id},

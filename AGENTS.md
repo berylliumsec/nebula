@@ -12,7 +12,8 @@ This override is authorization, not evidence of memory containment or cleanup.
 
 Read and follow these repository rules before working in Nebula:
 
-- [Branch, validation, and PR workflow](.codex/rules/change-workflow.md) for every change.
+- [Branch, validation, and PR workflow](.codex/rules/change-workflow.md) for every change,
+  including the standing bypass when the public commit guard's Codex review is unavailable.
 - [Focused test selection](.codex/rules/test-selection.md) before running tests or opening a PR. The detailed procedure is in [docs/TEST_SELECTION.md](docs/TEST_SELECTION.md).
 - [Operator workflow rules](.codex/rules/operator-workflows.md) when changing a feature an operator uses.
 - [Code troubleshooting](.agents/skills/code-troubleshooting/SKILL.md) for defects, regressions, and failing behavior. Identify the root cause and have a separate subagent validate it before attempting a fix.
