@@ -499,21 +499,32 @@ class McpProbeService:
                 raise McpProbeError(
                     "MCP server requires elicitation/forms, which this release does not support"
                 )
-            await client.notify("notifications/initialized")
+            # Every later exchange has the same bound as initialize: the probe
+            # runs as project work, and a server that stops answering must not
+            # hold that project's later work forever.
+            await self._bounded(
+                client.notify("notifications/initialized"),
+                profile,
+                "notifications/initialized",
+            )
             # tools/list is always attempted so servers that omit the tools
             # capability still work; resources and prompts are only requested
             # when advertised, as the MCP lifecycle requires.
-            tools_result = await self._optional_list(client, "tools/list")
+            tools_result = await self._bounded_list(client, profile, "tools/list")
             resources_result: dict[str, Any] = {}
             templates_result: dict[str, Any] = {}
             if "resources" in server_capabilities:
-                resources_result = await self._optional_list(client, "resources/list")
-                templates_result = await self._optional_list(
-                    client, "resources/templates/list"
+                resources_result = await self._bounded_list(
+                    client, profile, "resources/list"
+                )
+                templates_result = await self._bounded_list(
+                    client, profile, "resources/templates/list"
                 )
             prompts_result: dict[str, Any] = {}
             if "prompts" in server_capabilities:
-                prompts_result = await self._optional_list(client, "prompts/list")
+                prompts_result = await self._bounded_list(
+                    client, profile, "prompts/list"
+                )
             tools = self._tools(tools_result)
             snapshot = McpCapabilitySnapshot(
                 protocol_version=str(
@@ -773,6 +784,23 @@ class McpProbeService:
                 stage="mcp",
             )
             raise McpProbeError(str(exc)) from exc
+
+    @staticmethod
+    async def _bounded(awaitable, profile: McpServerProfile, method: str):
+        try:
+            return await asyncio.wait_for(
+                awaitable, timeout=profile.startup_timeout_seconds
+            )
+        except TimeoutError as exc:
+            raise McpProbeError(
+                f"MCP server did not answer {method} within "
+                f"{profile.startup_timeout_seconds:g} s"
+            ) from exc
+
+    async def _bounded_list(
+        self, client: _McpClient, profile: McpServerProfile, method: str
+    ) -> dict[str, Any]:
+        return await self._bounded(self._optional_list(client, method), profile, method)
 
     @staticmethod
     async def _optional_list(client: _McpClient, method: str) -> dict[str, Any]:
