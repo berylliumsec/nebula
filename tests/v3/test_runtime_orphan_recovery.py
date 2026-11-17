@@ -16,10 +16,15 @@ from nebula.v3.database import (
     RuntimeResourceRow,
 )
 from nebula.v3.domain import (
+    Approval,
+    ApprovalStatus,
     ChatGoal,
     ChatSession,
+    ChatSubagent,
+    ChatSubagentStatus,
     ChatTurn,
     ChatTurnStatus,
+    NativeHookExecution,
     RiskClass,
     ToolCall,
     ToolCallOrigin,
@@ -181,6 +186,181 @@ async def test_dead_owner_reconciles_claims_admission_and_stream_once(orphan):
         assert not await value.coordinator._recovery_blockers(
             sql, "one", value.lease.runtime_id
         )
+
+
+async def test_failed_provider_turn_releases_only_paired_claims_and_keeps_history(
+    orphan,
+):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {
+            "status": ChatTurnStatus.FAILED,
+            "content": "Saved partial response",
+            "error": "Provider stream ended",
+        },
+        expected_revision=value.turn.revision,
+    )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["interrupted_turn_ids"] == []
+    assert result["released_failed_provider_claim_ids"] == [value.turn.id]
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.content == "Saved partial response"
+    assert turn.error == "Provider stream ended"
+    assert turn.execution_claim_id is None and turn.execution_owner_id is None
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id is None and goal.execution_owner_id is None
+    frames = await value.coordinator.coordination.replay_stream(turn.id)
+    assert [frame.event_type for frame in frames] == ["error", SEGMENT_END]
+    assert frames[-1].event_type == SEGMENT_END
+    async with value.coordinator.database.session() as sql:
+        admission = await sql.get(ProviderTurnQueueRow, turn.id)
+        assert admission.state == "complete" and admission.lease_owner is None
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+
+
+@pytest.mark.parametrize(
+    "unsafe_effect",
+    [
+        "running_tool",
+        "failed_write",
+        "running_hook",
+        "running_child",
+        "pending_approval",
+    ],
+)
+async def test_failed_provider_claim_is_retained_while_effect_is_unconfirmed(
+    orphan, unsafe_effect
+):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED},
+        expected_revision=value.turn.revision,
+    )
+    if unsafe_effect in {"running_tool", "failed_write"}:
+        await value.store.create(
+            ToolCall(
+                engagement_id="one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                tool_name=(
+                    "workspace.write"
+                    if unsafe_effect == "failed_write"
+                    else "local.read"
+                ),
+                arguments={},
+                risk_class=(
+                    RiskClass.WORKSPACE_WRITE
+                    if unsafe_effect == "failed_write"
+                    else RiskClass.LOCAL_READ
+                ),
+                status=(
+                    ToolCallStatus.FAILED
+                    if unsafe_effect == "failed_write"
+                    else ToolCallStatus.RUNNING
+                ),
+                started_at=utc_now(),
+            )
+        )
+    elif unsafe_effect == "running_hook":
+        await value.store.create(
+            NativeHookExecution(
+                engagement_id="one",
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                hook_id="synthetic-hook",
+                hook_snapshot={},
+                event_name="turn.complete",
+                status="running",
+                side_effects="none",
+                started_at=utc_now(),
+            )
+        )
+    elif unsafe_effect == "running_child":
+        await value.store.create(
+            ChatSubagent(
+                engagement_id="one",
+                parent_session_id=value.session.id,
+                parent_turn_id=value.turn.id,
+                child_session_id="synthetic-child-session",
+                name="Synthetic child",
+                task="Finish a bounded task",
+                status=ChatSubagentStatus.RUNNING,
+            )
+        )
+    else:
+        await value.store.create(
+            Approval(
+                engagement_id="one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                status=ApprovalStatus.PENDING,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                exact_request={"synthetic": True},
+                policy_rationale="Synthetic pending approval",
+                requested_by="test",
+            )
+        )
+    await value.expire()
+
+    with pytest.raises(CoordinationConflict, match="unconfirmed|unfinished"):
+        await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id is not None
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id == turn.execution_claim_id
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
+        assert not await sql.scalar(
+            select(DeploymentReceiptRow.id).where(
+                DeploymentReceiptRow.action == "project.orphans_reconciled"
+            )
+        )
+
+
+async def test_failed_provider_claim_requires_exact_paired_goal_claim(orphan):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED},
+        expected_revision=value.turn.revision,
+    )
+    await value.store.update(
+        ChatGoal,
+        value.goal.id,
+        {"execution_claim_id": "different-claim"},
+        expected_revision=value.goal.revision,
+    )
+    await value.expire()
+
+    with pytest.raises(CoordinationConflict, match="exact running goal claim"):
+        await value.reconcile()
+
+    assert (
+        await value.store.get(ChatTurn, value.turn.id)
+    ).execution_claim_id == value.turn.execution_claim_id
+    assert (
+        await value.store.get(ChatGoal, value.goal.id)
+    ).execution_claim_id == "different-claim"
 
 
 async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):

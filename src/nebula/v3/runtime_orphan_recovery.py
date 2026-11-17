@@ -19,12 +19,18 @@ from .database import (
 )
 from .deployments import DeploymentCoordinator
 from .domain import (
+    Approval,
+    ApprovalStatus,
     ChatBackend,
     ChatGoal,
     ChatTurn,
     ChatTurnStatus,
+    ChatSubagent,
+    ChatSubagentStatus,
     NativeHookExecution,
+    RiskClass,
     ToolCall,
+    ToolCallStatus,
     utc_now,
 )
 from .process_identity import process_origin, same_process
@@ -35,7 +41,7 @@ from .runtime_coordination import (
     CoordinationConflict,
     ProjectLease,
 )
-from .storage import NebulaStore, StoreTransaction
+from .storage import NebulaStore, NotFoundError, StoreTransaction
 
 MAX_ORPHAN_ROWS = 100
 MAX_HARNESS_CLAIMS = 1000
@@ -180,6 +186,9 @@ async def reconcile_dead_project(
                     transaction=transaction,
                 )
                 interrupted.append(turn.id)
+            released_failed_claims = await _release_failed_provider_claims(
+                session, store, transaction, expected_owner.project_id
+            )
             released_claims = await _release_harness_claims(
                 session, transaction, expected_owner.project_id
             )
@@ -202,7 +211,10 @@ async def reconcile_dead_project(
                 if (
                     turn.engagement_id != expected_owner.project_id
                     or turn.backend != ChatBackend.PROVIDER
-                    or turn.execution_claim_id is not None
+                    or (
+                        turn.execution_claim_id is not None
+                        and turn.id not in released_failed_claims
+                    )
                     or turn.status
                     in {ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING}
                 ):
@@ -295,6 +307,7 @@ async def reconcile_dead_project(
                 "settled_admission_ids": settled,
                 "released_capacity_ids": released_capacity,
                 "released_claim_ids": released_claims,
+                "released_failed_provider_claim_ids": released_failed_claims,
                 "settled_command_ids": settled_commands,
                 "effects_replayed": False,
             }
@@ -309,6 +322,179 @@ async def reconcile_dead_project(
             return result
     finally:
         await store.event_history.close()
+
+
+async def _release_failed_provider_claims(
+    session,
+    store: NebulaStore,
+    transaction: StoreTransaction,
+    project_id: str,
+) -> list[str]:
+    """Release only exact paired claims on failed provider turns with settled effects.
+
+    Failed turns are not replayed or rewritten. Their claims can be cleared only
+    when the paired running goal has the same claim and every durable child,
+    approval, tool, and hook record proves there is no unfinished effect.
+    """
+    rows = list(
+        await session.scalars(
+            select(EntityRow)
+            .where(
+                EntityRow.engagement_id == project_id,
+                EntityRow.kind == ChatTurn.entity_kind,
+                EntityRow.payload["backend"].as_string() == ChatBackend.PROVIDER.value,
+                EntityRow.payload["status"].as_string() == ChatTurnStatus.FAILED.value,
+                EntityRow.payload["execution_claim_id"].as_string().is_not(None),
+            )
+            .order_by(EntityRow.id)
+            .limit(MAX_ORPHAN_ROWS + 1)
+        )
+    )
+    if len(rows) > MAX_ORPHAN_ROWS:
+        raise CoordinationConflict(
+            "Too many failed provider claims; retain work for operator review"
+        )
+
+    released: list[str] = []
+    for row in rows:
+        turn = ChatTurn.model_validate(row.payload)
+        if (
+            turn.goal_id is None
+            or not turn.execution_owner_id
+            or not turn.execution_claim_id
+            or turn.execution_claimed_at is None
+        ):
+            raise CoordinationConflict(
+                "A failed provider turn has an incomplete execution claim"
+            )
+        goal_row = await session.get(EntityRow, turn.goal_id)
+        if goal_row is None or goal_row.kind != ChatGoal.entity_kind:
+            raise CoordinationConflict(
+                "A failed provider turn does not have its exact running goal claim"
+            )
+        goal = ChatGoal.model_validate(goal_row.payload)
+        if (
+            goal.engagement_id != project_id
+            or goal.session_id != turn.session_id
+            or goal.status.value != "running"
+            or goal.execution_claim_id != turn.execution_claim_id
+            or goal.execution_owner_id != turn.execution_owner_id
+            or goal.execution_claimed_at is None
+        ):
+            raise CoordinationConflict(
+                "A failed provider turn does not have its exact running goal claim"
+            )
+        await _require_settled_failed_turn_effects(store, turn)
+        await transaction.update(
+            ChatTurn,
+            turn.id,
+            {
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
+            },
+            expected_revision=turn.revision,
+        )
+        await transaction.update(
+            ChatGoal,
+            goal.id,
+            {
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
+            },
+            expected_revision=goal.revision,
+        )
+        released.append(turn.id)
+    return released
+
+
+async def _require_settled_failed_turn_effects(
+    store: NebulaStore, turn: ChatTurn
+) -> None:
+    calls = await store.find_entities(
+        ToolCall,
+        {"chat_turn_id": turn.id},
+        engagement_id=turn.engagement_id,
+    )
+    safe_call_statuses = {
+        ToolCallStatus.COMPLETE,
+        ToolCallStatus.DENIED,
+        ToolCallStatus.CANCELLED,
+    }
+    for call in calls:
+        if call.status in safe_call_statuses:
+            continue
+        # A failed read has no external or persistent effect. Other failed
+        # calls can have partially applied effects and require operator review.
+        if (
+            call.status == ToolCallStatus.FAILED
+            and call.risk_class == RiskClass.LOCAL_READ
+        ):
+            continue
+        raise CoordinationConflict(
+            "A failed provider turn still has an unconfirmed tool effect"
+        )
+
+    hooks = await store.find_entities(
+        NativeHookExecution,
+        {"chat_turn_id": turn.id},
+        engagement_id=turn.engagement_id,
+    )
+    if any(hook.status == "running" or hook.side_effects != "none" for hook in hooks):
+        raise CoordinationConflict(
+            "A failed provider turn still has an unconfirmed native-hook effect"
+        )
+
+    children = await store.find_entities(
+        ChatSubagent,
+        {"parent_turn_id": turn.id},
+        engagement_id=turn.engagement_id,
+    )
+    if any(
+        child.status == ChatSubagentStatus.RUNNING
+        or child.pending_goal_charge_turn_id == turn.id
+        for child in children
+    ):
+        raise CoordinationConflict(
+            "A failed provider turn still has unfinished child work"
+        )
+
+    approvals_by_id = {
+        approval.id: approval
+        for approval in await store.find_entities(
+            Approval,
+            {"chat_turn_id": turn.id},
+            engagement_id=turn.engagement_id,
+        )
+    }
+    for call in calls:
+        for approval in await store.find_entities(
+            Approval,
+            {"tool_call_id": call.id},
+            engagement_id=turn.engagement_id,
+        ):
+            approvals_by_id[approval.id] = approval
+    if turn.approval_id:
+        try:
+            approval = await store.get(Approval, turn.approval_id)
+        except NotFoundError:
+            pass
+        else:
+            approvals_by_id[approval.id] = approval
+    approvals = approvals_by_id.values()
+    for approval in approvals:
+        continuation = approval.continuation
+        if approval.status == ApprovalStatus.PENDING or (
+            continuation is not None
+            and (
+                continuation.status == "pending"
+                or continuation.adapter_status in {"pending", "unknown"}
+            )
+        ):
+            raise CoordinationConflict(
+                "A failed provider turn still has an unconfirmed approval effect"
+            )
 
 
 async def _release_harness_claims(session, transaction, project_id: str) -> list[str]:
