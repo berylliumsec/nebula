@@ -185,9 +185,10 @@ async def reconcile_dead_project(
                 if turn.status == ChatTurnStatus.WAITING_CALLBACK:
                     history = await chat._turn_history(turn)
                     pending = history[-1] if history else {}
-                    waiting_subagent = (
-                        pending.get("status") == "waiting_callback"
-                        and isinstance(pending.get("subagent_wait"), dict)
+                    waiting_subagent = pending.get(
+                        "status"
+                    ) == "waiting_callback" and isinstance(
+                        pending.get("subagent_wait"), dict
                     )
                     unknown_tool = pending.get("status") == "waiting_callback" and any(
                         call.id == pending.get("tool_call_id")
