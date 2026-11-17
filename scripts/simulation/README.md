@@ -117,6 +117,25 @@ start remains held until its original receipt confirms completion or no effect;
 absence alone cannot prove an in-flight request has stopped. Preserve the journal and
 use the recorded operation ID to inspect it; never edit it to force progress.
 
+When a later manual installation superseded a managed promotion, use
+`reconcile-superseded-manual-deployment --deployment-id <journal-id>
+--manual-receipt-prefix <YYYYMMDD-commit8>`. The command verifies the exact later
+stage, migration, host switch, API promotion, and final readback receipts, then
+checks the authenticated current host/API identity and confirms the old release
+has no process, resident version, or project owner. It archives the complete old
+journal and its Core receipts, including every uncertain receipt; it never
+replays those operations or labels them no-effect. A currently degraded
+deployment aggregate requires the explicit
+`--allow-degraded-baseline` flag. This records the degraded status while still
+requiring healthy API/database identity and exact host process readback. Other
+legacy attempt journals are preserved unchanged; this command does not settle
+their uncertain effects.
+
+Run the same checks without changing deployer state by adding `--dry-run`. It
+returns the proposed classification, verified receipts, live readback, uncertain
+effects to preserve, and state alignment. Rerun without `--dry-run` only after
+reviewing that summary.
+
 New hosts expose authenticated operation reconciliation at
 `POST /api/v1/deployment/operations/{operation_id}/reconcile`. It never repeats
 an effect. New operations retain private origin and child identities before

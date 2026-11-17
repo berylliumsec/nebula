@@ -57,6 +57,7 @@ RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
 DATA = ROOT / "state/v3"
 BACKUPS = ROOT / "rollback-backups"
+DEPLOYMENT_RECORDS = ROOT / "deployment-records"
 SQLITE_DATABASES = (
     "nebula.db",
     "butler-memory.sqlite3",
@@ -2361,6 +2362,528 @@ def reconcile_runtime_deployment(deployment_id: str) -> dict[str, Any]:
     return {"status": "reconciled_no_effect", "deployment": reconciliation}
 
 
+def _manual_record(prefix: str, name: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9]{8}-[0-9a-f]{8}", prefix):
+        raise ValueError("manual receipt prefix must be YYYYMMDD-<8 hex commit digits>")
+    path = DEPLOYMENT_RECORDS / f"{prefix}-{name}.json"
+    if path.is_symlink() or path.parent.resolve() != DEPLOYMENT_RECORDS.resolve():
+        raise RuntimeError("Manual deployment receipt path is unsafe")
+    if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+        raise RuntimeError(f"Manual deployment receipt is missing or oversized: {name}")
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Manual deployment receipt is unreadable: {name}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Manual deployment receipt has an invalid shape: {name}")
+    return value
+
+
+def _manual_runtime_package_version(version: str) -> str:
+    """Read the package identity from a manually staged, hash-bound release."""
+    release = RELEASES / version
+    if (
+        release.is_symlink()
+        or release.resolve(strict=True).parent != RELEASES.resolve()
+        or release.name != version
+    ):
+        raise RuntimeError("Manual runtime release path is unsafe")
+    outer = json.loads((release / "nebula-runtime.json").read_text())
+    relative = "dist/nebula-runtime/nebula-runtime.json"
+    files = outer.get("files")
+    expected = files.get(relative) if isinstance(files, dict) else None
+    bundle_manifest = release / relative
+    expected_bundle_path = (release / "dist/nebula-runtime").resolve(strict=True)
+    if (
+        outer.get("version") != version
+        or not isinstance(expected, str)
+        or not SHA256.fullmatch(expected)
+        or (release / "dist").is_symlink()
+        or (release / "dist/nebula-runtime").is_symlink()
+        or bundle_manifest.is_symlink()
+        or bundle_manifest.resolve(strict=True).parent != expected_bundle_path
+        or sha256(bundle_manifest) != expected
+    ):
+        raise RuntimeError("Manual runtime manifest does not bind its package identity")
+    value = json.loads(bundle_manifest.read_text()).get("version")
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 128
+        or any(ord(character) < 33 for character in value)
+    ):
+        raise RuntimeError("Manual runtime package version is invalid")
+    return value
+
+
+def _verify_manual_operation(
+    request: Any,
+    saved_receipt: Any,
+    *,
+    action: str,
+    version: str,
+    operation_id: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(request, dict) or not isinstance(saved_receipt, dict):
+        raise RuntimeError(f"Manual {action} receipt is incomplete")
+    request_id = request.get("operation_id")
+    parameters = request.get("parameters")
+    if (
+        request.get("action") != action
+        or not isinstance(request_id, str)
+        or operation_id is not None
+        and request_id != operation_id
+        or not isinstance(parameters, dict)
+    ):
+        raise RuntimeError(f"Manual {action} request does not match the release")
+    receipt = _read_deployment_operation(request_id)
+    if (
+        receipt.get("operation_id") != request_id
+        or receipt.get("action") != action
+        or receipt.get("state") != saved_receipt.get("state")
+        or receipt.get("result") != saved_receipt.get("result")
+        or saved_receipt.get("operation_id") != request_id
+        or saved_receipt.get("action") != action
+    ):
+        raise RuntimeError(f"Core {action} receipt differs from the manual record")
+    if action == "stage":
+        source = parameters.get("source")
+        if not isinstance(source, str):
+            raise RuntimeError("Manual stage receipt has no exact source release")
+        release = Path(source)
+        if (
+            release.is_symlink()
+            or release.resolve(strict=True).parent != RELEASES.resolve()
+            or release.name != version
+        ):
+            raise RuntimeError("Manual stage source is not the exact immutable release")
+        manifest_sha256 = sha256(release / "nebula-runtime.json")
+        if (
+            parameters.get("manifest_sha256") != manifest_sha256
+            or receipt.get("state") != "succeeded"
+            or (receipt.get("result") or {}).get("version") != version
+            or (receipt.get("result") or {}).get("manifest_sha256")
+            != manifest_sha256
+        ):
+            raise RuntimeError("Manual stage receipt is not bound to the exact release")
+    elif action == "migrate":
+        result = receipt.get("result") or {}
+        if (
+            parameters.get("version") != version
+            or receipt.get("state") != "succeeded"
+            or result.get("version") != version
+            or result.get("state") != "current"
+            or not isinstance(result.get("target_head"), str)
+            or result.get("current_head") != result.get("target_head")
+        ):
+            raise RuntimeError("Manual migration receipt is not exact and current")
+    elif action == "prepare_api":
+        result = receipt.get("result") or {}
+        if (
+            parameters.get("version") != version
+            or receipt.get("state") != "succeeded"
+            or result.get("version") != version
+            or result.get("role") != "api"
+            or not isinstance(result.get("runtime_id"), str)
+        ):
+            raise RuntimeError("Manual API preparation receipt is not exact")
+    elif action == "promote_api":
+        if (
+            not isinstance(parameters.get("runtime_id"), str)
+            or receipt.get("state") not in {"succeeded", "uncertain"}
+        ):
+            raise RuntimeError("Manual API promotion receipt is not reconcilable")
+    else:
+        raise ValueError(f"Unsupported manual receipt action: {action}")
+    return receipt
+
+
+def reconcile_superseded_manual_deployment(
+    deployment_id: str,
+    *,
+    manual_prefix: str,
+    allow_degraded_baseline: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Archive a manual release that superseded a stale managed promotion.
+
+    This records a later, authenticated host/API state and preserves the full
+    older journal. It never replays or reclassifies an uncertain Core effect as
+    no-effect. A degraded aggregate health state requires an explicit flag and
+    exact host/API/database identity.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", deployment_id):
+        raise ValueError("deployment ID must be a 32-character journal identity")
+    record = state()
+    history = record.get("runtime_deployment_history", [])
+    if not isinstance(history, list):
+        raise RuntimeError("Deployment history archive is malformed")
+    prior_archive = next(
+        (
+            item
+            for item in history
+            if isinstance(item, dict) and item.get("id") == deployment_id
+        ),
+        None,
+    )
+    if prior_archive is not None:
+        if prior_archive.get("classification") != "superseded_by_manual_deployment":
+            raise RuntimeError("Archived deployment has another reconciliation outcome")
+        return {"status": "already_reconciled", "deployment": prior_archive}
+
+    journal = record.get("runtime_deployment")
+    if (
+        not isinstance(journal, dict)
+        or journal.get("id") != deployment_id
+        or journal.get("action") != "promote"
+        or journal.get("state") != "running"
+    ):
+        raise RuntimeError("No matching unresolved promotion journal exists")
+    if record.get("pending") is not None or record.get("promoting") is not None:
+        raise RuntimeError("A pending or active deployer candidate must be resolved first")
+    version = journal.get("version")
+    steps = journal.get("steps")
+    expected_steps = {"stage", "migrate", "api", "promote-api", "target"}
+    if (
+        not isinstance(version, str)
+        or not SHA.fullmatch(version)
+        or not isinstance(steps, dict)
+        or set(steps) != expected_steps
+    ):
+        raise RuntimeError("The unresolved journal has an unsupported operation shape")
+
+    core_receipts: dict[str, dict[str, Any]] = {}
+    for step, action in (
+        ("stage", "stage"),
+        ("migrate", "migrate"),
+        ("api", "prepare_api"),
+        ("promote-api", "promote_api"),
+        ("target", "target_execution"),
+    ):
+        entry = steps.get(step)
+        operation_id = f"{deployment_id}:{step.replace('/', ':')}"
+        if (
+            not isinstance(entry, dict)
+            or entry.get("operation_id") != operation_id
+            or entry.get("action") != action
+            or not isinstance(entry.get("parameters"), dict)
+            or not isinstance(entry.get("receipt"), dict)
+        ):
+            raise RuntimeError(f"Journal step {step} is not exact")
+        receipt = _read_deployment_operation(operation_id)
+        saved = entry["receipt"]
+        if (
+            receipt.get("operation_id") != operation_id
+            or receipt.get("action") != action
+            or receipt.get("state") != saved.get("state")
+            or receipt.get("result") != saved.get("result")
+        ):
+            raise RuntimeError(f"Core {step} receipt differs from the saved journal")
+        if step in {"promote-api", "target"}:
+            settled = entry.get("settled")
+            if (
+                receipt.get("state") != "uncertain"
+                or not isinstance(settled, dict)
+                or settled.get("by") != "deployment_status"
+                or (settled.get("evidence") or {}).get(
+                    "api_version" if step == "promote-api" else "target_execution_version"
+                )
+                != version
+                or (settled.get("result") or {}).get(
+                    "api_version" if step == "promote-api" else "target_execution_version"
+                )
+                != version
+            ):
+                raise RuntimeError(f"Uncertain {step} lacks its exact saved status settlement")
+        elif receipt.get("state") != "succeeded":
+            raise RuntimeError(f"Journal step {step} is not confirmed successful")
+        core_receipts[step] = receipt
+
+    old_api_result = core_receipts["api"].get("result")
+    old_api_runtime = (
+        old_api_result.get("runtime_id") if isinstance(old_api_result, dict) else None
+    )
+    old_stage = steps["stage"]["parameters"]
+    old_migration = steps["migrate"]["parameters"]
+    old_prepare = steps["api"]["parameters"]
+    old_promote = steps["promote-api"]["parameters"]
+    old_target = steps["target"]["parameters"]
+    old_release, old_manifest_sha256 = runtime_release(version)
+    if (
+        not isinstance(old_stage.get("source"), str)
+        or old_stage.get("source") != str(old_release)
+        or old_stage.get("manifest_sha256") != old_manifest_sha256
+        or old_migration.get("version") != version
+        or type(old_migration.get("expected_revision")) is not int
+        or old_prepare != {"version": version}
+        or not isinstance(old_api_runtime, str)
+        or (old_api_result or {}).get("version") != version
+        or (old_api_result or {}).get("role") != "api"
+        or old_promote.get("runtime_id") != old_api_runtime
+        or type(old_promote.get("expected_revision")) is not int
+        or old_target != {"version": version}
+    ):
+        raise RuntimeError("Old deployment operations are not bound to its exact release")
+
+    activation = journal.get("host_activation")
+    activation_result = activation.get("result") if isinstance(activation, dict) else None
+    if (
+        not isinstance(activation, dict)
+        or activation.get("version") != version
+        or activation.get("state") != "complete"
+        or not isinstance(activation.get("operation_id"), str)
+        or not isinstance(activation_result, dict)
+        or activation_result.get("operation_id") != activation.get("operation_id")
+        or activation_result.get("status") != "host_activated"
+        or activation_result.get("health_commit") != version
+        or activation_result.get("version") != version
+    ):
+        raise RuntimeError("Old journal lacks its exact completed host activation")
+
+    stage = _manual_record(manual_prefix, "stage")
+    migration = _manual_record(manual_prefix, "migrate")
+    host_switch = _manual_record(manual_prefix, "host-switch-manual")
+    api_promotion = _manual_record(manual_prefix, "promote-api-manual")
+    final_readback = _manual_record(manual_prefix, "final-readback")
+    manual_version = host_switch.get("version")
+    if (
+        not isinstance(manual_version, str)
+        or not SHA.fullmatch(manual_version)
+        or not manual_prefix.endswith(manual_version[:8])
+        or manual_version == version
+        or api_promotion.get("version") != manual_version
+        or final_readback.get("target_commit") != manual_version
+        or (final_readback.get("deployment") or {}).get("api_version")
+        != manual_version
+    ):
+        raise RuntimeError("Manual receipt bundle does not identify a later release")
+
+    stage_receipt = _verify_manual_operation(
+        stage.get("request"),
+        stage.get("receipt"),
+        action="stage",
+        version=manual_version,
+    )
+    migration_receipt = _verify_manual_operation(
+        migration.get("request"),
+        migration.get("receipt"),
+        action="migrate",
+        version=manual_version,
+    )
+    manual_manifest = json.loads(
+        (RELEASES / manual_version / "nebula-runtime.json").read_text()
+    )
+    if (
+        manual_manifest.get("version") != manual_version
+        or migration_receipt["result"].get("target_head")
+        != manual_manifest.get("migration_head")
+    ):
+        raise RuntimeError(
+            "Manual migration receipt differs from the exact runtime manifest"
+        )
+    host_readback = host_switch.get("readback")
+    package_version = _manual_runtime_package_version(manual_version)
+    if (
+        host_switch.get("phase") != "complete"
+        or not isinstance(host_switch.get("operation_id"), str)
+        or host_switch.get("previous_version") == manual_version
+        or not isinstance(host_readback, dict)
+        or host_readback.get("health_commit") != manual_version
+        or host_readback.get("api_version") != manual_version
+        or host_readback.get("runtime_package_version") != package_version
+        or host_readback.get("ui_commit") != manual_version
+        or host_readback.get("owner_changes") != {}
+    ):
+        raise RuntimeError("Manual host-switch receipt is not an exact completed readback")
+    api_steps = api_promotion.get("steps")
+    prepare_step = api_steps.get("prepare-api") if isinstance(api_steps, dict) else None
+    promote_step = api_steps.get("promote-api") if isinstance(api_steps, dict) else None
+    if not isinstance(prepare_step, dict) or not isinstance(promote_step, dict):
+        raise RuntimeError("Manual API promotion receipt is incomplete")
+    prepare_receipt = _verify_manual_operation(
+        prepare_step.get("request"),
+        prepare_step.get("receipt"),
+        action="prepare_api",
+        version=manual_version,
+    )
+    promote_receipt = _verify_manual_operation(
+        promote_step.get("request"),
+        promote_step.get("receipt"),
+        action="promote_api",
+        version=manual_version,
+    )
+    prepared_runtime_id = (prepare_receipt.get("result") or {}).get("runtime_id")
+    if (
+        prepared_runtime_id != api_promotion.get("prepared_runtime_id")
+        or (promote_step.get("request", {}).get("parameters") or {}).get(
+            "runtime_id"
+        )
+        != prepared_runtime_id
+        or (api_promotion.get("promoted_readback") or {}).get("api_version")
+        != manual_version
+    ):
+        raise RuntimeError("Manual API promotion is not bound to its prepared runtime")
+    final_health = final_readback.get("health")
+    if (
+        not isinstance(final_health, dict)
+        or final_health.get("status") != "ok"
+        or final_health.get("database") != "ok"
+        or final_health.get("commit") != manual_version
+        or (final_readback.get("deployment") or {}).get("health") != "ready"
+    ):
+        raise RuntimeError("Manual final readback did not record a ready release")
+
+    if unit_state(SERVICE) != "active" or current_release_version() != manual_version:
+        raise RuntimeError("Current supervisor host differs from the manual release")
+    identity = host_connection()
+    package_version = _manual_runtime_package_version(manual_version)
+    service_identity = supervisor_service_identity()
+    if identity is None or identity.get("package_version") != package_version:
+        raise RuntimeError("Current supervisor process does not match the manual host")
+    require_runtime_process_in_service(service_identity, identity, manual_version)
+    health, status = read_supervisor_health()
+    if not isinstance(health, dict) or not isinstance(status, dict):
+        raise RuntimeError("Current authenticated Core health readback is malformed")
+    health_status = status.get("health")
+    if (
+        health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != manual_version
+        or health.get("recovery_version") != package_version
+        or status.get("protocol") != "nebula.runtime/v1"
+        or status.get("api_version") != manual_version
+        or health_status not in {"ready", "degraded"}
+        or (health_status == "degraded" and not allow_degraded_baseline)
+        or (health_status == "ready" and allow_degraded_baseline)
+    ):
+        raise RuntimeError("Current authenticated Core health does not match the manual release")
+    target = status.get("target_execution_version")
+    residents = status.get("resident_versions")
+    projects = status.get("projects")
+    processes = status.get("processes")
+    old_package_version = runtime_package_version(version)
+    superseded_identities = {version, old_package_version}
+    if (
+        not isinstance(target, str)
+        or not SHA.fullmatch(target)
+        or target in superseded_identities
+        or not isinstance(residents, list)
+        or any(
+            not isinstance(resident, str)
+            or resident in superseded_identities
+            for resident in residents
+        )
+        or not isinstance(projects, list)
+        or any(
+            not isinstance(project, dict)
+            or "runtime_version" not in project
+            or project["runtime_version"] is not None
+            and not isinstance(project["runtime_version"], str)
+            or project.get("runtime_version") in superseded_identities
+            for project in projects
+        )
+        or not isinstance(processes, list)
+        or any(
+            not isinstance(process, dict)
+            or not isinstance(process.get("version"), str)
+            or process.get("version") in superseded_identities
+            or "runtime_version" in process
+            and process.get("runtime_version") is not None
+            and not isinstance(process.get("runtime_version"), str)
+            or process.get("runtime_version") in superseded_identities
+            for process in processes
+        )
+    ):
+        raise RuntimeError("Live Core still owns or runs the superseded release")
+
+    if len(history) >= DEPLOYMENT_HISTORY_LIMIT:
+        raise RuntimeError("Deployment history archive is full; retain existing records")
+    reconciliation = {
+        "id": deployment_id,
+        "state": "reconciled_superseded",
+        "classification": "superseded_by_manual_deployment",
+        "reconciled_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "manual_receipt_prefix": manual_prefix,
+        "manual_release": manual_version,
+        "journal": deepcopy(journal),
+        "core_receipts": core_receipts,
+        "manual_receipts": {
+            "stage": stage_receipt,
+            "migrate": migration_receipt,
+            "host_switch": host_switch,
+            "prepare_api": prepare_receipt,
+            "promote_api": promote_receipt,
+            "final_readback": final_readback,
+        },
+        "live_readback": {
+            "current_release": manual_version,
+            "health": health,
+            "deployment_status": status,
+            "deployment_health": health_status,
+            "degraded_baseline_accepted": health_status == "degraded",
+            "host_process": identity,
+            "supervisor_service": service_identity,
+        },
+        "uncertain_effects_preserved": [
+            step
+            for step, receipt in core_receipts.items()
+            if receipt.get("state") == "uncertain"
+        ],
+    }
+    if dry_run:
+        return {
+            "status": "dry_run_validated",
+            "proposed": {
+                "id": deployment_id,
+                "classification": reconciliation["classification"],
+                "manual_receipt_prefix": manual_prefix,
+                "manual_release": manual_version,
+                "uncertain_effects_preserved": reconciliation[
+                    "uncertain_effects_preserved"
+                ],
+                "core_receipts": {
+                    step: {
+                        "operation_id": receipt["operation_id"],
+                        "action": receipt["action"],
+                        "state": receipt["state"],
+                    }
+                    for step, receipt in core_receipts.items()
+                },
+                "manual_receipt_operations": {
+                    "stage": stage_receipt["operation_id"],
+                    "migrate": migration_receipt["operation_id"],
+                    "prepare_api": prepare_receipt["operation_id"],
+                    "promote_api": promote_receipt["operation_id"],
+                },
+                "live_readback": reconciliation["live_readback"],
+                "state_alignment": {
+                    "active": manual_version,
+                    "host_active": manual_version,
+                    "canonical_runtime_version": target,
+                    "remove_runtime_deployment": deployment_id,
+                },
+            },
+        }
+    history.append(reconciliation)
+    record["runtime_deployment_history"] = history
+    record.pop("runtime_deployment", None)
+    record["deployment_mode"] = "supervisor"
+    record["active"] = manual_version
+    record["host_active"] = manual_version
+    record["previous"] = host_switch["previous_version"]
+    record["runtime_api_version"] = manual_version
+    record["canonical_runtime_version"] = target
+    record["last_health"] = {
+        "status": health.get("status"),
+        "database": health.get("database"),
+        "commit": manual_version,
+        "deployment_health": health_status,
+        "degraded_baseline_accepted": health_status == "degraded",
+    }
+    atomic_json(STATE, record)
+    return {"status": "reconciled_superseded", "deployment": reconciliation}
+
+
 def verified_release(sha: str) -> Path:
     if not SHA.fullmatch(sha):
         raise RuntimeError("release commit is invalid")
@@ -4630,6 +5153,7 @@ def main() -> int:
             "promote",
             "rollback",
             "reconcile-runtime-deployment",
+            "reconcile-superseded-manual-deployment",
             "activate-host",
             "rollback-host",
             "offline-rollback",
@@ -4675,6 +5199,22 @@ def main() -> int:
         "--deployment-id",
         help="exact unresolved runtime_deployment journal ID for guarded reconciliation",
     )
+    parser.add_argument(
+        "--manual-receipt-prefix",
+        help="exact YYYYMMDD-<8 hex commit digits> prefix for the later manual release receipts",
+    )
+    parser.add_argument(
+        "--allow-degraded-baseline",
+        action="store_true",
+        help=(
+            "explicitly accept a currently degraded deployment aggregate after the exact host, API, and database checks pass"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate a manual supersession reconciliation without changing deployer state",
+    )
     args = parser.parse_args()
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
@@ -4687,10 +5227,24 @@ def main() -> int:
         raise RuntimeError(
             "--allow-degraded-workers is supported only with activate-host"
         )
-    if args.deployment_id is not None and args.action != "reconcile-runtime-deployment":
+    if args.deployment_id is not None and args.action not in {
+        "reconcile-runtime-deployment",
+        "reconcile-superseded-manual-deployment",
+    }:
         raise RuntimeError("--deployment-id is supported only with reconciliation")
-    if args.action == "reconcile-runtime-deployment" and args.deployment_id is None:
+    if args.action in {
+        "reconcile-runtime-deployment",
+        "reconcile-superseded-manual-deployment",
+    } and args.deployment_id is None:
         raise RuntimeError("reconciliation requires --deployment-id")
+    if args.manual_receipt_prefix is not None and args.action != "reconcile-superseded-manual-deployment":
+        raise RuntimeError("--manual-receipt-prefix is supported only for manual supersession reconciliation")
+    if args.action == "reconcile-superseded-manual-deployment" and args.manual_receipt_prefix is None:
+        raise RuntimeError("manual supersession reconciliation requires --manual-receipt-prefix")
+    if args.allow_degraded_baseline and args.action != "reconcile-superseded-manual-deployment":
+        raise RuntimeError("--allow-degraded-baseline is supported only for manual supersession reconciliation")
+    if args.dry_run and args.action != "reconcile-superseded-manual-deployment":
+        raise RuntimeError("--dry-run is supported only for manual supersession reconciliation")
     with (ROOT / ".deploy.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = (
@@ -4704,6 +5258,13 @@ def main() -> int:
             if args.action == "prepare"
             else reconcile_runtime_deployment(args.deployment_id)
             if args.action == "reconcile-runtime-deployment"
+            else reconcile_superseded_manual_deployment(
+                args.deployment_id,
+                manual_prefix=args.manual_receipt_prefix,
+                allow_degraded_baseline=args.allow_degraded_baseline,
+                dry_run=args.dry_run,
+            )
+            if args.action == "reconcile-superseded-manual-deployment"
             else activate_host(allow_degraded_workers=args.allow_degraded_workers)
             if args.action == "activate-host"
             else globals()[args.action.replace("-", "_")]()
