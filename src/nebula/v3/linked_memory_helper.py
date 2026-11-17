@@ -643,6 +643,15 @@ def main() -> None:
 # Worker-side client
 
 
+def helper_command() -> list[str]:
+    """The helper's command line, for both a source and a frozen Core."""
+
+    if getattr(sys, "frozen", False):
+        # A frozen Core has no ``python -m``; its executable runs CLI commands.
+        return [sys.executable, "linked-memory-helper"]
+    return [sys.executable, "-m", "nebula.v3.linked_memory_helper"]
+
+
 class HelperUnavailable(RuntimeError):
     """The helper is down or over its limits; curation waits."""
 
@@ -714,9 +723,7 @@ class CurationHelper:
             self.state = "degraded"
             raise HelperUnavailable("helper keeps failing")
         process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "nebula.v3.linked_memory_helper",
+            *helper_command(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,

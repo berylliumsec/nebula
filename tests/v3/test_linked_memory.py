@@ -418,6 +418,13 @@ async def test_quiet_period_and_handoff_stop_curation(tmp_path):
 
     curator.handoff_active = handing_off
     assert await curator._gate(state, starting=True) == "handoff"
+
+    async def probe_fails() -> bool:
+        raise RuntimeError("coordination unavailable")
+
+    curator.handoff_active = probe_fails
+    assert await curator._gate(state, starting=True) == "handoff"
+    curator.handoff_active = handing_off
     await curator._run_project("project")
     assert provider.requests == []
     run = await LinkedMemoryStore(store).run(goal.id)
@@ -651,3 +658,16 @@ def test_diagnostics_use_registered_features():
         if feature.strip().lower().replace("_", "-") not in FEATURE_FILES
     }
     assert unknown == set()
+
+
+def test_helper_command_works_for_source_and_frozen_core(monkeypatch):
+    import sys
+
+    from nebula.v3.cli import app
+    from nebula.v3.linked_memory_helper import helper_command
+
+    assert helper_command()[1:] == ["-m", "nebula.v3.linked_memory_helper"]
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert helper_command() == [sys.executable, "linked-memory-helper"]
+    names = {command.name for command in app.registered_commands}
+    assert "linked-memory-helper" in names

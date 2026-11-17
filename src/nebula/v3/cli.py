@@ -115,6 +115,14 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(linked_memory_app, name="linked-memory")
 
 
+@app.command("linked-memory-helper", hidden=True)
+def linked_memory_helper_command() -> None:
+    """Run the linked memory curation helper on stdin and stdout (internal)."""
+    from .linked_memory_helper import main as helper_main
+
+    helper_main()
+
+
 _cli_stores: ContextVar[list[NebulaStore] | None] = ContextVar(
     "nebula_cli_stores", default=None
 )

@@ -407,8 +407,20 @@ class LinkedMemoryCurator:
             or getattr(chat, "restoring_handoff", False)
         ):
             return "handoff"
-        if self.handoff_active is not None and await self.handoff_active():
-            return "handoff"
+        if self.handoff_active is not None:
+            try:
+                handing_off = await self.handoff_active()
+            except Exception as error:
+                record_caught_exception(
+                    "knowledge",
+                    "linked_memory.handoff_probe_failed",
+                    "The project's handoff state could not be read; curation stops.",
+                    error,
+                    stage="gate",
+                )
+                return "handoff"
+            if handing_off:
+                return "handoff"
         if self._live_now():
             self._last_live = time.monotonic()
             return "live_turn"

@@ -112,3 +112,34 @@ async def test_butler_discovers_reads_and_sets_linked_memory_with_read_back(
     observed = (await client.get(PATH)).json()
     assert (observed["stage"], observed["revision"]) == ("shadow", 1)
     assert observed["updated_by"] == "butler:project"
+
+
+async def test_kernel_handoff_probe_reads_the_worker_coordination(core):
+    """The curator stops at a chunk boundary once its project hands off."""
+
+    from types import SimpleNamespace
+
+    _store, app, _client = core
+    curator = app.state.linked_memory_curator
+    assert await curator.handoff_active() is False  # no worker handoff agent
+
+    class Coordination:
+        def __init__(self, **snapshot):
+            self.snapshot = SimpleNamespace(**snapshot)
+            self.leases = []
+
+        async def dispatch_snapshot(self, lease):
+            self.leases.append(lease)
+            return self.snapshot
+
+    for snapshot, expected in (
+        ({"owned": True, "handoff_active": False}, False),
+        ({"owned": True, "handoff_active": True}, True),
+        ({"owned": False, "handoff_active": False}, True),
+    ):
+        coordination = Coordination(**snapshot)
+        app.state.runtime_handoff = SimpleNamespace(
+            coordinator=SimpleNamespace(coordination=coordination), lease="lease"
+        )
+        assert await curator.handoff_active() is expected
+        assert coordination.leases == ["lease"]

@@ -2073,7 +2073,8 @@ def create_execution_kernel(
         agent = getattr(app.state, "runtime_handoff", None)
         if agent is None:
             return False
-        snapshot = await agent.coordinator.dispatch_snapshot(agent.lease)
+        coordination = agent.coordinator.coordination
+        snapshot = await coordination.dispatch_snapshot(agent.lease)
         return snapshot.handoff_active or not snapshot.owned
 
     linked_memory_store = LinkedMemoryStore(store)
