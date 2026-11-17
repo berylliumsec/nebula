@@ -3100,12 +3100,9 @@ def require_runtime_process_in_service(
     """Bind the discovered Core executable to the active unit's process tree."""
     release, _ = runtime_release(version)
     accepted_executable = release / "dist/nebula-core"
-    receipt = json.loads((release / "simulation-acceptance.json").read_text())
-    expected_digest = receipt.get("core_sha256")
+    expected_digest = release_core_sha256(version)
     if (
         accepted_executable.is_symlink()
-        or not isinstance(expected_digest, str)
-        or not SHA256.fullmatch(expected_digest)
         or sha256(accepted_executable) != expected_digest
     ):
         raise RuntimeError("Accepted supervisor executable is not hash-bound")
@@ -3114,7 +3111,9 @@ def require_runtime_process_in_service(
         runtime_identity,
         accepted_executable.resolve(strict=True),
         expected_digest,
-        compare_live_image=False,
+        # A reconciled manual release has no build receipt; compare the live
+        # image as its reconciliation did.
+        compare_live_image=_manual_baseline_release(version) is not None,
     )
 
 
@@ -5196,7 +5195,110 @@ def deployment_post(path: str, payload: dict) -> dict:
     raise RuntimeError("Deployment operation retry budget is exhausted")
 
 
+def reconciled_manual_release(sha: str) -> dict[str, str] | None:
+    """Return the identity a manual supersession reconciliation recorded for ``sha``.
+
+    A manually installed release has no managed acceptance receipt. Once
+    ``reconcile-superseded-manual-deployment`` verified it as the live host, its
+    archive holds the manifest digest from the authenticated stage receipt and
+    the executable digest read from the live process image. Later promotions
+    and code rollbacks bind the release to exactly those digests.
+    """
+    if not SHA.fullmatch(sha):
+        return None
+    history = state().get("runtime_deployment_history", [])
+    if not isinstance(history, list):
+        return None
+    for item in reversed(history):
+        if (
+            not isinstance(item, dict)
+            or item.get("classification") != "superseded_by_manual_deployment"
+            or item.get("state") != "reconciled_superseded"
+            or item.get("manual_release") != sha
+        ):
+            continue
+        stage = ((item.get("manual_receipts") or {}).get("stage") or {}).get(
+            "result"
+        ) or {}
+        executable = (item.get("live_readback") or {}).get("host_executable") or {}
+        manifest_sha256 = stage.get("manifest_sha256")
+        core_sha256 = executable.get("sha256")
+        path = executable.get("path")
+        if (
+            stage.get("version") != sha
+            or not isinstance(manifest_sha256, str)
+            or not SHA256.fullmatch(manifest_sha256)
+            or not isinstance(core_sha256, str)
+            or not SHA256.fullmatch(core_sha256)
+            or not isinstance(path, str)
+        ):
+            raise RuntimeError(
+                "Reconciled manual release record lacks its exact manifest and executable identity"
+            )
+        return {
+            "manifest_sha256": manifest_sha256,
+            "core_sha256": core_sha256,
+            "executable": path,
+            "deployment_id": str(item.get("id")),
+        }
+    return None
+
+
+def _manual_baseline_release(sha: str) -> tuple[Path, dict[str, str]] | None:
+    """Verify a reconciled manual release against its recorded digests."""
+    release = RELEASES / sha
+    if (release / "simulation-acceptance.json").exists() or (
+        release / "simulation-acceptance.json"
+    ).is_symlink():
+        return None
+    identity = reconciled_manual_release(sha)
+    if identity is None:
+        return None
+    if (
+        release.is_symlink()
+        or release.resolve(strict=True).parent != RELEASES.resolve()
+        or release.name != sha
+        or (release / "dist").is_symlink()
+        or (release / "nebula-runtime.json").is_symlink()
+    ):
+        raise RuntimeError("Reconciled manual release path is unsafe")
+    executable = release / "dist/nebula-core"
+    if (
+        executable.is_symlink()
+        or str(executable.resolve(strict=True)) != identity["executable"]
+        or sha256(executable) != identity["core_sha256"]
+    ):
+        raise RuntimeError(
+            "Reconciled manual release executable changed after reconciliation"
+        )
+    manifest_path = release / "nebula-runtime.json"
+    if (
+        sha256(manifest_path) != identity["manifest_sha256"]
+        or json.loads(manifest_path.read_text()).get("version") != sha
+    ):
+        raise RuntimeError(
+            "Reconciled manual release manifest changed after reconciliation"
+        )
+    return release, identity
+
+
+def release_core_sha256(version: str) -> str:
+    """The supervisor executable digest bound to a managed or reconciled release."""
+    manual = _manual_baseline_release(version)
+    if manual is not None:
+        return manual[1]["core_sha256"]
+    release = verified_release(version)
+    receipt = json.loads((release / "simulation-acceptance.json").read_text())
+    expected = receipt.get("core_sha256")
+    if not isinstance(expected, str) or not SHA256.fullmatch(expected):
+        raise RuntimeError("Accepted supervisor executable is not hash-bound")
+    return expected
+
+
 def runtime_release(sha: str) -> tuple[Path, str]:
+    manual = _manual_baseline_release(sha)
+    if manual is not None:
+        return manual[0], manual[1]["manifest_sha256"]
     release = verified_release(sha)
     receipt = json.loads((release / "simulation-acceptance.json").read_text())
     digest = receipt.get("runtime_manifest_sha256")

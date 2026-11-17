@@ -31,6 +31,9 @@ spec = importlib.util.spec_from_file_location(
 assert spec is not None and spec.loader is not None
 deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deployer)
+REAL_RUNTIME_RELEASE = deployer.runtime_release
+REAL_PACKAGE_VERSION = deployer.runtime_package_version
+REAL_REQUIRE_PROCESS = deployer.require_runtime_process_in_service
 
 OLD = "5" * 40
 NEW = "3" * 40
@@ -904,6 +907,83 @@ def test_reconcile_superseded_manual_refuses_old_runtime_package_identity(
             deployment_id, manual_prefix=prefix
         )
     assert deployer.state()["runtime_deployment"]["id"] == deployment_id
+
+
+def _restore_real_release_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(deployer, "runtime_release", REAL_RUNTIME_RELEASE)
+    monkeypatch.setattr(deployer, "runtime_package_version", REAL_PACKAGE_VERSION)
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", REAL_REQUIRE_PROCESS
+    )
+
+
+def test_reconciled_manual_release_is_a_verified_baseline_for_later_promotion(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+):
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
+    release = host.releases / manual
+    # Before reconciliation the manual release has no managed acceptance.
+    with pytest.raises(FileNotFoundError):
+        REAL_RUNTIME_RELEASE(manual)
+    deployer.reconcile_superseded_manual_deployment(
+        deployment_id, manual_prefix=prefix
+    )
+    _restore_real_release_verification(monkeypatch)
+    manifest_sha256 = hashlib.sha256(
+        (release / "nebula-runtime.json").read_bytes()
+    ).hexdigest()
+    # Host activation, its code-only rollback, rollback-host and a staged code
+    # rollback all verify the previous host through these three functions.
+    assert deployer.runtime_release(manual) == (release, manifest_sha256)
+    assert deployer.runtime_package_version(manual) == package(manual)
+    assert (
+        deployer.release_core_sha256(manual)
+        == hashlib.sha256(b"manual core executable").hexdigest()
+    )
+    deployer.require_runtime_process_in_service(
+        deployer.supervisor_service_identity(), host.identity(), manual
+    )
+
+
+@pytest.mark.parametrize("tampered", ["executable", "manifest"])
+def test_reconciled_manual_release_refuses_changed_files(
+    host: Host, monkeypatch: pytest.MonkeyPatch, tampered: str
+):
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
+    deployer.reconcile_superseded_manual_deployment(
+        deployment_id, manual_prefix=prefix
+    )
+    _restore_real_release_verification(monkeypatch)
+    release = host.releases / manual
+    if tampered == "executable":
+        (release / "dist/nebula-core").write_bytes(b"replaced core executable")
+    else:
+        manifest = json.loads((release / "nebula-runtime.json").read_text())
+        manifest["migration_head"] = "other"
+        (release / "nebula-runtime.json").write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="changed after reconciliation"):
+        deployer.runtime_release(manual)
+
+
+def test_reconciled_manual_identity_does_not_apply_to_other_releases(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+):
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
+    deployer.reconcile_superseded_manual_deployment(
+        deployment_id, manual_prefix=prefix
+    )
+    _restore_real_release_verification(monkeypatch)
+    assert deployer.reconciled_manual_release(manual) is not None
+    assert deployer.reconciled_manual_release(NEW) is None
+    # A managed release keeps requiring its acceptance receipt.
+    with pytest.raises(FileNotFoundError):
+        deployer.runtime_release(OTHER)
 
 
 def test_code_rollback_after_completed_promotion_runs_to_completion(host: Host):

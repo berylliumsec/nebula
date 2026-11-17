@@ -1,5 +1,5 @@
 {
-  "change_digest": "73a1e29cdce2f79be94f1d3f83a33696be2113bb9d517041bdb6cdbd9726f755",
+  "change_digest": "6b83f971220543b5610c0bef9e9dc47c07dd806929e3560c69a71c002e5ad245",
   "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
   "reason": "The simulation deployer's host restart boundary now names chat turns held by an unavailable execution owner instead of waiting out its bound. The selected tests cover a frozen owner, a failed owner, an owner Core recovers, a pinned live owner, and the existing wait-then-stop and never-quiet activation paths.",
   "exclusions": "Only scripts/simulation/nebula_deployer.py and its restart test change; no Core, UI, frontend, native or browser code. test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop, test_host_switch_frees_an_orphan_left_by_a_stop_timeout (same file) and test_host_process_identity_accepts_verified_onefile_child fail identically on clean main locally and are unrelated to the boundary wait.",
