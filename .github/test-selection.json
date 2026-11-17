@@ -1,23 +1,24 @@
 {
-  "change_digest": "48b7646e6301f8ea1d885d4edc12a769cfb1f69035468f8d7e0aafec062e434d",
-  "reviewed_by": "Claude, based on an independently validated root cause (fresh subagent) and a scratch-Core double-kill reproduction",
-  "reason": "recover_project, reconcile_project and promote_api commit their effect in one transaction with an exactly keyed durable record, but any later error recorded an uncertain receipt that reconciliation could never settle; an uncertain automatic reconcile_project held recovery forever. The ledger now settles these receipts from that record at failure time and during reconciliation, and automatic recovery reconciles instead of holding. The selected files cover the ledger, automatic recovery and orphan reconciliation on SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser or deployer-script changes. tests/v3/test_recovery_reconciliation.py was run locally but not selected: its retained-worker process test fails identically on clean origin/main.",
+  "change_digest": "ce099c582a26d81d1be8fd84d6f4e3eefd7c9563d20f9c9d4fae18caadcc96aa",
+  "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
+  "reason": "Automatic dead-owner recovery no longer waits on every unowned execution process; it holds a project's recovery only while an unowned process still holds that project's open resource, unfinished command or held capacity. The selected tests cover an idle stray that neither blocks nor is reused, a stray holding the project's effects that still blocks, another project's leftover that does not block, and the existing lost-prepare no-replay case, on SQLite and PostgreSQL.",
+  "exclusions": "No UI, frontend, native or browser changes. The admission path is unchanged, so admission suites are not selected; tests/v3/test_admission_retry.py was run locally and passes.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 242,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_operations.py",
-    "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_runtime_orphan_recovery.py"
+    "tests/v3/test_runtime_auto_recovery.py::test_idle_unassigned_execution_neither_blocks_nor_is_reused",
+    "tests/v3/test_runtime_auto_recovery.py::test_unassigned_execution_holding_project_effects_blocks_recovery",
+    "tests/v3/test_runtime_auto_recovery.py::test_another_projects_leftover_does_not_block_recovery",
+    "tests/v3/test_runtime_auto_recovery.py::test_uncertain_prepare_retains_process_and_never_replays"
   ],
   "frontend": [],
   "native": [],

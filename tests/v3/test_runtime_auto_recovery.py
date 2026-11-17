@@ -13,6 +13,7 @@ from nebula.v3.database import (
     RuntimeCommandRow,
     RuntimeProcessRow,
     RuntimeRecoveryRow,
+    RuntimeResourceRow,
 )
 from nebula.v3.domain import ChatSession, Engagement
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
@@ -468,12 +469,66 @@ async def test_uncertain_reconciliation_without_effect_is_asked_again(recovery):
     assert rows["reconcile_project"].state == "succeeded"
 
 
-async def test_unknown_unassigned_execution_is_not_reused_or_duplicated(recovery):
+async def test_idle_unassigned_execution_neither_blocks_nor_is_reused(recovery):
+    """A stray unowned worker holding nothing (an abandoned deployment target,
+    a source not yet retired) cannot block recovery of an unrelated project;
+    recovery prepares and attaches only its own ledgered target."""
     async with recovery.coordinator.database.session() as session:
         session.add(process("unknown-target"))
     await recovery.automatic.reconcile()
+    calls = recovery.management.calls
+    assert [call[0] for call in calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    assert calls[2][1]["target_runtime_id"] == "prepared-target"
+    async with recovery.coordinator.database.session() as session:
+        stray = await session.get(RuntimeProcessRow, "unknown-target")
+        assert stray is not None and stray.state == "ready"
+
+
+def stray_terminal(project_id):
+    return RuntimeResourceRow(
+        id="terminal-" + project_id,
+        project_id=project_id,
+        runtime_id="unknown-target",
+        fencing_token=1,
+        kind="terminal",
+        state="open",
+        restoration="none",
+        detail="A terminal the stray worker still holds",
+        checkpoint={},
+        updated_at_ms=1_000_000,
+    )
+
+
+async def test_unassigned_execution_holding_project_effects_blocks_recovery(
+    recovery,
+):
+    async with recovery.coordinator.database.session() as session:
+        session.add(process("unknown-target"))
+        session.add(stray_terminal("one"))
+    await recovery.automatic.reconcile()
     assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
     assert len(await operations(recovery)) == 1
+    assert "unknown-target still holds project resources" in str(
+        recovery.diagnostics[-1]
+    )
+
+
+async def test_another_projects_leftover_does_not_block_recovery(recovery):
+    """A dead former owner of another project that still holds that
+    project's effects is that project's reconciliation, not this one's."""
+    async with recovery.coordinator.database.session() as session:
+        session.add(process("unknown-target"))
+        session.add(stray_terminal("two"))
+    await recovery.automatic.reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
 
 
 @pytest.mark.parametrize("held", ["shutdown", "archived"])
