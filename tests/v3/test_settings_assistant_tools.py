@@ -378,6 +378,8 @@ async def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
         "nebula.settings.set_memory_budget",
         "nebula.settings.apply_memory_limit",
         "nebula.settings.verify_memory_job",
+        "nebula.settings.linked_memory",
+        "nebula.settings.set_linked_memory",
     }
 
 

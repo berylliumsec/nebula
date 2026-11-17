@@ -1,15 +1,16 @@
 {
-  "change_digest": "2c33b0419a3e99e2993013bd1e70b40526825afa7f8e571b1f1f27ded600d024",
-  "reviewed_by": "Claude (health-liveness); selection reviewed against the diff by the implementing agent",
-  "reason": "Product: the UI connection monitor read authenticated /api/v1/health every 5 s; each read checks out a database session and sends a worker identity RPC, so a busy Core missed the 5 s deadline and was reported as 'Nebula Core is unavailable'. Core now serves an unauthenticated GET /api/v1/health/live (supervisor and single-process app) with no credential lookup, database session or worker call. The ApiClient records any sub-500 response as reachability evidence; the monitor skips probes while traffic is answered, probes liveness when idle, reads full health every 30 s (every 5 s while the API is not ready), and only failed liveness probes count toward loss. Recovery still re-reads full health. The two mocked outage journeys now fail every Core request instead of only /health, which is how a real outage looks.",
-  "exclusions": "core-connection-resilience/assistant-real-* entries are not selected: those projects' grep does not match the real-Core outage test, so they select nothing; that test was run locally instead under the real-core project against a LAN-bound Core (passed). The supervisor test's PostgreSQL variant skips without NEBULA_TEST_POSTGRES_URL. No setting or operator feature was added, so the settings catalog and product knowledge index are unchanged.",
+  "change_digest": "10149628e944bfce854885e15aca7889353826fa20d38d2871f21249bbc24e5c",
+  "reviewed_by": "Claude (health-liveness) and implementing agent; reconciled for merge with origin/main",
+  "reason": "This merge combines two focused changes. The health-liveness change adds an unauthenticated, database-free /health/live endpoint and updates the UI connection monitor to use lightweight liveness checks while idle; its selected Python and frontend regressions cover authentication, supervisor behavior, and the mocked outage journeys. The main-branch orphan-recovery change releases only paired orphan claims for failed provider turns after durable tool, hook, child, and approval checks; its six selected regressions cover retained history and unsafe or mismatched durable effects. The selected Python cases are expected to collect 48 tests across SQLite and PostgreSQL where applicable.",
+  "exclusions": "Only the three exact health-liveness Python cases and six exact runtime-orphan-recovery cases are selected. The health-liveness frontend files and six existing Playwright journey entries remain selected. Other Python suites, frontend files, native tests, production Core access, and live provider or Mac operations are excluded. PostgreSQL variants use disposable CI PostgreSQL only. Python 3.11 and 3.12 are selected to retain each change's reviewed runtime coverage.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
+    "3.11",
     "3.12"
   ],
   "expected_tests": {
-    "python": 4,
+    "python": 48,
     "frontend": 27,
     "native": 0,
     "playwright": 6
@@ -17,7 +18,13 @@
   "python": [
     "tests/v3/test_api.py::test_liveness_answers_without_credentials",
     "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
-    "tests/v3/test_supervisor.py::test_liveness_answers_without_credentials_database_or_worker"
+    "tests/v3/test_supervisor.py::test_liveness_answers_without_credentials_database_or_worker",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_turn_releases_only_paired_claims_and_keeps_history",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_is_retained_while_effect_is_unconfirmed",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_requires_exact_paired_goal_claim",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_or_mismatched_approval",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_tool_call_approval",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_unsettled_or_mismatched_approval_links"
   ],
   "frontend": [
     "ui/src/state/useCoreConnectionMonitor.test.tsx",

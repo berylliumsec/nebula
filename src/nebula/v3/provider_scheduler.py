@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import timedelta
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
 from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select, update
@@ -162,6 +162,14 @@ class ProviderAdmission:
                 self.scheduler._provider.release()
 
 
+class CurationDeferred(Exception):
+    """A linked-memory curation call must wait; live work goes first."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class ProviderScheduler:
     """Provider capacity with two slots reserved for direct work by default."""
 
@@ -191,6 +199,57 @@ class ProviderScheduler:
         self.host_load = host_load
         self.runtime_capacity = runtime_capacity
         self._host_reasons: dict[str, str] = {}
+        self._curation = asyncio.Lock()
+
+    async def direct_work_present(self) -> bool:
+        """Whether any direct turn is admitted here or queued or running.
+
+        A process sees its own admissions; the durable queue adds the queued
+        and running direct turns it is allowed to read.
+        """
+
+        if any(lane == "direct" for lane in self._active.values()):
+            return True
+        async with self.store.database.session() as session:
+            waiting = await session.scalar(
+                select(ProviderTurnQueueRow.turn_id)
+                .where(
+                    ProviderTurnQueueRow.lane == "direct",
+                    ProviderTurnQueueRow.state.in_(("queued", "running")),
+                )
+                .limit(1)
+            )
+        return waiting is not None
+
+    @asynccontextmanager
+    async def curation_call(self) -> AsyncIterator[None]:
+        """Admit one linked-memory curation call, stricter than ``background``.
+
+        It is admitted only while no direct turn is admitted, queued or
+        running, never waits for a slot, and at most one runs per process.
+        It holds a background and a provider slot for its duration, so it
+        counts against the same limits as every other call. A refusal raises
+        ``CurationDeferred``; the caller pauses at its chunk boundary.
+        """
+
+        if self._curation.locked():
+            raise CurationDeferred("another curation call is running")
+        async with self._curation:
+            if await self.direct_work_present():
+                raise CurationDeferred("a live turn is using the provider")
+            if self.host_load is not None and (await self.host_load.snapshot()).busy:
+                raise CurationDeferred("the host is busy")
+            if self._background.locked() or self._provider.locked():
+                raise CurationDeferred("provider capacity is in use")
+            await self._background.acquire()
+            try:
+                await self._provider.acquire()
+                try:
+                    yield
+                finally:
+                    self._provider.release()
+            finally:
+                self._background.release()
 
     def queue_detail(self, turn_id: str) -> str:
         return self._host_reasons.get(turn_id, "Waiting for provider capacity")

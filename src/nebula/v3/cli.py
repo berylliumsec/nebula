@@ -23,6 +23,7 @@ from typing import Annotated, Any
 import typer
 import uvicorn
 from nebula.chat_cli import app as chat_app
+from .linked_memory_cli import linked_memory_app
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import select
@@ -111,6 +112,15 @@ app.add_typer(diagnostics_app, name="diagnostics")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(chat_app, name="chat")
 app.add_typer(maintenance_app, name="maintenance")
+app.add_typer(linked_memory_app, name="linked-memory")
+
+
+@app.command("linked-memory-helper", hidden=True)
+def linked_memory_helper_command() -> None:
+    """Run the linked memory curation helper on stdin and stdout (internal)."""
+    from .linked_memory_helper import main as helper_main
+
+    helper_main()
 
 
 _cli_stores: ContextVar[list[NebulaStore] | None] = ContextVar(
