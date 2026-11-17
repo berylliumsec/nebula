@@ -2574,23 +2574,27 @@ def create_execution_kernel(
                 storage_integrations.shutdown,
             )
             # Event history of records deleted before their events went with
-            # them. Paused batches keep live writes flowing while it runs.
+            # them. A project-scoped database locks the worker's ownership row
+            # for every transaction, so its global scan belongs to the host.
             prune_stop = threading.Event()
-            prune_task = create_diagnostic_task(
-                prune_orphaned_event_history(
-                    store.database,
-                    pause=pause_between_batches,
-                    stop=prune_stop,
-                ),
-                feature="storage",
-                event_code="storage.event_history.prune",
-                failure_message="Removing event history of deleted records stopped.",
-                name="nebula-event-history-prune",
-            )
+            prune_task = None
+            if store.database.execution_runtime_id is None:
+                prune_task = create_diagnostic_task(
+                    prune_orphaned_event_history(
+                        store.database,
+                        pause=pause_between_batches,
+                        stop=prune_stop,
+                    ),
+                    feature="storage",
+                    event_code="storage.event_history.prune",
+                    failure_message="Removing event history of deleted records stopped.",
+                    name="nebula-event-history-prune",
+                )
 
             async def _stop_event_history_prune() -> None:
                 prune_stop.set()
-                await asyncio.wait({prune_task})
+                if prune_task is not None:
+                    await asyncio.wait({prune_task})
                 await store.event_history.close()
 
             started.append(

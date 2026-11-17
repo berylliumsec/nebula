@@ -46,6 +46,25 @@ async def supervised(managed):
         await supervisor.close()
 
 
+async def test_host_history_prune_uses_unscoped_database(managed, monkeypatch):
+    started = asyncio.Event()
+    seen = []
+
+    async def prune(database, **_kwargs):
+        seen.append(database.execution_runtime_id)
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("nebula.v3.supervisor.prune_orphaned_event_history", prune)
+    supervisor = RuntimeSupervisor(managed.host, operator_token=_TOKEN)
+    try:
+        await supervisor.start()
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert seen == [None]
+    finally:
+        await supervisor.close()
+
+
 async def test_one_listener_routes_static_builds_through_api_promotion_and_code_rollback(
     supervised,
 ):
