@@ -23,10 +23,11 @@ Linked memory is a background service in Core. It does four things:
 The service must not change the operator interface at all, and it must not make
 live work slower (see [Performance contract](#performance-contract)).
 
-## Release 1: shadow curation
+## Release 1: shadow curation and entry cards
 
-Release 1 implements rollout stage 1. It builds cards and links from completed
-goals and injects nothing.
+Release 1 implements rollout stages 1, 2 and 4: shadow curation, shadow
+retrieval recorded in each turn's `request_snapshot`, and entry-card injection
+behind a confirmed `inject` stage. Stage 3 (`recall`) is not built yet.
 
 Implemented:
 
@@ -34,7 +35,7 @@ Implemented:
   `linked_memory_goal_runs`, `linked_memory_cards`,
   `linked_memory_card_sources` and `linked_memory_links` (migration
   `0052_linked_memory`), all owned by one project through `engagement_id`;
-- the stages `off` and `shadow`, the revision-checked
+- the stages `off`, `shadow` and `inject` (confirmed), the revision-checked
   `/engagements/{id}/linked-memory` routes with `/status` and `/cards`, the
   `nebula-core linked-memory status | set | cards` commands, the Butler
   actions `nebula.settings.linked_memory` and
@@ -50,7 +51,13 @@ Implemented:
   supersede-authority rule, and model-typed links to the existing cards shown
   in the prompt plus proposed `similar_to` links for near-duplicates;
 - the gates under [Live work goes first](#live-work-goes-first) and the
-  curation admission in the provider scheduler (`curation_call`).
+  curation admission in the provider scheduler (`curation_call`);
+- entry cards: an in-memory card index per project, prefetch ranking by the
+  helper after each saved turn (skipped under pressure or while the helper is
+  busy), and a turn-start word-overlap check against the new message with a
+  5 ms cap. At most three cards, about 300 tokens, ride after the operator's
+  message as untrusted reference data, and every turn records a
+  `linked_memory` entry in its `request_snapshot`.
 
 Differences from the full design, to close in later releases:
 
@@ -66,10 +73,14 @@ Differences from the full design, to close in later releases:
 - **Ranking.** The helper ranks link candidates with its own MiniLM vectors
   (or shared words when the model files are absent). There is no cross-encoder
   re-scoring and no card index in the host index service yet.
-- **Not yet built:** prefetch and entry cards, `memory.recall` and
-  `memory.follow`, `memory.propose` and harness-chat curation, MCP sources,
-  tool-usage lessons, Butler memory absorption, global cards, episodes, the
-  automatic stop, and the per-turn `request_snapshot` record.
+- **Entry cards** are chosen by word overlap with the new message plus the
+  helper's ranking of the previous exchange; there is no cross-encoder. The
+  block is a fixed shape rather than the design's exact "unchanged for the
+  whole turn" contract with the tool loop, which it follows because it rides
+  on the operator's message.
+- **Not yet built:** `memory.recall` and `memory.follow`, `memory.propose`
+  and harness-chat curation, MCP sources, tool-usage lessons, Butler memory
+  absorption, global cards, episodes, and the automatic stop.
 
 ## Decisions
 

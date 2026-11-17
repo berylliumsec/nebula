@@ -2092,6 +2092,7 @@ def create_execution_kernel(
         scheduler=provider_chat.provider_scheduler,
         handoff_active=linked_memory_handoff_active,
     )
+    provider_chat.linked_memory = linked_memory_curator
     from .storage_integrations import StorageIntegrationService
 
     storage_integrations = StorageIntegrationService(

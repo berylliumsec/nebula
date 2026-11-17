@@ -1180,13 +1180,16 @@ Linked memory is a per-project setting with no Settings screen and no Settings
 destination. It is not RAM or a memory budget. Butler discovers the typed
 `nebula.settings.linked_memory` action, which reads the project's stage, its
 revision, the Core-wide kill switch and curation status, and
-`nebula.settings.set_linked_memory`, which changes the stage. The stages
-available in this release are `off` and `shadow`; `shadow` curates memory cards
-from completed top-level goals in the background and injects nothing into any
-chat. Change the stage only when the operator asks in the current
-conversation: read first, pass the read revision as `expected_revision`, and
-report Core's read-back rather than the request. Goals that completed before
-the first enable are never curated. See [Linked memory](../LINKED_MEMORY.md).
+`nebula.settings.set_linked_memory`, which changes the stage. The stages are
+`off`, `shadow`, which curates memory cards from completed top-level goals and
+records the cards a turn would receive without adding them, and `inject`, which
+also adds up to three matching cards to each turn as untrusted reference data.
+Change the stage only when the operator asks in the current conversation: read
+first, pass the read revision as `expected_revision`, and report Core's
+read-back rather than the request. Moving to `inject` requires
+`confirm_inject` after the operator explicitly confirms it. Goals that
+completed before the first enable are never curated. See
+[Linked memory](../LINKED_MEMORY.md).
 
 # Project tool approval policy
 

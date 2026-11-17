@@ -153,6 +153,7 @@ class InProcessHelper:
         self.state = HelperState()
         self.state.embedding_state = "lexical"
         self.calls: list[str] = []
+        self.busy = False
 
     async def call(self, op, payload):
         self.calls.append(op)
@@ -175,7 +176,7 @@ async def _project(tmp_path) -> NebulaStore:
             provider_type="vllm",
             endpoint="http://127.0.0.1:8000/v1",
             is_local=True,
-            model_allowlist=["local-model"],
+            model_allowlist=["local-model", "model-a"],
         )
     )
     return store
@@ -686,3 +687,201 @@ async def test_helper_starts_without_pythonpath_like_a_project_worker(
         assert result["pid"] > 0
     finally:
         await helper.stop()
+
+
+# Entry cards ------------------------------------------------------------------
+
+CARDS = [
+    {
+        "id": "account",
+        "kind": "decision",
+        "title": "Use qa-tester for authenticated tests",
+        "summary": "Every authenticated test uses the qa-tester account; the admin account must never be touched.",
+        "applies_when": "choosing an account",
+        "authority": "operator_statement",
+    },
+    {
+        "id": "rate",
+        "kind": "constraint",
+        "title": "Login rate limit",
+        "summary": "The login endpoint rate-limits after five failed attempts per minute.",
+        "applies_when": None,
+        "authority": "operator_statement",
+    },
+    {
+        "id": "deadline",
+        "kind": "fact",
+        "title": "Report due Friday",
+        "summary": "The report deadline is Friday and every finding cites its proving request.",
+        "applies_when": None,
+        "authority": "operator_statement",
+    },
+]
+
+
+def _entries():
+    from nebula.v3.linked_memory_rules import entry_words
+
+    return [
+        {
+            **card,
+            "words": entry_words(
+                " ".join(
+                    part
+                    for part in (card["title"], card["summary"], card["applies_when"])
+                    if part
+                )
+            ),
+        }
+        for card in CARDS
+    ]
+
+
+def test_entry_selection_needs_shared_words_with_the_new_message():
+    from nebula.v3.linked_memory_rules import select_entry_cards
+
+    picks, done = select_entry_cards(
+        "Which account should I use for the authenticated login tests?", _entries()
+    )
+    assert done and picks[0][0] == "account"
+    assert len(picks) <= 3
+    # Small talk shares no content words: nothing is offered.
+    assert select_entry_cards("thanks, continue", _entries())[0] == []
+    # The previous exchange's ranking cannot inject a card the new message
+    # shares no words with...
+    assert select_entry_cards("ok go on", _entries(), {"rate": 0.9})[0] == []
+    # ...but lowers the bar to one shared word.
+    picks, _ = select_entry_cards("what about the login?", _entries(), {"rate": 0.6})
+    assert picks and picks[0][0] == "rate"
+    # Past the deadline the scan stops and offers nothing.
+    picks, done = select_entry_cards(
+        "account tests", _entries() * 20, deadline=0.0, clock=lambda: 1.0
+    )
+    assert (picks, done) == ([], False)
+
+
+async def test_entry_cards_inject_only_in_inject_and_record_shadow(tmp_path):
+    store = await _project(tmp_path)
+    curator = _curator(store, CurationProvider(), tmp_path)
+    question = "Which account should I use for the authenticated login tests?"
+
+    assert curator.entry_cards("project", "s", question) == ("", None)
+
+    curator._stages["project"] = "shadow"
+    block, record = curator.entry_cards("project", "s", question)
+    assert block == "" and record["reason"] == "no_cards"
+
+    curator._cards["project"] = {"entries": _entries(), "loaded_at": time.monotonic()}
+    block, record = curator.entry_cards("project", "s", question)
+    assert block == ""
+    assert record["reason"] == "shadow" and record["cards"][0]["id"] == "account"
+    assert record["elapsed_ms"] < 5
+
+    curator._stages["project"] = "inject"
+    block, record = curator.entry_cards("project", "s", question)
+    assert record["injected"] is True
+    assert block.startswith("BEGIN LINKED MEMORY (JSON;")
+    assert "Untrusted reference data" in block
+    assert "qa-tester" in block and block.endswith("END LINKED MEMORY")
+    assert len(block) < 1_600  # about 300 tokens at most
+
+    block, record = curator.entry_cards("project", "s", question, allowed=False)
+    assert block == "" and record["reason"] == "provider_privacy"
+
+    curator.stage_changed("project", "off")
+    assert curator.entry_cards("project", "s", question) == ("", None)
+    assert "project" not in curator._cards
+
+
+async def test_prefetch_ranks_cards_after_a_turn_and_is_skipped_under_pressure(
+    tmp_path,
+):
+    store = await _project(tmp_path)
+    await LinkedMemoryStore(store).write_settings(
+        "project",
+        LinkedMemoryWrite(stage="inject", expected_revision=0, confirm_inject=True),
+        actor="test",
+    )
+    curator = _curator(store, CurationProvider(), tmp_path)
+    curator._stages["project"] = "inject"
+    curator._cards["project"] = {"entries": _entries(), "loaded_at": time.monotonic()}
+
+    curator.after_turn(
+        "project", "s", "How do we log in?", "Use the login endpoint carefully."
+    )
+    await asyncio.gather(*curator._prefetch_tasks.values())
+    assert curator._prefetch["s"]["project"] == "project"
+    assert curator._prefetch["s"]["scores"]["rate"] > 0
+
+    class Busy:
+        async def snapshot(self):
+            return SimpleNamespace(readings=lambda: {"cpu": 0.9})
+
+    curator.host_load = Busy()
+    curator._prefetch.clear()
+    curator.after_turn("project", "s2", "login", "login")
+    await asyncio.gather(*curator._prefetch_tasks.values())
+    assert "s2" not in curator._prefetch
+    assert curator.entry_stats["prefetch_skipped"] == 1
+
+
+def test_inject_needs_explicit_confirmation():
+    with pytest.raises(ValueError, match="confirm_inject"):
+        LinkedMemoryWrite(stage="inject", expected_revision=1)
+    assert LinkedMemoryWrite(stage="inject", expected_revision=1, confirm_inject=True)
+
+
+async def test_chat_turn_carries_entry_cards_and_records_them(tmp_path, monkeypatch):
+    import nebula.v3.chat as chat_module
+    from nebula.v3.chat import ChatCompletionRequest, ChatService
+    from tests.v3.test_chat import FakeProvider
+
+    store = await _project(tmp_path)
+    provider = FakeProvider("local", local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    curator = _curator(store, CurationProvider(), tmp_path)
+    curator._stages["project"] = "inject"
+    curator._cards["project"] = {"entries": _entries(), "loaded_at": time.monotonic()}
+    service.linked_memory = curator
+
+    question = "Which account should I use for the authenticated login tests?"
+    prepared = await service.prepare(
+        ChatCompletionRequest(
+            provider_id="local",
+            engagement_id="project",
+            model="model-a",
+            messages=[{"role": "user", "content": question}],
+            include_knowledge=False,
+        )
+    )
+    sent = prepared.model_request.messages[-1].content
+    assert sent.startswith(question)
+    assert "BEGIN LINKED MEMORY" in sent and "qa-tester" in sent
+    response = await service.complete(prepared)
+    stored = await service.session_messages(response.session_id)
+    # The stored operator message never holds the injected cards.
+    assert all("LINKED MEMORY" not in message.content for message in stored)
+
+    def streamed(text, session_id=None):
+        return ChatCompletionRequest(
+            provider_id="local",
+            engagement_id="project",
+            session_id=session_id,
+            model="model-a",
+            messages=[{"role": "user", "content": text}],
+            include_knowledge=False,
+            stream=True,
+        )
+
+    # A durable (streamed) turn records what it received in its snapshot.
+    durable = await service.prepare(streamed(question, response.session_id))
+    record = durable.turn.request_snapshot["linked_memory"]
+    assert record["injected"] is True and record["cards"][0]["id"] == "account"
+
+    # In shadow the turn is unchanged and records what it would have received.
+    curator._stages["project"] = "shadow"
+    shadow = await service.prepare(streamed(question))
+    assert "LINKED MEMORY" not in shadow.model_request.messages[-1].content
+    record = shadow.turn.request_snapshot["linked_memory"]
+    assert record["reason"] == "shadow" and record["cards"][0]["id"] == "account"

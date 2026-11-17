@@ -35,12 +35,14 @@ def linked_memory_tools(
     items = [
         (
             "nebula.settings.linked_memory",
-            "Read this project's linked memory stage (off or shadow), its revision, "
-            "the Core-wide kill switch, and curation status: completed goals waiting, "
-            "card and link counts, model spend, whether curation is paused and why, "
-            "the curation helper's state, and the last error. Linked memory curates "
-            "memory cards from completed goals in the background; in shadow it "
-            "injects nothing into any chat. This is not RAM or memory budgets.",
+            "Read this project's linked memory stage (off, shadow or inject), its "
+            "revision, the Core-wide kill switch, and curation status: completed "
+            "goals waiting, card and link counts, model spend, whether curation is "
+            "paused and why, the curation helper's state, entry-card counts and the "
+            "last error. Linked memory curates memory cards from completed goals in "
+            "the background; shadow records which cards a turn would receive, and "
+            "inject adds up to three matching cards to a turn as untrusted reference "
+            "data. This is not RAM or memory budgets.",
             _EMPTY,
             read,
             True,
@@ -49,10 +51,13 @@ def linked_memory_tools(
             "nebula.settings.set_linked_memory",
             "Change this project's linked memory stage only when the operator asks "
             "in this conversation. Read linked_memory first and pass its revision as "
-            "expected_revision. Stages: off, or shadow (curate completed goals in "
-            "the background, inject nothing). Core reads the saved stage back; "
-            "report the read-back, not the request. Goals completed before the "
-            "first enable are not curated.",
+            "expected_revision. Stages: off; shadow (curate completed goals in the "
+            "background and record would-be cards, inject nothing); inject (also add "
+            "matching cards to this project's turns). inject requires "
+            "confirm_inject=true, set only after the operator explicitly confirms it "
+            "in this conversation. Core reads the saved stage back; report the "
+            "read-back, not the request. Goals completed before the first enable are "
+            "not curated.",
             LinkedMemoryWrite.model_json_schema(),
             update,
             False,

@@ -37,8 +37,8 @@ def linked_memory_router(
         except ConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         service = current_curator()
-        if service is not None and saved.effective_stage != "off":
-            service.wake(engagement_id)
+        if service is not None:
+            service.stage_changed(engagement_id, saved.effective_stage)
         return saved.model_dump(mode="json")
 
     @router.get("/engagements/{engagement_id}/linked-memory/status")

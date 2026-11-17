@@ -46,7 +46,7 @@ async def test_stage_routes_are_revisioned_and_report_status(core):
     assert (await client.get(PATH, headers={"Authorization": ""})).status_code == 401
     initial = (await client.get(PATH)).json()
     assert (initial["stage"], initial["revision"]) == ("off", 0)
-    assert initial["available_stages"] == ["off", "shadow"]
+    assert initial["available_stages"] == ["off", "shadow", "inject"]
 
     saved = await client.put(PATH, json={"stage": "shadow", "expected_revision": 0})
     assert saved.status_code == 200
@@ -54,7 +54,12 @@ async def test_stage_routes_are_revisioned_and_report_status(core):
     assert saved.json()["updated_by"] == "operator"
     stale = await client.put(PATH, json={"stage": "off", "expected_revision": 0})
     assert stale.status_code == 409
-    later = await client.put(PATH, json={"stage": "inject", "expected_revision": 1})
+    unconfirmed = await client.put(
+        PATH, json={"stage": "inject", "expected_revision": 1}
+    )
+    assert unconfirmed.status_code == 422
+    assert "confirm_inject" in unconfirmed.text
+    later = await client.put(PATH, json={"stage": "recall", "expected_revision": 1})
     assert later.status_code == 422
 
     status = (await client.get(PATH + "/status")).json()

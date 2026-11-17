@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import func, select, update
 
 from .database import (
@@ -38,8 +38,8 @@ from .linked_memory_rules import (
 )
 from .storage import ConflictError, NebulaStore
 
-# Stages from the design. Only ``off`` and ``shadow`` exist in this release.
-LinkedMemoryStage = Literal["off", "shadow"]
+# Stages from the design; ``recall`` (pull tools) comes in a later release.
+LinkedMemoryStage = Literal["off", "shadow", "inject"]
 
 
 def _now() -> str:
@@ -62,10 +62,24 @@ class LinkedMemorySettings(NebulaModel):
 
 
 class LinkedMemoryWrite(NebulaModel):
-    """A revision-checked stage change. Revision 0 means none was saved yet."""
+    """A revision-checked stage change. Revision 0 means none was saved yet.
+
+    ``inject`` adds cards to the project's turns, so it needs the operator's
+    explicit confirmation in the same request.
+    """
 
     stage: LinkedMemoryStage
     expected_revision: int = Field(ge=0)
+    confirm_inject: bool = False
+
+    @model_validator(mode="after")
+    def inject_is_confirmed(self) -> "LinkedMemoryWrite":
+        if self.stage == "inject" and not self.confirm_inject:
+            raise ValueError(
+                "inject adds memory cards to this project's turns; set "
+                "confirm_inject only after the operator explicitly confirms it"
+            )
+        return self
 
 
 @dataclass(frozen=True)
@@ -240,15 +254,22 @@ class LinkedMemoryStore:
     async def enabled_projects(self) -> list[str]:
         """Projects with a stage other than off that this process can read."""
 
+        return list(await self.enabled_stages())
+
+    async def enabled_stages(self) -> dict[str, str]:
         if kill_switch_engaged():
-            return []
+            return {}
         async with self.database.session() as session:
             rows = await session.scalars(
                 select(LinkedMemorySettingsRow).where(
                     LinkedMemorySettingsRow.stage != "off"
                 )
             )
-            return [row.engagement_id for row in rows]
+            return {
+                row.engagement_id: row.stage
+                for row in rows
+                if row.stage in AVAILABLE_STAGES
+            }
 
     # Event cursor --------------------------------------------------------
 

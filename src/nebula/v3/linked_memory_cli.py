@@ -74,20 +74,35 @@ def status_command(project: ProjectOption, data_dir: DataDirOption = None) -> No
 @linked_memory_app.command("set")
 def set_command(
     project: ProjectOption,
-    stage: Annotated[str, typer.Option("--stage", help="off or shadow")],
+    stage: Annotated[str, typer.Option("--stage", help="off, shadow or inject")],
+    confirm_inject: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-inject",
+            help="Confirm that inject adds memory cards to this project's turns.",
+        ),
+    ] = False,
     data_dir: DataDirOption = None,
 ) -> None:
     """Change a project's stage, checked against the current revision."""
 
-    if stage not in {"off", "shadow"}:
-        raise typer.BadParameter("stage must be off or shadow in this release")
+    if stage not in {"off", "shadow", "inject"}:
+        raise typer.BadParameter("stage must be off, shadow or inject")
+    if stage == "inject" and not confirm_inject:
+        raise typer.BadParameter(
+            "inject adds memory cards to this project's turns; pass --confirm-inject"
+        )
     path = f"/engagements/{project}/linked-memory"
     current = _request(data_dir, "GET", path)
     saved = _request(
         data_dir,
         "PUT",
         path,
-        {"stage": stage, "expected_revision": current["revision"]},
+        {
+            "stage": stage,
+            "expected_revision": current["revision"],
+            "confirm_inject": confirm_inject,
+        },
     )
     observed = _request(data_dir, "GET", path)
     if observed.get("stage") != stage:

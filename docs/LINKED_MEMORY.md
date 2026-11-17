@@ -13,14 +13,17 @@ Memory panel.
 
 ## Stages
 
-Each project has a stage. This release has two:
+Each project has a stage:
 
 - `off` (the default): nothing is curated.
-- `shadow`: completed goals are curated into cards and links. Nothing is
-  injected into any chat, and no agent or model sees the cards.
+- `shadow`: completed goals are curated into cards and links. Each turn
+  records which cards it would have received, but nothing is added to any
+  chat and no model sees the cards.
+- `inject`: as `shadow`, and Core adds up to three matching cards to each
+  turn in the project (see [Entry cards](#entry-cards)). Turning it on needs
+  explicit confirmation.
 
-Later releases add `recall` (agents can search and follow cards) and `inject`
-(Core adds a few relevant cards to a turn).
+A later release adds `recall` (tools agents call to search and follow cards).
 
 Only goals that complete **after** a project is first enabled are curated.
 Cancelled, paused and blocked goals, child goals, and chats without a goal are
@@ -32,7 +35,17 @@ There is no Settings screen. Use the CLI against a running Core:
 
 ```bash
 nebula-core linked-memory set --project <project-id> --stage shadow
+```
+
+```bash
+nebula-core linked-memory set --project <project-id> --stage inject --confirm-inject
+```
+
+```bash
 nebula-core linked-memory status --project <project-id>
+```
+
+```bash
 nebula-core linked-memory cards --project <project-id> --limit 20
 ```
 
@@ -50,7 +63,36 @@ and reports Core's read-back.
 - recent goal runs with their state (`pending`, `running`, `paused`, `done`,
   `capped`), the reason for a pause, and the last error;
 - the curator (`idle`, `running` or `paused` and why) and the curation helper
-  process (state, memory use, priority, restarts).
+  process (state, memory use, priority, restarts);
+- entry cards: turns checked, cards injected or recorded in shadow, turns
+  with no match, and the slowest turn-start check in milliseconds.
+
+## Entry cards
+
+In `shadow` and `inject`, every provider turn in the project checks its new
+message against the project's cards:
+
+- **Turn start reads memory only.** The project worker keeps an index of the
+  project's active cards in memory. The check compares the new message's
+  content words with each card, with no database, model or index call, and
+  stops at 5 ms; past that the turn gets nothing. A card needs at least two
+  words in common with the new message, so small talk such as "thanks,
+  continue" gets nothing.
+- **Prefetch helps the next turn.** After a turn's answer is saved, the
+  curation helper ranks the cards against that exchange with MiniLM. On the
+  chat's next turn, a card the previous exchange made relevant needs only one
+  word in common. Prefetch is skipped, never delayed, when the host is busy
+  or the helper is curating.
+- **What the model sees.** At most three cards (title, summary, when it
+  applies, kind and authority), about 300 tokens, are added after the
+  operator's message as untrusted reference data that may be outdated, next
+  to any project knowledge. The stored message never contains them.
+  Quarantined cards are never added. A cloud provider receives cards only
+  under the same rules as project knowledge: the provider must permit
+  project data and the turn must allow cloud knowledge.
+- **Audit.** Each turn's request snapshot has a `linked_memory` record: the
+  stage, whether cards were injected, which cards with their scores, the
+  reason when none were, and how long the check took.
 
 ## How cards are curated
 

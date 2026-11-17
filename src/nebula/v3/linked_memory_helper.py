@@ -552,6 +552,26 @@ def handle(state: HelperState, request: dict[str, Any]) -> dict[str, Any]:
         prompt["shown"] = [card["id"] for card in ordered[:MAX_CANDIDATES_IN_PROMPT]]
         prompt["embedding"] = state.embedding_state
         return prompt
+    if op == "rank":
+        query = str(request.get("query") or "")[:6_000]
+        candidates = request.get("candidates") or []
+        query_key = "query:" + card_content_hash("query", query, "")
+        vectors = state.vectors(
+            {query_key: query} | {card["id"]: card_text(card) for card in candidates}
+        )
+        query_vector = vectors.pop(query_key, None)
+        state.cache.pop(query_key, None)
+        ranked = rank_candidates(
+            query,
+            candidates,
+            query_vector=query_vector,
+            vectors=vectors,
+            limit=int(request.get("limit") or 8),
+        )
+        return {
+            "ranked": [[card_id, round(score, 4)] for card_id, score in ranked],
+            "embedding": state.embedding_state,
+        }
     if op == "verify":
         chunk = request["chunk"]
         prompt = request["prompt"]
@@ -720,6 +740,12 @@ class CurationHelper:
         self._backoff_until = 0.0
         self._stderr_tail = b""
         self._stderr_task: asyncio.Task[None] | None = None
+
+    @property
+    def busy(self) -> bool:
+        """A request is in flight; prefetch skips rather than queue behind it."""
+
+        return self._lock.locked()
 
     def snapshot(self) -> dict[str, Any]:
         process = self._process
