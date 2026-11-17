@@ -1176,6 +1176,18 @@ Local detached workers currently require Linux pidfd support. Other desktop
 platforms can connect to a remote Core; local continuity on them remains
 unavailable. The retained runtime rejects unauthenticated remote mode explicitly.
 
+Linked memory is a per-project setting with no Settings screen and no Settings
+destination. It is not RAM or a memory budget. Butler discovers the typed
+`nebula.settings.linked_memory` action, which reads the project's stage, its
+revision, the Core-wide kill switch and curation status, and
+`nebula.settings.set_linked_memory`, which changes the stage. The stages
+available in this release are `off` and `shadow`; `shadow` curates memory cards
+from completed top-level goals in the background and injects nothing into any
+chat. Change the stage only when the operator asks in the current
+conversation: read first, pass the read revision as `expected_revision`, and
+report Core's read-back rather than the request. Goals that completed before
+the first enable are never curated. See [Linked memory](../LINKED_MEMORY.md).
+
 # Project tool approval policy
 
 Project approval policy `never` grants permission bypass for every enabled

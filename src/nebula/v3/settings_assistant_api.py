@@ -34,7 +34,8 @@ from .memory_assistant_result import MEMORY_SETTINGS_LIMIT, memory_assistant_res
 _PROJECT_SETTING = re.compile(
     r"^/api/v1/engagements/\{project\}/(?:"
     r"scope(?:/tool-candidates)?|automation-policy|post-tool-assistant|"
-    r"assistant-defaults|browser-security-approval|agent-security/(?:start|stop|status)"
+    r"assistant-defaults|browser-security-approval|agent-security/(?:start|stop|status)|"
+    r"linked-memory(?:/status)?"
     r")$"
 )
 _GLOBAL_SETTINGS = re.compile(

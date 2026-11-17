@@ -1,9 +1,10 @@
 # Linked memory
 
-Status: **proposed, not implemented.** This contract records the design agreed
-in discussion between 2026-11-13 and 2026-11-17. Nothing described here exists in
-Core yet, apart from the existing pieces it reuses (listed under
-[What it builds on](#what-it-builds-on)).
+Status: **stage 1 (shadow curation) implemented; later stages proposed.** This
+contract records the design agreed in discussion between 2026-11-13 and
+2026-11-17. [Release 1](#release-1-shadow-curation) lists what Core implements
+now and where it differs from the full design. The operator guide is
+[Linked memory](../LINKED_MEMORY.md).
 
 Linked memory is a background service in Core. It does four things:
 
@@ -21,6 +22,54 @@ Linked memory is a background service in Core. It does four things:
 
 The service must not change the operator interface at all, and it must not make
 live work slower (see [Performance contract](#performance-contract)).
+
+## Release 1: shadow curation
+
+Release 1 implements rollout stage 1. It builds cards and links from completed
+goals and injects nothing.
+
+Implemented:
+
+- the tables `linked_memory_settings`, `linked_memory_cursors`,
+  `linked_memory_goal_runs`, `linked_memory_cards`,
+  `linked_memory_card_sources` and `linked_memory_links` (migration
+  `0052_linked_memory`), all owned by one project through `engagement_id`;
+- the stages `off` and `shadow`, the revision-checked
+  `/engagements/{id}/linked-memory` routes with `/status` and `/cards`, the
+  `nebula-core linked-memory status | set | cards` commands, the Butler
+  actions `nebula.settings.linked_memory` and
+  `nebula.settings.set_linked_memory`, and the kill switch
+  `NEBULA_LINKED_MEMORY_DISABLED`;
+- the `goal.completed` trigger with a durable cursor. Enabling a project
+  starts the cursor at the current event, so goals completed earlier are not
+  curated;
+- chunked, resumable goal runs over the goal's chat, goal children and
+  subagent descendants, with a per-goal cap of 200 chunks and 400,000 tokens;
+- extraction with the chat's own model, quote verification, authority from
+  the quoted entry, quarantine for open-world tool evidence, the
+  supersede-authority rule, and model-typed links to the existing cards shown
+  in the prompt plus proposed `similar_to` links for near-duplicates;
+- the gates under [Live work goes first](#live-work-goes-first) and the
+  curation admission in the provider scheduler (`curation_call`).
+
+Differences from the full design, to close in later releases:
+
+- **Helper placement.** The project worker starts the curation helper on
+  demand instead of the supervisor running one per host. The helper still runs
+  at the lowest CPU priority and in the idle I/O class, has a memory limit
+  enforced by the worker, and exits after two idle minutes. One curation model
+  call runs per host, enforced by a lock file in the data root.
+- **Live-turn check.** A curation call waits while any direct turn the worker
+  can see is admitted, queued or running. Workers see only their own project's
+  queue, so another project's live turn on the same local model does not delay
+  curation. The project quiet period and host-pressure gate still apply.
+- **Ranking.** The helper ranks link candidates with its own MiniLM vectors
+  (or shared words when the model files are absent). There is no cross-encoder
+  re-scoring and no card index in the host index service yet.
+- **Not yet built:** prefetch and entry cards, `memory.recall` and
+  `memory.follow`, `memory.propose` and harness-chat curation, MCP sources,
+  tool-usage lessons, Butler memory absorption, global cards, episodes, the
+  automatic stop, and the per-turn `request_snapshot` record.
 
 ## Decisions
 
@@ -136,7 +185,7 @@ service that live turns use.
   keeps failing, status reports linked memory as degraded and live work carries
   on.
 - **Stateless between chunks.** Everything needed to resume is in
-  `memory_goal_runs` and the event cursors. A crash, restart or deployment loses
+  `linked_memory_goal_runs` and the event cursors. A crash, restart or deployment loses
   at most the chunk in progress.
 - **Requests never block the worker.** If the helper's socket is full or the
   helper is down, a prefetch request is dropped and a curation chunk waits.
@@ -272,7 +321,7 @@ curation run: one chunk at a time, only while the project is quiet
   [helper] re-score with the cross-encoder; type the links (any model call
            goes through the worker, as above)
   [worker] commit cards, links and the run position in one short transaction
-           fenced by the lease; record progress in memory_goal_runs
+           fenced by the lease; record progress in linked_memory_goal_runs
 
   [worker] = project execution worker, I/O only
   [helper] = curation helper, one per Core host, lowest CPU and I/O priority
@@ -308,7 +357,7 @@ next leased.
   not start a separate run.
 - **Chunked and resumable.** A goal can span many turns and up to 32 child
   chats. The curator works through them oldest first, records its position in
-  `memory_goal_runs`, and resumes from there after a restart. A per-goal spend
+  `linked_memory_goal_runs`, and resumes from there after a restart. A per-goal spend
   cap bounds the run. Work beyond the cap is recorded as skipped, with the
   reason.
 
@@ -622,16 +671,16 @@ table.
 
 | Table | Contents |
 | --- | --- |
-| `memory_cards` | `id`, `scope` (`project` or `global`), `scope_key`, `source_project_id`, `kind`, `title` ≤ 120, `summary` ≤ 400, `body` ≤ 800 (an absorbed Butler item's original text), `applies_when`, `authority`, `audience` (`butler` or `agents`), `state` (`proposed`, `active`, `superseded`, `contradicted`, `retracted`, `quarantined`), `episode_id`, `content_hash`, `verified_at`, `curator_version`, `curator_model`, `revision`, timestamps |
-| `memory_card_sources` | `card_id`, `kind` (`chat_message`, `turn_step`, `harness_item`, `butler_item`, `decision`, `artifact`, `external_mcp`), `ref` (session, message, step or item IDs; for MCP: profile, tool, external ID), `excerpt` ≤ 500, `excerpt_hash`, `captured_at`. A card needs at least one source. |
-| `memory_links` | `id`, `from_card`, `to_card`, `type`, `state` (`proposed`, `accepted`, `rejected`), `reason` ≤ 300, `basis`, `confidence`, `curator_version`, `curator_model`, timestamps. Unique on (`from_card`, `to_card`, `type`); indexed both ways. |
-| `memory_episodes` | `id`, `scope`, `scope_key`, `subject`, `root_card_id`, `current_card_id`, `updated_at` |
-| `memory_proposals` | One row per proposal from any producer: claim, kind, evidence, producer, turn, state, rejection reason |
-| `memory_cursors` | `project_id`, `last_event_sequence` |
-| `memory_goal_runs` | `goal_id`, `project_id`, covered `session_ids`, `state` (`pending`, `running`, `paused`, `done`, `capped`, `failed`), position (the last turn curated), spend, MCP query count, `reason` (including why a run is paused), timestamps |
-| `memory_source_bindings` | MCP `profile_id`, `tool_name`, `schema_digest`, argument and result mapping, `state` (`proposed`, `confirmed`, `disabled`), who confirmed it and when |
-| `memory_tool_lessons` | `card_id`, `tool_source` (`core` or `mcp:<profile id>`), `tool_name`, `schema_digest`, `form` (`argument_rule`, `call_order`, `note`), `field`, `signature`, `shown_count`, `recurrence_count`, `rewrites`, model counts, `last_shown_at`. A tool's notes in the current rollup are selected by (`tool_source`, `tool_name`, `schema_digest`). |
-| `memory_failure_signatures` | `tool_source`, `tool_name`, `category`, `invalid_input`, `error_code`, failure and recovery counts, model counts, `last_seen_at`. This feeds the `tool-misuse` report and the recurrence check. |
+| `linked_memory_cards` | `id`, `scope` (`project` or `global`), `scope_key`, `source_project_id`, `kind`, `title` ≤ 120, `summary` ≤ 400, `body` ≤ 800 (an absorbed Butler item's original text), `applies_when`, `authority`, `audience` (`butler` or `agents`), `state` (`proposed`, `active`, `superseded`, `contradicted`, `retracted`, `quarantined`), `episode_id`, `content_hash`, `verified_at`, `curator_version`, `curator_model`, `revision`, timestamps |
+| `linked_memory_card_sources` | `card_id`, `kind` (`chat_message`, `turn_step`, `harness_item`, `butler_item`, `decision`, `artifact`, `external_mcp`), `ref` (session, message, step or item IDs; for MCP: profile, tool, external ID), `excerpt` ≤ 500, `excerpt_hash`, `captured_at`. A card needs at least one source. |
+| `linked_memory_links` | `id`, `from_card`, `to_card`, `type`, `state` (`proposed`, `accepted`, `rejected`), `reason` ≤ 300, `basis`, `confidence`, `curator_version`, `curator_model`, timestamps. Unique on (`from_card`, `to_card`, `type`); indexed both ways. |
+| `linked_memory_episodes` | `id`, `scope`, `scope_key`, `subject`, `root_card_id`, `current_card_id`, `updated_at` |
+| `linked_memory_proposals` | One row per proposal from any producer: claim, kind, evidence, producer, turn, state, rejection reason |
+| `linked_memory_cursors` | `project_id`, `last_event_sequence` |
+| `linked_memory_goal_runs` | `goal_id`, `project_id`, covered `session_ids`, `state` (`pending`, `running`, `paused`, `done`, `capped`, `failed`), position (the last turn curated), spend, MCP query count, `reason` (including why a run is paused), timestamps |
+| `linked_memory_source_bindings` | MCP `profile_id`, `tool_name`, `schema_digest`, argument and result mapping, `state` (`proposed`, `confirmed`, `disabled`), who confirmed it and when |
+| `linked_memory_tool_lessons` | `card_id`, `tool_source` (`core` or `mcp:<profile id>`), `tool_name`, `schema_digest`, `form` (`argument_rule`, `call_order`, `note`), `field`, `signature`, `shown_count`, `recurrence_count`, `rewrites`, model counts, `last_shown_at`. A tool's notes in the current rollup are selected by (`tool_source`, `tool_name`, `schema_digest`). |
+| `linked_memory_failure_signatures` | `tool_source`, `tool_name`, `category`, `invalid_input`, `error_code`, failure and recovery counts, model counts, `last_seen_at`. This feeds the `tool-misuse` report and the recurrence check. |
 | `linked_memory_settings` | `project_id`, `stage` (`off`, `shadow`, `recall`, `inject`), `revision`, `updated_by`, `updated_at` |
 
 What a turn received goes into `ChatTurn.request_snapshot` under a
@@ -644,7 +693,7 @@ Its publication is fenced through `runtime_index_state`. The curation helper
 computes the vectors and keeps its own copy. The host index service receives
 them precomputed, in small batches, only to serve `memory.recall`, so it does
 no embedding for curation. Prefetched entry cards live only in worker memory,
-so there is no prefetch table. Dropping every `memory_*` table removes the
+so there is no prefetch table. Dropping every `linked_memory_*` table removes the
 feature without affecting any other data.
 
 ### Retention and deletion
@@ -792,7 +841,7 @@ Core, so the switch takes three releases:
   conversation. If neither is available, the turn waits in the backlog with a
   recorded reason.
 - **Subagent and mission specialist turns** use whatever model they ran on.
-- **Spend** is recorded per goal in `memory_goal_runs` and counted against
+- **Spend** is recorded per goal in `linked_memory_goal_runs` and counted against
   provider balances. It never changes the completed goal's record or budget,
   because the goal's own work is finished.
 - **Cost controls:**
