@@ -1,28 +1,24 @@
 {
-  "change_digest": "aea83510822c3d76b6979906abaef456efcecb04487e300e75ca7588a5f7f7ee",
+  "change_digest": "835e98013bfd890cb69043ef5b6a975eebcfdcf2ea8ca5c08530251ecdffb1bc",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Expired-owner recovery no longer stops for ten minutes after three recoveries: it backs off (15 s doubling, 5-minute cap, read from SQL) and the project reads as held with the next retry. The host now has a restoration target that failed cleanly before activation relinquish its grant and exit, so recovery restores the project on a fresh target. Selected: the auto-recovery suite, restoration and relinquish regressions, the recovery reconciliation cases around held, mismatched and waiting restorations, and the execution-waiting read, on SQLite and PostgreSQL.",
-  "exclusions": "test_retained_prepared_worker_survives_host_detach_and_new_host_activates_saved_recovery needs a pidfd-capable process host (fails locally on main too). No UI, native or Playwright layer: the held reason reuses the existing execution-waiting field. Both workflows were reproduced on a fault-injected scratch Core on main (STUCK) and on this branch (PASS). No settings or settings-assistant destination changed.",
+  "reason": "Expired-owner recovery now SIGKILLs a frozen or hung execution worker (lease lapsed beyond the grace margin, failed liveness call, pidfd-verified birth, whole session) and the supervisor reaps exited worker children. Selected: the auto-recovery initiation suite, the real detached-process suite (frozen worker with a grandchild, API/responsive/unverified workers never killed, exited worker reaped), process identity, and orphan recovery, on SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: no operator-visible interface changed. Recovery timing was measured end to end on a fake scratch Core (SIGSTOP forever, SIGSTOP then SIGKILL, SIGSTOP then SIGCONT).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 110,
+    "python": 199,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
     "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_execution_restoration.py",
-    "tests/v3/test_goal_execution_waiting.py",
-    "tests/v3/test_recovery_reconciliation.py::test_target_failed_before_activation_relinquishes_for_fresh_recovery",
-    "tests/v3/test_recovery_reconciliation.py::test_failed_target_that_did_not_clean_up_stays_held",
-    "tests/v3/test_recovery_reconciliation.py::test_waiting_transfer_is_recorded_once_per_reason",
-    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work",
-    "tests/v3/test_recovery_reconciliation.py::test_recovery_mismatch_stays_held_without_activation_or_claim"
+    "tests/v3/test_runtime_processes.py",
+    "tests/v3/test_process_identity.py",
+    "tests/v3/test_runtime_orphan_recovery.py"
   ],
   "frontend": [],
   "native": [],

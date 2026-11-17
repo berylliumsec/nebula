@@ -1102,11 +1102,41 @@ class RuntimeAutoAdmission:
             or getattr(supervisor, "management", None) is None
         ):
             return
+        discovered = await supervisor.host.rediscover()
         observed = {
             worker.runtime_id: worker
-            for worker in await supervisor.host.rediscover()
+            for worker in discovered
             if worker.process_state == "gone" and worker.identity is not None
         }
+        # A frozen or hung owner keeps a live process but can never renew its
+        # expired lease. Once it is provably unresponsive the host kills it,
+        # and the normal dead-owner recovery below runs in this same pass.
+        retire_unresponsive = getattr(supervisor.host, "retire_unresponsive", None)
+        expired = {owner.runtime_id for owner, _work in owners}
+        for worker in discovered:
+            if (
+                retire_unresponsive is None
+                or worker.runtime_id not in expired
+                or worker.runtime_id in observed
+                or worker.process_state != "alive"
+                or getattr(worker, "reachable", True)
+                or worker.identity is None
+                or worker.identity.role != "execution"
+            ):
+                continue
+            try:
+                if await retire_unresponsive(worker.identity):
+                    observed[worker.runtime_id] = worker
+            except Exception as error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.project_recovery.unresponsive_worker",
+                    "An unresponsive project worker could not be retired; its "
+                    "project stays held until the process ends.",
+                    error,
+                    stage="recovery",
+                    metadata={"entity_id": worker.runtime_id, "kind": "runtime"},
+                )
         for owner, has_project_work in owners:
             worker = observed.get(owner.runtime_id)
             if worker is None:
