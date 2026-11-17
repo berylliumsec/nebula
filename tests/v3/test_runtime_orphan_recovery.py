@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select, update
 
 from nebula.v3.chat_subagents import recoverable_after_core_restart
+from nebula.v3.chat_turn_ledger import ChatTurnLedger
 from nebula.v3.database import (
     DeploymentReceiptRow,
     ProjectOwnershipRow,
@@ -18,6 +19,8 @@ from nebula.v3.database import (
 from nebula.v3.domain import (
     ChatGoal,
     ChatSession,
+    ChatSubagent,
+    ChatSubagentStatus,
     ChatTurn,
     ChatTurnStatus,
     RiskClass,
@@ -152,8 +155,53 @@ async def orphan(host):
     await store.event_history.close()
 
 
-async def test_dead_owner_reconciles_claims_admission_and_stream_once(orphan):
+@pytest.mark.parametrize(
+    "status", [ChatTurnStatus.ROUTING, ChatTurnStatus.WAITING_CALLBACK]
+)
+async def test_dead_owner_reconciles_claims_admission_and_stream_once(orphan, status):
     value = orphan
+    child_ids = []
+    if status != ChatTurnStatus.ROUTING:
+        await value.store.update(
+            ChatTurn,
+            value.turn.id,
+            {"status": status},
+            expected_revision=value.turn.revision,
+        )
+        for name, state in (
+            ("Completed child", ChatSubagentStatus.COMPLETED),
+            ("Failed child", ChatSubagentStatus.FAILED),
+        ):
+            child = await value.store.create(
+                ChatSubagent(
+                    engagement_id="one",
+                    parent_session_id=value.session.id,
+                    parent_turn_id=value.turn.id,
+                    child_session_id=str(uuid4()),
+                    name=name,
+                    task="Synthetic delegated work",
+                    status=state,
+                    finished_at=utc_now(),
+                    result="Synthetic result"
+                    if state == ChatSubagentStatus.COMPLETED
+                    else "",
+                    error="Synthetic failure"
+                    if state == ChatSubagentStatus.FAILED
+                    else None,
+                )
+            )
+            child_ids.append(child.id)
+        await ChatTurnLedger(value.coordinator.database).append(
+            value.turn.id,
+            {
+                "step": 1,
+                "tool_call_id": "synthetic-subagent-wait",
+                "name": "wait_subagents",
+                "status": "waiting_callback",
+                "subagent_wait": {"ids": child_ids, "mode": "all"},
+                "result_summary": "Waiting for delegated work.",
+            },
+        )
     await value.expire()
     result = await value.reconcile()
     assert result["interrupted_turn_ids"] == [value.turn.id]
@@ -164,6 +212,22 @@ async def test_dead_owner_reconciles_claims_admission_and_stream_once(orphan):
     assert turn.execution_claim_id is None and goal.execution_claim_id is None
     assert goal.status.value == "paused"
     assert recoverable_after_core_restart(turn)
+    if child_ids:
+        from nebula.v3.chat import ChatService
+
+        chat = ChatService(value.store)
+        pending = (await chat._turn_history(turn))[-1]
+        wait = pending["subagent_wait"]
+        assert wait["ids"] == child_ids
+        assert await chat.subagents.wait_ready(wait)
+        output, _summary = await chat.subagents.wait_result(wait)
+        assert len(output["subagents"]) == 2
+        assert (
+            await value.store.get(ChatSubagent, child_ids[0])
+        ).status == ChatSubagentStatus.COMPLETED
+        assert (
+            await value.store.get(ChatSubagent, child_ids[1])
+        ).status == ChatSubagentStatus.FAILED
     frames = await value.coordinator.coordination.replay_stream(turn.id)
     assert [frame.event_type for frame in frames] == ["error", SEGMENT_END]
     assert await value.reconcile() == result
@@ -181,6 +245,80 @@ async def test_dead_owner_reconciles_claims_admission_and_stream_once(orphan):
         assert not await value.coordinator._recovery_blockers(
             sql, "one", value.lease.runtime_id
         )
+
+
+async def test_dead_owner_keeps_unclaimed_callback_wait(orphan):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {
+            "status": ChatTurnStatus.WAITING_CALLBACK,
+            "execution_claim_id": None,
+            "execution_owner_id": None,
+            "execution_claimed_at": None,
+        },
+        expected_revision=value.turn.revision,
+    )
+    await value.store.update(
+        ChatGoal,
+        value.goal.id,
+        {
+            "status": "paused",
+            "execution_claim_id": None,
+            "execution_owner_id": None,
+            "execution_claimed_at": None,
+        },
+        expected_revision=value.goal.revision,
+    )
+    await value.expire()
+    result = await value.reconcile()
+    assert result["interrupted_turn_ids"] == []
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    assert turn.status == ChatTurnStatus.WAITING_CALLBACK
+    async with value.coordinator.database.session() as sql:
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+
+
+async def test_dead_owner_does_not_clear_command_callback_claim(orphan):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.WAITING_CALLBACK},
+        expected_revision=value.turn.revision,
+    )
+    await ChatTurnLedger(value.coordinator.database).append(
+        value.turn.id,
+        {
+            "step": 1,
+            "tool_call_id": "synthetic-command-callback",
+            "name": "run_command",
+            "status": "waiting_callback",
+            "process_id": "synthetic-process",
+            "result_summary": "Waiting for command result.",
+        },
+    )
+    await value.expire()
+    with pytest.raises(CoordinationConflict, match="command callback"):
+        await value.reconcile()
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    assert turn.status == ChatTurnStatus.WAITING_CALLBACK
+    assert turn.execution_claim_id is not None
+    assert (
+        await value.store.get(ChatGoal, value.goal.id)
+    ).execution_claim_id is not None
+    async with value.coordinator.database.session() as sql:
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "active"
 
 
 async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):
