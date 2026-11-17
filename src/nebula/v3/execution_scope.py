@@ -6,11 +6,24 @@ transactions take the same lock order, including the raw-connection ledger
 writers.
 
 On PostgreSQL every transaction first holds ``EXECUTION_SQL_KEY`` shared, then
-its own runtime's key exclusively, then row-locks the runtime's ownership rows.
-A runtime's transactions therefore still run one at a time, while different
-projects' runtimes run side by side: they write disjoint project rows, and the
-ownership row locks order each runtime's work against claims, transfers and
-retirement. A host Work batch takes ``EXECUTION_SQL_KEY`` exclusively and so
+its own runtime's key exclusively, then share-locks the runtime's ownership
+rows (``FOR KEY SHARE``). A runtime's transactions therefore still run one at a
+time, while different projects' runtimes run side by side: they write disjoint
+project rows. Claims, transfers, retirement and fenced coordination writes lock
+an ownership row ``FOR UPDATE``, which waits for these transactions, so they
+stay ordered against each runtime's work and a stale owner never commits after
+a new owner's grant. Lease renewal and command submission only update non-key
+columns (``FOR NO KEY UPDATE``), which a key-share lock admits: a worker's own
+long transaction can no longer starve its heartbeat or hold API acceptance.
+
+Because a runtime's transactions run one at a time, one long transaction would
+still freeze the whole project. Each is bounded by
+``EXECUTION_TRANSACTION_SECONDS``: on PostgreSQL by ``statement_timeout`` and
+``idle_in_transaction_session_timeout``, and on every dialect no statement
+starts once the transaction is older than that. A transaction this long already
+outlived the lease renewal window before key-share locks; it now fails alone.
+
+A host Work batch takes ``EXECUTION_SQL_KEY`` exclusively and so
 still excludes every execution transaction; an older release that takes it
 exclusively still runs alone. Rows shared by all projects (global entities and
 their search documents) are the exception: the first statement that may write
@@ -24,7 +37,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from collections.abc import Mapping
+import os
 import re
+import time
 from typing import Any, Iterator
 
 from sqlalchemy import and_, event, exists, false, literal, or_, select
@@ -44,7 +59,13 @@ from .database import (
     SearchDocumentRow,
 )
 from .projection_write import SearchProjectionWrite
-from .runtime_coordination import CoordinationConflict, LeaseLost, ProjectLease
+from .runtime_coordination import (
+    LEASE_MS,
+    LEASE_SAFETY_MS,
+    CoordinationConflict,
+    LeaseLost,
+    ProjectLease,
+)
 
 _current_lease: ContextVar[ProjectLease | None] = ContextVar(
     "execution_lease", default=None
@@ -61,6 +82,33 @@ GLOBAL_WRITES_KEY = (
     "hashtext(current_schema()), hashtext('nebula:execution-global-writes:v1')"
 )
 _GLOBAL_TABLES = {"entities", "search_documents"}
+
+
+def _transaction_seconds() -> float:
+    # The lease renewal window: a scoped transaction this long froze its whole
+    # project and cost the worker its lease before key-share ownership locks.
+    default = (LEASE_MS - LEASE_SAFETY_MS) / 1000
+    value = os.getenv("NEBULA_V3_EXECUTION_TRANSACTION_SECONDS")
+    if not value:
+        return default
+    try:
+        seconds = float(value)
+    except ValueError:
+        # diagnostic-expected: a malformed override keeps the safe default.
+        return default
+    return seconds if seconds > 0 else 0.0
+
+
+# Zero disables the bound (tests only).
+EXECUTION_TRANSACTION_SECONDS = _transaction_seconds()
+
+
+class ExecutionTransactionTooLong(CoordinationConflict):
+    """A project-scoped transaction outlived its bound and was abandoned.
+
+    Nothing it wrote is committed. Long work must commit in bounded batches,
+    because every other transaction of the project waits behind it.
+    """
 
 
 @contextmanager
@@ -120,12 +168,22 @@ class ExecutionSQLScope:
                 cursor.execute("BEGIN IMMEDIATE")
             else:
                 cursor.execute(_BEGIN_LOCKS, (self.runtime_id,))
+                bound = EXECUTION_TRANSACTION_SECONDS
+                if bound > 0:
+                    milliseconds = str(int(bound * 1000))
+                    cursor.execute(
+                        "SELECT set_config('statement_timeout', %s, true), "
+                        "set_config('idle_in_transaction_session_timeout', %s, true)",
+                        (milliseconds, milliseconds),
+                    )
+            # Key share: claims and transfers (FOR UPDATE) wait for this
+            # transaction; heartbeat renewal and command submission do not.
             cursor.execute(
                 "SELECT project_id, fencing_token, lease_expires_at_ms "
                 "FROM project_ownership WHERE runtime_id = "
                 + placeholder
                 + " ORDER BY project_id"
-                + (" FOR UPDATE" if dialect == "postgresql" else ""),
+                + (" FOR KEY SHARE" if dialect == "postgresql" else ""),
                 (self.runtime_id,),
             )
             rows = cursor.fetchall()
@@ -152,6 +210,7 @@ class ExecutionSQLScope:
                 owned = {context.project_id: context.fencing_token}
             connection.info["execution_owned"] = owned
             connection.info["execution_dirty"] = False
+            connection.info["execution_began"] = time.monotonic()
             # SQLite's BEGIN IMMEDIATE already admits one writer at a time.
             connection.info["execution_global_writes"] = dialect != "postgresql"
         finally:
@@ -244,6 +303,14 @@ class ExecutionSQLScope:
         # connection. Load this transaction's ownership before compiling scope.
         if not connection.in_transaction():
             connection.begin()
+        began = connection.info.get("execution_began")
+        bound = EXECUTION_TRANSACTION_SECONDS
+        if began is not None and bound > 0 and time.monotonic() - began > bound:
+            raise ExecutionTransactionTooLong(
+                f"A project transaction stayed open longer than {bound:g} s and was "
+                "abandoned; every other request in the project waits behind one. "
+                "Long work must commit in smaller batches."
+            )
         owned = connection.info.get("execution_owned", {})
         context = _current_lease.get()
         if context is not None and (
@@ -724,3 +791,4 @@ class ExecutionSQLScope:
             return
         connection.info.pop("execution_owned", None)
         connection.info.pop("execution_dirty", None)
+        connection.info.pop("execution_began", None)

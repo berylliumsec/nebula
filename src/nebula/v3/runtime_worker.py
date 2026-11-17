@@ -71,6 +71,7 @@ async def keep_lease(
     renewal: LeaseRenewal,
     *,
     interval: float,
+    lock_wait: Callable[[], str | None] | None = None,
 ) -> NoReturn:
     """Renew this incarnation's leases until ownership can no longer be proven.
 
@@ -80,11 +81,21 @@ async def keep_lease(
     attempt still unanswered when that bound is spent is abandoned. LeaseLost
     or any other answer from SQL ends at once. This returns only by raising,
     and the caller then stops the worker as before.
+
+    ``lock_wait`` names a SQL lock the latest renewal waited on, when that
+    (not an unreachable server) is why renewals did not complete.
     """
     failures = 0
     cause: BaseException | None = None
+    waited: str | None = None
     while True:
         if renewal.spent:
+            if waited is not None:
+                raise LeaseLost(
+                    "Lease renewal stayed blocked on a SQL lock until this runtime "
+                    f"could no longer prove its lease ({waited}); SQL was reachable. "
+                    "It stops before the lease can expire"
+                ) from cause
             raise LeaseLost(
                 "SQL stayed unreachable until this runtime could no longer prove "
                 "its lease; it stops before the lease can expire"
@@ -101,14 +112,20 @@ async def keep_lease(
                 raise
             cause = error
             failures += 1
+            waited = lock_wait() if lock_wait is not None else None
             if failures == 1:
                 record_caught_exception(
                     "runtime",
                     "runtime.lease.renewal_waiting",
-                    "A lease renewal failed while SQL was unreachable; it is retried only while the leases are provably live.",
+                    "A lease renewal waited on a SQL lock; it is retried only while the leases are provably live."
+                    if waited is not None
+                    else "A lease renewal failed while SQL was unreachable; it is retried only while the leases are provably live.",
                     error,
                     stage="lease",
-                    metadata={"seconds_left": round(renewal.remaining(), 1)},
+                    metadata={
+                        "seconds_left": round(renewal.remaining(), 1),
+                        **({"lock_wait": waited} if waited is not None else {}),
+                    },
                 )
             await asyncio.sleep(
                 min(interval, 0.25 * 2 ** min(failures - 1, 5), renewal.remaining())
@@ -125,7 +142,7 @@ async def keep_lease(
                 stage="lease",
                 metadata={"failed_attempts": failures},
             )
-        failures, cause = 0, None
+        failures, cause, waited = 0, None, None
         await asyncio.sleep(interval)
 
 
@@ -413,6 +430,7 @@ async def run_worker(
                     ),
                     renewal,
                     interval=HEARTBEAT_SECONDS,
+                    lock_wait=lambda: coordinator.coordination.renewal_wait,
                 )
             except BaseException:
                 if server is not None:
