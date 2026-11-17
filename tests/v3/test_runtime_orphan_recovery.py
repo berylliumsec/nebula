@@ -741,7 +741,56 @@ async def test_dead_owner_keeps_unclaimed_callback_wait(orphan):
         )
 
 
-async def test_dead_owner_does_not_clear_command_callback_claim(orphan):
+async def test_dead_owner_interrupts_unknown_command_callback_without_replay(orphan):
+    value = orphan
+    call = await value.store.create(
+        ToolCall(
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            tool_name="run_command",
+            arguments={"command": "synthetic"},
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            status=ToolCallStatus.RUNNING,
+            started_at=utc_now(),
+        )
+    )
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.WAITING_CALLBACK},
+        expected_revision=value.turn.revision,
+    )
+    await ChatTurnLedger(value.coordinator.database).append(
+        value.turn.id,
+        {
+            "step": 1,
+            "tool_call_id": call.id,
+            "name": "run_command",
+            "status": "waiting_callback",
+            "process_id": "synthetic-process",
+            "result_summary": "Waiting for command result.",
+        },
+    )
+    await value.expire()
+    result = await value.reconcile()
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    assert result["interrupted_turn_ids"] == [turn.id]
+    assert turn.status == ChatTurnStatus.INTERRUPTED
+    assert turn.execution_claim_id is None
+    assert turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == [call.id]
+    assert (await value.store.get(ChatGoal, value.goal.id)).status.value == "paused"
+    assert (await value.store.get(ToolCall, call.id)).status == ToolCallStatus.RUNNING
+    async with value.coordinator.database.session() as sql:
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+
+
+async def test_dead_owner_retains_unmatched_command_callback(orphan):
     value = orphan
     await value.store.update(
         ChatTurn,
@@ -753,11 +802,10 @@ async def test_dead_owner_does_not_clear_command_callback_claim(orphan):
         value.turn.id,
         {
             "step": 1,
-            "tool_call_id": "synthetic-command-callback",
+            "tool_call_id": "missing-tool-call",
             "name": "run_command",
             "status": "waiting_callback",
             "process_id": "synthetic-process",
-            "result_summary": "Waiting for command result.",
         },
     )
     await value.expire()
@@ -766,14 +814,6 @@ async def test_dead_owner_does_not_clear_command_callback_claim(orphan):
     turn = await value.store.get(ChatTurn, value.turn.id)
     assert turn.status == ChatTurnStatus.WAITING_CALLBACK
     assert turn.execution_claim_id is not None
-    assert (
-        await value.store.get(ChatGoal, value.goal.id)
-    ).execution_claim_id is not None
-    async with value.coordinator.database.session() as sql:
-        resource = await sql.get(
-            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
-        )
-        assert resource.state == "active"
 
 
 async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):

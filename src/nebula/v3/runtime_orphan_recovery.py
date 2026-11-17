@@ -177,20 +177,27 @@ async def reconcile_dead_project(
             interrupted = []
             for row in rows:
                 turn = ChatTurn.model_validate(row.payload)
-                if turn.status == ChatTurnStatus.WAITING_CALLBACK:
-                    history = await chat._turn_history(turn)
-                    pending = history[-1] if history else {}
-                    if pending.get("status") != "waiting_callback" or not isinstance(
-                        pending.get("subagent_wait"), dict
-                    ):
-                        raise CoordinationConflict(
-                            "An orphaned command callback still requires effect reconciliation"
-                        )
                 calls = await store.find_entities(
                     ToolCall,
                     {"chat_turn_id": turn.id},
                     engagement_id=expected_owner.project_id,
                 )
+                if turn.status == ChatTurnStatus.WAITING_CALLBACK:
+                    history = await chat._turn_history(turn)
+                    pending = history[-1] if history else {}
+                    waiting_subagent = (
+                        pending.get("status") == "waiting_callback"
+                        and isinstance(pending.get("subagent_wait"), dict)
+                    )
+                    unknown_tool = pending.get("status") == "waiting_callback" and any(
+                        call.id == pending.get("tool_call_id")
+                        and chat._tool_effect_unknown(call)
+                        for call in calls
+                    )
+                    if not (waiting_subagent or unknown_tool):
+                        raise CoordinationConflict(
+                            "An orphaned command callback still requires effect reconciliation"
+                        )
                 hooks = await store.find_entities(
                     NativeHookExecution,
                     {"chat_turn_id": turn.id},
