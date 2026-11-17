@@ -105,14 +105,15 @@ _STOPWORDS = frozenset(
     whom why will with would you your yours please tell know need want let us use
     using used one two get got make made like just still also each every""".split()
 )
-_ENTRY_WORD = re.compile(r"[a-z0-9][a-z0-9_.@/-]*[a-z0-9]|[a-z0-9]")
+_ENTRY_WORD = re.compile(r"[a-z0-9][a-z0-9_.@/]*[a-z0-9]|[a-z0-9]")
 
 
 def entry_words(text: str) -> frozenset[str]:
     """Content words for the in-memory overlap check (no model, no I/O)."""
 
     words = set()
-    for word in _ENTRY_WORD.findall(text.casefold()):
+    # "rate-limits" must meet "rate limit": hyphens separate words here.
+    for word in _ENTRY_WORD.findall(text.casefold().replace("-", " ")):
         if len(word) < 3 or word in _STOPWORDS:
             continue
         words.add(word)

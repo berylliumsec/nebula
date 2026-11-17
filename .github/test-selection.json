@@ -5,7 +5,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 91,
+    "python": 92,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -32,5 +32,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "aa542e2d92e86ec71f146b833c27ac255df87426f91d60b7453258cb0c981f5d"
+  "change_digest": "221b8a1d2e11effe5c2ef08da1a3c8ad4c9bc07360c136a0c9ebd699a70b7847"
 }

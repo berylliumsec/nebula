@@ -885,3 +885,11 @@ async def test_chat_turn_carries_entry_cards_and_records_them(tmp_path, monkeypa
     assert "LINKED MEMORY" not in shadow.model_request.messages[-1].content
     record = shadow.turn.request_snapshot["linked_memory"]
     assert record["reason"] == "shadow" and record["cards"][0]["id"] == "account"
+
+
+def test_entry_words_split_hyphens_and_fold_plurals():
+    from nebula.v3.linked_memory_rules import entry_words
+
+    words = entry_words("The login endpoint rate-limits failed attempts")
+    assert {"rate", "limit", "login", "attempt", "endpoint"} <= words
+    assert "the" not in words
