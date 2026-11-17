@@ -1,21 +1,26 @@
 {
-  "change_digest": "3f12da59ff2200619c7a3b4820c6e26cb3dd37eddd4e267b49a104d002795d95",
-  "reviewed_by": "Claude, based on an independently validated root cause (fresh subagent) and a rehearsal-Core reproduction",
-  "reason": "After reconcile-superseded-manual-deployment aligns deployer state to a manually installed release, the next managed promotion failed at host activation because every previous-host and rollback-target check required that release's managed simulation-acceptance.json. The deployer now binds a reconciled manual release to the manifest and executable digests its reconciliation recorded. The deploy-resume file covers the reconciliation, the new baseline verification, tamper refusal, and unchanged managed verification.",
-  "exclusions": "Only scripts/simulation/nebula_deployer.py and its deploy-resume tests change. No Core runtime, UI, frontend, native, or browser code changes.",
+  "change_digest": "6b83f971220543b5610c0bef9e9dc47c07dd806929e3560c69a71c002e5ad245",
+  "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
+  "reason": "The simulation deployer's host restart boundary now names chat turns held by an unavailable execution owner instead of waiting out its bound. The selected tests cover a frozen owner, a failed owner, an owner Core recovers, a pinned live owner, and the existing wait-then-stop and never-quiet activation paths.",
+  "exclusions": "Only scripts/simulation/nebula_deployer.py and its restart test change; no Core, UI, frontend, native or browser code. test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop, test_host_switch_frees_an_orphan_left_by_a_stop_timeout (same file) and test_host_process_identity_accepts_verified_onefile_child fail identically on clean main locally and are unrelated to the boundary wait.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 60,
+    "python": 6,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_deploy_resume.py"
+    "tests/test_simulation_host_restart.py::test_activation_stops_the_host_only_after_chat_turns_settle",
+    "tests/test_simulation_host_restart.py::test_activation_does_not_stop_the_host_while_chat_turns_stay_active",
+    "tests/test_simulation_host_restart.py::test_restart_boundary_names_a_turn_held_by_an_unresponsive_owner",
+    "tests/test_simulation_host_restart.py::test_restart_boundary_names_a_turn_held_by_a_failed_owner",
+    "tests/test_simulation_host_restart.py::test_restart_boundary_waits_out_an_owner_that_core_recovers",
+    "tests/test_simulation_host_restart.py::test_restart_boundary_does_not_blame_a_pinned_live_owner"
   ],
   "frontend": [],
   "native": [],

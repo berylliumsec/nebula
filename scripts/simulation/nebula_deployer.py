@@ -85,6 +85,9 @@ HOST_START_ATTEMPTS = 16
 HOST_RESTART_DELAY_SECONDS = 5
 HOST_QUIET_WAIT_SECONDS = 300
 HOST_QUIET_POLL_SECONDS = 5
+# Longer than an owner lease (30 s) plus Core's dead-owner recovery pass, so
+# an owner that recovers on its own is never reported.
+HOST_UNAVAILABLE_OWNER_SECONDS = 60
 
 
 class _LegacyAttempt:
@@ -2374,7 +2377,9 @@ def _manual_record(prefix: str, name: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text())
     except (OSError, ValueError) as error:
-        raise RuntimeError(f"Manual deployment receipt is unreadable: {name}") from error
+        raise RuntimeError(
+            f"Manual deployment receipt is unreadable: {name}"
+        ) from error
     if not isinstance(value, dict):
         raise RuntimeError(f"Manual deployment receipt has an invalid shape: {name}")
     return value
@@ -2463,8 +2468,7 @@ def _verify_manual_operation(
             parameters.get("manifest_sha256") != manifest_sha256
             or receipt.get("state") != "succeeded"
             or (receipt.get("result") or {}).get("version") != version
-            or (receipt.get("result") or {}).get("manifest_sha256")
-            != manifest_sha256
+            or (receipt.get("result") or {}).get("manifest_sha256") != manifest_sha256
         ):
             raise RuntimeError("Manual stage receipt is not bound to the exact release")
     elif action == "migrate":
@@ -2489,10 +2493,9 @@ def _verify_manual_operation(
         ):
             raise RuntimeError("Manual API preparation receipt is not exact")
     elif action == "promote_api":
-        if (
-            not isinstance(parameters.get("runtime_id"), str)
-            or receipt.get("state") not in {"succeeded", "uncertain"}
-        ):
+        if not isinstance(parameters.get("runtime_id"), str) or receipt.get(
+            "state"
+        ) not in {"succeeded", "uncertain"}:
             raise RuntimeError("Manual API promotion receipt is not reconcilable")
     else:
         raise ValueError(f"Unsupported manual receipt action: {action}")
@@ -2541,7 +2544,9 @@ def reconcile_superseded_manual_deployment(
     ):
         raise RuntimeError("No matching unresolved promotion journal exists")
     if record.get("pending") is not None or record.get("promoting") is not None:
-        raise RuntimeError("A pending or active deployer candidate must be resolved first")
+        raise RuntimeError(
+            "A pending or active deployer candidate must be resolved first"
+        )
     version = journal.get("version")
     steps = journal.get("steps")
     expected_steps = {"stage", "migrate", "api", "promote-api", "target"}
@@ -2587,15 +2592,21 @@ def reconcile_superseded_manual_deployment(
                 or not isinstance(settled, dict)
                 or settled.get("by") != "deployment_status"
                 or (settled.get("evidence") or {}).get(
-                    "api_version" if step == "promote-api" else "target_execution_version"
+                    "api_version"
+                    if step == "promote-api"
+                    else "target_execution_version"
                 )
                 != version
                 or (settled.get("result") or {}).get(
-                    "api_version" if step == "promote-api" else "target_execution_version"
+                    "api_version"
+                    if step == "promote-api"
+                    else "target_execution_version"
                 )
                 != version
             ):
-                raise RuntimeError(f"Uncertain {step} lacks its exact saved status settlement")
+                raise RuntimeError(
+                    f"Uncertain {step} lacks its exact saved status settlement"
+                )
         elif receipt.get("state") != "succeeded":
             raise RuntimeError(f"Journal step {step} is not confirmed successful")
         core_receipts[step] = receipt
@@ -2624,10 +2635,14 @@ def reconcile_superseded_manual_deployment(
         or type(old_promote.get("expected_revision")) is not int
         or old_target != {"version": version}
     ):
-        raise RuntimeError("Old deployment operations are not bound to its exact release")
+        raise RuntimeError(
+            "Old deployment operations are not bound to its exact release"
+        )
 
     activation = journal.get("host_activation")
-    activation_result = activation.get("result") if isinstance(activation, dict) else None
+    activation_result = (
+        activation.get("result") if isinstance(activation, dict) else None
+    )
     if (
         not isinstance(activation, dict)
         or activation.get("version") != version
@@ -2654,8 +2669,7 @@ def reconcile_superseded_manual_deployment(
         or manual_version == version
         or api_promotion.get("version") != manual_version
         or final_readback.get("target_commit") != manual_version
-        or (final_readback.get("deployment") or {}).get("api_version")
-        != manual_version
+        or (final_readback.get("deployment") or {}).get("api_version") != manual_version
     ):
         raise RuntimeError("Manual receipt bundle does not identify a later release")
 
@@ -2674,11 +2688,9 @@ def reconcile_superseded_manual_deployment(
     manual_manifest = json.loads(
         (RELEASES / manual_version / "nebula-runtime.json").read_text()
     )
-    if (
-        manual_manifest.get("version") != manual_version
-        or migration_receipt["result"].get("target_head")
-        != manual_manifest.get("migration_head")
-    ):
+    if manual_manifest.get("version") != manual_version or migration_receipt[
+        "result"
+    ].get("target_head") != manual_manifest.get("migration_head"):
         raise RuntimeError(
             "Manual migration receipt differs from the exact runtime manifest"
         )
@@ -2695,7 +2707,9 @@ def reconcile_superseded_manual_deployment(
         or host_readback.get("ui_commit") != manual_version
         or host_readback.get("owner_changes") != {}
     ):
-        raise RuntimeError("Manual host-switch receipt is not an exact completed readback")
+        raise RuntimeError(
+            "Manual host-switch receipt is not an exact completed readback"
+        )
     api_steps = api_promotion.get("steps")
     prepare_step = api_steps.get("prepare-api") if isinstance(api_steps, dict) else None
     promote_step = api_steps.get("promote-api") if isinstance(api_steps, dict) else None
@@ -2716,9 +2730,7 @@ def reconcile_superseded_manual_deployment(
     prepared_runtime_id = (prepare_receipt.get("result") or {}).get("runtime_id")
     if (
         prepared_runtime_id != api_promotion.get("prepared_runtime_id")
-        or (promote_step.get("request", {}).get("parameters") or {}).get(
-            "runtime_id"
-        )
+        or (promote_step.get("request", {}).get("parameters") or {}).get("runtime_id")
         != prepared_runtime_id
         or (api_promotion.get("promoted_readback") or {}).get("api_version")
         != manual_version
@@ -2759,7 +2771,9 @@ def reconcile_superseded_manual_deployment(
         or (health_status == "degraded" and not allow_degraded_baseline)
         or (health_status == "ready" and allow_degraded_baseline)
     ):
-        raise RuntimeError("Current authenticated Core health does not match the manual release")
+        raise RuntimeError(
+            "Current authenticated Core health does not match the manual release"
+        )
     target = status.get("target_execution_version")
     residents = status.get("resident_versions")
     projects = status.get("projects")
@@ -2772,8 +2786,7 @@ def reconcile_superseded_manual_deployment(
         or target in superseded_identities
         or not isinstance(residents, list)
         or any(
-            not isinstance(resident, str)
-            or resident in superseded_identities
+            not isinstance(resident, str) or resident in superseded_identities
             for resident in residents
         )
         or not isinstance(projects, list)
@@ -2800,7 +2813,9 @@ def reconcile_superseded_manual_deployment(
         raise RuntimeError("Live Core still owns or runs the superseded release")
 
     if len(history) >= DEPLOYMENT_HISTORY_LIMIT:
-        raise RuntimeError("Deployment history archive is full; retain existing records")
+        raise RuntimeError(
+            "Deployment history archive is full; retain existing records"
+        )
     reconciliation = {
         "id": deployment_id,
         "state": "reconciled_superseded",
@@ -3122,7 +3137,8 @@ def require_manual_runtime_process_in_service(
     executable = release / "dist/nebula-core"
     if (
         executable.is_symlink()
-        or executable.resolve(strict=True).parent != (release / "dist").resolve(strict=True)
+        or executable.resolve(strict=True).parent
+        != (release / "dist").resolve(strict=True)
         or not executable.is_file()
     ):
         raise RuntimeError("Manual supervisor executable path is unsafe")
@@ -3218,7 +3234,9 @@ def _require_process_identity_in_service(
         raise RuntimeError("Supervisor unit identity changed during validation")
 
 
-def _verify_live_process_executable(pid: int, expected_path: Path, expected_digest: str) -> None:
+def _verify_live_process_executable(
+    pid: int, expected_path: Path, expected_digest: str
+) -> None:
     """Compare the live process image with the current release file by path and bytes."""
     live_image = PROC_ROOT / str(pid) / "exe"
     try:
@@ -3227,14 +3245,18 @@ def _verify_live_process_executable(pid: int, expected_path: Path, expected_dige
         release_stat = expected_path.stat()
         live_digest = sha256(live_image)
     except OSError as error:
-        raise RuntimeError("Manual supervisor live executable could not be verified") from error
+        raise RuntimeError(
+            "Manual supervisor live executable could not be verified"
+        ) from error
     if (
         live_path != expected_path
         or live_stat.st_dev != release_stat.st_dev
         or live_stat.st_ino != release_stat.st_ino
         or live_digest != expected_digest
     ):
-        raise RuntimeError("Manual supervisor process image differs from its current release")
+        raise RuntimeError(
+            "Manual supervisor process image differs from its current release"
+        )
 
 
 def supervisor_service_configuration() -> dict[str, Any]:
@@ -3643,7 +3665,12 @@ def _save_host_activation(record: dict[str, Any], journal: dict[str, Any]) -> No
 
 def chat_turns_at_restart_boundary(client: CoreClient) -> list[str]:
     """Return projects with a chat turn queued, admitting or running."""
-    busy = []
+    return list(_restart_boundary_activity(client))
+
+
+def _restart_boundary_activity(client: CoreClient) -> dict[str, dict[str, Any]]:
+    """Map each project with unfinished chat work to its name and turn IDs."""
+    busy: dict[str, dict[str, Any]] = {}
     for project in client.all_entities("engagements"):
         project_id = project.get("id")
         if not isinstance(project_id, str) or not project_id:
@@ -3651,12 +3678,107 @@ def chat_turns_at_restart_boundary(client: CoreClient) -> list[str]:
         activity = client.get("chat/session-activity", engagement_id=project_id)
         if not isinstance(activity, list):
             raise ValueError("Core chat activity has an invalid shape")
-        if any(
-            not isinstance(item, dict) or item.get("state") != "idle"
+        pending = [
+            item
             for item in activity
-        ):
-            busy.append(project_id)
+            if not isinstance(item, dict) or item.get("state") != "idle"
+        ]
+        if pending:
+            name = project.get("name")
+            busy[project_id] = {
+                "name": name if isinstance(name, str) else "",
+                "turns": sorted(
+                    {
+                        item["turn_id"]
+                        for item in pending
+                        if isinstance(item, dict)
+                        and isinstance(item.get("turn_id"), str)
+                    }
+                ),
+            }
     return busy
+
+
+def _unavailable_turn_owners(
+    client: CoreClient, busy: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Busy projects whose execution owner cannot advance their turns.
+
+    Core recovers a project by itself only after its owner's process has
+    exited. An owner whose lease lapsed while its process stays alive (frozen
+    or wedged), or whose application failed while its process keeps renewing
+    the lease, keeps its turns unfinished for as long as that lasts. Ownerless
+    projects are not listed: admission starts a worker for their work.
+    """
+    status = client.get("deployment/status")
+    if not isinstance(status, dict):
+        raise ValueError("Core deployment status has an invalid shape")
+    projects = status.get("projects")
+    processes = status.get("processes")
+    if not isinstance(projects, list) or not isinstance(processes, list):
+        raise ValueError("Core deployment status has an invalid shape")
+    by_project = {
+        row.get("project_id"): row for row in projects if isinstance(row, dict)
+    }
+    by_runtime = {
+        row.get("runtime_id"): row for row in processes if isinstance(row, dict)
+    }
+    stuck: dict[str, dict[str, Any]] = {}
+    for project_id in busy:
+        row = by_project.get(project_id)
+        if row is None:
+            continue
+        runtime_id = row.get("runtime_id")
+        if not isinstance(runtime_id, str) or not runtime_id:
+            continue
+        process = by_runtime.get(runtime_id)
+        blockers = row.get("blockers")
+        failures = [
+            str(item)
+            for item in (blockers if isinstance(blockers, list) else [])
+            if str(item).startswith(f"Execution worker {runtime_id} failed")
+        ]
+        if failures:
+            reason = failures[0]
+        elif process is None:
+            reason = "Core no longer lists this worker as a resident process"
+        elif process.get("ready_verified") is not True:
+            reason = (
+                "its heartbeat lease lapsed while Core lists its process as "
+                f"{process.get('state')}, so it is not answering; Core recovers "
+                "the project only after that process exits"
+            )
+        else:
+            continue
+        stuck[project_id] = {
+            "runtime_id": runtime_id,
+            "version": row.get("runtime_version"),
+            "reason": reason,
+        }
+    return stuck
+
+
+def _unavailable_owner_blocker(
+    busy: dict[str, dict[str, Any]], stuck: dict[str, dict[str, Any]]
+) -> str:
+    parts = []
+    for project_id, owner in list(stuck.items())[:10]:
+        name = busy[project_id]["name"]
+        label = f'Project "{name}" ({project_id})' if name else f"Project {project_id}"
+        turns = ", ".join(busy[project_id]["turns"][:5]) or "unknown"
+        parts.append(
+            f"{label}: chat turn(s) {turns} belong to execution worker "
+            f"{owner['runtime_id']} (version {owner['version']}), which cannot "
+            f"advance them: {owner['reason']}"
+        )
+    return (
+        f"Chat turns in {len(stuck)} project(s) are held by an unavailable "
+        "execution worker and cannot settle by waiting, so the supervisor was "
+        "not stopped. "
+        + "; ".join(parts)
+        + ". End or recover that worker (deployment status names it), or stop "
+        "the turns once the project is recovered, then rerun the deployment"
+    )
 
 
 def wait_quiet_restart_boundary() -> dict[str, Any]:
@@ -3667,18 +3789,43 @@ def wait_quiet_restart_boundary() -> dict[str, Any]:
     bridge) while no host is running. The operator gate runs before staging
     and migration; this repeats its chat check at the moment of the stop.
     Reads fail closed. Nothing is stopped when chat work does not settle.
+
+    A turn whose execution owner is unavailable does not settle while that
+    owner stays unavailable. Once the same owner has stayed unavailable for
+    HOST_UNAVAILABLE_OWNER_SECONDS this refuses at once, naming the project,
+    its turns, the worker and why the worker cannot advance them.
     """
     started = time.monotonic()
     deadline = started + HOST_QUIET_WAIT_SECONDS
+    unavailable_since: dict[tuple[str, str], float] = {}
     while True:
-        busy = chat_turns_at_restart_boundary(api())
+        client = api()
+        busy = _restart_boundary_activity(client)
         if not busy:
             return {"quiet_after_seconds": round(time.monotonic() - started, 1)}
-        if time.monotonic() >= deadline:
+        stuck = _unavailable_turn_owners(client, busy)
+        now = time.monotonic()
+        unavailable_since = {
+            (project_id, owner["runtime_id"]): unavailable_since.get(
+                (project_id, owner["runtime_id"]), now
+            )
+            for project_id, owner in stuck.items()
+        }
+        lasting = {
+            project_id: owner
+            for project_id, owner in stuck.items()
+            if now - unavailable_since[(project_id, owner["runtime_id"])]
+            >= HOST_UNAVAILABLE_OWNER_SECONDS
+        }
+        if lasting:
+            raise RuntimeError(_unavailable_owner_blocker(busy, lasting))
+        if now >= deadline:
+            if stuck:
+                raise RuntimeError(_unavailable_owner_blocker(busy, stuck))
             raise RuntimeError(
                 f"Chat turns stayed queued, admitting or running in {len(busy)} "
                 "project(s) at the host restart boundary, so the supervisor was "
-                "not stopped: " + ", ".join(busy[:10])
+                "not stopped: " + ", ".join(list(busy)[:10])
             )
         time.sleep(HOST_QUIET_POLL_SECONDS)
 
@@ -5419,19 +5566,40 @@ def main() -> int:
         "reconcile-superseded-manual-deployment",
     }:
         raise RuntimeError("--deployment-id is supported only with reconciliation")
-    if args.action in {
-        "reconcile-runtime-deployment",
-        "reconcile-superseded-manual-deployment",
-    } and args.deployment_id is None:
+    if (
+        args.action
+        in {
+            "reconcile-runtime-deployment",
+            "reconcile-superseded-manual-deployment",
+        }
+        and args.deployment_id is None
+    ):
         raise RuntimeError("reconciliation requires --deployment-id")
-    if args.manual_receipt_prefix is not None and args.action != "reconcile-superseded-manual-deployment":
-        raise RuntimeError("--manual-receipt-prefix is supported only for manual supersession reconciliation")
-    if args.action == "reconcile-superseded-manual-deployment" and args.manual_receipt_prefix is None:
-        raise RuntimeError("manual supersession reconciliation requires --manual-receipt-prefix")
-    if args.allow_degraded_baseline and args.action != "reconcile-superseded-manual-deployment":
-        raise RuntimeError("--allow-degraded-baseline is supported only for manual supersession reconciliation")
+    if (
+        args.manual_receipt_prefix is not None
+        and args.action != "reconcile-superseded-manual-deployment"
+    ):
+        raise RuntimeError(
+            "--manual-receipt-prefix is supported only for manual supersession reconciliation"
+        )
+    if (
+        args.action == "reconcile-superseded-manual-deployment"
+        and args.manual_receipt_prefix is None
+    ):
+        raise RuntimeError(
+            "manual supersession reconciliation requires --manual-receipt-prefix"
+        )
+    if (
+        args.allow_degraded_baseline
+        and args.action != "reconcile-superseded-manual-deployment"
+    ):
+        raise RuntimeError(
+            "--allow-degraded-baseline is supported only for manual supersession reconciliation"
+        )
     if args.dry_run and args.action != "reconcile-superseded-manual-deployment":
-        raise RuntimeError("--dry-run is supported only for manual supersession reconciliation")
+        raise RuntimeError(
+            "--dry-run is supported only for manual supersession reconciliation"
+        )
     with (ROOT / ".deploy.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = (
