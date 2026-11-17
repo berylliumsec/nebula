@@ -1,36 +1,29 @@
 {
-  "reviewed_by": "Claude",
-  "reason": "Linked memory stage 1 (shadow curation): new linked_memory_* tables (migration 0052), a curator in the project execution worker that turns completed top-level goals into verified memory cards and typed links using the chat's own model, a low-priority curation helper process for prompt assembly/verification/embedding, a strict curation admission in the provider scheduler, revisioned /engagements/{id}/linked-memory routes, nebula-core linked-memory CLI commands, Butler actions nebula.settings.linked_memory / set_linked_memory, operator docs (docs/LINKED_MEMORY.md), settings-assistant guidance and the regenerated product knowledge index. Adds the confirmed inject stage: an in-memory card index per project, helper prefetch ranking after each saved turn, a 5 ms in-memory turn-start check that adds at most three cards as untrusted reference data, and a linked_memory record in every turn's request_snapshot (shadow records would-be cards). No UI change.",
-  "exclusions": "No frontend, native or Playwright tests: no file under ui/ changes and linked memory has no operator interface; the Butler workflow registry covers UI API calls only, and linked memory adds none. Python selection covers the new feature (test_linked_memory.py, test_linked_memory_api.py), the settings-assistant action catalog, the migration head and tree hash (test_runtime_bundle.py, test_migrations.py), the provider scheduler's admission paths (test_async_queue_positions.py, test_async_admission_cleanup.py), the CLI app (test_cli.py), and product knowledge freshness plus the searches near the edited guidance. tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli is excluded because it fails on pristine origin/main (685df5c) without this change. The real worker-process kernel test is selected because an unregistered diagnostics feature once stopped every project worker at startup; the execution-guard and Postgres worker path is validated on the fake-data staging Core with the local vLLM provider, recorded in the PR. chat.py changes only add the entry-card hook beside project knowledge and the prefetch call in _schedule_precompaction, so test_precompaction.py and the two knowledge-attachment chat tests are selected rather than the whole of test_chat.py.",
+  "change_digest": "f9c45e1b4a90de07e5034cd2f7df3353838465fa63b68617f7604f16dfdfba25",
+  "reviewed_by": "Implementing agent",
+  "reason": "The change releases only paired orphan claims for failed provider turns after durable tool, hook, child and approval checks. Six exact recovery regressions cover preserved failed-turn history, unsafe effects, mismatched goal claims, dangling turn and ToolCall approval references, reverse Approval.tool_call_id links, approved/edited approvals without settled calls, and failed or unknown continuation delivery; collection expects 44 cases across SQLite and PostgreSQL.",
+  "exclusions": "Only the six named tests in test_runtime_orphan_recovery.py are selected. The rest of that module, all other Python suites, frontend/browser/native tests, production Core access, and live provider or Mac operations are excluded. PostgreSQL tests run against a disposable localhost-only PostgreSQL 16 container with tmpfs storage; no persistent database is used.",
   "python_browser": false,
   "python_node": false,
+  "python_versions": [
+    "3.11"
+  ],
   "expected_tests": {
-    "python": 93,
+    "python": 44,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_linked_memory.py",
-    "tests/v3/test_linked_memory_api.py",
-    "tests/v3/test_settings_assistant_tools.py",
-    "tests/v3/test_runtime_bundle.py",
-    "tests/v3/test_migrations.py",
-    "tests/v3/test_async_queue_positions.py",
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_cli.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_linked_memory_and_its_butler_actions",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_scoped_browser_mission",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_enforced_memory_budgets_and_butler_actions",
-    "tests/v3/test_execution_worker_process.py::test_real_kernel_grant_delivery_and_supervisor_replacement",
-    "tests/v3/test_precompaction.py",
-    "tests/v3/test_chat.py::test_chat_without_ready_knowledge_skips_retrieval_agent",
-    "tests/v3/test_chat.py::test_cloud_knowledge_requires_profile_and_per_request_consent_and_redacts"
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_turn_releases_only_paired_claims_and_keeps_history",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_is_retained_while_effect_is_unconfirmed",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_requires_exact_paired_goal_claim",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_or_mismatched_approval",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_dangling_tool_call_approval",
+    "tests/v3/test_runtime_orphan_recovery.py::test_failed_provider_claim_rejects_unsettled_or_mismatched_approval_links"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": [],
-  "change_digest": "2a88d181f36530b2fc5c565189751230172a591737932657f16802657131c40a"
+  "checks": []
 }

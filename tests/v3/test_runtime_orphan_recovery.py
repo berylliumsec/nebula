@@ -17,12 +17,16 @@ from nebula.v3.database import (
     RuntimeResourceRow,
 )
 from nebula.v3.domain import (
+    Approval,
+    ApprovalContinuation,
+    ApprovalStatus,
     ChatGoal,
     ChatSession,
     ChatSubagent,
     ChatSubagentStatus,
     ChatTurn,
     ChatTurnStatus,
+    NativeHookExecution,
     RiskClass,
     ToolCall,
     ToolCallOrigin,
@@ -244,6 +248,457 @@ async def test_dead_owner_reconciles_claims_admission_and_stream_once(orphan, st
         assert resource.state == "closed"
         assert not await value.coordinator._recovery_blockers(
             sql, "one", value.lease.runtime_id
+        )
+
+
+async def test_failed_provider_turn_releases_only_paired_claims_and_keeps_history(
+    orphan,
+):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {
+            "status": ChatTurnStatus.FAILED,
+            "content": "Saved partial response",
+            "error": "Provider stream ended",
+        },
+        expected_revision=value.turn.revision,
+    )
+    await value.expire()
+
+    result = await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert result["interrupted_turn_ids"] == []
+    assert result["released_failed_provider_claim_ids"] == [value.turn.id]
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.content == "Saved partial response"
+    assert turn.error == "Provider stream ended"
+    assert turn.execution_claim_id is None and turn.execution_owner_id is None
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id is None and goal.execution_owner_id is None
+    frames = await value.coordinator.coordination.replay_stream(turn.id)
+    assert [frame.event_type for frame in frames] == ["error", SEGMENT_END]
+    assert frames[-1].event_type == SEGMENT_END
+    async with value.coordinator.database.session() as sql:
+        admission = await sql.get(ProviderTurnQueueRow, turn.id)
+        assert admission.state == "complete" and admission.lease_owner is None
+        resource = await sql.get(
+            RuntimeResourceRow, value.journal.resource_id(turn.id, "synthetic-segment")
+        )
+        assert resource.state == "closed"
+
+
+@pytest.mark.parametrize(
+    "unsafe_effect",
+    [
+        "running_tool",
+        "failed_write",
+        "running_hook",
+        "running_child",
+        "pending_approval",
+    ],
+)
+async def test_failed_provider_claim_is_retained_while_effect_is_unconfirmed(
+    orphan, unsafe_effect
+):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED},
+        expected_revision=value.turn.revision,
+    )
+    if unsafe_effect in {"running_tool", "failed_write"}:
+        await value.store.create(
+            ToolCall(
+                engagement_id="one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                tool_name=(
+                    "workspace.write"
+                    if unsafe_effect == "failed_write"
+                    else "local.read"
+                ),
+                arguments={},
+                risk_class=(
+                    RiskClass.WORKSPACE_WRITE
+                    if unsafe_effect == "failed_write"
+                    else RiskClass.LOCAL_READ
+                ),
+                status=(
+                    ToolCallStatus.FAILED
+                    if unsafe_effect == "failed_write"
+                    else ToolCallStatus.RUNNING
+                ),
+                started_at=utc_now(),
+            )
+        )
+    elif unsafe_effect == "running_hook":
+        await value.store.create(
+            NativeHookExecution(
+                engagement_id="one",
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                hook_id="synthetic-hook",
+                hook_snapshot={},
+                event_name="turn.complete",
+                status="running",
+                side_effects="none",
+                started_at=utc_now(),
+            )
+        )
+    elif unsafe_effect == "running_child":
+        await value.store.create(
+            ChatSubagent(
+                engagement_id="one",
+                parent_session_id=value.session.id,
+                parent_turn_id=value.turn.id,
+                child_session_id="synthetic-child-session",
+                name="Synthetic child",
+                task="Finish a bounded task",
+                status=ChatSubagentStatus.RUNNING,
+            )
+        )
+    else:
+        await value.store.create(
+            Approval(
+                engagement_id="one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=value.turn.id,
+                status=ApprovalStatus.PENDING,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                exact_request={"synthetic": True},
+                policy_rationale="Synthetic pending approval",
+                requested_by="test",
+            )
+        )
+    await value.expire()
+
+    with pytest.raises(CoordinationConflict, match="unconfirmed|unfinished"):
+        await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id is not None
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id == turn.execution_claim_id
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
+        assert not await sql.scalar(
+            select(DeploymentReceiptRow.id).where(
+                DeploymentReceiptRow.action == "project.orphans_reconciled"
+            )
+        )
+
+
+async def test_failed_provider_claim_requires_exact_paired_goal_claim(orphan):
+    value = orphan
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED},
+        expected_revision=value.turn.revision,
+    )
+    await value.store.update(
+        ChatGoal,
+        value.goal.id,
+        {"execution_claim_id": "different-claim"},
+        expected_revision=value.goal.revision,
+    )
+    await value.expire()
+
+    with pytest.raises(CoordinationConflict, match="exact running goal claim"):
+        await value.reconcile()
+
+    assert (
+        await value.store.get(ChatTurn, value.turn.id)
+    ).execution_claim_id == value.turn.execution_claim_id
+    assert (
+        await value.store.get(ChatGoal, value.goal.id)
+    ).execution_claim_id == "different-claim"
+
+
+@pytest.mark.parametrize("reference", ["missing", "wrong_turn", "wrong_project"])
+async def test_failed_provider_claim_rejects_dangling_or_mismatched_approval(
+    orphan, reference
+):
+    value = orphan
+    approval_id = (
+        "missing-approval" if reference == "missing" else "mismatched-approval"
+    )
+    if reference != "missing":
+        await value.store.create(
+            Approval(
+                id=approval_id,
+                engagement_id="two" if reference == "wrong_project" else "one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=(
+                    "different-turn" if reference == "wrong_turn" else value.turn.id
+                ),
+                status=ApprovalStatus.REJECTED,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                exact_request={"synthetic": True},
+                policy_rationale="Synthetic settled approval",
+                requested_by="test",
+            )
+        )
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED, "approval_id": approval_id},
+        expected_revision=value.turn.revision,
+    )
+    resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
+    async with value.coordinator.database.session() as sql:
+        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+    await value.expire()
+
+    with pytest.raises(
+        CoordinationConflict, match="references (a missing approval|an approval)"
+    ):
+        await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id == value.turn.execution_claim_id
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id == value.goal.execution_claim_id
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
+        assert (
+            await sql.get(RuntimeResourceRow, resource_id)
+        ).state == initial_resource_state
+        assert not await sql.scalar(
+            select(DeploymentReceiptRow.id).where(
+                DeploymentReceiptRow.action == "project.orphans_reconciled"
+            )
+        )
+
+
+@pytest.mark.parametrize("reference", ["missing", "wrong_project", "wrong_turn"])
+async def test_failed_provider_claim_rejects_dangling_tool_call_approval(
+    orphan, reference
+):
+    value = orphan
+    approval_id = (
+        "missing-tool-call-approval"
+        if reference == "missing"
+        else "mismatched-tool-call-approval"
+    )
+    call = await value.store.create(
+        ToolCall(
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            tool_name="workspace.write",
+            arguments={"path": "synthetic.txt"},
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            status=ToolCallStatus.COMPLETE,
+            approval_id=approval_id,
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+    )
+    if reference != "missing":
+        await value.store.create(
+            Approval(
+                id=approval_id,
+                engagement_id="two" if reference == "wrong_project" else "one",
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=(
+                    "different-turn" if reference == "wrong_turn" else value.turn.id
+                ),
+                tool_call_id=call.id,
+                status=ApprovalStatus.REJECTED,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                exact_request={"synthetic": True},
+                policy_rationale="Synthetic settled approval",
+                requested_by="test",
+            )
+        )
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED},
+        expected_revision=value.turn.revision,
+    )
+    resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
+    async with value.coordinator.database.session() as sql:
+        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+    await value.expire()
+
+    with pytest.raises(
+        CoordinationConflict,
+        match="references (a missing approval|an approval for another project, turn, or call)",
+    ):
+        await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id == value.turn.execution_claim_id
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id == value.goal.execution_claim_id
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
+        assert (
+            await sql.get(RuntimeResourceRow, resource_id)
+        ).state == initial_resource_state
+        assert not await sql.scalar(
+            select(DeploymentReceiptRow.id).where(
+                DeploymentReceiptRow.action == "project.orphans_reconciled"
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "approved_no_call",
+        "edited_no_call",
+        "missing_call",
+        "wrong_project_call",
+        "wrong_turn_call",
+        "call_missing_backref",
+        "failed_continuation",
+        "failed_adapter",
+        "unknown_adapter",
+    ],
+)
+async def test_failed_provider_claim_rejects_unsettled_or_mismatched_approval_links(
+    orphan, reference
+):
+    value = orphan
+    approval_id = f"approval-{reference}"
+    call = None
+    if reference in {
+        "wrong_project_call",
+        "wrong_turn_call",
+        "call_missing_backref",
+    }:
+        call = await value.store.create(
+            ToolCall(
+                engagement_id=("two" if reference == "wrong_project_call" else "one"),
+                run_id=value.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=value.session.id,
+                chat_turn_id=(
+                    "different-turn"
+                    if reference == "wrong_turn_call"
+                    else value.turn.id
+                ),
+                tool_name="workspace.write",
+                arguments={"path": "synthetic.txt"},
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                status=ToolCallStatus.COMPLETE,
+                started_at=utc_now(),
+                completed_at=utc_now(),
+            )
+        )
+    tool_call_id = (
+        call.id
+        if call is not None
+        else "missing-tool-call"
+        if reference == "missing_call"
+        else None
+    )
+    approval_status = (
+        ApprovalStatus.APPROVED
+        if reference
+        in {
+            "approved_no_call",
+            "missing_call",
+            "wrong_project_call",
+            "wrong_turn_call",
+            "call_missing_backref",
+        }
+        else ApprovalStatus.EDITED
+        if reference == "edited_no_call"
+        else ApprovalStatus.REJECTED
+    )
+    continuation = None
+    if reference == "failed_continuation":
+        continuation = ApprovalContinuation(
+            harness_turn_id=value.turn.id, status="failed"
+        )
+    elif reference == "failed_adapter":
+        continuation = ApprovalContinuation(
+            harness_turn_id=value.turn.id,
+            status="delivered",
+            adapter_handoff="transport_write",
+            adapter_status="failed",
+        )
+    elif reference == "unknown_adapter":
+        continuation = ApprovalContinuation(
+            harness_turn_id=value.turn.id,
+            status="delivered",
+            adapter_handoff="transport_write",
+            adapter_status="unknown",
+        )
+    await value.store.create(
+        Approval(
+            id=approval_id,
+            engagement_id="one",
+            run_id=value.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=value.session.id,
+            chat_turn_id=value.turn.id,
+            tool_call_id=tool_call_id,
+            status=approval_status,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            exact_request={"synthetic": True},
+            policy_rationale="Synthetic approval-link boundary",
+            requested_by="test",
+            continuation=continuation,
+        )
+    )
+    await value.store.update(
+        ChatTurn,
+        value.turn.id,
+        {"status": ChatTurnStatus.FAILED, "approval_id": approval_id},
+        expected_revision=value.turn.revision,
+    )
+    resource_id = value.journal.resource_id(value.turn.id, "synthetic-segment")
+    async with value.coordinator.database.session() as sql:
+        initial_resource_state = (await sql.get(RuntimeResourceRow, resource_id)).state
+    await value.expire()
+
+    with pytest.raises(
+        CoordinationConflict,
+        match="references (a missing tool call|another project, turn, or tool call)|no exact settled tool call|unconfirmed approval effect",
+    ):
+        await value.reconcile()
+
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.execution_claim_id == value.turn.execution_claim_id
+    assert goal.status.value == "running"
+    assert goal.execution_claim_id == value.goal.execution_claim_id
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(ProviderTurnQueueRow, turn.id)).state == "running"
+        assert (
+            await sql.get(RuntimeResourceRow, resource_id)
+        ).state == initial_resource_state
+        assert not await sql.scalar(
+            select(DeploymentReceiptRow.id).where(
+                DeploymentReceiptRow.action == "project.orphans_reconciled"
+            )
         )
 
 
