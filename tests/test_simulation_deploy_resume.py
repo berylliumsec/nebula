@@ -577,6 +577,9 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
             "files": {"dist/nebula-runtime/nebula-runtime.json": bundle_manifest_hash},
         })
     )
+    executable = manual_release / "dist/nebula-core"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"manual core executable")
     manual_manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     monkeypatch.setattr(
         deployer, "runtime_release", lambda version: (host.releases / version, digest(version))
@@ -604,15 +607,30 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         deployer,
         "supervisor_service_identity",
-        lambda: {"main_pid": host.pid, "main_process_birth": f"birth-{host.pid}"},
+        lambda: {
+            "main_pid": host.pid,
+            "main_process_birth": f"birth-{host.pid}",
+            "exec_start": f"{manual_release}/dist/nebula-core",
+        },
     )
     monkeypatch.setattr(
         deployer,
-        "require_runtime_process_in_service",
-        lambda service, runtime, version: None
-        if runtime.get("pid") == service.get("main_pid") and version == manual
-        else (_ for _ in ()).throw(RuntimeError("wrong service identity")),
+        "linux_process_snapshot",
+        lambda pid: {
+            "pid": pid,
+            "parent_pid": 0,
+            "process_birth": f"birth-{pid}",
+            "effective_uid": deployer.os.getuid(),
+            "executable": executable.resolve(),
+        }
+        if pid == host.pid
+        else None,
     )
+    proc_root = Path(deployer.STATE).parent / "proc"
+    live_executable = proc_root / str(host.pid) / "exe"
+    live_executable.parent.mkdir(parents=True)
+    live_executable.symlink_to(executable)
+    monkeypatch.setattr(deployer, "PROC_ROOT", proc_root)
     monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (host.health(), host.status()))
 
     journal_steps = {}
@@ -732,6 +750,52 @@ def test_reconcile_superseded_manual_archives_full_uncertain_journal_and_aligns(
     assert saved["canonical_runtime_version"] == OTHER
     assert saved["deployment_attempt_976_root_manifest"]["operation"] == legacy
     assert saved["operator_disabled"] is True
+    live_readback = archived["live_readback"]["host_executable"]
+    assert live_readback["path"] == str(host.releases / manual / "dist/nebula-core")
+    assert live_readback["sha256"] == hashlib.sha256(b"manual core executable").hexdigest()
+    assert live_readback["identity_source"] == "current_manual_release_and_live_process_image"
+
+
+def test_reconcile_superseded_manual_accepts_manual_binary_without_acceptance_receipt(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+):
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    executable = host.releases / manual / "dist/nebula-core"
+    assert not (host.releases / manual / "simulation-acceptance.json").exists()
+    result = deployer.reconcile_superseded_manual_deployment(
+        deployment_id, manual_prefix=prefix, dry_run=True
+    )
+    identity = result["proposed"]["live_readback"]["host_executable"]
+    assert identity["path"] == str(executable)
+    assert identity["sha256"] == hashlib.sha256(executable.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("failure", ["path", "digest"])
+def test_reconcile_superseded_manual_refuses_live_executable_mismatch(
+    host: Host, monkeypatch: pytest.MonkeyPatch, failure: str
+):
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    executable = host.releases / manual / "dist/nebula-core"
+    live_executable = deployer.PROC_ROOT / str(host.pid) / "exe"
+    if failure == "path":
+        other = executable.parent / "other-core"
+        other.write_bytes(b"other core executable")
+        live_executable.unlink()
+        live_executable.symlink_to(other)
+    else:
+        original_sha256 = deployer.sha256
+
+        def wrong_live_digest(path: Path) -> str:
+            if path == live_executable:
+                return "0" * 64
+            return original_sha256(path)
+
+        monkeypatch.setattr(deployer, "sha256", wrong_live_digest)
+
+    with pytest.raises(RuntimeError, match="process image differs"):
+        deployer.reconcile_superseded_manual_deployment(
+            deployment_id, manual_prefix=prefix, dry_run=True
+        )
 
 
 def test_reconcile_superseded_manual_requires_explicit_degraded_acceptance(
