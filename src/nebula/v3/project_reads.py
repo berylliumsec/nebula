@@ -20,6 +20,7 @@ from .domain import (
     OperatorExecutionStatus,
     utc_now,
 )
+from .project_execution_status import ExecutionWaiting
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 
@@ -47,6 +48,12 @@ async def active_control_assistant_session(
         ),
         None,
     )
+
+
+class ChatGoalRead(ChatGoal):
+    """A goal as read; ``execution`` says why a running goal is not executing."""
+
+    execution: ExecutionWaiting | None = None
 
 
 async def stored_chat_goal(store: NebulaStore, session_id: str) -> ChatGoal:

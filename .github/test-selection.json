@@ -1,24 +1,28 @@
 {
-  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
-  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
-  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
+  "change_digest": "2579e0bc482065612450b85960e1c60585b7a25b5e80c8b57abbf2125ca40b9a",
+  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
+  "reason": "The goal read and saved-request status served by the API worker from SQL now say why a running goal or queued request is not executing (no live ready owner, expired lease, held transfer, admission hold, or unconfirmed automatic recovery), and the goal card shows waiting/held instead of running. Selected: new API-worker regressions in SQLite and PostgreSQL, the existing inventory goal read, and the goal panel and client mapping unit tests.",
+  "exclusions": "No native or Playwright layer: goal panel journeys live only in real-core.spec.ts; the waiting card was exercised on a scratch Core in Chromium (1280) and WebKit (390) by script. No settings or settings-assistant destination changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 8,
+    "frontend": 27,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
+    "tests/v3/test_goal_execution_waiting.py",
+    "tests/v3/test_deployment_inventory_reads.py::test_inventory_reads_answer_from_sql_without_admitting_a_worker"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/api/goalExecutionWaiting.test.ts",
+    "ui/src/api/goalHandoff.test.ts"
+  ],
   "native": [],
   "playwright": [],
   "checks": []

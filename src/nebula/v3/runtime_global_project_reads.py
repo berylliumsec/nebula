@@ -22,7 +22,7 @@ from .linked_project_chats import (
 from .database import EntityRow
 from .domain import (
     ChatBookmark,
-    ChatGoal,
+    ChatGoalStatus,
     ChatMessage,
     ChatSession,
     Engagement,
@@ -33,7 +33,9 @@ from .domain import (
     WorkUpdate,
     message_is_replaced,
 )
+from .project_execution_status import project_execution_waiting
 from .project_reads import (
+    ChatGoalRead,
     active_control_assistant_session,
     active_notebook_runs,
     filter_executions,
@@ -209,12 +211,23 @@ def mount_global_project_reads(
 
     @app.get(
         "/api/v1/chat/sessions/{session_id}/goal",
-        response_model=ChatGoal,
+        response_model=ChatGoalRead,
         dependencies=dependencies,
     )
-    async def get_project_chat_goal(session_id: str, response: Response) -> ChatGoal:
+    async def get_project_chat_goal(
+        session_id: str, response: Response
+    ) -> ChatGoalRead:
         response.headers["Cache-Control"] = "no-store"
-        return presented_chat_goal(await stored_chat_goal(store, session_id))
+        goal = await stored_chat_goal(store, session_id)
+        waiting = None
+        if goal.status == ChatGoalStatus.RUNNING:
+            # Served without the project's worker: a stored "running" goal only
+            # progresses while a ready worker owns the project.
+            async with store.database.session() as session:
+                waiting = await project_execution_waiting(session, goal.engagement_id)
+        return ChatGoalRead.model_validate(
+            {**presented_chat_goal(goal).model_dump(), "execution": waiting}
+        )
 
     @app.get(
         "/api/v1/engagements/{engagement_id}/notebooks/runs/active",
