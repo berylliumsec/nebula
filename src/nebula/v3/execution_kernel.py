@@ -2064,6 +2064,33 @@ def create_execution_kernel(
         reviewer=ProviderButlerReviewer(store, provider_factory, harness_runtime),
         memory_service=butler_memory_service,
     )
+    from .linked_memory import LinkedMemoryStore
+    from .linked_memory_curator import LinkedMemoryCurator
+
+    async def linked_memory_handoff_active() -> bool:
+        # Only a project worker has a handoff agent; curation stops at its
+        # chunk boundary as soon as the project starts handing off.
+        agent = getattr(app.state, "runtime_handoff", None)
+        if agent is None:
+            return False
+        snapshot = await agent.coordinator.dispatch_snapshot(agent.lease)
+        return snapshot.handoff_active or not snapshot.owned
+
+    linked_memory_store = LinkedMemoryStore(store)
+    linked_memory_curator = LinkedMemoryCurator(
+        store,
+        provider_factory=provider_factory,
+        data_root=(
+            Path(execution_data_root)
+            if execution_data_root is not None
+            else artifact_store.root.parent
+            if artifact_store is not None
+            else Path.home() / ".local/share/nebula/v3"
+        ),
+        chat=provider_chat,
+        scheduler=provider_chat.provider_scheduler,
+        handoff_active=linked_memory_handoff_active,
+    )
     from .storage_integrations import StorageIntegrationService
 
     storage_integrations = StorageIntegrationService(
@@ -2517,6 +2544,12 @@ def create_execution_kernel(
                 "project-oversight",
                 butler_oversight.startup,
                 butler_oversight.shutdown,
+            )
+            await start_component(
+                "linked_memory",
+                "curator",
+                linked_memory_curator.startup,
+                linked_memory_curator.shutdown,
             )
             await start_component(
                 "missions", "service", missions.startup, missions.shutdown
@@ -11850,6 +11883,14 @@ def create_execution_kernel(
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
+    from .linked_memory_api import linked_memory_router
+
+    app.include_router(
+        linked_memory_router(linked_memory_store, lambda: linked_memory_curator),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+    app.state.linked_memory_curator = linked_memory_curator
     from .butler_improvements import improvements_router
 
     app.include_router(
