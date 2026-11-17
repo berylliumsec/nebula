@@ -59,6 +59,8 @@ class WorkerContext:
     rpc: RuntimeRpcServer = field(repr=False)
     # The heartbeat's proof that this incarnation's leases are still live.
     renewal: LeaseRenewal = field(default_factory=LeaseRenewal, repr=False)
+    # Asks this worker process to exit; set by run_worker once it serves.
+    request_exit: Callable[[], None] | None = field(default=None, repr=False)
 
 
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
@@ -367,6 +369,13 @@ async def run_worker(
         context = WorkerContext(
             bootstrap, database, coordinator, manifest, secret, rpc, renewal
         )
+
+        def request_exit() -> None:
+            # Ends this process like a crash; its heartbeat stops with it.
+            if server is not None:
+                server.should_exit = True
+
+        context.request_exit = request_exit
 
         async def identity(payload):
             if payload:
