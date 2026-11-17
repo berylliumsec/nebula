@@ -20,7 +20,7 @@ const transportMethods = new Map([
   ["voice_client", new Set(["getVoiceWorkRoster", "getVoiceWorkDetail", "startVoiceSession"])],
   ["authenticated_media", new Set(["fetchChatImagePreview", "uploadChatImage"])],
   ["device_handoff_protocol", new Set(["createHandoff", "cancelHandoff", "consumeHandoff", "resolveHandoff"])],
-  ["connection_auth", new Set(["getToken", "health", "setupStatus"])],
+  ["connection_auth", new Set(["getToken", "health", "lastReachableAt", "liveness", "setupStatus"])],
   ["request_continuity", new Set(["initializeContinuity", "getContinuityScope", "getPendingRequests", "reconcilePendingRequests", "subscribeContinuity", "dismissCompletedRequest"])],
   ["ui_projection", new Set(["resolveResourceActions", "resolveResource", "listResourceRelations"])],
   ["browser_worker_protocol", new Set(["claimSecurityBrowserCommand", "createSecurityBrowserIntercept", "finishSecurityBrowserCommand", "getEngagementScope", "getSecurityBrowserAutomation", "getSecurityBrowserResearch", "getSecurityBrowserWorkspace", "recordSecurityBrowserRepeaterResult", "recordSecurityBrowserSiteNode", "transitionSecurityBrowserCrawl", "transitionSecurityBrowserRepeaterTab", "uploadEvidence", "uploadSecurityBrowserBodyArtifact", "recordSecurityBrowserTraffic", "recordSecurityBrowserWebSocketFrame"])],

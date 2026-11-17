@@ -4263,6 +4263,11 @@ def create_execution_kernel(
             "concurrency": await provider_chat.provider_scheduler.metrics(),
         }
 
+    @app.get(f"{API_PREFIX}/health/live", tags=["system"])
+    async def liveness() -> JSONResponse:
+        # Reachability only: no credential lookup or database session.
+        return JSONResponse({"status": "alive"}, headers={"Cache-Control": "no-store"})
+
     @app.get(f"{API_PREFIX}/health", tags=["system"])
     async def health(_: str = Depends(require_auth)) -> dict[str, Any]:
         identity = build_metadata()

@@ -826,6 +826,14 @@ async def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api)
     assert "reload" in stale.json()["detail"].lower()
 
 
+async def test_liveness_answers_without_credentials(api):
+    client, _, _ = api
+    response = await client.get("/api/v1/health/live")
+    assert response.status_code == 200
+    assert response.json() == {"status": "alive"}
+    assert response.headers["cache-control"] == "no-store"
+
+
 async def test_health_and_data_routes_require_auth(api):
     client, _, _ = api
     assert (await client.get("/api/v1/health")).status_code == 401

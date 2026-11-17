@@ -39,3 +39,38 @@ it.each([
   const health = await new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock }).health();
   expect(health.apiAdmission).toBe(apiAdmission);
 });
+
+describe("ApiClient liveness", () => {
+  it.each([
+    [200, true],
+    [404, true],
+    [401, true],
+    [502, false],
+    [503, false],
+  ])("treats status %i as reachable: %s", async (status, reachable) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(status === 200 ? '{"status":"alive"}' : null, { status }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const probe = client.liveness();
+    if (reachable) await expect(probe).resolves.toBeUndefined();
+    else await expect(probe).rejects.toThrow(String(status));
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/health/live");
+    expect(client.lastReachableAt() > 0).toBe(reachable);
+  });
+
+  it("records ordinary responses as reachability evidence", async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    try {
+      const fetchMock = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(new Response("{}", { status: 503 }))
+        .mockResolvedValueOnce(new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
+      const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+      expect(client.lastReachableAt()).toBe(0);
+      await client.request("engagements").catch(() => undefined);
+      expect(client.lastReachableAt()).toBe(0);
+      await client.request("engagements");
+      expect(client.lastReachableAt()).toBe(1_000_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
