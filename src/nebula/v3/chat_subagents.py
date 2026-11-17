@@ -1096,6 +1096,9 @@ class SubagentService:
         # sibling-limit checks read state that the start's own write changes,
         # and the start awaits in between (store, plans, harness sessions).
         self._start_locks: dict[str, asyncio.Lock] = {}
+        # Waiting turns a delivery is resuming right now (see
+        # _resume_waiting_turn).
+        self._resuming_turns: set[str] = set()
         # Step counts and last steps of finished rounds, which never change.
         self._finished_steps: OrderedDict[
             tuple[str, str, str], tuple[int, list[dict[str, Any]]]
@@ -4576,8 +4579,14 @@ class SubagentService:
             or (await self.chat._goal_time_wait_due(latest, utc_now()))
         ):
             return
-        if self.chat.has_active_provider_turn(latest.id):
+        # Subagents that finish together each deliver, and each delivery tries
+        # this resume. Awaits separate the check from the start, so a delivery
+        # already resuming this turn owns it until its start returns.
+        if latest.id in self._resuming_turns or self.chat.has_active_provider_turn(
+            latest.id
+        ):
             return
+        self._resuming_turns.add(latest.id)
         try:
             (
                 await self.chat.start_provider_turn(
@@ -4585,6 +4594,10 @@ class SubagentService:
                 )
             )
         except Exception as exc:
+            if await self._continuation_owns(latest.id, exc):
+                # A continuation that started another way (an operator's
+                # Resume, say) won the race: this resume lost, nothing failed.
+                return
             record_caught_exception(
                 "chat",
                 "chat.subagent.parent_resume_failed",
@@ -4593,6 +4606,29 @@ class SubagentService:
                 stage="subagent-deliver",
             )
             await self._fail_unresumable(latest, exc)
+        finally:
+            self._resuming_turns.discard(latest.id)
+
+    async def _continuation_owns(self, turn_id: str, exc: Exception) -> bool:
+        """Whether a resume that refused with a conflict lost to a continuation.
+
+        Decided from fresh execution state, not the error text: a runtime in
+        this process, or a claim on the turn row, means the turn is running.
+        """
+
+        from .chat import ChatHistoryConflict
+
+        if not isinstance(exc, ChatHistoryConflict):
+            return False
+        if self.chat.has_active_provider_turn(turn_id):
+            return True
+        try:
+            latest = await self.store.get(ChatTurn, turn_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the turn was deleted with its conversation
+            return False
+        return latest.execution_claim_id is not None
 
     async def _fail_unresumable(self, turn: ChatTurn, exc: Exception) -> None:
         """Fail a waiting turn visibly instead of leaving it parked forever.
