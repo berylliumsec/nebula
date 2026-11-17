@@ -652,6 +652,25 @@ def helper_command() -> list[str]:
     return [sys.executable, "-m", "nebula.v3.linked_memory_helper"]
 
 
+def helper_environment() -> dict[str, str]:
+    """Run the helper from exactly the code this process imported.
+
+    A project worker's launcher clears ``PYTHONPATH`` and puts its release on
+    ``sys.path`` itself, so the helper is given that package root explicitly.
+    """
+
+    import nebula
+
+    root = str(Path(nebula.__file__).resolve().parent.parent)
+    inherited = os.environ.get("PYTHONPATH")
+    environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if not getattr(sys, "frozen", False):
+        environment["PYTHONPATH"] = (
+            root if not inherited else os.pathsep.join([root, inherited])
+        )
+    return environment
+
+
 class HelperUnavailable(RuntimeError):
     """The helper is down or over its limits; curation waits."""
 
@@ -699,6 +718,8 @@ class CurationHelper:
         self.embedding: str | None = None
         self.peak_rss_bytes = 0
         self._backoff_until = 0.0
+        self._stderr_tail = b""
+        self._stderr_task: asyncio.Task[None] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         process = self._process
@@ -726,28 +747,44 @@ class CurationHelper:
             *helper_command(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
             limit=MAX_LINE_BYTES + 1024,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env=helper_environment(),
         )
-        assert process.stdout is not None
+        assert process.stdout is not None and process.stderr is not None
+        self._stderr_tail = b""
+        # diagnostic-expected: a bounded drain of the helper's stderr, cancelled when the helper stops.
+        self._stderr_task = asyncio.create_task(self._drain_stderr(process.stderr))
         try:
             ready = json.loads(
                 await asyncio.wait_for(process.stdout.readline(), timeout=30)
             )
         except Exception as error:
-            process.kill()
-            await process.wait()
-            raise HelperUnavailable("helper did not start") from error
+            await self._discard(process)
+            detail = self._stderr_tail.decode("utf-8", "replace").strip()
+            self.last_error = ("helper did not start: " + detail[-300:]).strip()
+            raise HelperUnavailable(self.last_error) from error
         if ready.get("ready") != PROTOCOL:
-            process.kill()
-            await process.wait()
+            await self._discard(process)
             raise HelperUnavailable("helper protocol mismatch")
         self.priority = dict(ready.get("priority") or {})
         if self.state != "stopped" or self.restarts or self.failures:
             self.restarts += 1
         self.state = "running"
         return process
+
+    async def _drain_stderr(self, stream: asyncio.StreamReader) -> None:
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                return
+            self._stderr_tail = (self._stderr_tail + chunk)[-4096:]
+
+    async def _discard(self, process: asyncio.subprocess.Process) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            # diagnostic-expected: the helper already exited.
+            process.kill()
+        await process.wait()
 
     async def _fail(self, reason: str) -> None:
         self.failures += 1
@@ -757,6 +794,9 @@ class CurationHelper:
         await self._stop_process()
 
     async def _stop_process(self) -> None:
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            self._stderr_task = None
         process, self._process = self._process, None
         if process is None or process.returncode is not None:
             return

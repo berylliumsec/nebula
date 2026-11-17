@@ -671,3 +671,18 @@ def test_helper_command_works_for_source_and_frozen_core(monkeypatch):
     assert helper_command() == [sys.executable, "linked-memory-helper"]
     names = {command.name for command in app.registered_commands}
     assert "linked-memory-helper" in names
+
+
+async def test_helper_starts_without_pythonpath_like_a_project_worker(
+    tmp_path, monkeypatch
+):
+    """Worker launchers clear PYTHONPATH; the helper must still import Core."""
+
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    helper = CurationHelper(idle_seconds=60)
+    try:
+        result = await helper.call("ping", {})
+        assert result["pid"] > 0
+    finally:
+        await helper.stop()
