@@ -17,12 +17,14 @@ from .database import (
     RuntimeProcessRow,
     RuntimeResourceRow,
 )
+from .chat_goals import active_time_changes
 from .deployments import DeploymentCoordinator
 from .domain import (
     Approval,
     ApprovalStatus,
     ChatBackend,
     ChatGoal,
+    ChatGoalStatus,
     ChatTurn,
     ChatTurnStatus,
     ChatSubagent,
@@ -129,6 +131,9 @@ async def reconcile_dead_project(
                 )
             previous = await session.get(DeploymentReceiptRow, receipt_key)
             if previous is not None:
+                # An earlier reconciliation left the dead owner's capacity
+                # held; settling it again is idempotent and replays nothing.
+                await _settle_dead_owner_capacity(session, store, expected_owner, now)
                 return previous.result
             rows = list(
                 await session.scalars(
@@ -217,7 +222,10 @@ async def reconcile_dead_project(
                     transaction=transaction,
                 )
                 interrupted.append(turn.id)
-            released_failed_claims = await _release_failed_provider_claims(
+            (
+                released_ended_claims,
+                review_turns,
+            ) = await _release_ended_provider_claims(
                 session, store, transaction, expected_owner.project_id
             )
             released_claims = await _release_harness_claims(
@@ -244,7 +252,7 @@ async def reconcile_dead_project(
                     or turn.backend != ChatBackend.PROVIDER
                     or (
                         turn.execution_claim_id is not None
-                        and turn.id not in released_failed_claims
+                        and turn.id not in released_ended_claims
                     )
                     or turn.status
                     in {ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING}
@@ -317,6 +325,9 @@ async def reconcile_dead_project(
                         reservation.release_reason = "dead-provider-owner"
                         reservation.released_at_ms = now
                         released_capacity.append(reservation.id)
+            released_capacity += await _settle_dead_owner_capacity(
+                session, store, expected_owner, now
+            )
             if settled:
                 await session.execute(
                     update(ProviderTurnQueueRow)
@@ -338,7 +349,8 @@ async def reconcile_dead_project(
                 "settled_admission_ids": settled,
                 "released_capacity_ids": released_capacity,
                 "released_claim_ids": released_claims,
-                "released_failed_provider_claim_ids": released_failed_claims,
+                "released_failed_provider_claim_ids": released_ended_claims,
+                "goal_review_turn_ids": review_turns,
                 "settled_command_ids": settled_commands,
                 "effects_replayed": False,
             }
@@ -355,17 +367,109 @@ async def reconcile_dead_project(
         await store.event_history.close()
 
 
-async def _release_failed_provider_claims(
+async def _settle_dead_owner_capacity(
+    session, store: NebulaStore, owner: ProjectLease, now: int
+) -> list[str]:
+    """Release host capacity that only a provably dead owner still holds.
+
+    A worker reserves capacity before it admits a provider turn and releases
+    it after the admission ends, each in its own commit, and holds a ``tool:``
+    slot around every tool call. Death in any of those gaps leaves a held
+    reservation that no living process will release, and recovery would wait
+    on it forever. The expected owner was proven dead and expired by the
+    caller; an earlier owner of this project counts only when its own process
+    is gone too. Capacity is accounting: releasing it replays nothing. A
+    reservation whose effect has durable completion evidence (the process
+    that made a provider call is gone; a tool call reached a final state) is
+    released as ended, and any other as of unknown outcome, while the effect's
+    own record (a tool call, an interrupted turn) stays as it is for review.
+    """
+    await session.flush()
+    rows = list(
+        await session.scalars(
+            select(RuntimeCapacityReservationRow)
+            .where(
+                RuntimeCapacityReservationRow.project_id == owner.project_id,
+                RuntimeCapacityReservationRow.state == "held",
+                or_(
+                    and_(
+                        RuntimeCapacityReservationRow.runtime_id == owner.runtime_id,
+                        RuntimeCapacityReservationRow.fencing_token
+                        == owner.fencing_token,
+                    ),
+                    RuntimeCapacityReservationRow.fencing_token < owner.fencing_token,
+                ),
+            )
+            .order_by(RuntimeCapacityReservationRow.id)
+            .limit(MAX_ORPHAN_ROWS + 1)
+        )
+    )
+    if len(rows) > MAX_ORPHAN_ROWS:
+        raise CoordinationConflict(
+            "Too many held capacity reservations; retain them for operator review"
+        )
+    gone: dict[str, bool] = {owner.runtime_id: True}
+    released = []
+    for row in rows:
+        if row.runtime_id not in gone:
+            process = await session.get(RuntimeProcessRow, row.runtime_id)
+            gone[row.runtime_id] = (
+                process is None
+                or not process.pid
+                or not same_process(process.pid, process.process_birth)
+            )
+        if not gone[row.runtime_id]:
+            # A live earlier owner still releases its own reservation.
+            continue
+        ended = row.request_key.startswith("provider:")
+        if row.request_key.startswith("tool:"):
+            try:
+                call = await store.get(ToolCall, row.request_key[len("tool:") :])
+            except NotFoundError:
+                # diagnostic-expected: no durable call record means no
+                # completion evidence; the slot is released as unknown.
+                call = None
+            ended = call is not None and call.status in {
+                ToolCallStatus.COMPLETE,
+                ToolCallStatus.FAILED,
+                ToolCallStatus.DENIED,
+                ToolCallStatus.CANCELLED,
+            }
+        row.state = "released"
+        row.release_reason = (
+            "dead-owner-effect-ended" if ended else "dead-owner-outcome-unknown"
+        )
+        row.released_at_ms = now
+        released.append(row.id)
+    return released
+
+
+# A turn in one of these states produces nothing more. Its worker saves it
+# before releasing its claim in a separate commit, so a death in between
+# leaves an ended turn (and its goal) claimed by nobody alive.
+ENDED_TURN_STATUSES = (
+    ChatTurnStatus.COMPLETE,
+    ChatTurnStatus.FAILED,
+    ChatTurnStatus.CANCELLED,
+    ChatTurnStatus.INTERRUPTED,
+)
+
+
+async def _release_ended_provider_claims(
     session,
     store: NebulaStore,
     transaction: StoreTransaction,
     project_id: str,
-) -> list[str]:
-    """Release only exact paired claims on failed provider turns with settled effects.
+) -> tuple[list[str], list[str]]:
+    """Release the dead owner's claims on provider turns that already ended.
 
-    Failed turns are not replayed or rewritten. Their claims can be cleared only
-    when the paired running goal has the same claim and every durable child,
-    approval, tool, and hook record proves there is no unfinished effect.
+    The turn is not replayed or rewritten, and a goal whose last turn settled
+    every effect keeps running. When a durable child, approval, tool or hook
+    record does not prove its effect settled, that record stays as it is and
+    a running goal is paused for operator review instead of continuing; the
+    project itself is not held.
+
+    Returns the released turn IDs and those whose goal was held for review.
     """
     rows = list(
         await session.scalars(
@@ -374,7 +478,9 @@ async def _release_failed_provider_claims(
                 EntityRow.engagement_id == project_id,
                 EntityRow.kind == ChatTurn.entity_kind,
                 EntityRow.payload["backend"].as_string() == ChatBackend.PROVIDER.value,
-                EntityRow.payload["status"].as_string() == ChatTurnStatus.FAILED.value,
+                EntityRow.payload["status"]
+                .as_string()
+                .in_([status.value for status in ENDED_TURN_STATUSES]),
                 EntityRow.payload["execution_claim_id"].as_string().is_not(None),
             )
             .order_by(EntityRow.id)
@@ -383,39 +489,21 @@ async def _release_failed_provider_claims(
     )
     if len(rows) > MAX_ORPHAN_ROWS:
         raise CoordinationConflict(
-            "Too many failed provider claims; retain work for operator review"
+            "Too many ended provider claims; retain work for operator review"
         )
 
     released: list[str] = []
+    held: list[str] = []
+    now = utc_now()
     for row in rows:
         turn = ChatTurn.model_validate(row.payload)
-        if (
-            turn.goal_id is None
-            or not turn.execution_owner_id
-            or not turn.execution_claim_id
-            or turn.execution_claimed_at is None
-        ):
-            raise CoordinationConflict(
-                "A failed provider turn has an incomplete execution claim"
-            )
-        goal_row = await session.get(EntityRow, turn.goal_id)
-        if goal_row is None or goal_row.kind != ChatGoal.entity_kind:
-            raise CoordinationConflict(
-                "A failed provider turn does not have its exact running goal claim"
-            )
-        goal = ChatGoal.model_validate(goal_row.payload)
-        if (
-            goal.engagement_id != project_id
-            or goal.session_id != turn.session_id
-            or goal.status.value != "running"
-            or goal.execution_claim_id != turn.execution_claim_id
-            or goal.execution_owner_id != turn.execution_owner_id
-            or goal.execution_claimed_at is None
-        ):
-            raise CoordinationConflict(
-                "A failed provider turn does not have its exact running goal claim"
-            )
-        await _require_settled_failed_turn_effects(store, turn)
+        try:
+            await _require_settled_failed_turn_effects(store, turn)
+            unconfirmed = None
+        except CoordinationConflict as error:
+            # diagnostic-expected: the unconfirmed effect stays recorded and
+            # its goal is held below; only the dead owner's claim is released.
+            unconfirmed = str(error)
         await transaction.update(
             ChatTurn,
             turn.id,
@@ -426,6 +514,73 @@ async def _release_failed_provider_claims(
             },
             expected_revision=turn.revision,
         )
+        released.append(turn.id)
+        goal_row = await session.get(EntityRow, turn.goal_id) if turn.goal_id else None
+        if goal_row is None or goal_row.kind != ChatGoal.entity_kind:
+            continue
+        goal = ChatGoal.model_validate(goal_row.payload)
+        if goal.engagement_id != project_id:
+            continue
+        changes: dict = {}
+        if goal.execution_claim_id == turn.execution_claim_id:
+            changes.update(
+                {
+                    "execution_owner_id": None,
+                    "execution_claim_id": None,
+                    "execution_claimed_at": None,
+                    **active_time_changes(goal, working=False, now=now),
+                }
+            )
+        if unconfirmed is not None and goal.status == ChatGoalStatus.RUNNING:
+            changes.update(
+                {
+                    "status": ChatGoalStatus.PAUSED,
+                    "paused_at": now,
+                    "active_since": None,
+                    "elapsed_seconds": goal.active_elapsed_seconds(now),
+                    "blocked_reason": (
+                        "Project runtime stopped after a response ended while "
+                        f"an effect was unconfirmed ({unconfirmed.rstrip('.')}). "
+                        "Review it before resuming; no effect has been retried."
+                    ),
+                }
+            )
+            held.append(turn.id)
+        if changes:
+            await transaction.update(
+                ChatGoal, goal.id, changes, expected_revision=goal.revision
+            )
+    # A goal claim no turn holds any more belongs only to the dead owner (a
+    # claim is taken on a turn and its goal together); nothing can release
+    # it after this, and recovery would wait on it forever.
+    await session.flush()
+    for row in await session.scalars(
+        select(EntityRow)
+        .where(
+            EntityRow.engagement_id == project_id,
+            EntityRow.kind == ChatGoal.entity_kind,
+            EntityRow.payload["execution_claim_id"].as_string().is_not(None),
+            or_(
+                EntityRow.payload["execution_owner_id"].as_string().is_(None),
+                EntityRow.payload["execution_owner_id"].as_string()
+                != HARNESS_CLAIM_OWNER,
+            ),
+        )
+        .order_by(EntityRow.id)
+        .limit(MAX_ORPHAN_ROWS)
+    ):
+        goal = ChatGoal.model_validate(row.payload)
+        if await session.scalar(
+            select(EntityRow.id)
+            .where(
+                EntityRow.engagement_id == project_id,
+                EntityRow.kind == ChatTurn.entity_kind,
+                EntityRow.payload["execution_claim_id"].as_string()
+                == goal.execution_claim_id,
+            )
+            .limit(1)
+        ):
+            continue
         await transaction.update(
             ChatGoal,
             goal.id,
@@ -433,11 +588,12 @@ async def _release_failed_provider_claims(
                 "execution_owner_id": None,
                 "execution_claim_id": None,
                 "execution_claimed_at": None,
+                **active_time_changes(goal, working=False, now=now),
             },
             expected_revision=goal.revision,
         )
-        released.append(turn.id)
-    return released
+        released.append(goal.id)
+    return released, held
 
 
 async def _require_settled_failed_turn_effects(
