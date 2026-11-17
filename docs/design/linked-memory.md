@@ -1,7 +1,7 @@
 # Linked memory
 
 Status: **proposed, not implemented.** This contract records the design agreed
-in discussion on 2026-11-13 and 2026-11-14. Nothing described here exists in
+in discussion between 2026-11-13 and 2026-11-17. Nothing described here exists in
 Core yet, apart from the existing pieces it reuses (listed under
 [What it builds on](#what-it-builds-on)).
 
@@ -19,7 +19,8 @@ Linked memory is a background service in Core. It does four things:
   the tool's definition so later calls do not repeat the mistake (see
   [Tool-usage lessons](#tool-usage-lessons)).
 
-The service must not change the operator interface at all.
+The service must not change the operator interface at all, and it must not make
+live work slower (see [Performance contract](#performance-contract)).
 
 ## Decisions
 
@@ -33,6 +34,7 @@ The service must not change the operator interface at all.
 | 2026-11-14 | Operators enable linked memory per project through the CLI and Butler. There is no Settings screen. |
 | 2026-11-14 | Tool-usage lessons are a card kind in linked memory, not a separate service. They are learned only from a failure the model fixed later in the same turn, keyed to the tool and its schema digest, and shown only inside tool definitions. |
 | 2026-11-16 | The curator runs only when a Core goal completes. Plain chats and goals that are cancelled, paused or blocked are not curated. Reading memory (entry cards and pull tools) stays available in every chat. This replaces curation after every turn and the planned `chat.turn.settled` event. |
+| 2026-11-17 | Linked memory must not make live work slower. Project workers keep only I/O (database reads, fenced writes, provider and MCP calls) and do it only while the project is quiet. All computation runs in one helper process per Core host at the lowest CPU and I/O priority, with a memory limit and no database access. Curation calls a provider only when no live turn is using it, and stops itself if live latency rises. This replaces running the curator as a task inside each project worker. |
 
 ## Goals and non-goals
 
@@ -47,8 +49,9 @@ Goals:
   corrected, in any chat that uses the same tool.
 - Preserve provenance and authority. Every card points to the exact source that
   supports it, and a weaker source can never overturn a stronger one.
-- Add no latency, interface, approval prompt or resource contention to the
-  turn an operator is waiting on.
+- Add no interface or approval prompt, and never make live work slower. With
+  curation running, live-turn latency must match `off` within run-to-run
+  variation.
 
 Non-goals:
 
@@ -63,15 +66,148 @@ Non-goals:
 | Guarantee | Meaning |
 | --- | --- |
 | No new surface | No new chat stream event types, transcript or activity rows (beyond ordinary tool rows for the memory tools), citation chips, Settings entries or panels. Injected memories are kept out of `done.citations`, because the UI renders those as chips. Tool-usage lessons appear only in the tool definitions sent to models; failure receipts, which the UI shows in expanded tool rows, are unchanged. |
-| No added turn latency | Turn start never calls a provider, an MCP server or the host index. It does one database read and a cheap local check against a hard deadline, and injects nothing if that misses. |
+| No added turn latency | Turn start never calls the database, an index, a provider or an MCP server for linked memory. It reads entry cards already held in the worker's memory under a 5 ms cap, and injects nothing on a miss. |
 | No approval prompts | The service calls only MCP tools that Core's own rule would run without approval (see [MCP vector databases](#mcp-vector-databases)), or tools the operator granted to linked memory explicitly. |
-| No resource contention | Curation runs at low priority behind the host load gate and the provider scheduler's background lane. It never delays live-turn index lookups and never keeps an idle project worker alive. |
+| No resource contention | All computation runs in a separate helper process at the lowest priority. Curation yields to live work, never keeps an idle project worker alive, and stops itself if live latency rises. See [Performance contract](#performance-contract). |
 
 Two visible effects are unavoidable, and they are intentional:
 
 - Curation spend counts against provider balances. It is recorded per goal,
   but never changes the completed goal's own record or budget.
 - An agent's own use of memory tools shows as ordinary tool rows.
+
+## Performance contract
+
+Linked memory must not make anything an operator waits on slower: chat and goal
+turns, Butler, tool calls, streaming or page loads. This is measured, not
+assumed. With curation actively running, live-turn latency must match `off`
+within run-to-run variation (see [Acceptance evidence](#acceptance-evidence)).
+
+Core's existing controls do not guarantee this on their own:
+
+- The provider scheduler's `background` lane still takes one of the shared
+  provider slots that live turns use (up to 58 of the default 60), and a live
+  turn never overtakes a background call that is already running. Both also
+  count against the provider's rate limits.
+- The host load gate reports busy only at 80% CPU, memory, load or I/O
+  pressure, and only before work is admitted. It does not pause work that is
+  already running.
+- A task inside a project worker shares the event loop that streams that
+  project's live turns. Python cannot give it a lower priority.
+- `McpProbeService.call_tool` starts a new stdio process for every call. A
+  vector database server that loads an embedding model would load it again for
+  every query.
+
+### I/O in the worker, computation in a helper
+
+The project worker keeps only the work that needs the project lease or Core's
+state, and all of it is I/O:
+
+- reading a goal's stored turns from the database in chunks of bounded size;
+- curation model calls (see [Provider calls](#provider-calls)) and MCP queries
+  (see [MCP queries](#mcp-queries));
+- committing each finished chunk (cards, links, sources, run position and event
+  cursor) in one short transaction fenced by the lease;
+- holding prefetched entry cards in memory, and turn start.
+
+Everything else runs in the **curation helper**, one process per Core host,
+started and restarted by the supervisor:
+
+- assembling curation prompts and summarising tool results;
+- parsing model output and verifying proposals against the chunk;
+- embedding, cross-encoder re-scoring and finding link candidates;
+- rendering tool-usage rules;
+- ranking entry cards for prefetch.
+
+The helper follows the rules of Core's existing CPU workers (`cpu_workers.py`).
+It never opens the database or holds Core state, and only plain, bounded inputs
+and results cross its socket. It keeps only derived data that can be rebuilt:
+its own copies of the MiniLM embedding model and the cross-encoder, and a copy
+of the card index partitioned by scope, so a request from one project never
+sees another project's private cards. It never sends requests to the host index
+service that live turns use.
+
+- **Priority.** The helper runs at the lowest CPU priority and in the idle I/O
+  class (on macOS, the background QoS class). Where Core runs under systemd, it
+  also gets its own slice with minimal `CPUWeight` and `IOWeight`. The kernel
+  then serves live work first, even while the helper is busy.
+- **Memory.** The helper has a hard memory limit, tuned on staging. Reaching it
+  ends the helper, never Core. The supervisor restarts it with backoff. If it
+  keeps failing, status reports linked memory as degraded and live work carries
+  on.
+- **Stateless between chunks.** Everything needed to resume is in
+  `memory_goal_runs` and the event cursors. A crash, restart or deployment loses
+  at most the chunk in progress.
+- **Requests never block the worker.** If the helper's socket is full or the
+  helper is down, a prefetch request is dropped and a curation chunk waits.
+
+### Live work goes first
+
+Before every chunk, curation pauses at the chunk boundary if any of these hold:
+
+- the project had a live turn queued or running within a quiet period (30
+  seconds to start);
+- host CPU, memory, load or I/O pressure is above a curation threshold set well
+  below the live-turn gate (start below 50%, pause above 65% to start);
+- the project is handing off, its worker is retiring, or a deployment is in
+  progress.
+
+These values are tuned on staging. A paused run resumes from its recorded
+position. Curation never starts a project worker and never keeps one leased. If
+the project has no worker, the run waits for the next lease. On a deployment,
+curation stops at the next chunk boundary and the new release resumes it, so it
+never pins a project to an old worker.
+
+Prefetch is skipped, never deferred, when host pressure is above the curation
+threshold or the helper is busy. The next turn then simply gets no entry cards.
+
+### Provider calls
+
+Curation model calls go through the provider scheduler in a new `curation`
+lane, stricter than `background`:
+
+- a call is admitted only when that provider has no `direct` turn queued or
+  running;
+- at most one curation call runs on the Core host at a time;
+- the first rate-limit or capacity error pauses the goal's run until later;
+- for a model served on the Core host itself, a call waits until the model has
+  no live request.
+
+A live turn therefore competes with at most one curation call, never a queue of
+them. Provider privacy checks and balances stay in the scheduler, as for every
+other call.
+
+### MCP queries
+
+For a goal run, the worker keeps one session per bound MCP server open instead
+of starting a process per query, and closes it when the run pauses or ends. It
+starts stdio servers for curation at the lowest CPU and I/O priority, so a
+server's own embedding work also yields to live turns. Each goal run has a cap
+on MCP queries. MCP is never called at turn start or by prefetch.
+
+### The live path
+
+This is everything linked memory adds to a live turn:
+
+- **Turn start:** a lookup in the worker's in-memory prefetch map and a
+  word-overlap check against the new message. There is no database, index,
+  model or MCP call, and a hard cap of 5 ms. Past the cap, the turn gets
+  nothing.
+- **Prompt size:** the entry-card block is capped at about 300 tokens, and each
+  tool carries at most three notes of at most 200 characters. Both stay fixed
+  for the turn and between rollups, so the prompt cache keeps working.
+- **Pull tools,** only when an agent calls them: `memory.recall` is served the
+  same way as `knowledge.search`, and `memory.follow` is one indexed database
+  read.
+
+### Automatic stop
+
+Core records live-turn timings in its `database.performance` spans. Time to
+first token is added if it is not yet recorded. While curation runs, Core
+compares live time to first token and turn-start time with a rolling baseline
+taken while curation was idle. If the p95 rises above the baseline by more than
+a set margin, curation pauses for a cool-down period and status records the
+trip. The `off` stage and the Core-wide kill switch stop curation completely.
 
 ## What it builds on
 
@@ -86,7 +222,17 @@ Two visible effects are unavoidable, and they are intentional:
   message.
 - **Background pre-compaction** (`_schedule_precompaction` in `chat.py`). It
   runs after the answer is saved, at most two at once, and cannot delay or fail
-  a turn. This is the template for post-turn work.
+  a turn. Prefetch keeps that rule, but its computation runs in the curation
+  helper instead.
+- **CPU workers** (`cpu_workers.py`). Experimental, bounded helper processes
+  used for reports. They never open the database or hold Core state, and only
+  plain inputs and results cross their pipe. The curation helper follows the
+  same rules.
+- **Host load gate and provider scheduler** (`host_load.py`,
+  `provider_scheduler.py`). The gate admits work below 80% pressure, and the
+  scheduler's `background` lane shares provider slots with live turns. The
+  [Performance contract](#performance-contract) explains why curation needs
+  stricter rules than either.
 - **Durable goal events with a cursor.** `record_goal_transition`
   (`butler_oversight.py`) writes a `goal.<status>` project event, including
   `goal.completed`, in the same transaction as every goal status change.
@@ -112,25 +258,34 @@ top-level goal completed (project execution worker)
   └─ same transaction: the existing goal.completed project event
                 │
                 ▼
-curator (background task in the same worker; host load gate; background lane)
-  1. read the goal's work in chunks, oldest first: every turn of the goal's
-     chat and of its child chats (ledger steps, tool results, answers), and
-     the memory.propose proposals made in them
-  2. extract or verify proposals, including lessons from recovered tool
-     failures → create / attach / update / supersede / contradict / ignore
-  3. find candidates: the Nebula card index, plus MCP sources visible to the project
-  4. re-score with the local cross-encoder; type the links; write cards and
-     links (fenced by the lease); record progress in memory_goal_runs
+curation run: one chunk at a time, only while the project is quiet
+  [worker] read a bounded chunk, oldest first: turns of the goal's chat and
+           child chats (ledger steps, tool results, answers) and the
+           memory.propose proposals made in them
+  [helper] summarise; build the extraction prompt
+  [worker] model call through the provider scheduler's curation lane
+  [helper] parse; extract or verify proposals, including lessons from
+           recovered tool failures → create / attach / update / supersede /
+           contradict / ignore
+  [helper] embed; find candidates in its copy of the card index
+  [worker] query MCP sources visible to the project (one session per server)
+  [helper] re-score with the cross-encoder; type the links (any model call
+           goes through the worker, as above)
+  [worker] commit cards, links and the run position in one short transaction
+           fenced by the lease; record progress in memory_goal_runs
 
-after every saved turn in any chat (best effort, local only)
-  prefetch: rank likely entry cards for the conversation's next turn with the
-  local card index and cross-encoder; no model call, no MCP call
+  [worker] = project execution worker, I/O only
+  [helper] = curation helper, one per Core host, lowest CPU and I/O priority
+
+after every saved turn in any chat (best effort; skipped under pressure)
+  [worker] send the latest exchange → [helper] rank entry cards with its card
+  index and the cross-encoder → [worker] keep them in memory
+  no model call, no MCP call
                 │
                 ▼
 next turn start (critical path)
-  read the prefetched set → quick local check (scope, freshness, overlap with
-  the new message) under a hard deadline
-  miss, timeout or not ready → nothing
+  in-memory lookup and word-overlap check with the new message, 5 ms cap
+  miss or cap reached → nothing
   hit → at most 3 short cards appended to the last user message as untrusted
         data, unchanged for the whole turn; recorded in ChatTurn.request_snapshot
 
@@ -141,9 +296,10 @@ on demand: memory.recall / memory.follow (provider tools and the harness gateway
 
 The curator starts from the `goal.completed` event that Core already writes when
 a goal's status changes to completed. Nothing is added to ordinary turns. The
-curator consumes these events with a durable per-project cursor, so a restart
-or worker retirement loses nothing. Unprocessed events wait until the project
-is next leased.
+project worker starts a run when it writes the event, and checks the durable
+per-project cursor once when it takes the lease. A restart or worker retirement
+loses nothing, and nothing polls. Unprocessed events wait until the project is
+next leased.
 
 - **Only completed goals.** Cancelled, paused and blocked goals, and chats with
   no goal, are never curated.
@@ -159,19 +315,18 @@ is next leased.
 ### Curator placement
 
 Project data can be written only by the worker that holds the project's
-execution lease (`current_execution_lease()` with a fenced session), so the
-curator runs as a background task inside each project worker:
+execution lease (`current_execution_lease()` with a fenced session). The
+curator is therefore split in two:
 
-- **Model calls** go through the provider scheduler's background lane
-  (`ChatTurn.capacity_lane="background"`).
-- **Embedding and re-scoring** run in the host process, as they do today.
-  Host index requests currently run in arrival order. This design requires
-  them to carry a priority, so live-turn knowledge lookups are served first.
-  That host change is a precondition for leaving `shadow` stage.
-- **Load.** The curator waits on `HostLoadGate.wait()` and runs one task per
-  worker. It must not count as activity that keeps an idle worker leased.
-- **Global cards** take the same advisory transaction lock that Butler's
-  global memory uses, so two projects cannot create duplicates.
+- the **project worker** does the I/O: it reads the goal in bounded chunks,
+  makes the curation model and MCP calls, and commits each finished chunk under
+  its lease;
+- the **curation helper**, one process per Core host at the lowest CPU and I/O
+  priority, does all the computation and never touches the database.
+
+[Performance contract](#performance-contract) gives the rules for both. Global
+cards take the same advisory transaction lock that Butler's global memory uses,
+so two projects cannot create duplicates.
 
 ### Proposals: three producers, one verifier
 
@@ -209,19 +364,22 @@ root.
 
 ### Turn-time retrieval for provider chats
 
-Prefetch runs after every saved turn in any chat, scheduled in-process the same
-way as background pre-compaction. It ranks cards with the local card index and
-cross-encoder against the latest exchange. It makes no model call and no MCP
-call. It is best effort and not durable: if it is lost, the next turn gets no
-cards. At turn start Core:
+Prefetch runs after every saved turn in any chat. The worker sends the latest
+exchange to the curation helper. The helper ranks cards with its copy of the
+card index and the cross-encoder, drops cards outside the turn's scope and
+superseded or quarantined cards, and returns at most three. The worker keeps
+them in memory, bounded per worker, and drops any entry whose card changes state
+in a later commit. Prefetch makes no model call and no MCP call. It is best
+effort and not durable: if it is lost, skipped under pressure or not back in
+time, the next turn gets no cards. At turn start Core:
 
-1. reads the prefetched set for the session, keyed by the message it follows;
-2. drops cards outside the turn's scope, superseded or quarantined cards, and
-   cards with no overlap with the new message;
-3. stops at the deadline (about 200 ms, to be tuned on staging);
-4. appends at most three cards under an untrusted reference heading. The format
-   follows `_reference_data_block`: title, one-line summary, authority, date,
-   card ID and the number of links.
+1. looks up the prefetched set for the session in memory, keyed by the message
+   it follows;
+2. drops cards with no word overlap with the new message;
+3. stops at a hard cap of 5 ms;
+4. appends at most three cards, about 300 tokens in all, under an untrusted
+   reference heading. The format follows `_reference_data_block`: title,
+   one-line summary, authority, date, card ID and the number of links.
 
 The block is computed once per turn and reused for every tool step, so the
 prompt-cache prefix stays stable. It is never stored in the message.
@@ -470,8 +628,7 @@ table.
 | `memory_episodes` | `id`, `scope`, `scope_key`, `subject`, `root_card_id`, `current_card_id`, `updated_at` |
 | `memory_proposals` | One row per proposal from any producer: claim, kind, evidence, producer, turn, state, rejection reason |
 | `memory_cursors` | `project_id`, `last_event_sequence` |
-| `memory_goal_runs` | `goal_id`, `project_id`, covered `session_ids`, `state` (`pending`, `running`, `done`, `capped`, `failed`), position (the last turn curated), spend, `reason`, timestamps |
-| `memory_prefetch` | `session_id`, `after_message_id`, card IDs with scores, `computed_at`, `expires_at` |
+| `memory_goal_runs` | `goal_id`, `project_id`, covered `session_ids`, `state` (`pending`, `running`, `paused`, `done`, `capped`, `failed`), position (the last turn curated), spend, MCP query count, `reason` (including why a run is paused), timestamps |
 | `memory_source_bindings` | MCP `profile_id`, `tool_name`, `schema_digest`, argument and result mapping, `state` (`proposed`, `confirmed`, `disabled`), who confirmed it and when |
 | `memory_tool_lessons` | `card_id`, `tool_source` (`core` or `mcp:<profile id>`), `tool_name`, `schema_digest`, `form` (`argument_rule`, `call_order`, `note`), `field`, `signature`, `shown_count`, `recurrence_count`, `rewrites`, model counts, `last_shown_at`. A tool's notes in the current rollup are selected by (`tool_source`, `tool_name`, `schema_digest`). |
 | `memory_failure_signatures` | `tool_source`, `tool_name`, `category`, `invalid_input`, `error_code`, failure and recovery counts, model counts, `last_seen_at`. This feeds the `tool-misuse` report and the recurrence check. |
@@ -483,8 +640,12 @@ the tool-usage lessons attached to its tool definitions.
 
 The card vector index is derived. It embeds only title, summary and
 `applies_when`, using the same local ONNX MiniLM model as the knowledge index.
-Its publication is fenced through `runtime_index_state`. Dropping every
-`memory_*` table removes the feature without affecting any other data.
+Its publication is fenced through `runtime_index_state`. The curation helper
+computes the vectors and keeps its own copy. The host index service receives
+them precomputed, in small batches, only to serve `memory.recall`, so it does
+no embedding for curation. Prefetched entry cards live only in worker memory,
+so there is no prefetch table. Dropping every `memory_*` table removes the
+feature without affecting any other data.
 
 ### Retention and deletion
 
@@ -522,10 +683,12 @@ Connected vector databases are sources of candidates, never storage.
   
   Otherwise the operator must grant it to linked memory explicitly. The service
   never raises an approval card.
-- **Batching.** `McpProbeService.call_tool` starts a fresh stdio process or HTTP
-  session for every call, so the curator batches queries per pass. MCP is never
-  called at turn start. A pooled session for the curator is a possible later
-  optimisation.
+- **Sessions.** `McpProbeService.call_tool` starts a fresh stdio process or HTTP
+  session for every call. For curation, the worker instead keeps one session
+  per bound server open for a goal run, starts stdio servers at the lowest CPU
+  and I/O priority, and caps the queries per run (see
+  [MCP queries](#mcp-queries)). MCP is never called at turn start or by
+  prefetch.
 - **Scores are not comparable.** Each database has its own embedding model and
   distance metric. External hits only propose candidates; the local
   cross-encoder ranks everything.
@@ -621,7 +784,9 @@ Core, so the switch takes three releases:
 ## Curation model and cost
 
 - **Provider turns** are curated with the turn's own provider and model, as
-  naming, retrieval planning and pre-compaction already are. Provider privacy is
+  naming, retrieval planning and pre-compaction already are. Calls go through
+  the provider scheduler's `curation` lane (see
+  [Provider calls](#provider-calls)). Provider privacy is
   re-checked at call time. If the provider is disabled or removed, the
   session's current runtime is used, since it has already received the
   conversation. If neither is available, the turn waits in the backlog with a
@@ -633,6 +798,7 @@ Core, so the switch takes three releases:
 - **Cost controls:**
   - one curation run per completed top-level goal;
   - a per-goal spend cap;
+  - a per-goal cap on MCP queries;
   - summarise tool results and cap each chunk's input size;
   - use a low reasoning setting and structured output where supported.
   
@@ -671,6 +837,8 @@ Core, so the switch takes three releases:
   - card, link and quarantined counts;
   - tool-usage lessons by tool, with their recurrence counts;
   - curation spend;
+  - the curation helper's state: running or paused and why, memory use, and
+    automatic-stop trips;
   - the last error;
   - what a given turn received, read from its `request_snapshot`.
 - **Naming.** Always say **linked memory**. "Memory" already means RAM budgets
@@ -698,17 +866,34 @@ Core, so the switch takes three releases:
 4. **Inject.** Turn on Core-added entry cards, project by project.
 
 Stages 1 and 2 change nothing a model or an operator sees, so they can run on
-live Core to gather evidence.
+live Core to gather evidence. They run on live Core only after the staging A/B
+under [Acceptance evidence](#acceptance-evidence) has passed with curation
+actively running.
 
 ## Acceptance evidence
 
 - **Staging A/B** on the fake-data staging Core with the stub model: stages
-  `off`, `shadow` and `inject` under the same load. Measure:
-  - time-to-first-token p50 and p95;
+  `off`, `shadow` and `inject` under the same live load, with goals completing
+  during the run so curation and prefetch are actively working. Measure:
+  - time to first token and turn duration, p50 and p95, which must match `off`
+    within run-to-run variation;
+  - turn-start time, which must stay under the 5 ms cap;
   - the per-turn sequence of chat stream event types, which must be identical;
   - Playwright baselines, which must be unchanged;
-  - host CPU and pressure stall information;
-  - database transactions per second.
+  - host CPU and pressure stall information for Core's own processes;
+  - database transactions per second and commit latency.
+- **Performance isolation** (staging):
+  - a live turn sent in the middle of a goal run waits for no curation work,
+    and the run resumes from its recorded position;
+  - with a stub provider limited to a few concurrent requests, a live turn
+    never waits behind more than one curation call;
+  - killing the curation helper, or driving it into its memory limit, during a
+    live turn leaves the turn unaffected;
+  - one goal run starts each bound stdio MCP server once, not once per query;
+  - slowing live turns artificially trips the automatic stop, and status
+    reports it;
+  - a deployment during a goal run stops curation at a chunk boundary, and the
+    new release resumes it without pinning the project.
 - **Butler parity**: identical panel responses and precedent digests from the
   old store and the card facade.
 - **Gateway latency**: `memory.propose` returns within a fixed budget while the
@@ -740,16 +925,20 @@ live Core to gather evidence.
 
 ## Open questions
 
-- Tuning: the injection deadline, the per-goal curation cap and chunk size,
-  per-turn and per-project caps.
+- Tuning: the per-goal curation cap and chunk size, per-turn and per-project
+  caps, the quiet period, the curation pressure thresholds, the helper's memory
+  limit and the automatic-stop margin.
+- Whether a goal waiting for curation may keep its project's worker leased for
+  a bounded time after the project goes quiet. As designed, a project whose
+  worker retires soon after its goal completes waits for its next lease.
+- Whether the curation helper should share the host index service's ONNX
+  models to save memory, at the cost of competing with live lookups.
 - Whether a long-running goal should also be curated at checkpoints before it
   completes. As designed, a goal that runs for days teaches nothing until it
   ends.
 - Whether provider chats should also get `memory.propose` alongside background
   extraction.
-- The priority scheme for host index requests (live turn ahead of curation).
 - Episode boundaries: when a new episode starts rather than continuing one.
-- A long-lived MCP session for curator batches.
 - Whether curation should reuse the warm prompt cache.
 - Tool-usage lessons: the rollup period, the recurrence threshold for a
   rewrite or retraction, and whether tool notes need their own switch apart

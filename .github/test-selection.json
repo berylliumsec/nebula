@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Claude",
-  "reason": "Documentation only: adds docs/design/linked-memory.md, a proposed (unimplemented) design contract for a background linked-memory service in Core (memory cards curated when goals complete, typed links, MCP vector databases as read-only candidate sources, Butler memory absorption, harness memory.propose, tool-usage lessons learned from recovered tool failures, CLI/Butler enablement, zero-UI-impact contract). No source, test, UI, build or packaging file changes.",
+  "reason": "Documentation only: adds docs/design/linked-memory.md, a proposed (unimplemented) design contract for a background linked-memory service in Core (memory cards curated when goals complete, typed links, MCP vector databases as read-only candidate sources, Butler memory absorption, harness memory.propose, tool-usage lessons learned from recovered tool failures, CLI/Butler enablement, zero-UI-impact contract, performance contract with a lowest-priority curation helper process and live-work-first rules). No source, test, UI, build or packaging file changes.",
   "exclusions": "No Python, frontend, native or Playwright tests apply: the diff adds one Markdown file under docs/design/, which no test, build step or runtime reads. scripts/build_product_knowledge.py indexes only top-level docs/*.md and docs/design/nebula-settings-assistant.md, so the bundled product knowledge index is unaffected. LAN Core validation does not apply to a documentation-only change; the design's own acceptance evidence is listed in the document for the implementation PRs.",
   "python_browser": false,
   "python_node": false,
@@ -15,5 +15,5 @@
   "native": [],
   "playwright": [],
   "checks": [],
-  "change_digest": "a631422dc4135c560762671d2541ba2ea3c2e3b0c327a47bb1c58e85e17be6ff"
+  "change_digest": "08b3d4b57c69f5687a54069be835db9b79152d8f58df1ea5163c00502bb660a7"
 }
