@@ -567,12 +567,77 @@ class StagedDeployer:
         """
         resident = status.get("resident_versions", [])
         if version not in resident and len(resident) >= 2:
+            pins = StagedDeployer._version_pins(status, resident)
+            held = "; ".join(
+                f"version {pin['version']} is kept by "
+                + (
+                    ", ".join(
+                        project["project_id"]
+                        + (
+                            f" (handoff {project['phase']})"
+                            if project.get("phase") not in (None, "verified")
+                            else ""
+                        )
+                        for project in pin["projects"]
+                    )
+                    or "no project"
+                )
+                + (
+                    " and unowned worker(s) " + ", ".join(pin["unowned_runtime_ids"])
+                    if pin["unowned_runtime_ids"]
+                    else ""
+                )
+                for pin in pins
+            )
             return {
                 "status": "api_promoted_execution_staged",
                 "commit": version,
+                "detail": (
+                    f"Release {version} is staged for execution: versions "
+                    f"{', '.join(resident)} are resident and at most two can "
+                    "run at once, so no project can switch to it yet. "
+                    f"{held}. Move every project off one of those versions "
+                    "(finish the deployment that targeted the other one, or let "
+                    "them go idle so their workers retire), retire its unowned "
+                    "workers, then rerun this deployment. The promoted API stays."
+                ),
+                "blockers": pins,
                 "deployment": status,
             }
         return None
+
+    @staticmethod
+    def _version_pins(status: dict, resident: list) -> list[dict]:
+        """Projects and unowned workers keeping each resident version."""
+        rows = [row for row in status.get("projects", []) if isinstance(row, dict)]
+        owners = {row.get("runtime_id") for row in rows if row.get("runtime_id")}
+        processes = [
+            row
+            for row in status.get("processes", [])
+            if isinstance(row, dict) and row.get("role") == "execution"
+        ]
+        return [
+            {
+                "version": version,
+                "projects": [
+                    {
+                        "project_id": row.get("project_id"),
+                        "runtime_id": row.get("runtime_id"),
+                        "phase": row.get("phase"),
+                        "blockers": row.get("blockers") or [],
+                    }
+                    for row in rows
+                    if row.get("runtime_id") and row.get("runtime_version") == version
+                ],
+                "unowned_runtime_ids": [
+                    row.get("runtime_id")
+                    for row in processes
+                    if row.get("version") == version
+                    and row.get("runtime_id") not in owners
+                ],
+            }
+            for version in resident
+        ]
 
     def promote(self, version: str) -> dict:
         journal = self._journal("promote", version)

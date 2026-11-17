@@ -335,7 +335,11 @@ class DeploymentCoordinator:
             if not await self._compatible(
                 session, ReleaseManifest.model_validate(release.manifest), role=role
             ):
-                detail = "Two execution versions remain resident. The candidate is staged until the older version can retire."
+                detail = (
+                    f"Release {version} is staged: no execution worker can "
+                    "start as it while two other execution versions remain "
+                    "resident. " + await self._resident_version_pins(session)
+                )[:4000]
                 if host.detail != detail:
                     host.detail = detail
                     host.revision += 1
@@ -570,7 +574,107 @@ class DeploymentCoordinator:
             f"execution versions {', '.join(resident)} are resident and at most "
             f"{MAX_EXECUTION_VERSIONS} can run at once, so its workers could not "
             "start. Move projects off one of those versions and retire it first. "
-            f"The execution target stays {host.target_version or 'unset'}."
+            f"The execution target stays {host.target_version or 'unset'}. "
+            + await self._resident_version_pins(session)
+        )
+
+    async def execution_capacity_blocker(self, version: str) -> str:
+        """Why no execution worker of ``version`` can start, for a refusal."""
+        async with self.database.session() as session:
+            return (
+                f"Release {version} cannot start an execution worker: "
+                f"at most {MAX_EXECUTION_VERSIONS} execution versions can run at "
+                "once and two others are resident, so no project can switch to "
+                "it yet. " + await self._resident_version_pins(session)
+            )
+
+    async def _resident_version_pins(self, session, *, limit: int = 10) -> str:
+        """Name which projects keep each resident execution version, and how
+        that version retires.
+
+        A version stays resident while any of its execution processes is
+        unretired: a project owner, or an unowned process (prepared, draining
+        after release, or unreachable) that still holds a slot.
+        """
+        processes = list(
+            await session.scalars(
+                select(RuntimeProcessRow)
+                .where(
+                    RuntimeProcessRow.role == "execution",
+                    RuntimeProcessRow.state.in_(_RESIDENT),
+                )
+                .order_by(RuntimeProcessRow.version, RuntimeProcessRow.runtime_id)
+            )
+        )
+        owners: dict[str, list[str]] = {}
+        for project_id, runtime_id in await session.execute(
+            select(ProjectOwnershipRow.project_id, ProjectOwnershipRow.runtime_id)
+            .where(
+                ProjectOwnershipRow.runtime_id.in_(
+                    [row.runtime_id for row in processes]
+                )
+            )
+            .order_by(ProjectOwnershipRow.project_id)
+        ):
+            owners.setdefault(runtime_id, []).append(project_id)
+        handoffs = {
+            row.project_id: row
+            for row in await session.scalars(
+                select(ProjectHandoffRow).where(
+                    ProjectHandoffRow.project_id.in_(
+                        [item for values in owners.values() for item in values]
+                    )
+                )
+            )
+        }
+        versions: dict[str, list[RuntimeProcessRow]] = {}
+        for row in processes:
+            versions.setdefault(row.version, []).append(row)
+        parts = []
+        for version, rows in versions.items():
+            projects, unowned = [], []
+            for row in rows:
+                owned = owners.get(row.runtime_id, [])
+                if not owned:
+                    unowned.append(f"{row.runtime_id} ({row.state})")
+                for project_id in owned:
+                    label = await self._project_label_in(session, project_id)
+                    handoff = handoffs.get(project_id)
+                    if handoff is not None and handoff.phase != HandoffPhase.VERIFIED:
+                        label += f" [handoff {handoff.phase}"
+                        if handoff.blockers:
+                            label += ": " + "; ".join(
+                                str(item)[:200] for item in handoff.blockers[:3]
+                            )
+                        label += "]"
+                    projects.append(label)
+            held = []
+            if projects:
+                held.append(
+                    f"{len(projects)} project(s): "
+                    + ", ".join(projects[:limit])
+                    + (
+                        f" and {len(projects) - limit} more"
+                        if len(projects) > limit
+                        else ""
+                    )
+                )
+            if unowned:
+                held.append(
+                    f"{len(unowned)} unowned worker(s): "
+                    + ", ".join(unowned[:limit])
+                    + (
+                        f" and {len(unowned) - limit} more"
+                        if len(unowned) > limit
+                        else ""
+                    )
+                )
+            parts.append(f"Version {version} is kept resident by " + " and ".join(held))
+        return (
+            "; ".join(parts)
+            + ". A version retires once each of its projects has moved to the "
+            "other resident version (a deployment handoff) or gone idle so its "
+            "worker retires, and its unowned workers are retired."
         )
 
     async def target_execution(self, version: str) -> None:

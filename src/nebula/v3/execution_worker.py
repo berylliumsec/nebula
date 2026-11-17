@@ -259,6 +259,7 @@ class ProjectExecution:
         self.cleanup_complete = False
         self.quiesce_proof = None
         self.failure: str | None = None
+        self.served = False
         self.recovery_blockers: list[str] = []
         context.rpc.register("execution.attach/v1", self.attach)
         context.rpc.register("execution.status/v1", self.status)
@@ -658,6 +659,8 @@ class ProjectExecution:
                         if chat is not None:
                             chat.restoring_handoff = False
                     self.state = "ready"
+                    # Producers start from here: a later failure is a crash.
+                    self.served = True
                     delivery = RuntimeDelivery(
                         self.context.coordinator.coordination,
                         RuntimeVault(
@@ -925,6 +928,34 @@ class ProjectExecution:
                 self.state = "closed"
             if self.state == "failed":
                 await self._record_failure(lease)
+                if self.served and not self.closed:
+                    self._exit_after_failure()
+
+    def _exit_after_failure(self) -> None:
+        """End this process after a project that was serving failed.
+
+        The process heartbeat renews every grant this runtime holds, so a
+        live process would keep the failed project's lease forever, and Core
+        recovers only owners whose process has exited. Exiting hands the
+        project to the existing dead-owner reconciliation, exactly as a crash
+        would: interrupted turns and commands are settled, unknown effects
+        stay held, and repeated failures are capped. A failure before the
+        project served, while it quiesces or while it is closing, keeps the
+        hold: its restoration, shutdown or quiescence caller owns the outcome.
+        """
+        request_exit = getattr(self.context, "request_exit", None)
+        if request_exit is None:
+            return
+        record_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.project.failed_worker_exiting",
+            "The project application failed; its worker exits so Core recovers the project.",
+            outcome="recovering",
+            stage="execution",
+            retryable=True,
+        )
+        request_exit()
 
     async def _record_failure(self, lease) -> None:
         """Publish why this owner failed, so deployment status can show it."""
