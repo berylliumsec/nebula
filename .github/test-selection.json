@@ -1,22 +1,21 @@
 {
-  "change_digest": "a65451b8c984df6fbacaf595ca5f5f0f1c8bdd470aa41699c987fa5f6f3dfd01",
-  "reviewed_by": "Codex, based on independently validated orphan-callback root cause",
-  "reason": "Dead-owner recovery now interrupts a waiting command callback only when its exact durable tool call has an unresolved effect. The selected tests cover matched unknown callback release and unmatched callback retention in both SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native, browser, or unrelated Python workflow changes. Only the two exact orphan-recovery cases are selected.",
+  "change_digest": "3f12da59ff2200619c7a3b4820c6e26cb3dd37eddd4e267b49a104d002795d95",
+  "reviewed_by": "Claude, based on an independently validated root cause (fresh subagent) and a rehearsal-Core reproduction",
+  "reason": "After reconcile-superseded-manual-deployment aligns deployer state to a manually installed release, the next managed promotion failed at host activation because every previous-host and rollback-target check required that release's managed simulation-acceptance.json. The deployer now binds a reconciled manual release to the manifest and executable digests its reconciliation recorded. The deploy-resume file covers the reconciliation, the new baseline verification, tamper refusal, and unchanged managed verification.",
+  "exclusions": "Only scripts/simulation/nebula_deployer.py and its deploy-resume tests change. No Core runtime, UI, frontend, native, or browser code changes.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 60,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_interrupts_unknown_command_callback_without_replay",
-    "tests/v3/test_runtime_orphan_recovery.py::test_dead_owner_retains_unmatched_command_callback"
+    "tests/test_simulation_deploy_resume.py"
   ],
   "frontend": [],
   "native": [],
