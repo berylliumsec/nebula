@@ -35,6 +35,7 @@ from .domain import NebulaModel, PairedDeviceSession, utc_now
 from .execution_scope import execution_context
 from .memory_actor import memory_actor
 from .runtime_coordination import (
+    FOLLOWS_TURN_HEADER,
     ClaimedCommand,
     CommandReceipt,
     CoordinationConflict,
@@ -776,6 +777,14 @@ class DurableHttpRunner:
         # The typed chat transports this owner's application serves.
         self.typed_chat_commands = typed_chat_commands & CHAT_COMMANDS
         self._storage_pruned_at: float | None = None
+        # Turn-following responses that no longer hold their lane.
+        self._following: set[asyncio.Task] = set()
+
+    async def close(self) -> None:
+        """Stop following turns; their commands keep the usual uncertainty."""
+        for task in list(self._following):
+            task.cancel()
+        await asyncio.gather(*self._following, return_exceptions=True)
 
     async def run_one(
         self, lease: ProjectLease, *, lane: Literal["work", "control", "report"]
@@ -815,9 +824,61 @@ class DurableHttpRunner:
         return False
 
     async def _run_claimed(self, lease: ProjectLease, command: ClaimedCommand) -> None:
+        """Run a claimed command; return early once it only follows a turn.
+
+        A route that started a turn may stream that turn's progress for as long
+        as the turn runs. Once it marks its response as following and the
+        command leaves its lane head, the rest of the response is delivered by
+        a tracked task, so this lane's consumer can claim later work.
+        """
+        released = asyncio.Event()
+        with execution_context(lease):
+            # diagnostic-expected: awaited below, or tracked and its failure recorded by _followed.
+            task = asyncio.create_task(
+                self._run_claimed_inline(lease, command, released),
+                name="nebula-command-" + command.receipt.command_id,
+            )
+        # diagnostic-expected: an Event wait cannot fail; it is cancelled below.
+        waiter = asyncio.create_task(released.wait())
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+        finally:
+            waiter.cancel()
+        if task.done():
+            await task
+            return
+        self._following.add(task)
+        task.add_done_callback(self._followed)
+
+    def _followed(self, task: asyncio.Task) -> None:
+        self._following.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and not isinstance(error, LeaseLost):
+            # The command was already marked uncertain; record why it ended.
+            record_caught_exception(
+                "runtime",
+                "runtime.command.follow_failed",
+                "A response that followed a running turn ended early; its "
+                "request needs explicit reconciliation.",
+                error,
+                stage="delivery",
+            )
+
+    async def _run_claimed_inline(
+        self,
+        lease: ProjectLease,
+        command: ClaimedCommand,
+        released: asyncio.Event | None = None,
+    ) -> None:
         try:
             with execution_context(lease):
-                await self._invoke(lease, command)
+                await self._invoke(lease, command, released)
         except BaseException:
             # A controller failure can follow a committed external effect.
             # Keep the receipt, mark uncertainty and never replay automatically.
@@ -862,7 +923,12 @@ class DurableHttpRunner:
                 stage="delivery",
             )
 
-    async def _invoke(self, lease: ProjectLease, command: ClaimedCommand):
+    async def _invoke(
+        self,
+        lease: ProjectLease,
+        command: ClaimedCommand,
+        released: asyncio.Event | None = None,
+    ):
         intent, actor = await self.delivery.request(command)
         command_id = command.receipt.command_id
         # A storage report's response is published only with its outcome.
@@ -981,10 +1047,20 @@ class DurableHttpRunner:
                 status_code = message["status"]
                 if type(status_code) is not int or not 100 <= status_code <= 599:
                     raise RuntimeIpcError("runtime response status is invalid")
+                raw_headers = message.get("headers", [])
+                follows = any(
+                    key.lower() == FOLLOWS_TURN_HEADER.encode()
+                    for key, _ in raw_headers
+                )
                 response_headers = [
                     [key.decode("latin-1"), value.decode("latin-1")]
-                    for key, value in message.get("headers", [])
-                    if key.lower() not in {b"connection", b"transfer-encoding"}
+                    for key, value in raw_headers
+                    if key.lower()
+                    not in {
+                        b"connection",
+                        b"transfer-encoding",
+                        FOLLOWS_TURN_HEADER.encode(),
+                    }
                 ]
                 head = _json({"status": status_code, "headers": response_headers})
                 if buffered is not None:
@@ -992,6 +1068,16 @@ class DurableHttpRunner:
                 else:
                     await self.delivery.append(lease, command_id, "head", head)
                 started = True
+                if (
+                    follows
+                    and released is not None
+                    and buffered is None
+                    and name == HTTP_INVOKE_COMMAND
+                    and await self.delivery.coordination.release_follow(
+                        lease, command_id
+                    )
+                ):
+                    released.set()
             elif message["type"] == "http.response.body":
                 if not started or ended:
                     raise RuntimeIpcError("runtime response body is out of order")

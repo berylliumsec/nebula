@@ -326,6 +326,19 @@ For an `http.invoke/v1` chat start:
 - **Fix to adopt.** Decide `chat.accept/v1` for a cold project from the release
   auto-admission will spawn, instead of "no owner, no feature". Cold chat
   starts then stop occupying the work lane.
+- **Turn-following responses leave the lane.** Harness chats (which never use
+  `chat.accept/v1`) and provider chat starts carried by `http.invoke/v1` start
+  their turn before they begin streaming, and the rest of the response only
+  follows it. Their route marks the response with the internal
+  `x-nebula-follows-turn` header. When the owner sees it, it renames the running
+  command `http.follow/v1` under its fence, and lane heads skip that name. The
+  response keeps streaming to its viewer and completes as before, but later
+  project work no longer waits for the whole turn. Without this, a harness turn
+  that never ended held every later chat and mutation in its project until the
+  operator stopped it. A followed command still blocks handoff and retirement
+  like any running command. If the owner stops, the command becomes uncertain
+  and is settled as failed by dead-owner reconciliation, without blocking the
+  lane.
 
 ## Adversarial review
 

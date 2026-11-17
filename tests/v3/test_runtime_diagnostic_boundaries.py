@@ -305,6 +305,9 @@ async def test_lease_watcher_preserves_fencing_and_classifies_unexpected_failure
         async def run_one(self, *_args, **_kwargs):
             return False
 
+        async def close(self):
+            pass
+
     async def idle(_lease):
         return DispatchSnapshot(owned=True, lanes=frozenset(), handoff_active=False)
 
