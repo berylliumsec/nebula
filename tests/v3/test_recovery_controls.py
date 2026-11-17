@@ -412,3 +412,75 @@ async def test_restart_recovery_keeps_an_operator_recovery_stop(tmp_path):
     assert (await store.get(ChatTurn, turn.id)).status == ChatTurnStatus.INTERRUPTED
     await store.event_history.close()
     await store.database.dispose()
+
+
+async def test_held_target_that_ran_a_control_and_then_failed_exits(recovery):  # noqa: F811 (fixture)
+    # The held target ran the operator's pause (a command row of its own, so
+    # it can never relinquish), then failed while constructing the restored
+    # project. It exits so dead-owner recovery restores the project on a
+    # fresh target; the pause stays applied and nothing is replayed.
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy import select
+
+    value = recovery
+    goal, _queued, claimed = await held_project(value)
+    lease = await value.begin()
+    exits = []
+    value.context.request_exit = lambda: exits.append(value.execution.state)
+    pause = await submit(
+        value,
+        "pause",
+        GOAL.format("held-session"),
+        {"expected_revision": goal.revision, "action": "pause"},
+    )
+    supervisor = value.new_supervisor()
+    await supervisor.advance_project_handoffs()
+    await settled(value, pause)
+    assert value.execution.state == "recovering"
+    async with value.database.session() as session:
+        ran = list(
+            await session.scalars(
+                select(RuntimeCommandRow.state).where(
+                    RuntimeCommandRow.runtime_id == lease.runtime_id
+                )
+            )
+        )
+    assert ran == ["succeeded"]
+
+    @asynccontextmanager
+    async def failing(ctx, grant):
+        try:
+            raise RuntimeError("synthetic restoration failure before activation")
+            yield
+        finally:
+            ctx.restore_cleanup_completed = True
+
+    value.execution.application_factory = failing
+    current = await value.store.get(ChatGoal, goal.id)
+    await value.store.update(
+        ChatGoal,
+        goal.id,
+        {
+            "execution_owner_id": None,
+            "execution_claim_id": None,
+            "execution_claimed_at": None,
+        },
+        expected_revision=current.revision,
+    )
+    turn = await value.store.get(ChatTurn, claimed.id)
+    await value.store.update(
+        ChatTurn,
+        claimed.id,
+        {
+            "status": "failed",
+            "execution_owner_id": None,
+            "execution_claim_id": None,
+            "execution_claimed_at": None,
+        },
+        expected_revision=turn.revision,
+    )
+    await until(lambda: value.execution.state == "failed")
+    await until(lambda: bool(exits))
+    assert exits == ["failed"] and not value.activations
+    assert (await value.store.get(ChatGoal, goal.id)).status == "paused"

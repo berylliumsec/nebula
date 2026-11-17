@@ -71,7 +71,13 @@ and never stops recovering a project: each recovery within 30 minutes of earlier
 ones waits longer (15 s doubling, capped at 5 minutes), and the project reads as
 held with the next retry time instead of crash-looping. A restoration target that
 fails cleanly before activation relinquishes its grant and exits, so recovery
-restores the project on a fresh target.
+restores the project on a fresh target. Any execution process whose project
+failed (a first start, a restoration, or after a control it ran while held)
+exits unless it is quiescing, relinquishing or closing, so a live failed owner
+never keeps renewing its lease. A prepared recovery target that ended before it
+took the project is replaced by a fresh preparation under its own operation
+identity, and a preparation left uncertain by a dead host settles from its
+spawn checkpoint and process row instead of waiting for manual reconciliation.
 Checkpoint hashing has no total-record ceiling: entity, provider admission and
 tool-manifest references stream in batches of 10,000 from one SQL statement
 snapshot. The compact v1 digest remains unchanged, including optional manifest
