@@ -55,6 +55,7 @@ REPO = Path("/srv/apple-sim/repos/nebula")
 CANDIDATES = ROOT / "candidates"
 RELEASES = ROOT / "releases"
 CURRENT = ROOT / "current"
+PROC_ROOT = Path("/proc")
 DATA = ROOT / "state/v3"
 BACKUPS = ROOT / "rollback-backups"
 DEPLOYMENT_RECORDS = ROOT / "deployment-records"
@@ -2740,7 +2741,9 @@ def reconcile_superseded_manual_deployment(
     service_identity = supervisor_service_identity()
     if identity is None or identity.get("package_version") != package_version:
         raise RuntimeError("Current supervisor process does not match the manual host")
-    require_runtime_process_in_service(service_identity, identity, manual_version)
+    executable, executable_sha256 = require_manual_runtime_process_in_service(
+        service_identity, identity, manual_version
+    )
     health, status = read_supervisor_health()
     if not isinstance(health, dict) or not isinstance(status, dict):
         raise RuntimeError("Current authenticated Core health readback is malformed")
@@ -2823,6 +2826,11 @@ def reconcile_superseded_manual_deployment(
             "degraded_baseline_accepted": health_status == "degraded",
             "host_process": identity,
             "supervisor_service": service_identity,
+            "host_executable": {
+                "path": str(executable),
+                "sha256": executable_sha256,
+                "identity_source": "current_manual_release_and_live_process_image",
+            },
         },
         "uncertain_effects_preserved": [
             step
@@ -3075,18 +3083,6 @@ def require_runtime_process_in_service(
     service_identity: dict[str, Any], runtime_identity: dict[str, Any], version: str
 ) -> None:
     """Bind the discovered Core executable to the active unit's process tree."""
-    main_pid = service_identity.get("main_pid")
-    main_birth = service_identity.get("main_process_birth")
-    runtime_pid = runtime_identity.get("pid")
-    runtime_birth = runtime_identity.get("process_birth")
-    if (
-        type(main_pid) is not int
-        or type(runtime_pid) is not int
-        or not isinstance(main_birth, str)
-        or not isinstance(runtime_birth, str)
-    ):
-        raise RuntimeError("Supervisor process identities are incomplete")
-
     release, _ = runtime_release(version)
     accepted_executable = release / "dist/nebula-core"
     receipt = json.loads((release / "simulation-acceptance.json").read_text())
@@ -3098,7 +3094,72 @@ def require_runtime_process_in_service(
         or sha256(accepted_executable) != expected_digest
     ):
         raise RuntimeError("Accepted supervisor executable is not hash-bound")
-    accepted_executable = accepted_executable.resolve(strict=True)
+    _require_process_identity_in_service(
+        service_identity,
+        runtime_identity,
+        accepted_executable.resolve(strict=True),
+        expected_digest,
+        compare_live_image=False,
+    )
+
+
+def require_manual_runtime_process_in_service(
+    service_identity: dict[str, Any], runtime_identity: dict[str, Any], version: str
+) -> tuple[Path, str]:
+    """Bind manual Core to its exact current release and live process image.
+
+    Manual releases do not have managed simulation-acceptance receipts. Their
+    current executable is therefore checked against the immutable release path
+    and the bytes exposed by each live /proc/<pid>/exe link.
+    """
+    release = RELEASES / version
+    if (
+        release.is_symlink()
+        or release.name != version
+        or release.resolve(strict=True).parent != RELEASES.resolve()
+        or (release / "dist").is_symlink()
+    ):
+        raise RuntimeError("Manual supervisor release path is unsafe")
+    executable = release / "dist/nebula-core"
+    if (
+        executable.is_symlink()
+        or executable.resolve(strict=True).parent != (release / "dist").resolve(strict=True)
+        or not executable.is_file()
+    ):
+        raise RuntimeError("Manual supervisor executable path is unsafe")
+    expected_digest = sha256(executable)
+    if not SHA256.fullmatch(expected_digest):
+        raise RuntimeError("Manual supervisor executable digest is invalid")
+    _require_process_identity_in_service(
+        service_identity,
+        runtime_identity,
+        executable.resolve(strict=True),
+        expected_digest,
+        compare_live_image=True,
+    )
+    return executable.resolve(strict=True), expected_digest
+
+
+def _require_process_identity_in_service(
+    service_identity: dict[str, Any],
+    runtime_identity: dict[str, Any],
+    accepted_executable: Path,
+    expected_digest: str,
+    *,
+    compare_live_image: bool,
+) -> None:
+    """Apply the common unit ancestry, process birth, UID, and image checks."""
+    main_pid = service_identity.get("main_pid")
+    main_birth = service_identity.get("main_process_birth")
+    runtime_pid = runtime_identity.get("pid")
+    runtime_birth = runtime_identity.get("process_birth")
+    if (
+        type(main_pid) is not int
+        or type(runtime_pid) is not int
+        or not isinstance(main_birth, str)
+        or not isinstance(runtime_birth, str)
+    ):
+        raise RuntimeError("Supervisor process identities are incomplete")
 
     chain: dict[int, dict[str, Any]] = {}
     current_pid = runtime_pid
@@ -3131,8 +3192,10 @@ def require_runtime_process_in_service(
         executable = chain[pid]["executable"]
         if executable != accepted_executable or sha256(executable) != expected_digest:
             raise RuntimeError(
-                "Supervisor process does not match the accepted onefile executable"
+                "Supervisor process does not match the expected executable"
             )
+        if compare_live_image:
+            _verify_live_process_executable(pid, accepted_executable, expected_digest)
 
     # Re-read every link in the chain to reject PID reuse or reparenting during
     # validation, and re-read systemd's identity to bind the ancestry to the
@@ -3144,6 +3207,9 @@ def require_runtime_process_in_service(
             for key in ("process_birth", "parent_pid", "effective_uid", "executable")
         ):
             raise RuntimeError("Supervisor process ancestry changed during validation")
+    if compare_live_image:
+        for pid in {runtime_pid, main_pid}:
+            _verify_live_process_executable(pid, accepted_executable, expected_digest)
     latest_service = supervisor_service_identity()
     if (
         latest_service.get("main_pid") != main_pid
@@ -3151,6 +3217,25 @@ def require_runtime_process_in_service(
         or latest_service.get("exec_start") != service_identity.get("exec_start")
     ):
         raise RuntimeError("Supervisor unit identity changed during validation")
+
+
+def _verify_live_process_executable(pid: int, expected_path: Path, expected_digest: str) -> None:
+    """Compare the live process image with the current release file by path and bytes."""
+    live_image = PROC_ROOT / str(pid) / "exe"
+    try:
+        live_path = live_image.resolve(strict=True)
+        live_stat = live_image.stat()
+        release_stat = expected_path.stat()
+        live_digest = sha256(live_image)
+    except OSError as error:
+        raise RuntimeError("Manual supervisor live executable could not be verified") from error
+    if (
+        live_path != expected_path
+        or live_stat.st_dev != release_stat.st_dev
+        or live_stat.st_ino != release_stat.st_ino
+        or live_digest != expected_digest
+    ):
+        raise RuntimeError("Manual supervisor process image differs from its current release")
 
 
 def supervisor_service_configuration() -> dict[str, Any]:
