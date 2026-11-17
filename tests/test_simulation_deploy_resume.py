@@ -581,6 +581,7 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         deployer, "runtime_release", lambda version: (host.releases / version, digest(version))
     )
+    monkeypatch.setattr(deployer, "runtime_package_version", package)
     host.host_version = manual
     host.unit = "active"
     host.revision += 1
@@ -797,6 +798,46 @@ def test_reconcile_superseded_manual_refuses_receipt_prefix_mismatch(
     with pytest.raises(RuntimeError, match="later release"):
         deployer.reconcile_superseded_manual_deployment(
             deployment_id, manual_prefix=wrong_prefix
+        )
+    assert deployer.state()["runtime_deployment"]["id"] == deployment_id
+
+
+@pytest.mark.parametrize(
+    "inventory_field",
+    ["resident_versions", "project_runtime_version", "process_version", "process_runtime_version"],
+)
+def test_reconcile_superseded_manual_refuses_old_runtime_package_identity(
+    host: Host, monkeypatch: pytest.MonkeyPatch, inventory_field: str
+):
+    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    original_read = deployer.read_supervisor_health
+    old_package_version = package(NEW)
+
+    def read_with_old_package():
+        health, status = original_read()
+        status = json.loads(json.dumps(status))
+        if inventory_field == "resident_versions":
+            status["resident_versions"].append(old_package_version)
+        elif inventory_field == "project_runtime_version":
+            status["projects"][0]["runtime_version"] = old_package_version
+        elif inventory_field == "process_version":
+            status["processes"].append(
+                {"runtime_id": "old-package", "version": old_package_version}
+            )
+        else:
+            status["processes"].append(
+                {
+                    "runtime_id": "old-package-runtime-version",
+                    "version": OTHER,
+                    "runtime_version": old_package_version,
+                }
+            )
+        return health, status
+
+    monkeypatch.setattr(deployer, "read_supervisor_health", read_with_old_package)
+    with pytest.raises(RuntimeError, match="still owns or runs"):
+        deployer.reconcile_superseded_manual_deployment(
+            deployment_id, manual_prefix=prefix
         )
     assert deployer.state()["runtime_deployment"]["id"] == deployment_id
 

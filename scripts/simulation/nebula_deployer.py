@@ -2761,21 +2761,36 @@ def reconcile_superseded_manual_deployment(
     residents = status.get("resident_versions")
     projects = status.get("projects")
     processes = status.get("processes")
+    old_package_version = runtime_package_version(version)
+    superseded_identities = {version, old_package_version}
     if (
         not isinstance(target, str)
         or not SHA.fullmatch(target)
-        or target == version
+        or target in superseded_identities
         or not isinstance(residents, list)
-        or version in residents
+        or any(
+            not isinstance(resident, str)
+            or resident in superseded_identities
+            for resident in residents
+        )
         or not isinstance(projects, list)
         or any(
             not isinstance(project, dict)
-            or project.get("runtime_version") == version
+            or "runtime_version" not in project
+            or project["runtime_version"] is not None
+            and not isinstance(project["runtime_version"], str)
+            or project.get("runtime_version") in superseded_identities
             for project in projects
         )
         or not isinstance(processes, list)
         or any(
-            not isinstance(process, dict) or process.get("version") == version
+            not isinstance(process, dict)
+            or not isinstance(process.get("version"), str)
+            or process.get("version") in superseded_identities
+            or "runtime_version" in process
+            and process.get("runtime_version") is not None
+            and not isinstance(process.get("runtime_version"), str)
+            or process.get("runtime_version") in superseded_identities
             for process in processes
         )
     ):
