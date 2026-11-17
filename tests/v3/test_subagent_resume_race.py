@@ -139,9 +139,7 @@ async def test_two_subagents_finishing_together_resume_the_parent_once(
     tmp_path: Path,
 ) -> None:
     provider = _two_child_provider([_finish("p4"), _response(text="Both done.")])
-    store, chat, session, parent_turn_id, goals = await _park_parent(
-        tmp_path, provider
-    )
+    store, chat, session, parent_turn_id, goals = await _park_parent(tmp_path, provider)
     subagents = chat.subagents
 
     # Both children finish before either delivery looks at the parent, and
@@ -208,9 +206,7 @@ async def test_a_resume_that_loses_to_a_queued_continuation_leaves_it_alone(
     """
 
     provider = _two_child_provider([_finish("p4"), _response(text="Both done.")])
-    store, chat, session, parent_turn_id, goals = await _park_parent(
-        tmp_path, provider
-    )
+    store, chat, session, parent_turn_id, goals = await _park_parent(tmp_path, provider)
     subagents = chat.subagents
     real_prepare_resume = chat.prepare_resume
     real_start = chat.start_provider_turn
@@ -221,9 +217,7 @@ async def test_a_resume_that_loses_to_a_queued_continuation_leaves_it_alone(
         prepared = await real_prepare_resume(turn_id)
         if turn_id == parent_turn_id and not competing:
             # An operator's Resume starts the continuation first.
-            competing.append(
-                await real_start(await real_prepare_resume(turn_id))
-            )
+            competing.append(await real_start(await real_prepare_resume(turn_id)))
         return prepared
 
     async def start_provider_turn(prepared, *args, **kwargs):
@@ -271,9 +265,7 @@ async def test_a_parent_that_cannot_resume_still_fails_visibly(
     tmp_path: Path,
 ) -> None:
     provider = _two_child_provider([])
-    store, chat, session, parent_turn_id, goals = await _park_parent(
-        tmp_path, provider
-    )
+    store, chat, session, parent_turn_id, goals = await _park_parent(tmp_path, provider)
 
     async def broken_prepare_resume(turn_id: str):
         raise RuntimeError("provider went away")

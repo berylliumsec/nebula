@@ -4624,7 +4624,9 @@ class SubagentService:
             return True
         try:
             latest = await self.store.get(ChatTurn, turn_id)
-        except NotFoundError:  # diagnostic-expected: the turn was deleted with its conversation
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the turn was deleted with its conversation
             return False
         return latest.execution_claim_id is not None
 
