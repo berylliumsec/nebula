@@ -1,5 +1,5 @@
 {
-  "change_digest": "cce4ebac75333769f5227953c69d3a66009deed87e3be5413ffbc3e1b97146af",
+  "change_digest": "f6f0bd9648ab6fe9663550881c02f63eb7ef9a14627f67724beaf9ebebd65cf6",
   "reviewed_by": "Implementing agent",
   "reason": "The change releases only paired orphan claims for failed provider turns after durable tool, hook, child and approval checks. Six exact recovery regressions cover preserved failed-turn history, unsafe effects, mismatched goal claims, dangling turn and ToolCall approval references, reverse Approval.tool_call_id links, approved/edited approvals without settled calls, and failed or unknown continuation delivery; collection expects 44 cases across SQLite and PostgreSQL.",
   "exclusions": "Only the six named tests in test_runtime_orphan_recovery.py are selected. The rest of that module, all other Python suites, frontend/browser/native tests, production Core access, and live provider or Mac operations are excluded. PostgreSQL tests run against a disposable localhost-only PostgreSQL 16 container with tmpfs storage; no persistent database is used.",
