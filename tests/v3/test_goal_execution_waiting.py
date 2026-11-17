@@ -13,6 +13,7 @@ from sqlalchemy import update
 
 from nebula.v3.database import (
     DeploymentOperationRow,
+    ProjectAdmissionHoldRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeProcessRow,
@@ -154,6 +155,26 @@ async def test_running_goal_reads_waiting_until_a_ready_worker_owns_it(core):
     uncertain = (await goal_read(core, session.id))["execution"]
     assert uncertain["reason"] == "held"
     assert "Synthetic stream needs reconciliation" in uncertain["detail"]
+
+
+async def test_recovery_backoff_reads_held_with_its_retry(core):
+    # A project whose recovered workers keep failing waits between recovery
+    # attempts; the goal says so, and that Core is still retrying.
+    session = await running_goal(core.store)
+    await ready_worker(core)
+    async with committed(core) as db:
+        await db.execute(update(ProjectOwnershipRow).values(lease_expires_at_ms=0))
+        db.add(
+            ProjectAdmissionHoldRow(
+                project_id="project",
+                reason="Synthetic worker stopped 3 times; Core recovers it again in about 60 s",
+                attempts=3,
+                updated_at_ms=1,
+            )
+        )
+    held = (await goal_read(core, session.id))["execution"]
+    assert held["reason"] == "held"
+    assert "recovers it again in about 60 s" in held["detail"]
 
 
 async def test_paused_goal_has_no_execution_state(core):

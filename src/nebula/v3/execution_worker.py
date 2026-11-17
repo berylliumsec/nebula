@@ -401,6 +401,12 @@ class ProjectExecution:
             await self.context.coordinator.relinquish_failed_restoration(self.lease)
             self.state, self.closed = "fenced", True
             self._stop.set()
+            # An execution process attaches once, so this one can never serve
+            # again. Exiting lets recovery see the expired owner as gone and
+            # restore the project on a fresh target; the reply is sent first.
+            request_exit = getattr(self.context, "request_exit", None)
+            if request_exit is not None:
+                request_exit()
             return await self.status({})
 
     async def activate(self, payload):

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from nebula.v3.database import (
     DeploymentHostRow,
     DeploymentOperationRow,
+    ProjectAdmissionHoldRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeCommandRow,
@@ -550,15 +551,65 @@ async def test_existing_recovery_is_left_for_supervisor_advancement(recovery, ph
     assert not recovery.management.calls
 
 
-async def test_persisted_crash_loop_cap_expires_after_ten_minutes(recovery):
+async def admission_hold(recovery):
+    async with recovery.coordinator.database.session() as session:
+        row = await session.get(ProjectAdmissionHoldRow, "one")
+        return row.reason if row is not None else None
+
+
+async def test_repeated_recoveries_back_off_and_never_stop(recovery, monkeypatch):
+    # Three recoveries just now: the next waits 60 s, then runs. It is never
+    # held for an operator, and the wait is visible and reported once.
+    noted = []
+    monkeypatch.setattr(
+        "nebula.v3.runtime_auto_admission.record_diagnostic",
+        lambda *args, **kwargs: noted.append((args, kwargs)),
+    )
     await history(recovery, count=3)
     await recovery.automatic.reconcile()
     await recovery.automatic.reconcile()
     await recovery.controller().reconcile()
     assert not recovery.management.calls
-    assert len(recovery.diagnostics) == 2
-    recovery.clock[0] += 10 * 60_000 + 1
+    assert not recovery.diagnostics
+    assert [args[2] for args, _ in noted] == ["runtime.project_recovery.backoff"] * 2
+    reason = await admission_hold(recovery)
+    assert "stopped 3 times" in reason and "about 60 s" in reason
+    # A fresh controller (a Core restart) reads the same backoff from SQL.
+    recovery.clock[0] += 59_000
+    await recovery.controller().reconcile()
+    assert not recovery.management.calls
+    recovery.clock[0] += 1_001
+    await recovery.controller().reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+    assert await admission_hold(recovery) is None
+
+
+async def test_crash_loop_backoff_is_capped_at_five_minutes(recovery):
+    # However often the project failed, the next recovery is at most five
+    # minutes after the last one, so a failure that stops is soon recovered.
+    await history(recovery, count=40)
     await recovery.automatic.reconcile()
+    recovery.clock[0] += 5 * 60_000 - 1
+    await recovery.controller().reconcile()
+    assert not recovery.management.calls
+    assert "stopped 40 times" in await admission_hold(recovery)
+    recovery.clock[0] += 2
+    await recovery.controller().reconcile()
+    assert len(recovery.management.calls) == 3
+
+
+async def test_recovery_backoff_runs_from_the_latest_recovery(recovery):
+    # Only recent recoveries count, and the wait runs from the newest one.
+    await history(recovery, count=1)
+    recovery.clock[0] += 14_000
+    await recovery.controller().reconcile()
+    assert not recovery.management.calls
+    recovery.clock[0] += 1_000
+    await recovery.controller().reconcile()
     assert len(recovery.management.calls) == 3
 
 

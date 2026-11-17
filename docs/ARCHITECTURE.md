@@ -67,7 +67,11 @@ operator-selected execution target (or the source version when no target is
 selected) and transfer ownership through checkpoint restoration and
 verification. Lost operation responses do not authorize another process launch.
 The host retains recovery receipts across restarts, applies diagnostic backoff,
-and holds projects after three recoveries in ten minutes rather than crash-looping.
+and never stops recovering a project: each recovery within 30 minutes of earlier
+ones waits longer (15 s doubling, capped at 5 minutes), and the project reads as
+held with the next retry time instead of crash-looping. A restoration target that
+fails cleanly before activation relinquishes its grant and exits, so recovery
+restores the project on a fresh target.
 Checkpoint hashing has no total-record ceiling: entity, provider admission and
 tool-manifest references stream in batches of 10,000 from one SQL statement
 snapshot. The compact v1 digest remains unchanged, including optional manifest
