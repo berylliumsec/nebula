@@ -336,6 +336,64 @@ def test_third_execution_version_stays_staged():
     assert "target" not in record["runtime_deployment"]["steps"]
 
 
+def test_staged_execution_names_the_projects_pinning_each_version():
+    host, record = Host(), {"active": "v2", "pending": "v3"}
+    host.state["projects"].append(
+        {
+            "project_id": "apple",
+            "runtime_id": "current",
+            "runtime_version": "v2",
+            "fencing_token": 1,
+            "phase": "finishing",
+            "blockers": [],
+        }
+    )
+    host.live_runtimes["current"] = "v2"
+    host._refresh_resident_versions()
+    host.state["processes"] = [
+        {"runtime_id": "old", "version": "v1", "role": "execution"},
+        {"runtime_id": "current", "version": "v2", "role": "execution"},
+        {"runtime_id": "spare", "version": "v2", "role": "execution"},
+    ]
+
+    result = host.deployer(record).promote("v3")
+
+    assert result["status"] == "api_promoted_execution_staged"
+    assert "versions v1, v2 are resident" in result["detail"]
+    assert "version v1 is kept by project" in result["detail"]
+    assert (
+        "version v2 is kept by apple (handoff finishing) and unowned worker(s) spare"
+        in result["detail"]
+    )
+    assert "then rerun this deployment" in result["detail"]
+    assert result["blockers"] == [
+        {
+            "version": "v1",
+            "projects": [
+                {
+                    "project_id": "project",
+                    "runtime_id": "old",
+                    "phase": None,
+                    "blockers": [],
+                }
+            ],
+            "unowned_runtime_ids": [],
+        },
+        {
+            "version": "v2",
+            "projects": [
+                {
+                    "project_id": "apple",
+                    "runtime_id": "current",
+                    "phase": "finishing",
+                    "blockers": [],
+                }
+            ],
+            "unowned_runtime_ids": ["spare"],
+        },
+    ]
+
+
 def test_staged_promotion_resumes_once_an_older_version_retires():
     host, record = Host(), {"active": "v2", "pending": "v3"}
     host.state["projects"].append(

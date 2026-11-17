@@ -862,7 +862,10 @@ class RuntimeSupervisor:
                 raise OperationRejected(str(error)) from error
             spawned = await self.host.spawn(version, "execution")
             if spawned is None:
-                raise OperationRejected("The execution candidate remains staged")
+                raise OperationRejected(
+                    "The execution candidate remains staged. "
+                    + await self.coordinator.execution_capacity_blocker(version)
+                )
             return spawned
 
     async def attach_execution(

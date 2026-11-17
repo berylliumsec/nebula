@@ -1,24 +1,28 @@
 {
-  "change_digest": "15239c3dc3d820e299256111fa143a73409cf51fb1db4156623165e73344ed42",
-  "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
-  "reason": "A project worker whose serving application failed now exits after recording its failure, so Core's existing dead-owner reconciliation and recovery free the project. The selected tests cover the exit after the failure receipt, the retained hold for a startup failure and for a failure while closing, and close cleanup, on SQLite and PostgreSQL.",
-  "exclusions": "No UI, frontend, native or browser changes. Process-level worker suites are not selected because locally they import the primary checkout, not this branch; the change was exercised end to end on a scratch Core. tests/v3/test_recovery_reconciliation.py::test_retained_prepared_worker_survives_host_detach_and_new_host_activates_saved_recovery fails identically on clean main locally.",
+  "change_digest": "f262971a0f50154023e75ada3cd4a647c2e91622af579bd1793797356f00a7f1",
+  "reviewed_by": "Claude, based on an independently validated by-design finding and a scratch-Core reproduction",
+  "reason": "Refusals for a third execution version (target_execution, the per-project prepare_execution switch, the deployment status detail and the staged deployer result) now name the projects and unowned workers that keep each resident version and how a version retires. The selected tests cover the new blocker text on SQLite and PostgreSQL, the prepare_execution refusal, the staged deployer's structured blockers, and the existing third-version staging, targeting and resume paths.",
+  "exclusions": "No UI consumes /deployment/status, so no frontend, native or browser coverage. The two-version limit and handoff behaviour are unchanged, so broader deployment suites are not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 8,
+    "python": 11,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_worker.py::test_failed_startup_is_reported_and_same_grant_does_not_retry",
-    "tests/v3/test_execution_worker.py::test_serving_project_failure_exits_the_worker_after_its_receipt",
-    "tests/v3/test_execution_worker.py::test_failure_while_closing_keeps_the_worker",
-    "tests/v3/test_execution_worker.py::test_cancelled_close_waits_for_controller_cleanup"
+    "tests/v3/test_deployment_lifecycle.py::test_third_version_refusal_names_the_projects_pinning_each_version",
+    "tests/v3/test_deployment_lifecycle.py::test_third_execution_version_cannot_become_the_target",
+    "tests/v3/test_deployment_lifecycle.py::test_third_execution_version_stages_while_compatible_api_can_promote",
+    "tests/v3/test_runtime_operations.py::test_execution_prepare_without_reservation_is_a_failed_receipt",
+    "tests/test_staged_deployer.py::test_staged_execution_names_the_projects_pinning_each_version",
+    "tests/test_staged_deployer.py::test_third_execution_version_stays_staged",
+    "tests/test_staged_deployer.py::test_staged_promotion_resumes_once_an_older_version_retires",
+    "tests/test_staged_deployer.py::test_code_rollback_to_a_third_version_keeps_the_target"
   ],
   "frontend": [],
   "native": [],
