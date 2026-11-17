@@ -81,6 +81,13 @@ Curation must not slow down anything an operator is waiting on:
   rate-limit error pauses the goal's run for five minutes.
 - Each goal run is capped at 200 chunks and 400,000 tokens.
 
+## Diagnostics
+
+Linked memory records its diagnostics under the `knowledge` feature with
+`linked_memory.*` event codes, for example `linked_memory.goal_run_created`,
+`linked_memory.chunk_curated` (with card, link, token and timing counts) and
+`linked_memory.goal_run_done`.
+
 ## Configuration
 
 These environment variables are read when Core starts:

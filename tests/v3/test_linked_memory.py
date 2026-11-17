@@ -589,3 +589,48 @@ async def test_helper_process_runs_at_low_priority_and_answers():
     finally:
         await helper.stop()
     assert helper.snapshot()["state"] == "stopped"
+
+
+def test_diagnostics_use_registered_features():
+    """An unregistered feature raises inside a worker and stops the project."""
+
+    import ast
+    from pathlib import Path
+
+    import nebula.v3 as package
+    from nebula.v3.diagnostics import FEATURE_FILES
+
+    root = Path(package.__file__).parent
+    calls = {
+        "record_diagnostic": 1,
+        "record_caught_exception": 0,
+        "start_component": 0,
+    }
+    used = set()
+    for name in ("linked_memory_curator.py", "execution_kernel.py"):
+        tree = ast.parse((root / name).read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if func == "create_diagnostic_task":
+                for keyword in node.keywords:
+                    if keyword.arg == "feature" and isinstance(
+                        keyword.value, ast.Constant
+                    ):
+                        used.add((name, keyword.value.value))
+            elif func in calls and len(node.args) > calls[func]:
+                argument = node.args[calls[func]]
+                if isinstance(argument, ast.Constant) and isinstance(
+                    argument.value, str
+                ):
+                    if name == "execution_kernel.py" and func != "start_component":
+                        continue
+                    used.add((name, argument.value))
+    assert ("linked_memory_curator.py", "knowledge") in used
+    unknown = {
+        (name, feature)
+        for name, feature in used
+        if feature.strip().lower().replace("_", "-") not in FEATURE_FILES
+    }
+    assert unknown == set()

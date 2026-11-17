@@ -2546,8 +2546,8 @@ def create_execution_kernel(
                 butler_oversight.shutdown,
             )
             await start_component(
-                "linked_memory",
-                "curator",
+                "knowledge",
+                "linked-memory-curator",
                 linked_memory_curator.startup,
                 linked_memory_curator.shutdown,
             )

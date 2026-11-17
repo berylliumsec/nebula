@@ -214,7 +214,7 @@ class LinkedMemoryCurator:
             projects = await self.memory.enabled_projects()
         except Exception as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.startup_scan_failed",
                 "Linked memory could not list enabled projects at startup.",
                 error,
@@ -258,7 +258,7 @@ class LinkedMemoryCurator:
         if state.task is None or state.task.done():
             state.task = create_diagnostic_task(
                 self._run_project(project_id),
-                feature="linked_memory",
+                feature="knowledge",
                 event_code="linked_memory.project_loop_failed",
                 failure_message="Linked memory curation stopped unexpectedly.",
                 name=f"nebula-linked-memory-{project_id[:32]}",
@@ -350,7 +350,7 @@ class LinkedMemoryCurator:
                         session_ids.append(record.child_session_id)
             except ConflictError as error:
                 record_caught_exception(
-                    "linked_memory",
+                    "knowledge",
                     "linked_memory.subagent_chain_invalid",
                     "A goal's subagent chain could not be read; only its own chat is curated.",
                     error,
@@ -361,7 +361,7 @@ class LinkedMemoryCurator:
         )
         record_diagnostic(
             "info",
-            "linked_memory",
+            "knowledge",
             "linked_memory.goal_run_created",
             "Linked memory will curate a completed goal.",
             project_id=project_id,
@@ -386,7 +386,7 @@ class LinkedMemoryCurator:
             snapshot = await gate.snapshot()
         except Exception as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.host_pressure_unavailable",
                 "Host pressure could not be read; curation waits.",
                 error,
@@ -482,7 +482,7 @@ class LinkedMemoryCurator:
                 await self._set_state(run, "done", reason=None)
                 record_diagnostic(
                     "info",
-                    "linked_memory",
+                    "knowledge",
                     "linked_memory.goal_run_done",
                     "Linked memory finished curating a goal.",
                     project_id=project_id,
@@ -585,7 +585,7 @@ class LinkedMemoryCurator:
                     steps = await ledger.history(turn)
                 except Exception as error:
                     record_caught_exception(
-                        "linked_memory",
+                        "knowledge",
                         "linked_memory.tool_steps_unreadable",
                         "A turn's tool steps could not be read for curation.",
                         error,
@@ -683,7 +683,7 @@ class LinkedMemoryCurator:
             await validate_engagement_provider_privacy(self.store, project, provider)
         except ProviderPrivacyViolation as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.provider_privacy",
                 "The project's privacy policy forbids this chat's provider for curation.",
                 error,
@@ -735,7 +735,7 @@ class LinkedMemoryCurator:
             )
         except HelperUnavailable as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.helper_unavailable",
                 "The curation helper is unavailable; the chunk waits.",
                 error,
@@ -759,7 +759,7 @@ class LinkedMemoryCurator:
             return "wait", await self._set_state(run, "paused", reason=deferred.reason)
         except (ProviderOverloadedError, ProviderQuotaError) as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.provider_rate_limited",
                 "The provider refused a curation call; the goal run pauses.",
                 error,
@@ -774,7 +774,7 @@ class LinkedMemoryCurator:
             )
         except (ProviderContextLengthError, ProviderError, TimeoutError) as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.provider_call_failed",
                 "A curation model call failed.",
                 error,
@@ -827,7 +827,7 @@ class LinkedMemoryCurator:
             )
         except HelperUnavailable as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.helper_unavailable",
                 "The curation helper is unavailable; the chunk waits.",
                 error,
@@ -849,7 +849,7 @@ class LinkedMemoryCurator:
             )
         except ConflictError as error:
             record_caught_exception(
-                "linked_memory",
+                "knowledge",
                 "linked_memory.chunk_commit_conflict",
                 "A curated chunk could not be saved; it runs again.",
                 error,
@@ -860,7 +860,7 @@ class LinkedMemoryCurator:
         self.chunks_curated += 1
         record_diagnostic(
             "info",
-            "linked_memory",
+            "knowledge",
             "linked_memory.chunk_curated",
             "Linked memory curated one chunk of a completed goal.",
             project_id=project_id,
