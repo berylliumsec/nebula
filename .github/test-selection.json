@@ -1,31 +1,20 @@
 {
-  "change_digest": "e2d4be226ffa28be22a6ccb6ccf57e2be521ca20d9080bd105831d4e840d68ad",
-  "reviewed_by": "Claude (py-test-rot harness group); selection reviewed against the diff by the implementing agent; the gateway gate race independently validated by a separate subagent",
-  "reason": "Product: HarnessRuntimeService._gateway_execution_gate (harnesses.py) checked for a turn's gate, then awaited the run, project and scope reads before storing a new semaphore; since #939 those reads yield, so overlapping calls could each store their own gate and run gateway action calls past the concurrency limit. The gate is stored with setdefault so every caller shares the first. Tests: eleven harness/Claude/Grok/native-hook suites left stale by #939 are repaired (constructors back to __init__, awaited prepare_chat and turn tasks, async predicates and stubs, asyncio.sleep, the aiosqlite plan capture) with stale expectations citing cea8b38, #572 and #1125; the unattached-session fixture uses a neutral synthetic name.",
-  "exclusions": "test_harnesses.py is selected only for the gate regression: two of its tests (catalog changes keeping the same native thread) conflict with cea8b38's standing-instruction design and await an owner decision. test_chat_subagent_lifecycle.py passes but its process sometimes hangs at exit on unclosed aiosqlite threads, so it is not selected yet. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL.",
+  "change_digest": "cffce457580630940358a52c74459799f450b75c6cfda7384f19e4c3b5ea771b",
+  "reviewed_by": "Claude; documentation-only selection reviewed against the diff by the implementing agent",
+  "reason": "Documentation only: AGENTS.md and .codex/rules/change-workflow.md gain the operator's standing approval to use the public commit guard's tree-scoped Public-Review-Bypass when Codex review is unavailable (usage limit, authentication, outage), never when Codex reviewed and did not allow a commit.",
+  "exclusions": "No product code, tests, UI, native or Playwright surface changed, so no tests apply. LAN validation does not apply to agent instructions.",
   "python_browser": false,
   "python_node": false,
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 163,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/v3/test_claude_harness_turn_cost.py",
-    "tests/v3/test_claude_harness_turns.py",
-    "tests/v3/test_grok_acp_compliance.py",
-    "tests/v3/test_harness_activity_cost.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_harness_leftovers.py",
-    "tests/v3/test_harness_tool_lookup.py",
-    "tests/v3/test_native_hook_turn_ends.py",
-    "tests/v3/test_native_hooks.py",
-    "tests/v3/test_harnesses.py::test_chat_gateway_serializes_concurrent_action_calls"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],

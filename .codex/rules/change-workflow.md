@@ -46,6 +46,32 @@ run, keep the PR unmerged, report the precise missing evidence, and continue whe
 the gate becomes available. Do not present PR creation or merge as proof that an
 untested feature works.
 
+## Public commit review unavailable
+
+The local public-commit guard has Codex review every staged commit. The operator
+gives standing approval to bypass it when Codex review is **unavailable**: the
+guard reports `Codex review failed`, `could not start or timed out`, or `invalid
+review result`, and a trivial `codex exec` confirms a usage limit, an
+authentication failure, or an outage. Retry once first. Never bypass a commit that
+Codex reviewed and did not allow, and never bypass to commit secrets or research
+material the guard exists to keep out of the public repository.
+
+Use only the guard's tree-scoped bypass, for one commit at a time:
+
+```sh
+TREE=$(git write-tree)
+REASON="Codex review unavailable: <cause, e.g. usage limit until 2026-11-21>"
+NEBULA_PUBLIC_COMMIT_BYPASS_TREE=$TREE \
+NEBULA_PUBLIC_COMMIT_BYPASS_REASON="$REASON" \
+git commit -F <message file ending with "Public-Review-Bypass: $REASON">
+```
+
+The reason must be 10-200 printable characters on one line and match the
+`Public-Review-Bypass:` trailer exactly. Set the variables only on that command,
+never in a shell profile or session environment. Name the bypass and its cause in
+the pull request description. Do not create guard bypass marker files or edit the
+hooks.
+
 ## Core rollback snapshot retention
 
 The legacy simulation deployer in `scripts/simulation/nebula_deployer.py`
