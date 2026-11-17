@@ -35,6 +35,7 @@ from .runtime_coordination import (
     pending_storage_dispatches,
     project_worker_commands,
 )
+from .runtime_operations import _DURABLE_OUTCOME_ACTIONS
 from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
 
@@ -753,6 +754,16 @@ class RuntimeAutoAdmission:
             # Saved parameters and results are authoritative, including an
             # unknown spawn outcome after a host restart.
             receipt = await ledger.status(operation_id, actor_id=_RECOVERY_ACTOR)
+            if receipt["state"] == "uncertain" and action in _DURABLE_OUTCOME_ACTIONS:
+                # Settle it from its durable record: a committed effect is
+                # succeeded; a proven absent one is failed and is asked again
+                # after the refused-operation backoff. Never re-dispatched.
+                receipt = await ledger.reconcile(operation_id, actor_id=_RECOVERY_ACTOR)
+                if receipt["state"] == "failed":
+                    raise CoordinationConflict(
+                        f"Automatic recovery operation {operation_id} had no "
+                        "committed effect; it is asked again shortly"
+                    )
         else:
             holder = (
                 await self._unassigned_execution_with_effects(owner["project_id"])

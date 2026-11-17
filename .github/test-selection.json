@@ -1,5 +1,5 @@
 {
-  "change_digest": "a607479fc4d2de260df53214aaca4833309e8872c43cc2a7838df4dfb6806adb",
+  "change_digest": "ce099c582a26d81d1be8fd84d6f4e3eefd7c9563d20f9c9d4fae18caadcc96aa",
   "reviewed_by": "Claude, based on an independently validated root cause and a scratch-Core reproduction",
   "reason": "Automatic dead-owner recovery no longer waits on every unowned execution process; it holds a project's recovery only while an unowned process still holds that project's open resource, unfinished command or held capacity. The selected tests cover an idle stray that neither blocks nor is reused, a stray holding the project's effects that still blocks, another project's leftover that does not block, and the existing lost-prepare no-replay case, on SQLite and PostgreSQL.",
   "exclusions": "No UI, frontend, native or browser changes. The admission path is unchanged, so admission suites are not selected; tests/v3/test_admission_retry.py was run locally and passes.",

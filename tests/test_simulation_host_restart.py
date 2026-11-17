@@ -290,6 +290,21 @@ class QuietCore:
         return [{"id": "project-1"}]
 
     def get(self, path: str, **parameters):
+        if path == "deployment/status":
+            # The busy turn's owner is a live, verified worker.
+            return {
+                "projects": [
+                    {
+                        "project_id": "project-1",
+                        "runtime_id": "worker-1",
+                        "runtime_version": NEW,
+                        "blockers": [],
+                    }
+                ],
+                "processes": [
+                    {"runtime_id": "worker-1", "state": "ready", "ready_verified": True}
+                ],
+            }
         assert path == "chat/session-activity", path
         self.reads.append(parameters["engagement_id"])
         busy = len(self.reads) <= self.busy_reads
@@ -499,3 +514,139 @@ def test_activation_does_not_stop_the_host_while_chat_turns_stay_active(
     assert alive(old_supervisor)
     assert "host_activation" not in record
     assert deployer.current_release_version() == OLD
+
+
+class UnavailableOwnerCore:
+    """A project whose turn stays working while its owner cannot advance it.
+
+    ``owners`` yields the project's owner per status read: each is
+    (runtime_id, ready_verified, blockers). After ``idle_after`` activity
+    reads the turn finishes.
+    """
+
+    def __init__(self, owners, idle_after: int | None = None) -> None:
+        self.owners = list(owners)
+        self.idle_after = idle_after
+        self.status_reads = 0
+        self.activity_reads = 0
+
+    def all_entities(self, path: str, **_parameters) -> list[dict]:
+        assert path == "engagements"
+        return [{"id": "project-apple", "name": "Apple Bug Bounty"}]
+
+    def _owner(self):
+        return self.owners[min(self.status_reads, len(self.owners) - 1)]
+
+    def get(self, path: str, **parameters):
+        if path == "chat/session-activity":
+            assert parameters["engagement_id"] == "project-apple"
+            idle = (
+                self.idle_after is not None and self.activity_reads >= self.idle_after
+            )
+            self.activity_reads += 1
+            return [
+                {
+                    "session_id": "chat-1",
+                    "state": "idle" if idle else "working",
+                    "turn_id": None if idle else "turn-7",
+                }
+            ]
+        assert path == "deployment/status", path
+        runtime_id, verified, blockers = self._owner()
+        self.status_reads += 1
+        return {
+            "projects": [
+                {
+                    "project_id": "project-apple",
+                    "runtime_id": runtime_id,
+                    "runtime_version": "3.0.0+old",
+                    "blockers": blockers,
+                }
+            ],
+            "processes": [
+                {
+                    "runtime_id": runtime_id,
+                    "state": "ready",
+                    "ready_verified": verified,
+                }
+            ],
+        }
+
+
+def _bounded_quiet_wait(monkeypatch: pytest.MonkeyPatch, core) -> None:
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(deployer, "HOST_QUIET_POLL_SECONDS", 0.02, raising=False)
+    monkeypatch.setattr(deployer, "HOST_QUIET_WAIT_SECONDS", 30, raising=False)
+    monkeypatch.setattr(deployer, "HOST_UNAVAILABLE_OWNER_SECONDS", 0.2, raising=False)
+
+
+def test_restart_boundary_names_a_turn_held_by_an_unresponsive_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A frozen owner keeps its process (Core recovers only exited ones) and
+    its lapsed lease, so its turn never settles: refuse with the exact
+    blocker instead of spending the whole quiet bound on every run."""
+    core = UnavailableOwnerCore([("worker-frozen", False, [])])
+    _bounded_quiet_wait(monkeypatch, core)
+    started = time.monotonic()
+
+    with pytest.raises(RuntimeError) as refused:
+        deployer.wait_quiet_restart_boundary()
+
+    assert time.monotonic() - started < 10
+    message = str(refused.value)
+    assert 'Project "Apple Bug Bounty" (project-apple)' in message
+    assert "turn-7" in message
+    assert "worker-frozen (version 3.0.0+old)" in message
+    assert "heartbeat lease lapsed" in message
+    assert "supervisor was not stopped" in message
+
+
+def test_restart_boundary_names_a_turn_held_by_a_failed_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed application keeps renewing its lease, so Core never recovers
+    the project; the refusal carries Core's own failure blocker."""
+    failure = (
+        "Execution worker worker-failed failed: boom; its cleanup is "
+        "unverified, so it keeps the project's ownership"
+    )
+    core = UnavailableOwnerCore([("worker-failed", True, [failure])])
+    _bounded_quiet_wait(monkeypatch, core)
+
+    with pytest.raises(RuntimeError) as refused:
+        deployer.wait_quiet_restart_boundary()
+
+    assert failure in str(refused.value)
+    assert "turn-7" in str(refused.value)
+
+
+def test_restart_boundary_waits_out_an_owner_that_core_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead owner is reconciled and replaced by Core within its lease; the
+    resumed turn then finishes, so activation proceeds."""
+    core = UnavailableOwnerCore(
+        [("worker-dead", False, [])] * 3 + [("worker-new", True, [])],
+        idle_after=8,
+    )
+    _bounded_quiet_wait(monkeypatch, core)
+
+    result = deployer.wait_quiet_restart_boundary()
+
+    assert result["quiet_after_seconds"] >= 0
+    assert core.activity_reads == 9
+
+
+def test_restart_boundary_does_not_blame_a_pinned_live_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Handoff blockers on a live owner are ordinary running work."""
+    core = UnavailableOwnerCore(
+        [("worker-live", True, ["1 resident handle(s) in harness require it"])]
+    )
+    _bounded_quiet_wait(monkeypatch, core)
+    monkeypatch.setattr(deployer, "HOST_QUIET_WAIT_SECONDS", 0.4, raising=False)
+
+    with pytest.raises(RuntimeError, match="stayed queued, admitting or running"):
+        deployer.wait_quiet_restart_boundary()

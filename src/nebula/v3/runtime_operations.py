@@ -30,6 +30,77 @@ def _document(value: dict) -> dict:
     return value
 
 
+# Operations whose effect is one transaction with an exactly keyed durable
+# record. An error after that commit must not leave an unsettleable receipt.
+_DURABLE_OUTCOME_ACTIONS = frozenset(
+    {"recover_project", "reconcile_project", "promote_api"}
+)
+_DURABLE_RECORDS = {
+    "recover_project": "runtime_recoveries row with this operation ID",
+    "reconcile_project": "orphan-recovery deployment receipt for the expected owner",
+    "promote_api": "api.promoted deployment receipt for this runtime at expected_revision + 1",
+}
+
+
+async def durable_outcome(session, row) -> dict | None:
+    """Return the committed result of ``row``'s effect, or None when absent.
+
+    * ``recover_project``: begin_recovery's RuntimeRecoveryRow carries the
+      same operation ID. Attach, verification and activation continue from
+      that row; its current phase is reported.
+    * ``reconcile_project``: the orphan reconciliation receipt keyed by the
+      exact expected owner.
+    * ``promote_api``: the ``api.promoted`` receipt for this runtime at the
+      single revision this request's expected revision could produce.
+    """
+    from sqlalchemy import select
+
+    from .database import DeploymentReceiptRow, RuntimeRecoveryRow
+
+    parameters = row.parameters or {}
+    if row.action == "recover_project":
+        recovery = await session.get(RuntimeRecoveryRow, row.operation_id)
+        if recovery is None or recovery.project_id != parameters.get("project_id"):
+            return None
+        return {
+            "project_id": recovery.project_id,
+            "runtime_id": recovery.target_runtime_id,
+            "fencing_token": recovery.target_fencing_token,
+            "recovery_phase": recovery.phase,
+            "confirmed_by": "runtime_recovery",
+        }
+    if row.action == "reconcile_project":
+        from .runtime_coordination import ProjectLease
+        from .runtime_orphan_recovery import orphan_receipt_key
+
+        owner = parameters.get("expected_owner") or {}
+        receipt = await session.get(
+            DeploymentReceiptRow, orphan_receipt_key(ProjectLease(**owner))
+        )
+        if receipt is None:
+            return None
+        return {**receipt.result, "confirmed_by": "orphan_reconciliation_receipt"}
+    if row.action == "promote_api":
+        runtime_id = parameters.get("runtime_id")
+        revision = parameters.get("expected_revision")
+        if not isinstance(runtime_id, str) or type(revision) is not int:
+            return None
+        for receipt in await session.scalars(
+            select(DeploymentReceiptRow).where(
+                DeploymentReceiptRow.action == "api.promoted",
+                DeploymentReceiptRow.result["runtime_id"].as_string() == runtime_id,
+            )
+        ):
+            if receipt.result.get("revision") == revision + 1:
+                return {
+                    "api_runtime_id": runtime_id,
+                    "version": receipt.result.get("version"),
+                    "revision": revision + 1,
+                    "confirmed_by": "api_promoted_receipt",
+                }
+    return None
+
+
 class DeploymentOperations:
     def __init__(
         self, coordinator: DeploymentCoordinator, *, owner_id: str | None = None
@@ -196,6 +267,18 @@ class DeploymentOperations:
             )
 
             async def uncertain():
+                if not rejected and action in _DURABLE_OUTCOME_ACTIONS:
+                    # The effect may have committed before the error. Its own
+                    # durable record decides; only a proven effect settles it.
+                    await self._finish_unconfirmed(
+                        operation_id,
+                        {
+                            "detail": detail,
+                            "error_type": error_type,
+                            **({"reason": reason} if reason else {}),
+                        },
+                    )
+                    return
                 await self._finish(
                     operation_id,
                     "failed" if rejected else "uncertain",
@@ -268,6 +351,44 @@ class DeploymentOperations:
             )
             row.updated_at_ms = await self.coordinator.coordination._clock_ms(session)
 
+    async def _finish_unconfirmed(self, operation_id, failure: dict) -> None:
+        """Record an unconfirmed dispatch from its effect's durable record.
+
+        A proven commit is ``succeeded`` with that record, keeping the dispatch
+        error type beside it. Absence alone does not prove that a lost COMMIT
+        did nothing, so that receipt stays ``uncertain`` and names the record
+        reconciliation reads.
+        """
+        async with self.coordinator.coordination._write() as session:
+            await self.coordinator._host(session)
+            row = await session.get(
+                DeploymentOperationRow, operation_id, with_for_update=True
+            )
+            if (
+                row is None
+                or row.claim_owner != self.owner_id
+                or row.state != "running"
+            ):
+                raise CoordinationConflict(
+                    "operation ownership changed before completion"
+                )
+            outcome = await durable_outcome(session, row)
+            recovery = (row.result or {}).get("recovery")
+            if recovery:
+                recovery = {**recovery, "dispatch_finished": True}
+            if outcome is not None:
+                row.state = "succeeded"
+                result = {
+                    **outcome,
+                    "dispatch_error_type": failure["error_type"],
+                    "detail": "The effect committed before the reply failed; this result is read from its durable record.",
+                }
+            else:
+                row.state = "uncertain"
+                result = {**failure, "durable_record": _DURABLE_RECORDS[row.action]}
+            row.result = {**result, **({"recovery": recovery} if recovery else {})}
+            row.updated_at_ms = await self.coordinator.coordination._clock_ms(session)
+
     async def reconcile(self, operation_id: str, *, actor_id: str) -> dict:
         """Resolve only an inactive, durably linked operation; never replay it."""
         if self._locks.setdefault(operation_id, asyncio.Lock()).locked():
@@ -321,7 +442,12 @@ class DeploymentOperations:
                         "The original operation host is not confirmed gone"
                     )
             phase = recovery.get("phase")
-            if phase == "dispatch" and not same_owner and row.action != "retire":
+            if (
+                phase == "dispatch"
+                and not same_owner
+                and row.action != "retire"
+                and row.action not in _DURABLE_OUTCOME_ACTIONS
+            ):
                 raise CoordinationConflict(
                     "Previous host did not publish an effect boundary"
                 )
@@ -373,6 +499,15 @@ class DeploymentOperations:
                             "Unadmitted worker reservation needs verified abort"
                         )
                 state = "failed"
+            elif row.action in _DURABLE_OUTCOME_ACTIONS:
+                # One transaction with an exactly keyed record. Its original
+                # host is confirmed gone, or this host finished the dispatch,
+                # so a commit that is absent now can no longer appear.
+                result = await durable_outcome(session, row)
+                if result is not None:
+                    state = "succeeded"
+                elif not same_owner or recovery.get("dispatch_finished") is True:
+                    state = "failed"
             elif row.action == "retire":
                 identity = await self.coordinator._retirement_readback(
                     session, row.parameters["runtime_id"]
