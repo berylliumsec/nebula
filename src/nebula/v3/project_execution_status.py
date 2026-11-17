@@ -47,7 +47,9 @@ async def _clock_ms(session: AsyncSession) -> int:
         value = func.extract("epoch", func.clock_timestamp()) * 1000
     else:
         value = (func.julianday("now") - 2440587.5) * 86_400_000
-    return int(await session.scalar(select(cast(value, BigInteger))))
+    now = await session.scalar(select(cast(value, BigInteger)))
+    assert now is not None
+    return int(now)
 
 
 def _held(reason: str | None) -> ExecutionWaiting:
