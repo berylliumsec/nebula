@@ -959,8 +959,10 @@ def provider_plugins(
         ),
     ]
     from .memory_tools import memory_budget_tools
+    from .linked_memory_tools import linked_memory_tools
 
     plugins.extend(memory_budget_tools(settings_api, engagement_id))
+    plugins.extend(linked_memory_tools(settings_api, engagement_id))
     if work is not None:
         from .control_assistant_work import (
             WORK_TOOLS,

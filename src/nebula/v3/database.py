@@ -21,6 +21,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -1047,6 +1048,118 @@ class ProviderTurnQueueRow(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# Linked memory (docs/design/linked-memory.md). Every table carries the
+# owning project's ``engagement_id`` so the project's execution worker, which
+# holds the lease, is the only writer.
+class LinkedMemorySettingsRow(Base):
+    __tablename__ = "linked_memory_settings"
+
+    engagement_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(20), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
+
+
+class LinkedMemoryCursorRow(Base):
+    __tablename__ = "linked_memory_cursors"
+
+    engagement_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class LinkedMemoryGoalRunRow(Base):
+    __tablename__ = "linked_memory_goal_runs"
+    __table_args__ = (
+        Index("ix_linked_memory_goal_runs_state", "engagement_id", "state"),
+    )
+
+    goal_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    engagement_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    session_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    position: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    chunks: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    mcp_queries: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    last_error: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class LinkedMemoryCardRow(Base):
+    __tablename__ = "linked_memory_cards"
+    __table_args__ = (
+        UniqueConstraint(
+            "engagement_id", "content_hash", name="uq_linked_memory_card_content"
+        ),
+        Index("ix_linked_memory_cards_scope", "engagement_id", "state", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    engagement_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    summary: Mapped[str] = mapped_column(String(400), nullable=False)
+    applies_when: Mapped[str | None] = mapped_column(String(300))
+    authority: Mapped[str] = mapped_column(String(30), nullable=False)
+    audience: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    goal_id: Mapped[str | None] = mapped_column(String(200))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    curator_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    curator_model: Mapped[str] = mapped_column(String(200), nullable=False)
+    verified_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class LinkedMemoryCardSourceRow(Base):
+    __tablename__ = "linked_memory_card_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "card_id", "excerpt_hash", name="uq_linked_memory_card_source"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    card_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    engagement_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    ref: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    excerpt: Mapped[str] = mapped_column(String(500), nullable=False)
+    excerpt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    captured_at: Mapped[str] = mapped_column(String(50), nullable=False)
+
+
+class LinkedMemoryLinkRow(Base):
+    __tablename__ = "linked_memory_links"
+    __table_args__ = (
+        UniqueConstraint("from_card", "to_card", "type", name="uq_linked_memory_link"),
+        Index("ix_linked_memory_links_to", "to_card"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    engagement_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    from_card: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_card: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(30), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(String(300), nullable=False)
+    basis: Mapped[str] = mapped_column(String(30), nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    curator_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    curator_model: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
 
 
 # The ORM never updates or deletes an event row. The history of a deleted
