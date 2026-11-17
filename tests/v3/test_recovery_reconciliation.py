@@ -70,6 +70,7 @@ def stepped_supervisor(coordinator, rpc):
     root._handoff_serial, root._operations = asyncio.Lock(), asyncio.Lock()
     root._activated_handoffs = set()
     root._restore_waiting = {}
+    root._relinquish_waiting = {}
     return root
 
 
@@ -715,3 +716,94 @@ async def test_waiting_transfer_is_recorded_once_per_reason(recovery, monkeypatc
         handoff = await session.get(ProjectHandoffRow, "one")
         assert handoff.phase == "transferred" and handoff.admission_held
         assert handoff.revision == before + 1
+
+
+async def test_target_failed_before_activation_relinquishes_for_fresh_recovery(
+    recovery,
+):
+    # A recovery target whose restoration failed after construction and
+    # before activation stays alive, and its heartbeat would renew the held
+    # grant forever. The host has it give the grant back and exit, so normal
+    # recovery restores the project on a fresh target.
+    value = recovery
+    lease = await value.begin()
+    exits = []
+    value.context.request_exit = lambda: exits.append(lease.runtime_id)
+
+    @asynccontextmanager
+    async def failing(ctx, grant):
+        value.constructions.append(grant)
+        try:
+            raise RuntimeError("synthetic restoration failure before activation")
+            yield
+        finally:
+            ctx.restore_cleanup_completed = True
+
+    value.execution.application_factory = failing
+    await value.execution.attach(asdict(lease))
+    await until(lambda: value.execution.state == "failed")
+    root = value.new_supervisor()
+    await root.advance_project_handoffs()
+    assert value.execution.state == "fenced" and exits == ["target"]
+    assert not value.activations and not value.activation_requests
+    async with value.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert (owner.runtime_id, owner.fencing_token) == (
+            "target",
+            lease.fencing_token,
+        )
+        assert owner.lease_expires_at_ms == 0
+        handoff = await session.get(ProjectHandoffRow, "one")
+        assert handoff.phase == "transferred" and handoff.admission_held
+    with pytest.raises(LeaseLost):
+        async with value.coordination.fenced(lease):
+            pytest.fail("A relinquished grant kept its authority")
+    # The released project recovers onto a fresh process incarnation; the
+    # failed attempt is kept as blocked history.
+    await value.coordination.register_runtime("fresh", "restore")
+    async with value.database.session() as session:
+        session.add(
+            RuntimeProcessRow(
+                runtime_id="fresh",
+                version="restore",
+                role="execution",
+                pid=0,
+                process_birth="synthetic-no-process",
+                endpoint="unix:///synthetic/fresh",
+                credential_reference=uuid4().hex,
+                state="ready",
+                updated_at_ms=value.clock[0],
+            )
+        )
+        revision = (await session.get(ProjectHandoffRow, "one")).revision
+    fresh = await value.coordinator.begin_recovery(
+        "one",
+        "fresh",
+        expected_owner=lease,
+        expected_handoff_revision=revision,
+        operation_id="fresh-recovery",
+        actor_id="operator",
+    )
+    assert fresh.fencing_token == lease.fencing_token + 1
+    async with value.database.session() as session:
+        failed = await session.get(RuntimeRecoveryRow, "saved-recovery")
+        assert failed.phase == "blocked"
+
+
+async def test_failed_target_that_did_not_clean_up_stays_held(recovery):
+    value = recovery
+    lease = await value.begin()
+
+    @asynccontextmanager
+    async def failing(ctx, grant):
+        raise RuntimeError("synthetic failure with unverified cleanup")
+        yield
+
+    value.execution.application_factory = failing
+    await value.execution.attach(asdict(lease))
+    await until(lambda: value.execution.state == "failed")
+    await value.new_supervisor().advance_project_handoffs()
+    assert value.execution.state == "failed"
+    async with value.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert owner.lease_expires_at_ms > 0

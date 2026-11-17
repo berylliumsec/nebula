@@ -46,8 +46,14 @@ _RECOVERY_ACTOR = "runtime-auto-recovery"
 _ADMISSION_BACKOFF_SECONDS = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 _ADMISSION_PERSISTENT = 5
 _ATTACHABLE = ("reserved", "starting", "ready")
-_RECOVERY_WINDOW_MS = 10 * 60_000
-_RECOVERY_LIMIT = 3
+# Expired-owner recovery never stops for a project. Each recovery within
+# _RECOVERY_WINDOW_MS of the previous ones waits longer before the next:
+# _RECOVERY_BACKOFF_MS doubling per recent recovery, capped at
+# _RECOVERY_BACKOFF_MAX_MS, so a worker that keeps failing is retried every
+# few minutes instead of crash-looping, and recovers once the failure stops.
+_RECOVERY_WINDOW_MS = 30 * 60_000
+_RECOVERY_BACKOFF_MS = 15_000
+_RECOVERY_BACKOFF_MAX_MS = 5 * 60_000
 _RECOVERY_RETRY_MS = 30_000
 # A project worker stays this long after the project's last routed request
 # before it retires for lack of open chats or work, so a rename, archive or
@@ -100,6 +106,8 @@ class RuntimeAutoAdmission:
         self._legacy_chat_retry: dict[str, tuple[str, str, dict, int]] = {}
         self._legacy_chat_next_scan_at = 0.0
         self._recovery_blocked: dict[str, tuple[str, int, int]] = {}
+        # The recent-recovery count last reported per backing-off project.
+        self._recovery_backoff_noted: dict[str, int] = {}
         self._recovery_cursor: str | None = None
         # Whether each staged release can quiesce under a project retirement
         # hold. A staged release's manifest never changes.
@@ -506,19 +514,28 @@ class RuntimeAutoAdmission:
                         },
                     )
 
-    async def _record_hold(self, project_id: str, error: Exception, attempts: int):
+    async def _record_hold(
+        self,
+        project_id: str,
+        error: Exception | None,
+        attempts: int,
+        *,
+        reason: str | None = None,
+    ):
         """Say why a wanted worker is not starting, so a view waits calmly.
 
-        Only an operator-facing gate (the memory budget) is quoted; any other
-        refusal gets a generic reason. Best effort: admission keeps retrying.
+        Only an operator-facing gate (the memory budget) or an explicit
+        ``reason`` is quoted; any other refusal gets a generic reason. Best
+        effort: admission and recovery keep retrying.
         """
         from .memory_policy import MemoryBudgetError
 
-        reason = (
-            str(error)[:1000]
-            if isinstance(error, MemoryBudgetError) and str(error)
-            else "This project's worker could not start yet; Core keeps retrying automatically."
-        )
+        if reason is None:
+            reason = (
+                str(error)[:1000]
+                if isinstance(error, MemoryBudgetError) and str(error)
+                else "This project's worker could not start yet; Core keeps retrying automatically."
+            )
         try:
             async with self.supervisor.coordinator.database.session() as session:
                 now = await self.supervisor.coordinator.coordination._clock_ms(session)
@@ -542,6 +559,35 @@ class RuntimeAutoAdmission:
                 failure,
                 stage="admission",
             )
+
+    async def _recovery_backoff(self, owner, attempts: int, wait_ms: int) -> None:
+        """Say once per new failure that recovery is waiting, and until when."""
+        if self._recovery_backoff_noted.get(owner.project_id) == attempts:
+            return
+        self._recovery_backoff_noted[owner.project_id] = attempts
+        seconds = max(1, round(wait_ms / 1000))
+        reason = (
+            f"This project's worker stopped {attempts} "
+            f"time{'s' if attempts != 1 else ''} in the last "
+            f"{_RECOVERY_WINDOW_MS // 60_000} minutes. Core recovers it "
+            f"automatically again in about {seconds} s and keeps retrying; "
+            "check the project's runtime failures if this repeats."
+        )
+        await self._record_hold(owner.project_id, None, attempts, reason=reason)
+        record_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.project_recovery.backoff",
+            reason,
+            outcome="waiting",
+            stage="recovery",
+            retryable=True,
+            metadata={
+                "entity_id": owner.project_id,
+                "kind": "project",
+                "attempt": attempts,
+            },
+        )
 
     async def _clear_hold(self, project_id: str) -> None:
         try:
@@ -1094,21 +1140,32 @@ class RuntimeAutoAdmission:
                         )
                         .limit(1)
                     )
-                    attempts = await session.scalar(
-                        select(func.count())
-                        .select_from(RuntimeRecoveryRow)
-                        .where(
-                            RuntimeRecoveryRow.project_id == owner.project_id,
-                            RuntimeRecoveryRow.created_at_ms
-                            >= now - _RECOVERY_WINDOW_MS,
+                    attempts, latest = (
+                        await session.execute(
+                            select(
+                                func.count(), func.max(RuntimeRecoveryRow.created_at_ms)
+                            ).where(
+                                RuntimeRecoveryRow.project_id == owner.project_id,
+                                RuntimeRecoveryRow.created_at_ms
+                                >= now - _RECOVERY_WINDOW_MS,
+                            )
                         )
-                    )
+                    ).one()
                 if existing is not None:
                     continue
-                if attempts >= _RECOVERY_LIMIT:
-                    raise CoordinationConflict(
-                        "Automatic recovery is held after three recoveries in ten minutes; inspect this project's runtime failures"
+                if attempts:
+                    due = latest + min(
+                        _RECOVERY_BACKOFF_MAX_MS,
+                        _RECOVERY_BACKOFF_MS * 2 ** min(attempts - 1, 10),
                     )
+                    if now < due:
+                        await self._recovery_backoff(owner, attempts, due - now)
+                        self._recovery_blocked[owner.project_id] = (
+                            owner.runtime_id,
+                            owner.fencing_token,
+                            due,
+                        )
+                        continue
                 await self._recovery_operation(
                     expected_owner,
                     "reconcile_project",
@@ -1138,6 +1195,8 @@ class RuntimeAutoAdmission:
                     },
                 )
                 self._recovery_blocked.pop(owner.project_id, None)
+                self._recovery_backoff_noted.pop(owner.project_id, None)
+                await self._clear_hold(owner.project_id)
             except Exception as error:
                 self._recovery_blocked[owner.project_id] = (
                     owner.runtime_id,

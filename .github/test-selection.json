@@ -1,28 +1,30 @@
 {
-  "change_digest": "0bdfd5e5c87c659ebad376295b9b277fd4f03fe818175d81be31f3105152a9a7",
+  "change_digest": "aea83510822c3d76b6979906abaef456efcecb04487e300e75ca7588a5f7f7ee",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "The goal read and saved-request status served by the API worker from SQL now say why a running goal or queued request is not executing (no live ready owner, expired lease, held transfer, admission hold, or unconfirmed automatic recovery), and the goal card shows waiting/held instead of running. Selected: new API-worker regressions in SQLite and PostgreSQL, the existing inventory goal read, and the goal panel and client mapping unit tests.",
-  "exclusions": "No native or Playwright layer: goal panel journeys live only in real-core.spec.ts; the waiting card was exercised on a scratch Core in Chromium (1280) and WebKit (390) by script. No settings or settings-assistant destination changed.",
+  "reason": "Expired-owner recovery no longer stops for ten minutes after three recoveries: it backs off (15 s doubling, 5-minute cap, read from SQL) and the project reads as held with the next retry. The host now has a restoration target that failed cleanly before activation relinquish its grant and exit, so recovery restores the project on a fresh target. Selected: the auto-recovery suite, restoration and relinquish regressions, the recovery reconciliation cases around held, mismatched and waiting restorations, and the execution-waiting read, on SQLite and PostgreSQL.",
+  "exclusions": "test_retained_prepared_worker_survives_host_detach_and_new_host_activates_saved_recovery needs a pidfd-capable process host (fails locally on main too). No UI, native or Playwright layer: the held reason reuses the existing execution-waiting field. Both workflows were reproduced on a fault-injected scratch Core on main (STUCK) and on this branch (PASS). No settings or settings-assistant destination changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 8,
-    "frontend": 27,
+    "python": 110,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_execution_restoration.py",
     "tests/v3/test_goal_execution_waiting.py",
-    "tests/v3/test_deployment_inventory_reads.py::test_inventory_reads_answer_from_sql_without_admitting_a_worker"
+    "tests/v3/test_recovery_reconciliation.py::test_target_failed_before_activation_relinquishes_for_fresh_recovery",
+    "tests/v3/test_recovery_reconciliation.py::test_failed_target_that_did_not_clean_up_stays_held",
+    "tests/v3/test_recovery_reconciliation.py::test_waiting_transfer_is_recorded_once_per_reason",
+    "tests/v3/test_recovery_reconciliation.py::test_restart_resumes_original_recovery_once_without_changing_paused_work",
+    "tests/v3/test_recovery_reconciliation.py::test_recovery_mismatch_stays_held_without_activation_or_claim"
   ],
-  "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/api/goalExecutionWaiting.test.ts",
-    "ui/src/api/goalHandoff.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "checks": []

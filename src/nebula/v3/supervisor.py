@@ -31,7 +31,11 @@ from .database import (
     RuntimeRecoveryRow,
 )
 from .deployment_protocol import ReleaseManifest, WorkerIdentity
-from .diagnostics import create_diagnostic_task, record_caught_exception
+from .diagnostics import (
+    create_diagnostic_task,
+    record_caught_exception,
+    record_diagnostic,
+)
 from .deployments import _RESIDENT, checkpoint_digest
 from .event_history import pause_between_batches, prune_orphaned_event_history
 from .release_store import ReleaseStore
@@ -193,6 +197,8 @@ class RuntimeSupervisor:
         # The last waiting reason logged per project, so a transfer that keeps
         # waiting is recorded when its reason changes, not on every tick.
         self._restore_waiting: dict[str, tuple] = {}
+        # The last relinquishment refusal reported per project, reported once.
+        self._relinquish_waiting: dict[str, str] = {}
         self.viewers: set[asyncio.Task] = set()
         # Relayed exchanges that have sent their response start, by loop time.
         self.answered: dict[asyncio.Task, float] = {}
@@ -521,6 +527,8 @@ class RuntimeSupervisor:
                         )
                     if row.phase != "transferred":
                         continue
+                    if await self._relinquish_failed_restoration(row):
+                        continue
                     blockers = [
                         "Target runtime "
                         + row.target_runtime_id
@@ -535,6 +543,69 @@ class RuntimeSupervisor:
                         ):
                             pending.blockers = blockers
                             pending.revision += 1
+
+    async def _relinquish_failed_restoration(self, row) -> bool:
+        """Give back the grant of a target that failed before activation.
+
+        A restoration target whose project failed before activation keeps a
+        live process, and its heartbeat would renew the held grant forever.
+        When the target reports a failed, never-activated and cleaned
+        restoration of exactly this grant, it relinquishes it: the lease
+        expires with its fence and evidence kept, the target process exits,
+        and expired-owner recovery restores the project on a fresh target.
+        Anything else (a target still starting, uncleaned or activated) keeps
+        the hold.
+        """
+        try:
+            client = await self.host.rpc(row.target_runtime_id)
+        except Exception:
+            # diagnostic-expected: an unreachable target is already reported as a waiting restoration; a gone one lets its lease lapse.
+            return False
+        try:
+            try:
+                status = await client.call("execution.status/v1", {}, timeout=5)
+            except Exception:
+                # diagnostic-expected: an unreachable target is already reported as a waiting restoration; a gone one lets its lease lapse.
+                return False
+            lease = status.get("lease") or {}
+            if (
+                status.get("runtime_id") != row.target_runtime_id
+                or status.get("state") != "failed"
+                or status.get("activation_started")
+                or not status.get("cleanup_complete")
+                or lease.get("project_id") != row.project_id
+                or lease.get("runtime_id") != row.target_runtime_id
+            ):
+                return False
+            try:
+                await client.call("execution.relinquish/v1", {}, timeout=30)
+            except Exception as error:
+                # A refused relinquishment keeps the hold; say why once.
+                signature = f"{row.target_runtime_id}:{type(error).__name__}:{error}"
+                if self._relinquish_waiting.get(row.project_id) != signature:
+                    self._relinquish_waiting[row.project_id] = signature
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.project_restore.relinquish_waiting",
+                        "A failed restoration target could not give back its project yet; the project stays held.",
+                        error,
+                        stage="handoff",
+                    )
+                return False
+        finally:
+            await client.close()
+        self._relinquish_waiting.pop(row.project_id, None)
+        record_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.project_restore.relinquished",
+            "A restoration target failed before activation and gave back its project; Core recovers it on a fresh worker.",
+            outcome="recovering",
+            stage="handoff",
+            retryable=True,
+            metadata={"entity_id": row.project_id, "kind": "project"},
+        )
+        return True
 
     async def _advance_project_handoff(self, row):
         if row.phase == "transferable":

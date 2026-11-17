@@ -100,6 +100,10 @@ async def project_execution_waiting(
         uncertain = await _uncertain_recovery(session, owner)
         if uncertain is not None:
             return _held(uncertain)
+        # Recovery that keeps failing backs off and says when it retries.
+        hold = await session.get(ProjectAdmissionHoldRow, project_id)
+        if hold is not None:
+            return _held(hold.reason)
         return ExecutionWaiting(reason="starting", detail=_RECOVERING)
     process = await session.get(RuntimeProcessRow, owner.runtime_id)
     instance = await session.get(RuntimeInstanceRow, owner.runtime_id)
