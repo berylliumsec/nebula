@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 
+import httpx
 from sqlalchemy import and_, delete, func, or_, select
 
 from .database import (
@@ -27,7 +28,11 @@ from .database import (
     RuntimeReleaseRow,
     RuntimeResourceRow,
 )
-from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
+from .deployment_protocol import (
+    IDLE_RETIREMENT_FEATURE,
+    ReleaseManifest,
+    WorkerIdentity,
+)
 from .diagnostics import record_caught_exception, record_diagnostic
 from .domain import Engagement
 from .runtime_coordination import (
@@ -35,6 +40,7 @@ from .runtime_coordination import (
     pending_storage_dispatches,
     project_worker_commands,
 )
+from .runtime_ipc import RuntimeIpcError
 from .runtime_operations import _DURABLE_OUTCOME_ACTIONS
 from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
@@ -55,6 +61,16 @@ _RECOVERY_WINDOW_MS = 30 * 60_000
 _RECOVERY_BACKOFF_MS = 15_000
 _RECOVERY_BACKOFF_MAX_MS = 5 * 60_000
 _RECOVERY_RETRY_MS = 30_000
+# Fresh targets one expired owner's recovery may prepare after earlier ones
+# ended before they took the project.
+_PREPARE_ATTEMPTS = 32
+
+
+def _attempt_stage(action: str, attempt: int) -> str:
+    # The first attempt keeps the original operation identity.
+    return action if attempt == 1 else f"{action}#{attempt}"
+
+
 # A project worker stays this long after the project's last routed request
 # before it retires for lack of open chats or work, so a rename, archive or
 # second action on a quiet project does not pay another cold start. Bounded;
@@ -761,9 +777,113 @@ class RuntimeAutoAdmission:
                 .limit(1)
             )
 
-    async def _recovery_operation(self, owner: dict, action: str, parameters: dict):
+    async def _recovery_target(
+        self, owner: dict, version: str, gone: dict
+    ) -> tuple[str, int]:
+        """The prepared target recovery claims, and its preparation attempt.
+
+        Each preparation is a ledgered operation dispatched at most once. A
+        prepared target that ended before it took the project (its process
+        is gone or no longer attachable) can never be claimed, so the next
+        attempt, under its own operation identity, prepares a fresh one; a
+        target that is still usable is always kept.
+        """
+        for attempt in range(1, _PREPARE_ATTEMPTS + 1):
+            prepared = await self._recovery_operation(
+                owner,
+                "prepare_execution",
+                {"version": version},
+                stage=_attempt_stage("prepare_execution", attempt),
+            )
+            runtime_id = prepared.get("runtime_id")
+            if not isinstance(runtime_id, str) or not runtime_id:
+                raise CoordinationConflict(
+                    "The saved recovery preparation has no confirmed runtime identity"
+                )
+            if runtime_id not in gone:
+                async with self.supervisor.coordinator.database.session() as session:
+                    process = await session.get(RuntimeProcessRow, runtime_id)
+                if process is not None and process.state in _ATTACHABLE:
+                    return runtime_id, attempt
+            record_diagnostic(
+                "warning",
+                "runtime",
+                "runtime.project_recovery.target_lost",
+                "A prepared recovery target ended before it took the project; Core prepares a fresh one.",
+                outcome="recovering",
+                stage="recovery",
+                retryable=True,
+                metadata={
+                    "entity_id": owner["project_id"],
+                    "kind": "project",
+                    "attempt": attempt,
+                },
+            )
+        raise CoordinationConflict(
+            "Every prepared recovery target for this owner ended before it took the project"
+        )
+
+    async def _confirm_interrupted_start(self, operation_id: str) -> None:
+        """Record the readiness a dead host no longer could.
+
+        The host that spawned this preparation's worker died after the
+        bound-child checkpoint and before it recorded the worker ready, so the
+        worker runs unowned in ``starting`` and the preparation stays
+        uncertain. When that exact incarnation (runtime, PID, birth and
+        endpoint from its checkpoint) answers its authenticated identity
+        probe, readiness is recorded exactly as the spawn would have, and the
+        ledger then settles the preparation from that durable record. A
+        worker that does not answer is left for process reconciliation.
+        """
+        supervisor = self.supervisor
+        async with supervisor.coordinator.database.session() as session:
+            row = await session.get(DeploymentOperationRow, operation_id)
+            origin = ((row.result or {}).get("recovery") or {}) if row else {}
+            runtime_id = origin.get("runtime_id")
+            process = (
+                await session.get(RuntimeProcessRow, runtime_id)
+                if isinstance(runtime_id, str)
+                else None
+            )
+        if (
+            process is None
+            or process.state != "starting"
+            or not process.pid
+            or not process.process_birth
+            or process.endpoint != origin.get("endpoint")
+        ):
+            return
+        identity = WorkerIdentity(
+            runtime_id=process.runtime_id,
+            version=process.version,
+            role=process.role,
+            pid=process.pid,
+            process_birth=process.process_birth,
+            endpoint=process.endpoint,
+        )
+        client = await supervisor.host.rpc(process.runtime_id)
+        try:
+            observed = WorkerIdentity.model_validate(
+                await client.call("worker.identity", {}, timeout=2)
+            )
+        except (OSError, httpx.HTTPError, RuntimeIpcError):
+            # diagnostic-expected: an unanswered probe leaves the uncertain preparation for the next pass; recovery reports its wait.
+            return
+        finally:
+            await client.close()
+        if observed == identity:
+            await supervisor.coordinator.worker_ready(identity)
+
+    async def _recovery_operation(
+        self,
+        owner: dict,
+        action: str,
+        parameters: dict,
+        *,
+        stage: str | None = None,
+    ):
         management = self.supervisor.management
-        operation_id = self._recovery_operation_id(owner, action)
+        operation_id = self._recovery_operation_id(owner, stage or action)
         ledger = management.ledger()
         async with self.supervisor.coordinator.database.session() as session:
             prior = await session.get(DeploymentOperationRow, operation_id)
@@ -800,10 +920,17 @@ class RuntimeAutoAdmission:
             # Saved parameters and results are authoritative, including an
             # unknown spawn outcome after a host restart.
             receipt = await ledger.status(operation_id, actor_id=_RECOVERY_ACTOR)
-            if receipt["state"] == "uncertain" and action in _DURABLE_OUTCOME_ACTIONS:
+            if receipt["state"] == "uncertain" and (
+                action in _DURABLE_OUTCOME_ACTIONS or action == "prepare_execution"
+            ):
                 # Settle it from its durable record: a committed effect is
                 # succeeded; a proven absent one is failed and is asked again
                 # after the refused-operation backoff. Never re-dispatched.
+                # A preparation whose host died settles from its worker spawn
+                # checkpoint and process row (a ready, verified worker or a
+                # retired reservation); until then it is asked again.
+                if action == "prepare_execution":
+                    await self._confirm_interrupted_start(operation_id)
                 receipt = await ledger.reconcile(operation_id, actor_id=_RECOVERY_ACTOR)
                 if receipt["state"] == "failed":
                     raise CoordinationConflict(
@@ -1201,16 +1328,11 @@ class RuntimeAutoAdmission:
                     "reconcile_project",
                     {"expected_owner": expected_owner},
                 )
-                prepared = await self._recovery_operation(
+                target_runtime_id, attempt = await self._recovery_target(
                     expected_owner,
-                    "prepare_execution",
-                    {"version": target_version or worker.identity.version},
+                    target_version or worker.identity.version,
+                    observed,
                 )
-                target_runtime_id = prepared.get("runtime_id")
-                if not isinstance(target_runtime_id, str) or not target_runtime_id:
-                    raise CoordinationConflict(
-                        "The saved recovery preparation has no confirmed runtime identity"
-                    )
                 async with supervisor.coordinator.database.session() as session:
                     handoff = await session.get(ProjectHandoffRow, owner.project_id)
                     revision = handoff.revision if handoff else None
@@ -1223,6 +1345,7 @@ class RuntimeAutoAdmission:
                         "expected_owner": expected_owner,
                         "expected_handoff_revision": revision,
                     },
+                    stage=_attempt_stage("recover_project", attempt),
                 )
                 self._recovery_blocked.pop(owner.project_id, None)
                 self._recovery_backoff_noted.pop(owner.project_id, None)

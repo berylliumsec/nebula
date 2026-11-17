@@ -53,6 +53,12 @@ class Management:
         self.reject_reconciliation = False
         self.change_handoff = False
         self.abort_starts = 0
+        self.reject_recover = 0
+        # Runtime IDs successive preparations return, then "prepared-target".
+        self.prepare_ids = []
+        # (pid, birth) the prepared worker process row and spawn checkpoint
+        # record; the default names no live process.
+        self.worker_process = (12345, "synthetic-birth")
         # "after_commit" or "before_commit": lose the reconciliation reply.
         self.lose_reconciliation = None
 
@@ -91,19 +97,50 @@ class Management:
 
                 self.abort_starts -= 1
                 raise StartAborted("The worker did not become ready; nothing started")
-            runtime_id = "prepared-target"
+            from nebula.v3.deployment_recovery import checkpoint
+            from nebula.v3.process_identity import process_origin
+
+            runtime_id = (
+                self.prepare_ids.pop(0) if self.prepare_ids else "prepared-target"
+            )
+            # As the host's spawn does: the reservation, then the bound child.
+            await checkpoint(
+                phase="worker_spawn_intent",
+                runtime_id=runtime_id,
+                version=values["version"],
+                role="execution",
+            )
             await self.coordinator.coordination.register_runtime(
                 runtime_id, values["version"]
             )
+            pid, birth = self.worker_process
             async with self.coordinator.database.session() as session:
-                session.add(process(runtime_id, values["version"]))
+                row = process(runtime_id, values["version"])
+                row.pid, row.process_birth = pid, birth
+                session.add(row)
                 if self.change_handoff:
                     handoff = await session.get(ProjectHandoffRow, "one")
                     handoff.revision += 1
+            await checkpoint(
+                phase="worker_spawned",
+                children=[
+                    {
+                        "pid": pid,
+                        "birth": birth,
+                        "kind": "worker",
+                        "process_origin": process_origin(),
+                    }
+                ],
+                runtime_id=runtime_id,
+                endpoint="unix:///synthetic/" + runtime_id + ".sock",
+            )
             if self.lose_prepare:
                 raise RuntimeError("The spawn result was lost")
             return {"runtime_id": runtime_id}
         assert action == "recover_project"
+        if self.reject_recover:
+            self.reject_recover -= 1
+            raise OperationRejected("The recovery target did not answer (OSError)")
         return {
             "project_id": values["project_id"],
             "runtime_id": values["target_runtime_id"],
@@ -665,6 +702,8 @@ async def test_recovery_initiation_is_bounded_to_sixteen_projects(recovery):
     async def dispatch(action, values, operation_id, actor_id):
         recovery.management.calls.append((action, values, operation_id, actor_id))
         if action == "prepare_execution":
+            async with recovery.coordinator.database.session() as session:
+                session.add(process(operation_id))
             return {"runtime_id": operation_id}
         return {}
 
@@ -746,3 +785,202 @@ async def test_reachable_api_or_unverified_owner_is_never_force_retired(
 
     assert asked == []
     assert recovery.management.calls == []
+
+
+def prepares(recovery):
+    return [
+        call for call in recovery.management.calls if call[0] == "prepare_execution"
+    ]
+
+
+def recovers(recovery):
+    return [call for call in recovery.management.calls if call[0] == "recover_project"]
+
+
+async def test_dead_prepared_target_is_replaced_by_a_fresh_preparation(recovery):
+    # The prepared target died before recover_project claimed it. Asking
+    # again with the saved target would be refused forever; a fresh
+    # preparation under its own operation identity takes its place.
+    recovery.management.reject_recover = 1
+    recovery.management.prepare_ids = ["prepared-target", "fresh-target"]
+    await recovery.automatic.reconcile()
+    assert [call[1]["target_runtime_id"] for call in recovers(recovery)] == [
+        "prepared-target"
+    ]
+    recovery.observed.append(
+        SimpleNamespace(
+            runtime_id="prepared-target",
+            process_state="gone",
+            identity=SimpleNamespace(version="v2"),
+        )
+    )
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert len(prepares(recovery)) == 2
+    assert len({call[2] for call in prepares(recovery)}) == 2
+    assert [call[1]["target_runtime_id"] for call in recovers(recovery)] == [
+        "prepared-target",
+        "fresh-target",
+    ]
+    assert recovers(recovery)[0][2] != recovers(recovery)[1][2]
+    # Replayed passes never dispatch either preparation again.
+    await recovery.controller().reconcile()
+    assert len(prepares(recovery)) == 2
+
+
+async def test_retired_prepared_target_is_replaced(recovery):
+    recovery.management.reject_recover = 1
+    recovery.management.prepare_ids = ["prepared-target", "fresh-target"]
+    await recovery.automatic.reconcile()
+    async with recovery.coordinator.database.session() as session:
+        (await session.get(RuntimeProcessRow, "prepared-target")).state = "retired"
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert recovers(recovery)[-1][1]["target_runtime_id"] == "fresh-target"
+
+
+async def test_live_prepared_target_is_kept_after_a_refused_claim(recovery):
+    recovery.management.reject_recover = 1
+    await recovery.automatic.reconcile()
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert len(prepares(recovery)) == 1
+    assert [call[1]["target_runtime_id"] for call in recovers(recovery)] == [
+        "prepared-target",
+        "prepared-target",
+    ]
+
+
+async def host_died(recovery):
+    """The host that dispatched the saved operations is gone (a restart)."""
+    async with recovery.coordinator.database.session() as session:
+        for row in await session.scalars(select(DeploymentOperationRow)):
+            origin = dict((row.result or {}).get("recovery") or {})
+            if origin:
+                origin["pid"] = 2**22 + 12345
+                row.result = {**row.result, "recovery": origin}
+    recovery.management.operations = DeploymentOperations(recovery.coordinator)
+
+
+async def test_uncertain_prepare_of_a_verified_worker_settles_and_recovers(
+    recovery,
+):
+    # The host lost the preparation reply after its worker became ready (for
+    # example it died). The spawn checkpoint and process row prove the
+    # worker, so the receipt settles and recovery claims that same worker.
+    import os
+
+    from nebula.v3.database import RuntimeInstanceRow
+    from nebula.v3.process_identity import process_birth
+
+    recovery.management.worker_process = (os.getpid(), process_birth(os.getpid()))
+    recovery.management.lose_prepare = True
+    await recovery.automatic.reconcile()
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["prepare_execution"].state == "uncertain"
+    async with recovery.coordinator.database.session() as session:
+        instance = await session.get(RuntimeInstanceRow, "prepared-target")
+        instance.lease_expires_at_ms = recovery.clock[0] + 60_000
+    await host_died(recovery)
+    await recovery.controller().reconcile()
+    assert len(prepares(recovery)) == 1
+    assert [call[1]["target_runtime_id"] for call in recovers(recovery)] == [
+        "prepared-target"
+    ]
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["prepare_execution"].state == "succeeded"
+
+
+async def test_uncertain_prepare_of_a_retired_reservation_is_prepared_again(
+    recovery,
+):
+    recovery.management.lose_prepare = True
+    await recovery.automatic.reconcile()
+    async with recovery.coordinator.database.session() as session:
+        (await session.get(RuntimeProcessRow, "prepared-target")).state = "retired"
+    await host_died(recovery)
+    recovery.management.lose_prepare = False
+    recovery.management.prepare_ids = ["fresh-target"]
+    await recovery.controller().reconcile()
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["prepare_execution"].state == "failed"
+    recovery.clock[0] += 31_000
+    await recovery.controller().reconcile()
+    assert len(prepares(recovery)) == 2
+    assert recovers(recovery)[-1][1]["target_runtime_id"] == "fresh-target"
+
+
+async def test_uncertain_prepare_of_an_unconfirmed_started_worker_settles(recovery):
+    # The host died after the bound-child checkpoint and before it recorded
+    # the worker ready: the worker runs unowned in "starting". Its exact
+    # incarnation answers the identity probe, so readiness is recorded as
+    # the spawn would have, the receipt settles and recovery claims it.
+    import os
+
+    from nebula.v3.database import RuntimeInstanceRow
+    from nebula.v3.process_identity import process_birth
+
+    pid, birth = os.getpid(), process_birth(os.getpid())
+    recovery.management.worker_process = (pid, birth)
+    recovery.management.lose_prepare = True
+    await recovery.automatic.reconcile()
+    async with recovery.coordinator.database.session() as session:
+        (await session.get(RuntimeProcessRow, "prepared-target")).state = "starting"
+        instance = await session.get(RuntimeInstanceRow, "prepared-target")
+        instance.lease_expires_at_ms = recovery.clock[0] + 60_000
+    await host_died(recovery)
+    probes = []
+
+    class Client:
+        async def call(self, name, payload, timeout):
+            probes.append(name)
+            return {
+                "runtime_id": "prepared-target",
+                "version": "v2",
+                "role": "execution",
+                "pid": pid,
+                "process_birth": birth,
+                "endpoint": "unix:///synthetic/prepared-target.sock",
+            }
+
+        async def close(self):
+            pass
+
+    async def rpc(runtime_id):
+        assert runtime_id == "prepared-target"
+        return Client()
+
+    recovery.automatic.supervisor.host.rpc = rpc
+    await recovery.controller().reconcile()
+    assert probes == ["worker.identity"]
+    assert len(prepares(recovery)) == 1
+    assert [call[1]["target_runtime_id"] for call in recovers(recovery)] == [
+        "prepared-target"
+    ]
+    async with recovery.coordinator.database.session() as session:
+        assert (
+            await session.get(RuntimeProcessRow, "prepared-target")
+        ).state == "ready"
+
+
+async def test_uncertain_prepare_of_an_unanswering_started_worker_waits(recovery):
+    import os
+
+    from nebula.v3.process_identity import process_birth
+
+    recovery.management.worker_process = (os.getpid(), process_birth(os.getpid()))
+    recovery.management.lose_prepare = True
+    await recovery.automatic.reconcile()
+    async with recovery.coordinator.database.session() as session:
+        (await session.get(RuntimeProcessRow, "prepared-target")).state = "starting"
+    await host_died(recovery)
+
+    async def rpc(runtime_id):
+        raise OSError("synthetic worker socket is not answering")
+
+    recovery.automatic.supervisor.host.rpc = rpc
+    await recovery.controller().reconcile()
+    # Nothing is re-dispatched and nothing is claimed while it is unproven.
+    assert len(prepares(recovery)) == 1 and not recovers(recovery)
+    rows = {row.action: row for row in await operations(recovery)}
+    assert rows["prepare_execution"].state == "uncertain"
