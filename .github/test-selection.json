@@ -1,27 +1,23 @@
 {
-  "change_digest": "b524894dd4fd916c3f5f6e81bf5463efc18779e3beee829fd1adacb22e468448",
-  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A live worker's failed http.invoke/v1 request no longer stays 'uncertain' at its lane head. The run's write tracker stays active and is fenced (CommandSettled) before settle_failed_request reads the write record: unsaved and unpublished requests are re-queued (bounded), saved ones fail with saved_changes, untracked ones fail as 'may have partly applied'. Selected: the new execution-scope and API-worker regressions, durable delivery (updated uncertain expectations), runtime coordination, orphan recovery, chat acceptance and storage report suites; SQLite and PostgreSQL.",
-  "exclusions": "No UI, native or Playwright layer: viewers read the same saved answers; the API's wording is a separate change. Process-level worker suites (test_execution_worker.py) were not run locally because children import the primary checkout; the live-worker failure was exercised on a fake scratch Core instead.",
+  "change_digest": "38c6c12fd10461e48ede2d32029caca88acdf1d5d8f6370adabae170fc355be8",
+  "reviewed_by": "Claude Code after a route audit (independent subagent inventory, re-traced by hand) and scratch-Core reproduction",
+  "reason": "runtime_routes.rerunnable_request now also allows every PATCH /chat-sessions/{id}, every goal action plus goal create/edit, Butler harness session reservation, and harness chats (streamed or not): each commits only Core SQL through the execution scope before any other effect, and a harness chat reaches the vendor only from start_chat_turn on its saved queued turn. Selected: the allowlist regression and the API-worker re-run tests, orphan recovery and runtime coordination that settle by the write record; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: viewers receive the re-run's normal answer. The harness path was exercised on a fake scratch Core with a fake Codex app-server that logs every turn/start.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 478,
+    "python": 264,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_execution_scope.py",
     "tests/v3/test_api_worker.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_runtime_coordination.py",
     "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_runtime_chat_acceptance.py",
-    "tests/v3/test_storage_report_backlog.py"
+    "tests/v3/test_runtime_coordination.py"
   ],
   "frontend": [],
   "native": [],

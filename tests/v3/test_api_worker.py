@@ -1457,6 +1457,10 @@ async def test_a_live_workers_failed_request_never_holds_its_lane(boundary):
 
 
 def test_only_routes_whose_effects_are_project_writes_are_rerunnable():
+    """Requests whose every effect is a Core SQL write run again after their
+    worker died having saved nothing; the rest settle as "may have partly
+    applied". Harness chats qualify because the vendor hears of a turn only
+    after its queued turn is saved."""
     from nebula.v3.runtime_routes import rerunnable_request
 
     def body(value):
@@ -1466,18 +1470,29 @@ def test_only_routes_whose_effects_are_project_writes_are_rerunnable():
     assert rerunnable_request("POST", chat, body({"stream": False}))
     assert rerunnable_request("POST", chat, body({"control_assistant": True}))
     assert not rerunnable_request("POST", chat, body({"stream": True}))
-    assert not rerunnable_request("POST", chat, body({"backend": "harness"}))
+    assert rerunnable_request("POST", chat, body({"backend": "harness"}))
+    assert rerunnable_request(
+        "POST", chat, body({"backend": "harness", "stream": True})
+    )
     goal = "/api/v1/chat/sessions/s/goal/actions"
-    for action in ("start", "pause", "resume", "cancel"):
+    for action in ("start", "pause", "resume", "cancel", "block", "complete"):
         assert rerunnable_request("POST", goal, body({"action": action}))
-    assert not rerunnable_request("POST", goal, body({"action": "complete"}))
+    assert not rerunnable_request("POST", goal, body({}))
+    assert rerunnable_request("POST", "/api/v1/chat/sessions/s/goal", b"{}")
+    assert rerunnable_request("PATCH", "/api/v1/chat/sessions/s/goal", b"{}")
+    assert not rerunnable_request(
+        "POST", "/api/v1/chat/sessions/s/goal/children", b"{}"
+    )
     session = "/api/v1/chat-sessions/s"
     assert rerunnable_request("PATCH", session, body({"archived": False}))
-    assert not rerunnable_request("PATCH", session, body({"archived": False, "x": 1}))
-    assert not rerunnable_request("PATCH", session, body({"archived": True}))
+    assert rerunnable_request("PATCH", session, body({"archived": True}))
+    assert rerunnable_request("PATCH", session, body({"title": "renamed"}))
     assert not rerunnable_request("DELETE", session, None)
+    assert not rerunnable_request("PATCH", session + "/notebook", b"{}")
     butler = "/api/v1/chat/control-assistant/session"
     assert rerunnable_request("POST", butler, body({"backend": "provider"}))
-    assert not rerunnable_request("POST", butler, body({"backend": "harness"}))
+    assert rerunnable_request("POST", butler, body({"backend": "harness"}))
+    assert not rerunnable_request("POST", butler, body({}))
     assert not rerunnable_request("POST", "/api/v1/mcp/servers/x/tools/y", b"{}")
+    assert not rerunnable_request("POST", "/api/v1/chat/sessions/s/fork", b"{}")
     assert not rerunnable_request("POST", chat, b"not json")
