@@ -19,6 +19,7 @@ import posixpath
 import re
 import shutil
 import socket
+import time
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -48,6 +49,10 @@ CHUNK_OVERLAP_CHARACTERS = 180
 INGESTION_VERSION = "nebula.knowledge.v1"
 MAX_SOURCE_URL_LENGTH = 2_048
 MAX_SOURCE_REDIRECTS = 5
+# One URL capture (redirects, body and rendered page resources) must finish
+# within this. Read timeouts only bound silence, so a server trickling bytes
+# would otherwise hold the capture, and its project's work, for years.
+MAX_SOURCE_FETCH_SECONDS = 120.0
 MAX_RENDER_RESOURCE_BYTES = 50 * 1024 * 1024
 MAX_RENDER_TOTAL_BYTES = 50 * 1024 * 1024
 RENDER_SETTLE_MILLISECONDS = 1_500
@@ -437,7 +442,8 @@ async def ingest_document(
 def fetch_url_document(url: str) -> FetchedUrlDocument:
     """Capture one bounded public URL, rendering HTML in an isolated browser."""
 
-    resource = _fetch_url_resource(url, max_bytes=MAX_DOCUMENT_BYTES)
+    deadline = time.monotonic() + MAX_SOURCE_FETCH_SECONDS
+    resource = _fetch_url_resource(url, max_bytes=MAX_DOCUMENT_BYTES, deadline=deadline)
     filename = _url_filename(
         _validate_source_url(resource.source_url), resource.media_type
     )
@@ -445,6 +451,7 @@ def fetch_url_document(url: str) -> FetchedUrlDocument:
         rendered = _render_html_snapshot(
             resource.data,
             base_url=resource.source_url,
+            deadline=deadline,
         )
         return FetchedUrlDocument(
             data=rendered,
@@ -461,9 +468,24 @@ def fetch_url_document(url: str) -> FetchedUrlDocument:
     )
 
 
-def _fetch_url_resource(url: str, *, max_bytes: int) -> _FetchedUrlResource:
-    """Fetch bytes through a DNS-pinned, redirect-revalidated public route."""
+def _check_fetch_deadline(deadline: float) -> None:
+    if time.monotonic() > deadline:
+        raise SourceFetchError(
+            f"source URL did not finish within {MAX_SOURCE_FETCH_SECONDS:g} s"
+        )
 
+
+def _fetch_url_resource(
+    url: str, *, max_bytes: int, deadline: float | None = None
+) -> _FetchedUrlResource:
+    """Fetch bytes through a DNS-pinned, redirect-revalidated public route.
+
+    ``deadline`` (``time.monotonic()``) bounds the whole fetch, redirects and
+    body included; without one it gets its own ``MAX_SOURCE_FETCH_SECONDS``.
+    """
+
+    if deadline is None:
+        deadline = time.monotonic() + MAX_SOURCE_FETCH_SECONDS
     current = _validate_source_url(url)
     headers = {
         "Accept": ", ".join(
@@ -490,6 +512,7 @@ def _fetch_url_resource(url: str, *, max_bytes: int) -> _FetchedUrlResource:
             headers=headers,
         ) as client:
             for redirect_count in range(MAX_SOURCE_REDIRECTS + 1):
+                _check_fetch_deadline(deadline)
                 resolved = _resolve_public_addresses(current)
                 with _stream_public_response(client, current, resolved) as response:
                     if response.is_redirect:
@@ -536,6 +559,7 @@ def _fetch_url_resource(url: str, *, max_bytes: int) -> _FetchedUrlResource:
                             )
                     content = bytearray()
                     for chunk in response.iter_bytes():
+                        _check_fetch_deadline(deadline)
                         content.extend(chunk)
                         if len(content) > max_bytes:
                             raise DocumentTooLargeError(
@@ -564,7 +588,9 @@ def _is_html_media_type(media_type: str | None, filename: str) -> bool:
     ).suffix.casefold() in {".html", ".htm"}
 
 
-def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
+def _render_html_snapshot(
+    document: bytes, *, base_url: str, deadline: float | None = None
+) -> bytes:
     """Run page scripts, then persist only a passive visible-text HTML snapshot."""
 
     sync_playwright, playwright_error = _load_playwright_runtime()
@@ -603,6 +629,7 @@ def _render_html_snapshot(document: bytes, *, base_url: str) -> bytes:
             resource = _fetch_url_resource(
                 request.url,
                 max_bytes=MAX_RENDER_RESOURCE_BYTES,
+                deadline=deadline,
             )
             transferred_bytes += len(resource.data)
             if transferred_bytes > MAX_RENDER_TOTAL_BYTES:
