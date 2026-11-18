@@ -16,12 +16,14 @@ a new owner's grant. Lease renewal and command submission only update non-key
 columns (``FOR NO KEY UPDATE``), which a key-share lock admits: a worker's own
 long transaction can no longer starve its heartbeat or hold API acceptance.
 
-Because a runtime's transactions run one at a time, one long transaction would
-still freeze the whole project. Each is bounded by
-``EXECUTION_TRANSACTION_SECONDS``: on PostgreSQL by ``statement_timeout`` and
+Because a runtime's transactions run one at a time, one runaway transaction
+would still freeze the whole project. A generous serialization guard,
+``EXECUTION_TRANSACTION_SECONDS`` (120 s; the lease no longer depends on it),
+abandons one that runs away: on PostgreSQL ``statement_timeout`` and
 ``idle_in_transaction_session_timeout``, and on every dialect no statement
-starts once the transaction is older than that. A transaction this long already
-outlived the lease renewal window before key-share locks; it now fails alone.
+starts once the transaction is older than that. Large legitimate work commits
+in bounded pages instead (for example the search projection repair), so it
+stays far below the guard at millions of rows.
 
 A host Work batch takes ``EXECUTION_SQL_KEY`` exclusively and so
 still excludes every execution transaction; an older release that takes it
@@ -60,8 +62,6 @@ from .database import (
 )
 from .projection_write import SearchProjectionWrite
 from .runtime_coordination import (
-    LEASE_MS,
-    LEASE_SAFETY_MS,
     CoordinationConflict,
     LeaseLost,
     ProjectLease,
@@ -84,10 +84,13 @@ GLOBAL_WRITES_KEY = (
 _GLOBAL_TABLES = {"entities", "search_documents"}
 
 
+# Measured at ~2.7 M entities, a 300k-message chat and a drifted projection,
+# the longest legitimate worker transaction was ~16 s; this is a runaway guard.
+DEFAULT_EXECUTION_TRANSACTION_SECONDS = 120.0
+
+
 def _transaction_seconds() -> float:
-    # The lease renewal window: a scoped transaction this long froze its whole
-    # project and cost the worker its lease before key-share ownership locks.
-    default = (LEASE_MS - LEASE_SAFETY_MS) / 1000
+    default = DEFAULT_EXECUTION_TRANSACTION_SECONDS
     value = os.getenv("NEBULA_V3_EXECUTION_TRANSACTION_SECONDS")
     if not value:
         return default

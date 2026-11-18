@@ -1,5 +1,5 @@
 {
-  "change_digest": "",
+  "change_digest": "79315217317e111fa37c0570e5a8da7733e66f6a23167491c2241f69fd919757",
   "reviewed_by": "Claude Code after scratch-Core reproduction on main and independent subagent root-cause validation",
   "reason": "Project-scoped execution transactions hold ownership rows FOR KEY SHARE (claims and fenced checks lock FOR UPDATE) so a worker's own long transaction cannot starve its lease renewal or API acceptance; a 120 s runaway guard bounds them; LeaseLost names a blocking lock or a blocked event loop; the search projection repair runs in bounded pages and searches wait at most 5 s for it. Selected: the new lease, fencing, guard, stall and paged-repair regressions, the ownership-change and coordination lock-order tests, worker SQL outage, runtime coordination, checkpoint heartbeat, federated search and read-responsiveness suites, on SQLite and PostgreSQL.",
   "exclusions": "No UI, native, browser or Playwright layer: no operator-visible control changed, only a worker diagnostic message. test_execution_locks.py::test_handoff_waits_for_an_in_flight_source_write is excluded because it already fails on origin/main. Process-level worker suites are excluded (locally they import the primary checkout); the worker path was verified on a scratch Core instead. No settings or settings-assistant destination changed.",

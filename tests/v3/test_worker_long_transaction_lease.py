@@ -10,7 +10,7 @@ import re
 import time
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError
 
 from nebula.v3 import execution_scope, runtime_coordination
@@ -247,3 +247,144 @@ async def test_lease_lost_to_a_lock_wait_does_not_blame_sql_reachability(
             )
     assert "unreachable" not in str(raised.value)
     assert "backend 7" in str(raised.value)
+
+
+async def test_stale_projection_repair_pages_in_a_worker(execution, monkeypatch):
+    """A drifted search projection is repaired a bounded page per transaction."""
+    from nebula.v3 import search
+    from nebula.v3.action_registry import ActionRegistry
+    from nebula.v3.database import SearchDocumentRow
+    from nebula.v3.domain import Observation
+
+    control, runtime, _, lease = execution
+    monkeypatch.setattr(search, "REPAIR_PAGE", 3)
+    with execution_context(lease):
+        created = [
+            await runtime.create(
+                Observation(
+                    engagement_id="mine", observation_type="service", title=f"obs {i}"
+                )
+            )
+            for i in range(8)
+        ]
+    stale, missing = created[1], created[5]
+    async with control.database.session() as session:
+        await session.execute(
+            update(EntityRow)
+            .where(EntityRow.id == stale.id)
+            .values(
+                revision=2,
+                payload={
+                    **stale.model_dump(mode="json"),
+                    "title": "renamed",
+                    "revision": 2,
+                },
+            )
+        )
+        await session.execute(
+            delete(SearchDocumentRow).where(SearchDocumentRow.id == missing.id)
+        )
+        template = await session.get(SearchDocumentRow, created[6].id)
+        await session.execute(
+            insert(SearchDocumentRow).values(
+                id="gone-observation",
+                project_id="mine",
+                resource_kind=template.resource_kind,
+                resource_id="gone-observation",
+                revision=1,
+                label="gone",
+                description="",
+                breadcrumb="",
+                content="",
+                updated_at=template.updated_at,
+            )
+        )
+    transactions = []
+    original = runtime.database.session
+
+    def counted(*args, **kwargs):
+        transactions.append(kwargs.get("bulk"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.database, "session", counted)
+    finder = search.FederatedSearch(runtime, ActionRegistry(runtime))
+    with execution_context(lease):
+        assert await finder.repair_stale_projection() is True
+    # Several bounded transactions, not one over the whole table.
+    assert len(transactions) > 4
+    async with control.database.session() as session:
+        documents = {
+            row.id: row
+            for row in await session.scalars(
+                select(SearchDocumentRow).where(SearchDocumentRow.project_id == "mine")
+            )
+        }
+    assert documents[stale.id].revision == 2
+    assert documents[stale.id].label == "renamed"
+    assert missing.id in documents
+    assert "gone-observation" not in documents
+    assert {item.id for item in created} <= set(documents)
+    with execution_context(lease):
+        assert await finder.repair_stale_projection() is False
+
+
+async def test_lease_lost_to_a_blocked_event_loop_says_so(monkeypatch):
+    monkeypatch.setattr(runtime_coordination, "LEASE_MS", 6_000)
+    monkeypatch.setattr(runtime_coordination, "LEASE_SAFETY_MS", 3_000)
+    renewal, renewed = LeaseRenewal(), []
+
+    async def renew():
+        renewed.append(time.monotonic())
+
+    async def hog():
+        await asyncio.sleep(0.3)
+        time.sleep(4.5)  # CPU-bound work holding the event loop
+
+    blocker = asyncio.create_task(hog())
+    with pytest.raises(LeaseLost, match="event loop was blocked") as raised:
+        async with asyncio.timeout(15):
+            await keep_lease(renew, renewal, interval=0.1)
+    await blocker
+    assert "unreachable" not in str(raised.value)
+
+
+async def test_search_answers_from_a_partial_index_while_a_long_repair_runs(
+    execution, monkeypatch
+):
+    from nebula.v3 import search
+    from nebula.v3.action_registry import ActionRegistry
+    from nebula.v3.domain import SearchScope
+
+    _, runtime, _, lease = execution
+    monkeypatch.setattr(search, "REPAIR_WAIT_SECONDS", 0.2)
+    release, calls = asyncio.Event(), []
+
+    async def slow_repair(self):
+        calls.append(time.monotonic())
+        await release.wait()
+        return len(calls) == 1
+
+    monkeypatch.setattr(search.FederatedSearch, "repair_stale_projection", slow_repair)
+    finder = search.FederatedSearch(runtime, ActionRegistry(runtime))
+
+    async def ask():
+        with execution_context(lease):
+            return await finder.search(
+                query="mine",
+                active_project="mine",
+                scope=SearchScope.ACTIVE,
+                kinds=[],
+                cursor=None,
+                limit=10,
+            )
+
+    started = time.monotonic()
+    first = await asyncio.wait_for(ask(), 5)
+    second = await asyncio.wait_for(ask(), 5)
+    assert time.monotonic() - started < 3
+    assert first.partial_index and second.partial_index
+    # Both searches share the one running repair.
+    assert len(calls) == 1
+    release.set()
+    third = await asyncio.wait_for(ask(), 5)
+    assert third.partial_index is False
