@@ -33,7 +33,11 @@ from .database import (
 )
 from .diagnostics import record_caught_exception
 from .domain import NebulaModel, PairedDeviceSession, utc_now
-from .execution_scope import execution_context, tracking_command_writes
+from .execution_scope import (
+    CommandWrites,
+    execution_context,
+    tracking_command_writes,
+)
 from .memory_actor import memory_actor
 from .runtime_coordination import (
     FOLLOWS_TURN_HEADER,
@@ -858,6 +862,16 @@ def typed_chat_command(intent: HttpIntent) -> str | None:
     return None
 
 
+class _CommandRun:
+    """What the runner learns about one run of a claimed command."""
+
+    __slots__ = ("tracker",)
+
+    def __init__(self) -> None:
+        # The run's write tracker, when its request is re-runnable.
+        self.tracker: CommandWrites | None = None
+
+
 class DurableHttpRunner:
     """Execution-owned ASGI delivery; viewer cancellation has no task to cancel."""
 
@@ -972,15 +986,23 @@ class DurableHttpRunner:
         command: ClaimedCommand,
         released: asyncio.Event | None = None,
     ) -> None:
+        run = _CommandRun()
         try:
             with execution_context(lease):
-                await self._invoke(lease, command, released)
-        except BaseException:
+                await self._invoke(lease, command, released, run)
+        except BaseException as failure:
             # A controller failure can follow a committed external effect.
-            # Keep the receipt, mark uncertainty and never replay automatically.
+            # Keep the receipt and never replay such an effect automatically.
             # A storage report has no external effect, records atomically and
             # publishes its response only with its outcome, so it runs again.
-            async def uncertain():
+            lease_lost = isinstance(failure, LeaseLost)
+            tracker = run.tracker
+            if tracker is not None:
+                # From here on no write of this run can commit, so the
+                # request's write record is final once settlement reads it.
+                tracker.settling = True
+
+            async def settle():
                 if command.name == STORAGE_REPORT_COMMAND:
                     await self.delivery.coordination.requeue_storage_report(
                         lease, command.receipt.command_id
@@ -992,6 +1014,40 @@ class DurableHttpRunner:
                     lease, command.receipt.command_id
                 ):
                     return
+                outcome = None
+                try:
+                    # An owner that lost the project leaves it to recovery,
+                    # which settles it once this owner is fenced.
+                    if not lease_lost:
+                        outcome = (
+                            await self.delivery.coordination.settle_failed_request(
+                                lease,
+                                command.receipt.command_id,
+                                tracked=tracker is not None,
+                            )
+                        )
+                except LeaseLost:
+                    raise
+                except Exception as error:
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.command.settle_failed",
+                        "A failed request could not be settled; it is kept as needing reconciliation.",
+                        error,
+                        stage="delivery",
+                        metadata={
+                            "entity_id": command.receipt.command_id,
+                            "kind": "runtime-command",
+                        },
+                    )
+                if outcome == "saved" and tracker is not None:
+                    # Its changes are its outcome: the rest of the run may
+                    # finish them, as it would after a successful response.
+                    tracker.release()
+                if outcome is not None:
+                    return
+                if tracker is not None:
+                    tracker.release()
                 await self.delivery.coordination.finish_command(
                     lease,
                     command.receipt.command_id,
@@ -1001,7 +1057,7 @@ class DurableHttpRunner:
                     },
                 )
 
-            await finish_cleanup(uncertain())
+            await finish_cleanup(settle())
             raise
         if command.name == STORAGE_REPORT_COMMAND:
             await self._prune_storage_reports(lease)
@@ -1030,6 +1086,7 @@ class DurableHttpRunner:
         lease: ProjectLease,
         command: ClaimedCommand,
         released: asyncio.Event | None = None,
+        run: _CommandRun | None = None,
     ):
         intent, actor = await self.delivery.request(command)
         command_id = command.receipt.command_id
@@ -1230,19 +1287,25 @@ class DurableHttpRunner:
                     stage="delivery",
                     metadata={"entity_id": command_id, "kind": "runtime-command"},
                 )
-        attribution = memory_actor.set(actor)
-        try:
-            with (
-                runtime_principal(actor),
-                tracking_command_writes(command_id, lease.project_id)
-                if tracked
-                else nullcontext(),
-            ):
-                await self.app(scope, receive, send)
-        finally:
-            memory_actor.reset(attribution)
-        if not ended:
-            raise RuntimeIpcError("runtime response ended without a durable completion")
-        await self.delivery.complete(
-            lease, command_id, status_code=status_code, frames=buffered or ()
-        )
+        # The tracker spans the durable completion too: until the request
+        # is complete, a write of its run is one recovery must know about.
+        with (
+            tracking_command_writes(command_id, lease.project_id)
+            if tracked
+            else nullcontext()
+        ) as tracker:
+            if run is not None:
+                run.tracker = tracker
+            attribution = memory_actor.set(actor)
+            try:
+                with runtime_principal(actor):
+                    await self.app(scope, receive, send)
+            finally:
+                memory_actor.reset(attribution)
+            if not ended:
+                raise RuntimeIpcError(
+                    "runtime response ended without a durable completion"
+                )
+            await self.delivery.complete(
+                lease, command_id, status_code=status_code, frames=buffered or ()
+            )

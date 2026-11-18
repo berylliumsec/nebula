@@ -1440,8 +1440,9 @@ async def test_a_non_streamed_request_runs_again_only_when_it_saved_nothing(boun
             boundary.delivery, stopped, operator_token=_TOKEN
         ).run_one(boundary.lease, lane="work")
     async with boundary.host.database.session() as session:
-        assert (await session.get(RuntimeCommandRow, raised)).state == "uncertain"
+        # Settled by its live owner once no write of the run can commit.
         row = await session.get(RuntimeCommandRow, raised)
+        assert (row.state, row.result) == ("queued", {"interrupted_runs": 1})
         row.state = "failed"  # let the lane move on
         await session.commit()
 
@@ -1466,7 +1467,99 @@ async def test_a_non_streamed_request_runs_again_only_when_it_saved_nothing(boun
         assert await session.get(RuntimeCommandWriteRow, lost) is None
 
 
+async def test_a_live_workers_failed_request_never_holds_its_lane(boundary):
+    """A request whose run raised in its live worker used to stay "uncertain"
+    at the head of its lane, so no later request of the project ever ran.
+
+    Its owner now settles it: a tracked request that saved nothing runs
+    again (at most three runs), one that saved changes fails saying so, and
+    an untracked one fails without being retried. The lane moves on.
+    """
+    from nebula.v3.database import RuntimeCommandWriteRow
+    from nebula.v3.runtime_coordination import (
+        FAILED_REQUEST_RESULT,
+        FAILED_SAVED_REQUEST_RESULT,
+        FAILED_UNSAVED_REQUEST_RESULT,
+    )
+
+    _, client = boundary.api()
+
+    async def submit(key, path, body):
+        accepted = await client.request(
+            "PATCH" if path.startswith("/api/v1/chat-sessions/") else "POST",
+            path,
+            headers=_AUTH | {"Idempotency-Key": key},
+            json=body,
+        )
+        assert accepted.status_code == 202, accepted.text
+        return accepted.json()["receipt"]["command_id"]
+
+    async def saves_then_fails(scope, _receive, _send):
+        # Stands for a committed project write of the route's run.
+        async with boundary.host.database.session() as session:
+            record = await session.get(
+                RuntimeCommandWriteRow, scope["state"]["runtime_command_id"]
+            )
+            record.wrote = True
+            await session.commit()
+        raise RuntimeError("delivery failed after the route saved")
+
+    async def fails(_scope, _receive, _send):
+        raise RuntimeError("delivery failed before anything was saved")
+
+    async def run(app):
+        with pytest.raises(RuntimeError):
+            await DurableHttpRunner(
+                boundary.delivery, app, operator_token=_TOKEN
+            ).run_one(boundary.lease, lane="work")
+
+    async def command(command_id):
+        async with boundary.host.database.session() as session:
+            row = await session.get(RuntimeCommandRow, command_id)
+            assert await session.get(RuntimeCommandWriteRow, command_id) is None
+            return row.state, row.result
+
+    unarchive = await submit(
+        "live-saved", "/api/v1/chat-sessions/s", {"archived": False}
+    )
+    await run(saves_then_fails)
+    assert await command(unarchive) == (
+        "failed",
+        {**FAILED_SAVED_REQUEST_RESULT, "previous_state": "running"},
+    )
+
+    goal = await submit(
+        "live-unsaved", "/api/v1/chat/sessions/s/goal/actions", {"action": "start"}
+    )
+    for runs in (1, 2):
+        await run(fails)
+        assert await command(goal) == ("queued", {"interrupted_runs": runs})
+    await run(fails)
+    assert await command(goal) == (
+        "failed",
+        {**FAILED_UNSAVED_REQUEST_RESULT, "previous_state": "running"},
+    )
+
+    untracked = await submit("live-untracked", "/api/v1/chat/sessions/s/fork", {})
+    await run(fails)
+    assert await command(untracked) == (
+        "failed",
+        {**FAILED_REQUEST_RESULT, "previous_state": "running"},
+    )
+
+    # The lane serves the project's next request.
+    following = await submit("live-next", "/api/v1/chat/sessions/s/fork", {})
+    assert await DurableHttpRunner(
+        boundary.delivery, reply, operator_token=_TOKEN
+    ).run_one(boundary.lease, lane="work")
+    assert (await command(following))[0] == "succeeded"
+
+
 def test_only_routes_whose_effects_are_project_writes_are_rerunnable():
+    """Requests whose every effect is a Core SQL write run again after their
+    worker died having saved nothing; the rest settle as "may have partly
+    applied". Harness chats qualify because the vendor hears of a turn only
+    after its queued turn is saved."""
     from nebula.v3.runtime_routes import rerunnable_request
 
     def body(value):
@@ -1476,18 +1569,29 @@ def test_only_routes_whose_effects_are_project_writes_are_rerunnable():
     assert rerunnable_request("POST", chat, body({"stream": False}))
     assert rerunnable_request("POST", chat, body({"control_assistant": True}))
     assert not rerunnable_request("POST", chat, body({"stream": True}))
-    assert not rerunnable_request("POST", chat, body({"backend": "harness"}))
+    assert rerunnable_request("POST", chat, body({"backend": "harness"}))
+    assert rerunnable_request(
+        "POST", chat, body({"backend": "harness", "stream": True})
+    )
     goal = "/api/v1/chat/sessions/s/goal/actions"
-    for action in ("start", "pause", "resume", "cancel"):
+    for action in ("start", "pause", "resume", "cancel", "block", "complete"):
         assert rerunnable_request("POST", goal, body({"action": action}))
-    assert not rerunnable_request("POST", goal, body({"action": "complete"}))
+    assert not rerunnable_request("POST", goal, body({}))
+    assert rerunnable_request("POST", "/api/v1/chat/sessions/s/goal", b"{}")
+    assert rerunnable_request("PATCH", "/api/v1/chat/sessions/s/goal", b"{}")
+    assert not rerunnable_request(
+        "POST", "/api/v1/chat/sessions/s/goal/children", b"{}"
+    )
     session = "/api/v1/chat-sessions/s"
     assert rerunnable_request("PATCH", session, body({"archived": False}))
-    assert not rerunnable_request("PATCH", session, body({"archived": False, "x": 1}))
-    assert not rerunnable_request("PATCH", session, body({"archived": True}))
+    assert rerunnable_request("PATCH", session, body({"archived": True}))
+    assert rerunnable_request("PATCH", session, body({"title": "renamed"}))
     assert not rerunnable_request("DELETE", session, None)
+    assert not rerunnable_request("PATCH", session + "/notebook", b"{}")
     butler = "/api/v1/chat/control-assistant/session"
     assert rerunnable_request("POST", butler, body({"backend": "provider"}))
-    assert not rerunnable_request("POST", butler, body({"backend": "harness"}))
+    assert rerunnable_request("POST", butler, body({"backend": "harness"}))
+    assert not rerunnable_request("POST", butler, body({}))
     assert not rerunnable_request("POST", "/api/v1/mcp/servers/x/tools/y", b"{}")
+    assert not rerunnable_request("POST", "/api/v1/chat/sessions/s/fork", b"{}")
     assert not rerunnable_request("POST", chat, b"not json")

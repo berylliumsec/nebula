@@ -12,6 +12,7 @@ from nebula.v3.domain import PairedDeviceSession, utc_now
 from nebula.v3.execution_scope import current_execution_lease
 from nebula.v3.memory_actor import memory_actor
 from nebula.v3.runtime_coordination import (
+    FAILED_REQUEST_RESULT,
     FOLLOWS_TURN_HEADER,
     RUNTIME_RELEASE_LANE_STATE,
     CoordinationConflict,
@@ -165,13 +166,17 @@ async def test_changed_intent_conflicts_and_another_principal_cannot_read_receip
         await accept(api, actor="Bearer pretend-token")
 
 
-async def test_cancelled_effect_is_uncertain_and_controls_bypass_held_work(
+async def test_cancelled_effect_is_failed_unreplayed_and_its_lane_moves_on(
     cluster, tmp_path
 ):
+    """A live worker's cancelled request may have acted, so it never runs
+    again. It used to stay "uncertain" at its lane head, and no later work
+    of the project ran while that worker lived; now it fails saying it may
+    have partly applied, and the lane serves the next request."""
     (first, second), _, _ = cluster
     delivery = RuntimeDelivery(first, RuntimeVault(tmp_path / "private"))
     receipt = await accept(delivery)
-    await accept(delivery, key="queued-later")
+    later = await accept(delivery, key="queued-later")
     lease = await first.claim_project("project", "old")
     effect_started = asyncio.Event()
     effects = []
@@ -190,8 +195,12 @@ async def test_cancelled_effect_is_uncertain_and_controls_bypass_held_work(
     worker.cancel()
     with pytest.raises(asyncio.CancelledError):
         await worker
-    assert (await delivery.page("operator", receipt.command_id)).state == "uncertain"
-    assert await second.claim_next(lease, lane="work") is None
+    assert (await delivery.page("operator", receipt.command_id)).state == "failed"
+    async with first.database.session() as session:
+        row = await session.get(RuntimeCommandRow, receipt.command_id)
+        assert row.result == {**FAILED_REQUEST_RESULT, "previous_state": "running"}
+    claimed = await second.claim_next(lease, lane="work")
+    assert claimed is not None and claimed.receipt.command_id == later.command_id
     await accept(delivery, key="operator-stop", lane="control")
     controls = DurableHttpRunner(delivery, reply, operator_token="synthetic")
     assert await controls.run_one(lease, lane="control")
@@ -319,7 +328,7 @@ async def test_final_send_does_not_publish_completion_before_app_returns(
         release.set()
         assert await asyncio.wait_for(task, 5)
     after = await viewer.page("operator", receipt.command_id)
-    assert after.state == ("uncertain" if cancelled else "succeeded")
+    assert after.state == ("failed" if cancelled else "succeeded")
     assert [frame.kind for frame in after.frames] == (
         ["head", "body"] if cancelled else ["head", "body", "end"]
     )
@@ -511,7 +520,7 @@ async def test_a_route_waiting_on_its_started_turn_frees_the_work_lane(
     assert (await delivery.page("operator", waiting.command_id)).state == ("succeeded")
 
 
-async def test_closing_the_runner_leaves_a_followed_command_uncertain(
+async def test_closing_the_runner_fails_a_followed_command_unreplayed(
     cluster, tmp_path
 ):
     (first, _), _, _ = cluster
@@ -532,6 +541,6 @@ async def test_closing_the_runner_leaves_a_followed_command_uncertain(
     runner = DurableHttpRunner(delivery, app, operator_token="t")
     assert await asyncio.wait_for(runner.run_one(lease, lane="work"), 5)
     await runner.close()
-    assert (await delivery.page("operator", following.command_id)).state == (
-        "uncertain"
-    )
+    # It no longer held a lane, but an unresolved command still blocked the
+    # project's handoff and Core's shutdown.
+    assert (await delivery.page("operator", following.command_id)).state == ("failed")

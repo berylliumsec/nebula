@@ -1,5 +1,5 @@
 {
-  "change_digest": "f59d1220504a4539f5ac93670845b65e13bf58e6e55baf40ed658aec9e77dc2c",
+  "change_digest": "de528596399a823ce00b9a7a45a4452db925951fc3b42458d41386b93bf3976d",
   "reviewed_by": "Claude Code after scratch-Core reproduction (text and code change; no UI element added)",
   "reason": "The API's 409 for a request that ended without a response now reads the command result recorded by recovery or its owner: saved_changes, saved_turn, nothing saved, or an unknown outcome with the route-specific thing to check, each with a stable code (runtime.request.*). Status, X-Nebula-Request-State, state and command_id are unchanged for the web UI, iOS (bundled web UI) and TUI. Selected: the new API-worker regression, durable delivery, storage report backlog (its own unsettled answer is unchanged) and the TUI transport tests that read this 409.",
   "exclusions": "No frontend or Playwright change: the web UI shows the 409 detail string as before (ui/src/api/client.ts reads detail; durableRequests reads state and the header), so only wording changes. Native iOS bundles the same web UI.",
