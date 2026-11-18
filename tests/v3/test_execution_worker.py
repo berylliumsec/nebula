@@ -317,6 +317,9 @@ async def test_failed_startup_is_reported_and_same_grant_does_not_retry(runtime)
     # process attaches once. It exits so dead-owner recovery admits a fresh
     # worker instead of the live failed owner holding the project forever.
     assert runtime.execution.served is False
+    # The exit is requested after the failure receipt commits, not with the
+    # state change itself.
+    await until(lambda: exits)
     assert exits == ["failed"]
 
 
