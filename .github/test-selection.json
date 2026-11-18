@@ -1,7 +1,7 @@
 {
-  "change_digest": "aa19acf81f67a903e5114d553fa1db888ec7a4b0bf6f1de643a01ba233f89c8b",
+  "change_digest": "c20da6f5e616af9481ed03cf7aaccb8654cf09712b4ffc25e64472ed1d652aa6",
   "reviewed_by": "Claude after independent subagent root-cause validation of the unmatched recovery and the interrupted-command pin",
-  "reason": "Deployments must never stop on a project. Core status now names the recovery that granted each owner; the staged deployer adopts a verified recovery from its journaled source grant, stops a source that misses its handoff grace period through a new evict_execution operation, and polls until projects settle. An interrupted command record no longer pins handoff. The selected files cover recovery adoption, eviction and polling, status provenance, host stop scoping, the handoff inventory, and the resume suite (whose stale restart-boundary stub from #1210 is repaired).",
+  "reason": "Deployments must never stop on a project. Core status now names the recovery that granted each owner; the staged deployer adopts a verified recovery from its journaled source grant, stops a source that misses its handoff grace period through a new evict_execution operation, and polls until projects settle. An interrupted command record no longer pins handoff. The selected files cover recovery adoption, eviction and polling, status provenance, host stop scoping, the handoff inventory, and the resume suite (whose stale restart-boundary stub from #1210 is repaired). Also repairs a race in test_target_failed_before_activation_relinquishes_for_fresh_recovery (asserted the exit request before the failure was saved; reproduced with a delayed save).",
   "exclusions": "No UI, native, or browser changes. Not run: a live staging replay of a stuck project, the full Python suite, and four simulation host tests that fail identically on origin/main in this environment (systemd and frozen-build dependent).",
   "python_versions": [
     "3.12"

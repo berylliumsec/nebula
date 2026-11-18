@@ -78,11 +78,14 @@ GITHUB_API = "https://api.github.com"
 CI_ARTIFACT_LIMIT = 1024 * 1024
 CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-TERMINAL_CLIENT_CI_JOBS = {
+# Acceptance records written before required jobs matched by family listed
+# each terminal-client matrix job by its exact GitHub name. Validation accepts
+# only this exact legacy expansion in place of the "terminal-client" family.
+LEGACY_TERMINAL_CLIENT_CI_JOBS = frozenset(
     f"terminal-client ({runner}, {version})"
     for runner in ("ubuntu-latest", "macos-15")
     for version in ("3.11", "3.12", "3.13")
-}
+)
 DEPLOYMENT_HISTORY_LIMIT = 32
 SUPERVISOR_STOP_GRACE_SECONDS = 30
 SUPERVISOR_EXIT_SECONDS = 30
@@ -661,7 +664,7 @@ def selected_ci_jobs(
     if plan.get("native") or "desktop-ui-build" in checks:
         required.add("desktop-macos")
     if any(item.startswith("tests/test_terminal_") for item in python_tests):
-        required.update(TERMINAL_CLIENT_CI_JOBS)
+        required.add("terminal-client")
     migration_prefixes = (
         "tests/v3/test_migrations.py",
         "tests/v3/test_database_migration",
@@ -692,26 +695,50 @@ def selected_ci_jobs(
     return required
 
 
+def ci_job_in_family(name: str, family: str) -> bool:
+    """Return whether a GitHub job name belongs to a required job family.
+
+    GitHub names each matrix instance "<job name> (<matrix values>)", so a
+    family is the exact job name or that name followed by " (". A bare prefix
+    never matches, which keeps "python (3.12)" apart from "python (3.11)".
+    """
+    return name == family or name.startswith(f"{family} (")
+
+
 def require_ci_jobs(jobs: list[dict[str, Any]], required: set[str]) -> dict[str, str]:
-    conclusions: dict[str, list[tuple[str | None, str | None]]] = {}
-    for job in jobs:
-        if not isinstance(job, dict) or not isinstance(job.get("name"), str):
-            continue
-        conclusions.setdefault(job["name"], []).append(
-            (job.get("status"), job.get("conclusion"))
-        )
-    missing = sorted(
-        name
-        for name in required
-        if not conclusions.get(name)
-        or any(
-            status != "completed" or conclusion != "success"
-            for status, conclusion in conclusions[name]
-        )
-    )
+    named = [
+        job
+        for job in jobs
+        if isinstance(job, dict) and isinstance(job.get("name"), str)
+    ]
+    missing = []
+    for family in sorted(required):
+        members = [job for job in named if ci_job_in_family(job["name"], family)]
+        if not members or any(
+            job.get("status") != "completed" or job.get("conclusion") != "success"
+            for job in members
+        ):
+            missing.append(family)
     if missing:
         raise RuntimeError(f"CI selected jobs did not succeed: {', '.join(missing)}")
     return {name: "success" for name in sorted(required)}
+
+
+def recorded_ci_jobs_match(recorded: Any, expected: dict[str, str]) -> bool:
+    """Compare a recorded selected-job map with the recomputed expectation.
+
+    Records written before family matching may list the six exact
+    terminal-client matrix jobs instead of the "terminal-client" family.
+    """
+    if recorded == expected:
+        return True
+    if "terminal-client" not in expected or not isinstance(recorded, dict):
+        return False
+    legacy = {
+        name: value for name, value in expected.items() if name != "terminal-client"
+    }
+    legacy.update(dict.fromkeys(LEGACY_TERMINAL_CLIENT_CI_JOBS, "success"))
+    return recorded == legacy
 
 
 def first_parent_commits(directory: Path, *, previous: str, sha: str) -> list[str]:
@@ -1652,7 +1679,7 @@ def validate_ci_acceptance_record(
                     supplemental_playwright_verified=supplemental is not None,
                 )
             }
-            if item["selected_jobs"] != expected_main_jobs:
+            if not recorded_ci_jobs_match(item["selected_jobs"], expected_main_jobs):
                 raise RuntimeError("release CI selected-job record is incomplete")
             verify_ci_trust_inputs(directory, trusted_baseline=previous, sha=commit)
             if supplemental is not None:
@@ -1666,7 +1693,9 @@ def validate_ci_acceptance_record(
                         selection, supplemental_playwright_verified=True
                     )
                 }
-                if pr_ci["selected_jobs"] != expected_pr_jobs:
+                if not recorded_ci_jobs_match(
+                    pr_ci["selected_jobs"], expected_pr_jobs
+                ):
                     raise RuntimeError("release PR CI job record is incomplete")
                 expected_plan, _ = expected_pr_playwright_plan(
                     selection,

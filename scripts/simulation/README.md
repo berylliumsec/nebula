@@ -43,9 +43,16 @@ requires exactly one distinct successful `main` push run from the active
 live-baseline-to-head chain. Each run must match that exact commit and its first
 parent. The deployer verifies each run's selection artifact SHA-256, validates
 the committed selection against that commit's diff, and requires all selected
-jobs to have completed successfully. A selected terminal client test requires
-all six Ubuntu/macOS and Python 3.11–3.13 matrix jobs by their exact GitHub
-job names. The immutable acceptance record retains
+jobs to have completed successfully. Each required job is a job family: the
+exact job name, or GitHub's matrix instances named `<job> (<matrix values>)`.
+A family needs at least one job, and every job in it must have completed with
+`success`; a failed, cancelled, or unfinished instance fails closed. A bare
+prefix never matches, so `python (3.12)` stays separate from `python (3.11)`.
+A selected terminal client test therefore requires every `terminal-client`
+matrix job, whatever runners and Python versions the matrix lists. Acceptance
+records key the family as `terminal-client`; records written earlier with the
+six exact Ubuntu/macOS and Python 3.11–3.13 job names still validate, and no
+other substitute does. The immutable acceptance record retains
 the ordered per-commit receipts and selected-job conclusions; the reviewed
 selection union must cover the entire first-parent range. Missing, repeated,
 reordered, or mismatched runs fail closed. This mode skips local test collection
