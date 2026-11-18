@@ -1,22 +1,23 @@
 {
-  "change_digest": "96752db3aa26b56510559b81e0163070986a3f137f9ef2338d0d44cfd848a312",
+  "change_digest": "b4e587e6291f21172efb0bc97f4113599dafb0287e0f968c44f03581afcbe59b",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Hosts without pidfd (a Python built without os.pidfd_open, older kernels, sandboxes refusing the call) could not spawn any worker, and could not retire a frozen project worker. process_identity now keeps pidfd where it works and otherwise re-reads the recorded kernel birth before each signal; spawn no longer requires pidfd. Selected: the process identity suite (pid reuse, frozen session kill, probe) and the runtime process suite, whose frozen/exited/never-force-retired tests now run with and without pidfd.",
-  "exclusions": "No UI, native or Playwright layer: no operator-visible interface changes; macOS local Core stays refused at startup and is not exercised.",
+  "reason": "A chat over its runtime's input target (background precompaction lost to a worker kill) refused every turn on another provider/model with 422 'requires confirmed context compaction', even when the target had identical limits. The switch gate now asks only when the switch compacts something the current runtime would not. Selected: test_chat.py (new equal-limit switch regression on SQLite and PostgreSQL, existing smaller-model confirmation test), test_history_content_fidelity.py (image-aware switch estimate, now from a text-only current runtime) and test_async_runtime_switching.py (deferred switch apply/confirmation).",
+  "exclusions": "No UI, native or Playwright layer: no UI code changed; the composer already handles a preflight that needs no confirmation. Butler and the assistant-config route call the same preflight and are covered through it.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 51,
+    "python": 117,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_process_identity.py",
-    "tests/v3/test_runtime_processes.py"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_history_content_fidelity.py",
+    "tests/v3/test_async_runtime_switching.py"
   ],
   "frontend": [],
   "native": [],
