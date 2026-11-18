@@ -1,21 +1,21 @@
 {
-  "change_digest": "31577721963ddae850baac54ffdf2d85e7d774bcddcc06b4561c987dca6d3ba3",
-  "reviewed_by": "Codex after independent root-cause validation and live journal readback",
-  "reason": "The change adds a guarded simulation deployer reconciliation for a staged promotion nested in an unactivated rollback. The selected deploy-resume file exercises the new dry-run and archive path, refusal cases, and surrounding promotion/rollback behavior.",
-  "exclusions": "No Core API, UI, native app, or browser behavior changes. The selected tests model the service and authenticated Core operation ledger; a live read-only dry run is required before using the command on simulation.",
+  "change_digest": "621d925f3dfb4378362b9e1d61beb50cc3ec809c76907832fb08ea97f9121e3e",
+  "reviewed_by": "Codex after independent root-cause validation against exact successful CI matrix jobs",
+  "reason": "CI-backed simulation preparation must accept all six successful terminal-client matrix jobs under their actual GitHub names. The selected deployer protocol file covers required-job calculation and rejection of a missing or failed matrix entry.",
+  "exclusions": "No Core, UI, native app, or browser behavior changes. Operator requested no local test execution or backups; this file was collected only, and CI executes its reviewed selection.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 66,
+    "python": 25,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_deploy_resume.py"
+    "tests/test_deployer_protocol.py"
   ],
   "frontend": [],
   "native": [],

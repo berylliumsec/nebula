@@ -78,6 +78,11 @@ GITHUB_API = "https://api.github.com"
 CI_ARTIFACT_LIMIT = 1024 * 1024
 CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+TERMINAL_CLIENT_CI_JOBS = {
+    f"terminal-client ({runner}, {version})"
+    for runner in ("ubuntu-latest", "macos-15")
+    for version in ("3.11", "3.12", "3.13")
+}
 DEPLOYMENT_HISTORY_LIMIT = 32
 SUPERVISOR_STOP_GRACE_SECONDS = 30
 SUPERVISOR_EXIT_SECONDS = 30
@@ -650,7 +655,7 @@ def selected_ci_jobs(
     if plan.get("native") or "desktop-ui-build" in checks:
         required.add("desktop-macos")
     if any(item.startswith("tests/test_terminal_") for item in python_tests):
-        required.add("terminal-client")
+        required.update(TERMINAL_CLIENT_CI_JOBS)
     migration_prefixes = (
         "tests/v3/test_migrations.py",
         "tests/v3/test_database_migration",

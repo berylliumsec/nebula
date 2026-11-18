@@ -546,6 +546,34 @@ def test_selected_ci_jobs_reject_playwright_not_run_on_push():
         deployer.selected_ci_jobs(_ci_plan(playwright=["assistant.spec.ts"]))
 
 
+def test_terminal_client_ci_acceptance_requires_every_matrix_job():
+    required = deployer.selected_ci_jobs(
+        _ci_plan(python=["tests/test_terminal_transport.py"])
+    )
+    assert required == {
+        "selection",
+        "security",
+        "python (3.12)",
+        *deployer.TERMINAL_CLIENT_CI_JOBS,
+    }
+    jobs = [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in required
+    ]
+    assert deployer.require_ci_jobs(jobs, required) == {
+        name: "success" for name in required
+    }
+    for missing in deployer.TERMINAL_CLIENT_CI_JOBS:
+        with pytest.raises(RuntimeError, match="terminal-client"):
+            deployer.require_ci_jobs(
+                [job for job in jobs if job["name"] != missing], required
+            )
+    failed = sorted(deployer.TERMINAL_CLIENT_CI_JOBS)[0]
+    next(job for job in jobs if job["name"] == failed)["conclusion"] = "failure"
+    with pytest.raises(RuntimeError, match="terminal-client"):
+        deployer.require_ci_jobs(jobs, required)
+
+
 def test_ci_acceptance_rejects_incomplete_artifact_listing():
     with pytest.raises(RuntimeError, match="artifact listing is incomplete"):
         deployer.complete_ci_artifact_listing(
