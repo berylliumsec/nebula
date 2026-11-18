@@ -1,0 +1,27 @@
+# Protected memory runner (nebula.memory-runner/v1) for Nebula Host commands.
+#
+# One instance per Core OS user. Enable for the account that runs Nebula Core:
+#   sudo systemctl enable --now nebula-memory-runner@$USER
+#
+# The runner owns this unit's delegated cgroup-v2 subtree and starts each Host
+# command as that user inside a root-owned memory group. Stopping the unit kills
+# every job group; Core keeps their reservations charged until it verifies the
+# groups are gone.
+[Unit]
+Description=Nebula protected memory runner for %i
+Documentation=file:///usr/share/doc/nebula/MEMORY_BUDGETS.md
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/nebula/memory-runner/host_memory_runner.py --client-user %i --socket /run/nebula-memory-runner/%i.sock --state-dir /var/lib/nebula-memory-runner/%i
+Delegate=memory pids
+KillMode=control-group
+Restart=on-failure
+RestartSec=2
+UMask=0022
+# No filesystem sandboxing here: jobs inherit this unit's mount namespace and
+# Host commands need the Core user's normal filesystem access.
+
+[Install]
+WantedBy=multi-user.target

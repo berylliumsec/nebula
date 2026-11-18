@@ -8,7 +8,7 @@ Nebula tools.
 
 from __future__ import annotations
 
-from .async_utils import MaybeAsync
+from .async_utils import finish_cleanup, MaybeAsync
 
 from .async_utils import call_async, resolve_workspace
 
@@ -452,13 +452,9 @@ class HostRuntimeSession(RuntimeBackendSession):
     async def enable_network(self) -> None:
         return None
 
-    async def run(
-        self,
-        process_id: str,
-        command: str,
-        cwd: str,
-        extra_env: dict[str, str] | None = None,
-    ) -> RuntimeBackendProcess:
+    def _prepare(
+        self, cwd: str, extra_env: dict[str, str] | None
+    ) -> tuple[Path, dict[str, str]]:
         if self._closed:
             raise AutomationRuntimeUnavailable("host session is closed")
         directory = Path(cwd).expanduser()
@@ -475,6 +471,16 @@ class HostRuntimeSession(RuntimeBackendSession):
             if key in {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}
         }
         environment.update(extra_env or {})
+        return directory, environment
+
+    async def run(
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> RuntimeBackendProcess:
+        directory, environment = self._prepare(cwd, extra_env)
         process = await asyncio.create_subprocess_exec(
             "/bin/bash",
             "--noprofile",
@@ -497,6 +503,98 @@ class HostRuntimeSession(RuntimeBackendSession):
         for process in self.processes:
             if process.process.returncode is None:
                 await process.terminate()
+
+
+class ManagedHostRuntimeProcess(RuntimeBackendProcess):
+    """A Host command the protected memory runner started in its job group."""
+
+    def __init__(self, process) -> None:
+        self.process = process
+        self.stdout = process.stdout
+        self.stderr = process.stderr
+
+    async def write(self, data: bytes) -> None:
+        if self.process.returncode is not None or self.process.stdin.is_closing():
+            raise AutomationRuntimeError("process stdin is closed")
+        self.process.stdin.write(data)
+        await self.process.stdin.drain()
+
+    async def _release_pipes(self) -> None:
+        """Close stdio a detached descendant kept open after the command exited.
+
+        The descendant itself stays inside the job group, charged to its budget,
+        until the session's verified cleanup removes the group.
+        """
+
+        deadline = asyncio.get_running_loop().time() + HOST_PIPE_RELEASE_SECONDS
+        while not (self.stdout.at_eof() and self.stderr.at_eof()):
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(HOST_EXIT_POLL_SECONDS)
+        await self.process.close()
+
+    async def wait(self) -> int:
+        code = await self.process.wait()
+        await self.process.signal("KILL")
+        await self._release_pipes()
+        return code
+
+    async def terminate(self) -> None:
+        await self.process.signal("TERM")
+        try:
+            await asyncio.wait_for(self.process.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            # diagnostic-expected: bounded escalation for a supervised host process.
+            await self.process.signal("KILL")
+            await self.process.wait()
+        await self.process.signal("KILL")
+        await self._release_pipes()
+
+
+class ManagedHostRuntimeSession(HostRuntimeSession):
+    """Host execution as Core's OS user inside one protected memory group."""
+
+    def __init__(self, workspace: Path, runner, memory_job) -> None:
+        super().__init__(workspace)
+        self.runner = runner
+        self.memory_job = memory_job
+
+    @property
+    def ended(self) -> bool:
+        return self.memory_job.ended
+
+    async def run(
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> RuntimeBackendProcess:
+        if self.memory_job.ended:
+            raise AutomationRuntimeUnavailable(
+                "This host worker ended. Inspect its memory outcome; the next command starts a new worker."
+            )
+        directory, environment = self._prepare(cwd, extra_env)
+        process = await self.runner.spawn(
+            self.memory_job.job_id,
+            ["/bin/bash", "--noprofile", "--norc", "-c", command],
+            str(directory),
+            environment,
+        )
+        backend = ManagedHostRuntimeProcess(process)
+        self.processes.append(backend)  # type: ignore[arg-type]
+        return backend
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            for process in self.processes:
+                if process.process.returncode is None:
+                    await process.terminate()
+        finally:
+            await self.memory_job.close()
 
 
 class ContainerRuntimeSession(RuntimeBackendSession):
@@ -2073,17 +2171,24 @@ class AutomationRuntimeManager:
         from .temporary_command_override import unmanaged_commands_allowed
         from .execution_policy import effective_scope
 
-        async def require_host_command_access() -> None:
+        async def require_host_command_access() -> Any:
+            """Return the protected runner, or None for the operator override."""
+            from .host_memory_client import HostMemoryRunner
+
+            runner = HostMemoryRunner.from_environment()
+            healthy, detail = await runner.available()
+            if healthy:
+                return runner
             if (
                 owner_kind == "chat" or (owner_kind == "harness" and chat_origin)
             ) and unmanaged_commands_allowed(engagement_id):
-                return
+                return None
             await self.memory_compute.reject_unsupported(
                 "local",
                 project_id=engagement_id,
                 resource_kind="host_command_session",
                 resource_id=owner_id,
-                detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
+                detail=detail,
             )
 
         key = (engagement_id, owner_kind, owner_id)
@@ -2096,8 +2201,11 @@ class AutomationRuntimeManager:
                 if (
                     existing.policy.revision == current_policy.revision
                     and existing.scope == current_scope
+                    and not getattr(existing.backend, "ended", False)
                 ):
-                    if existing.policy.execution_mode == "host":
+                    if existing.policy.execution_mode == "host" and not isinstance(
+                        existing.backend, ManagedHostRuntimeSession
+                    ):
                         await require_host_command_access()
                     return existing
                 # Rebuild the execution boundary as well as its approval policy.
@@ -2105,7 +2213,7 @@ class AutomationRuntimeManager:
             engagement = await self.store.get(Engagement, engagement_id)
             policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
-                await require_host_command_access()
+                host_runner = await require_host_command_access()
                 if not policy.host_access_acknowledged:
                     raise AutomationPolicyDenied(
                         "Host access has not been acknowledged"
@@ -2125,7 +2233,6 @@ class AutomationRuntimeManager:
                     else None
                 )
                 scope = await effective_scope(self.store, engagement_id, scope)
-                backend: RuntimeBackendSession = HostRuntimeSession(workspace)
                 entity = AutomationSession(
                     engagement_id=engagement_id,
                     owner_kind=owner_kind,
@@ -2144,15 +2251,37 @@ class AutomationRuntimeManager:
                     metadata={
                         "network_boundary": "host_os",
                         "workspace": str(workspace),
+                        "memory_runner": "nebula.memory-runner/v1"
+                        if host_runner is not None
+                        else "unmanaged_operator_override",
                     },
                 )
-                async with self.store.transaction(immediate=True) as transaction:
-                    (
-                        await transaction.assert_project_workspace(
-                            engagement_id, engagement.workspace_path
-                        )
+                backend: RuntimeBackendSession
+                if host_runner is None:
+                    backend = HostRuntimeSession(workspace)
+                else:
+                    memory_job = await self.memory_compute.open_host_job(
+                        host_runner,
+                        job_id="session-" + entity.id,
+                        project_id=engagement_id,
+                        resource_kind="host_command_session",
+                        resource_id=entity.id,
                     )
-                    (await transaction.add(entity))
+                    backend = ManagedHostRuntimeSession(
+                        workspace, host_runner, memory_job
+                    )
+                try:
+                    async with self.store.transaction(immediate=True) as transaction:
+                        (
+                            await transaction.assert_project_workspace(
+                                engagement_id, engagement.workspace_path
+                            )
+                        )
+                        (await transaction.add(entity))
+                except BaseException:
+                    # diagnostic-expected: an unrecorded session releases its verified worker.
+                    await finish_cleanup(backend.close())
+                    raise
                 managed = _ManagedSession(
                     entity=entity,
                     policy=policy,

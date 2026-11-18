@@ -96,6 +96,10 @@ that ownership metadata. Recovery checks actual owner death, checks the original
 runner, removes every known group and releases the SQL reservation using revision
 checks. An unacknowledged create or unavailable runner stays uncertain and charged.
 No heartbeat timeout alone proves cleanup or authorizes a retry.
+The protected local runner (`host_memory_runner.py`, see MEMORY_BUDGETS.md)
+implements this contract for Host commands with a root-owned cgroup-v2 group per
+worker job; its authority is a persistent instance ID plus its cgroup root, and
+the job-derived group name lets recovery remove a dead owner's group.
 Automatic orphan recovery also requires the same inspectable PID namespace and
 a stable runner authority. The current implementation uses Linux boot/namespace
 identity and Docker's daemon ID, including checks at normal cleanup. A Podman

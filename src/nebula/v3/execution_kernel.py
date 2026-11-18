@@ -3283,6 +3283,10 @@ def create_execution_kernel(
     runtime_usage.harness_account_reader = read_harness_account
 
     async def resolve_memory_cleanup_runner(job):
+        from .host_memory_client import HOST_RUNNER_PROFILE_ID, HostMemoryRunner
+
+        if job.snapshot.profile_id == HOST_RUNNER_PROFILE_ID:
+            return HostMemoryRunner.from_environment()
         if automation_runtime is None or job.snapshot.profile_id is None:
             from .memory_policy import MemoryEnforcementUnavailable
 
@@ -3291,6 +3295,8 @@ def create_execution_kernel(
             )
         profile = await store.get(RunnerProfile, job.snapshot.profile_id)
         return automation_runtime._runner(profile)
+
+    from .host_memory_client import HostMemoryRunner
 
     memory_reconciler = MemoryReconciler(memory_budgets, resolve_memory_cleanup_runner)
     app.state.memory_reconciler = memory_reconciler
@@ -3312,6 +3318,7 @@ def create_execution_kernel(
         if automation_runtime is not None
         else None,
         apply_running=memory_compute.apply_running,
+        host_runner=HostMemoryRunner.from_environment(),
     )
 
     # Reserve connection capacity for interactive reads using the discovered

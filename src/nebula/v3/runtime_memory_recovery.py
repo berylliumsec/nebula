@@ -37,7 +37,11 @@ class HostMemoryRecovery:
         self.state = "not_started"
 
     async def resolve(self, job):
+        from .host_memory_client import HOST_RUNNER_PROFILE_ID, HostMemoryRunner
+
         profile_id = job.snapshot.profile_id
+        if profile_id == HOST_RUNNER_PROFILE_ID:
+            return HostMemoryRunner.from_environment()
         if profile_id is None:
             raise MemoryEnforcementUnavailable(
                 "Reconnect this job's original execution profile before verifying cleanup"

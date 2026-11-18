@@ -777,6 +777,10 @@ A memory-admission or readiness refusal remains visible; an explicit retry uses
 the same owner and never falls back to an unrestricted local launch. Image
 download/build remains unavailable without a verified daemon-side memory runner;
 inspect and use only a fully verified cached image in that environment.
+Host-mode commands need the protected local memory runner. When the Memory
+budgets `local` environment reports unsupported, tell the operator to run
+`sudo systemctl enable --now nebula-memory-runner@<user>` on the Core host;
+Butler cannot install or start it, and must not suggest the unmanaged override.
 
 The focused test selection must cover the capability catalog, provider and
 harness tool paths, Core authorization and read-back, shell visibility, settings

@@ -61,10 +61,15 @@
       "deb": {
         "depends": [
           "libnspr4",
-          "libnss3"
+          "libnss3",
+          "python3 (>= 3.9)",
+          "util-linux"
         ],
         "files": {
           "/usr/bin/nebula": "../../packaging/linux/nebula",
+          "/usr/lib/nebula/memory-runner/host_memory_runner.py": "../../src/nebula/v3/host_memory_runner.py",
+          "/usr/lib/systemd/system/nebula-memory-runner@.service": "../../packaging/linux/nebula-memory-runner@.service",
+          "/usr/share/doc/nebula/MEMORY_BUDGETS.md": "../../docs/MEMORY_BUDGETS.md",
           "/usr/share/doc/nebula/LICENSE": "../../LICENSE.md",
           "/usr/share/doc/nebula/THIRD_PARTY_NOTICES.txt": "../../build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt",
           "/usr/share/icons/hicolor/128x128/apps/nebula-ui.png": "icons/128x128.png"
