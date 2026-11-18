@@ -1,3 +1,4 @@
+import {parallelCoreSpecs} from "../scripts/playwright_entry_args.mjs";
 import conversationOrder from "./playwright.conversation-order.config";
 import applicationModel from "./playwright.application-model.config";
 import applicationReopen from "./playwright.application-reopen.config";
@@ -25,6 +26,7 @@ const testCommand = process.env.NEBULA_UI_TEST_COMMAND
   ?? `npm run dev -- --host ${testHost} --port ${testPort}`;
 // Selecting real-Core must never implicitly schedule unrelated browser projects.
 const isolatedMatrixEntry = true;
+const coreSpecPatterns = ["**/real-core.spec.ts", ...parallelCoreSpecs.map(file => `**/${file.slice("tests/".length)}`)];
 
 // Workers inherit the validated parent selection rather than its CLI arguments.
 const selectedArgs: string[] = JSON.parse(process.env.NEBULA_PLAYWRIGHT_FOCUSED_ARGS ?? "[]");
@@ -60,7 +62,7 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? 0 : process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  reporter: process.env.CI ? [["github"], ["json", {outputFile: "test-results/results.json"}]] : "list",
   expect: {
     toHaveScreenshot: {
       animations: "disabled",
@@ -73,6 +75,7 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
     colorScheme: "dark",
     reducedMotion: "reduce",
     trace: "retain-on-failure",
+    screenshot: "only-on-failure",
   },
   projects: [
     ...[
@@ -82,7 +85,7 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
         {name: `assistant-real-chromium-${width}`, use: {...devices["Pixel 5"], viewport: {width, height: 844}}},
         {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
       ]),
-    ].map(project => ({...project, testMatch: ["**/real-core.spec.ts", "**/work-import.spec.ts", "**/mcp-project-scope.spec.ts", "**/butler-notes.spec.ts", "**/butler-subagents.spec.ts", "**/butler-queue.spec.ts", "**/ios-shell-real-core.spec.ts"], grep: /browser harness|assistant upgrade|assistant planning|project removal|project execution mode|Butler project lifecycle|mcp import|project MCP catalog|ssh environments|work hub|runtime usage|notebook real Core/})),
+    ].map(project => ({...project, testMatch: [...coreSpecPatterns, "**/work-import.spec.ts", "**/mcp-project-scope.spec.ts", "**/butler-notes.spec.ts", "**/butler-subagents.spec.ts", "**/butler-queue.spec.ts", "**/ios-shell-real-core.spec.ts"], grep: /browser harness|assistant upgrade|assistant planning|project removal|project execution mode|Butler project lifecycle|mcp import|project MCP catalog|ssh environments|work hub|runtime usage|notebook real Core/})),
     ...[
       { name: "browser-chromium-landscape", device: "Pixel 5" },
       { name: "browser-webkit-landscape", device: "iPhone 13" },
@@ -92,17 +95,17 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
     })),
     {
       name: "desktop",
-      testIgnore: ["**/real-core.spec.ts", "**/ios-shell-real-core.spec.ts", "**/usage/**"],
+      testIgnore: [...coreSpecPatterns, "**/ios-shell-real-core.spec.ts", "**/usage/**"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     {
       name: "compact",
-      testIgnore: ["**/real-core.spec.ts", "**/ios-shell-real-core.spec.ts", "**/usage/**"],
+      testIgnore: [...coreSpecPatterns, "**/ios-shell-real-core.spec.ts", "**/usage/**"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 700 } },
     },
     {
       name: "narrow",
-      testIgnore: ["**/real-core.spec.ts", "**/ios-shell-real-core.spec.ts", "**/usage/**"],
+      testIgnore: [...coreSpecPatterns, "**/ios-shell-real-core.spec.ts", "**/usage/**"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } },
     },
     {
@@ -156,7 +159,7 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
     },
     {
       name: "real-core",
-      testMatch: "**/real-core.spec.ts",
+      testMatch: coreSpecPatterns,
       dependencies: isolatedMatrixEntry ? [] : ["desktop", "compact", "narrow"],
       use: {
         ...devices["Desktop Chrome"],
@@ -171,7 +174,8 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
     // filters. File/project boundaries still apply, including isolated real Core.
     ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|iPhone assistant shell|${project.name.startsWith("mobile-") ? "provider and harness usage|" : ""}${project.grep.source}`)} : {}),
   })),
-  webServer: process.env.NEBULA_RELEASE_CORE_SMOKE === "1" ? undefined : {
+  // Focused Core journeys serve their own production UI and never use Vite.
+  webServer: process.env.NEBULA_RELEASE_CORE_SMOKE === "1" || (selectedFiles.length > 0 && selectedFiles.every(file => parallelCoreSpecs.includes(file))) ? undefined : {
     command: testCommand,
     url: `http://${testHost}:${testPort}`,
     reuseExistingServer: !process.env.CI,

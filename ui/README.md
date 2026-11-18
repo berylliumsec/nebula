@@ -15,6 +15,38 @@ Choose the test file for the changed behavior and follow the
 runtime defaults can use `npm test -- src/api/runtimeDefaults.test.ts`.
 Unscoped `npm test` is rejected.
 
+## End-to-end test structure
+
+Real-Core journeys are being separated from `tests/real-core.spec.ts` into focused
+specs: `authentication-real-core.spec.ts`, `first-user-real-core.spec.ts`, and
+`runtime-settings-real-core.spec.ts`. The original test titles and CI area filters
+are preserved. Other journeys remain in the original file for incremental migration.
+
+These specs use `tests/fixtures/journey-test.ts`. Register each Core, model stub,
+or request context with `resources.own()` immediately after acquiring it, before
+starting the next resource. Teardown runs in reverse order and attempts every
+disposer even when setup, assertions, or another disposer fail. Keep each test's
+database, ports, browser context, and synthetic credentials independent.
+Shared Core startup, model stubs, and visible navigation live in the adjacent
+`real-core.ts`, `model-stub.ts`, and `operator-ui.ts` helpers. Wait for observable
+UI or API state before reading it; avoid fixed sleeps.
+
+Build the production UI before running these self-hosted journeys. They serve it
+from disposable LAN Core instances and do not start a redundant Vite server.
+For example, after recording the focused selection:
+
+```bash
+npm run test:e2e -- tests/authentication-real-core.spec.ts --project=assistant-real-desktop
+```
+
+CI collection and execution share `scripts/playwright_entry_args.mjs`. Only the
+three isolated specs above use two workers; legacy specs keep one worker and their
+existing shard behavior. Add a spec to that allowlist only after verifying resource
+isolation. CI retains failure traces, screenshots, bounded fixture logs, and
+`test-results/results.json` with per-test timings and retry outcomes. Use those
+results to identify slow or retrying cases before changing timeouts or sharding.
+Artifacts contain synthetic fixture data and should not use operator credentials.
+
 Set `VITE_NEBULA_API_URL` only when the browser API is not served from the same origin. Vite proxies `/api` to `NEBULA_DEV_BACKEND` (default `http://127.0.0.1:8765`) during development. Preview data is visibly labeled and disappears only after Core health, authentication, and initial resource loading succeed.
 
 To run the desktop application, install the repository's Poetry development
