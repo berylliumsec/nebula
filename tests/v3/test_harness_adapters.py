@@ -405,6 +405,71 @@ async def test_codex_fork_uses_stored_turn_boundary(tmp_path):
     (await scenario())
 
 
+class SilentCodexRpc(FixtureCodexRpc):
+    """An app-server that never answers the named request methods."""
+
+    def __init__(self, *silent: str) -> None:
+        super().__init__()
+        self.silent = set(silent)
+
+    async def request(self, method: str, params: dict[str, Any]) -> Any:
+        if method in self.silent:
+            self.calls.append((method, params))
+            await asyncio.Event().wait()
+        return await super().request(method, params)
+
+
+@pytest.mark.parametrize("operation", ["fork", "skills"])
+async def test_codex_project_requests_give_up_on_a_silent_initialize(
+    tmp_path, monkeypatch, operation
+):
+    # Fork and the skill catalog run inside a project request; an app-server
+    # that never answers initialize must not hold that project's later work.
+    monkeypatch.setattr(harness_module, "CODEX_REQUEST_INITIALIZE_TIMEOUT_SECONDS", 0.2)
+    rpc = SilentCodexRpc("initialize")
+    adapter = FixtureCodexAdapter(rpc)
+    profile = HarnessProfile(
+        name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true"
+    )
+    call = (
+        adapter.fork_thread(
+            profile,
+            CredentialStore(),
+            tmp_path,
+            source_thread_id="source-thread",
+            last_turn_id="completed-turn",
+        )
+        if operation == "fork"
+        else adapter.list_available_skills(profile, CredentialStore(), tmp_path)
+    )
+
+    with pytest.raises(HarnessTransportError, match="did not answer initialize"):
+        await asyncio.wait_for(call, timeout=5)
+    assert rpc.closed is True
+
+
+async def test_codex_steer_gives_up_when_the_app_server_never_acknowledges(
+    monkeypatch,
+):
+    # Steer runs on the control lane beside Stop; it must not hold Stop.
+    monkeypatch.setattr(harness_module, "CODEX_STEER_TIMEOUT_SECONDS", 0.2)
+
+    async def allow(_ticket):
+        return None
+
+    rpc = SilentCodexRpc("turn/steer")
+    connection = CodexAppServerConnection(
+        rpc,  # type: ignore[arg-type]
+        external_session_id="thread-a",
+        permission_handler=allow,
+    )
+    connection.active_turn_id = "turn-a"
+
+    with pytest.raises(HarnessTransportError, match="did not acknowledge the input"):
+        await asyncio.wait_for(connection.steer("focus"), timeout=5)
+    assert rpc.calls[-1][0] == "turn/steer"
+
+
 async def test_grok_probe_uses_structured_model_catalog_without_cli(monkeypatch):
     class StructuredRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:

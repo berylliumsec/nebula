@@ -400,26 +400,37 @@ class _HttpMcpClient(_McpClient):
             raise McpProbeError("MCP HTTP returned malformed JSON") from exc
 
     async def close(self) -> None:
-        if self.session_id:
-            try:
-                await self.client.delete(
-                    self.url,
-                    headers={
-                        **self.headers,
-                        "MCP-Session-Id": self.session_id,
-                        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-                    },
-                )
-            except httpx.HTTPError as caught_error:
-                record_caught_exception(
-                    "harnesses",
-                    "harnesses.mcp.caught_failure_005",
-                    "A handled harnesses operation raised an exception.",
-                    caught_error,
-                    stage="mcp",
-                )
-                pass
-        await self.client.aclose()
+        try:
+            if self.session_id:
+                try:
+                    # Ending the session is a courtesy to the server. Its
+                    # reply must not hold the caller (a probe runs as project
+                    # work) while a server trickles it byte by byte.
+                    await asyncio.wait_for(
+                        self.client.delete(
+                            self.url,
+                            headers={
+                                **self.headers,
+                                "MCP-Session-Id": self.session_id,
+                                "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+                            },
+                        ),
+                        timeout=MCP_SESSION_CLOSE_TIMEOUT_SECONDS,
+                    )
+                except (httpx.HTTPError, TimeoutError) as caught_error:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.mcp.caught_failure_005",
+                        "A handled harnesses operation raised an exception.",
+                        caught_error,
+                        stage="mcp",
+                    )
+        finally:
+            await self.client.aclose()
+
+
+# How long an HTTP MCP server may take to acknowledge the end of a session.
+MCP_SESSION_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 class McpProbeService:
