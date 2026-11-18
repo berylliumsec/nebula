@@ -136,6 +136,19 @@ returns the proposed classification, verified receipts, live readback, uncertain
 effects to preserve, and state alignment. Rerun without `--dry-run` only after
 reviewing that summary.
 
+If a later verified manual host release superseded a promotion and an attempted
+code rollback stopped before host activation, use
+`reconcile-unactivated-supersession --deployment-id <rollback-journal-id> --dry-run`.
+This command accepts only a promotion with confirmed stage and migration receipts
+nested inside a rollback with a confirmed stage receipt. Both host activations
+must be merely requested. It checks the current release's accepted or reconciled
+identity, live service process, authenticated Core health and runtime inventory,
+and the exact database migration head. It preserves both journals and all three
+Core receipts in deployment history, then clears only the stale pending candidate
+and aligns host state. Review the dry run before repeating without `--dry-run`.
+Any extra operation or live candidate runtime blocks reconciliation; never edit
+the journal to make it match.
+
 New hosts expose authenticated operation reconciliation at
 `POST /api/v1/deployment/operations/{operation_id}/reconcile`. It never repeats
 an effect. New operations retain private origin and child identities before

@@ -2907,6 +2907,250 @@ def reconcile_superseded_manual_deployment(
     return {"status": "reconciled_superseded", "deployment": reconciliation}
 
 
+def reconcile_unactivated_supersession(
+    deployment_id: str, *, dry_run: bool = False
+) -> dict[str, Any]:
+    """Archive an unactivated rollback of a promotion superseded by a manual host.
+
+    Both recorded Core stages and the promotion migration remain real effects.
+    This path only clears deployer intent after exact receipts and the current
+    manual host/API/process inventory prove neither candidate was activated.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", deployment_id):
+        raise ValueError("deployment ID must be a 32-character journal identity")
+    record = state()
+    history = record.get("runtime_deployment_history", [])
+    if not isinstance(history, list):
+        raise RuntimeError("Deployment history archive is malformed")
+    prior = next(
+        (
+            item
+            for item in history
+            if isinstance(item, dict) and item.get("id") == deployment_id
+        ),
+        None,
+    )
+    if prior is not None:
+        if prior.get("classification") != "superseded_unactivated_deployment":
+            raise RuntimeError("Archived deployment has another reconciliation outcome")
+        return {"status": "already_reconciled", "deployment": prior}
+
+    rollback = record.get("runtime_deployment")
+    if (
+        not isinstance(rollback, dict)
+        or rollback.get("id") != deployment_id
+        or rollback.get("action") != "rollback"
+        or rollback.get("state") != "running"
+    ):
+        raise RuntimeError("No matching unresolved rollback journal exists")
+    promotion = rollback.get("superseded")
+    active = record.get("active")
+    old = rollback.get("version")
+    candidate = promotion.get("version") if isinstance(promotion, dict) else None
+    if (
+        not all(
+            isinstance(value, str) and SHA.fullmatch(value)
+            for value in (active, old, candidate)
+        )
+        or len({active, old, candidate}) != 3
+        or rollback.get("previous") != active
+        or not isinstance(promotion, dict)
+        or promotion.get("action") != "promote"
+        or promotion.get("state") != "running"
+        or promotion.get("previous") != old
+        or not isinstance(promotion.get("id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", promotion["id"])
+        or record.get("pending") != candidate
+        or record.get("promoting") is not None
+        or not isinstance(rollback.get("steps"), dict)
+        or not isinstance(promotion.get("steps"), dict)
+        or set(rollback.get("steps", {})) != {"stage"}
+        or set(promotion.get("steps", {})) != {"stage", "migrate"}
+    ):
+        raise RuntimeError(
+            "Deployment journals do not match an unactivated supersession"
+        )
+    # Accepted releases and reconciled manual releases have separate immutable
+    # identity checks; runtime_release verifies the applicable one.
+    runtime_release(active)
+
+    for journal in (promotion, rollback):
+        activation = journal.get("host_activation")
+        operation_id = journal["id"] + ":host-activation"
+        if not isinstance(activation, dict) or activation != {
+            "operation_id": operation_id,
+            "state": "requested",
+            "version": journal["version"],
+        }:
+            raise RuntimeError("Candidate host activation is not only requested")
+        top_level = record.get("host_activation")
+        if (
+            isinstance(top_level, dict)
+            and top_level.get("operation_id") == operation_id
+        ):
+            raise RuntimeError("Candidate has a host activation operation in progress")
+
+    receipts: dict[str, dict[str, Any]] = {}
+    for name, journal in (("promotion", promotion), ("rollback", rollback)):
+        version = journal["version"]
+        entry, receipt = _require_recorded_operation(
+            journal, step="stage", action="stage", expected_state="succeeded"
+        )
+        release, manifest_sha256 = runtime_release(version)
+        if (
+            entry["parameters"]
+            != {"source": str(release), "manifest_sha256": manifest_sha256}
+            or receipt["result"].get("version") != version
+            or receipt["result"].get("manifest_sha256") != manifest_sha256
+        ):
+            raise RuntimeError(f"{name} stage is not bound to its exact release")
+        receipts[name + ":stage"] = receipt
+    migration_entry, migration_receipt = _require_recorded_operation(
+        promotion, step="migrate", action="migrate", expected_state="succeeded"
+    )
+    migration = migration_status(candidate)
+    if (
+        migration_entry["parameters"].get("version") != candidate
+        or type(migration_entry["parameters"].get("expected_revision")) is not int
+        or migration_receipt["result"].get("version") != candidate
+        or migration_receipt["result"].get("target_head") != migration["target_head"]
+        or migration["current_head"] != migration["target_head"]
+    ):
+        raise RuntimeError("Promotion migration is not the exact current database head")
+    receipts["promotion:migrate"] = migration_receipt
+
+    if unit_state(SERVICE) != "active" or current_release_version() != active:
+        raise RuntimeError(
+            "Current supervisor host differs from the recorded active release"
+        )
+    identity = host_connection()
+    service_identity = supervisor_service_identity()
+    if identity is None or identity.get("package_version") != runtime_package_version(
+        active
+    ):
+        raise RuntimeError("Current supervisor process differs from the active release")
+    require_runtime_process_in_service(service_identity, identity, active)
+    health, status = read_supervisor_health()
+    forbidden = {
+        old,
+        candidate,
+        runtime_package_version(old),
+        runtime_package_version(candidate),
+    }
+    projects = status.get("projects") if isinstance(status, dict) else None
+    processes = status.get("processes") if isinstance(status, dict) else None
+    residents = status.get("resident_versions") if isinstance(status, dict) else None
+    if (
+        not isinstance(health, dict)
+        or health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != active
+        or not isinstance(status, dict)
+        or status.get("protocol") != "nebula.runtime/v1"
+        or status.get("health") != "ready"
+        or status.get("api_version") != active
+        or not isinstance(status.get("target_execution_version"), str)
+        or status.get("target_execution_version") in forbidden
+        or not isinstance(residents, list)
+        or any(
+            not isinstance(version, str) or version in forbidden
+            for version in residents
+        )
+        or not isinstance(projects, list)
+        or any(
+            not isinstance(row, dict)
+            or "runtime_version" not in row
+            or row["runtime_version"] is not None
+            and not isinstance(row["runtime_version"], str)
+            or row.get("runtime_version") in forbidden
+            for row in projects
+        )
+        or not isinstance(processes, list)
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("version"), str)
+            or row.get("version") in forbidden
+            or row.get("runtime_version") is not None
+            and not isinstance(row["runtime_version"], str)
+            or row.get("runtime_version") in forbidden
+            for row in processes
+        )
+    ):
+        raise RuntimeError(
+            "Live Core still runs a candidate or does not match the active release"
+        )
+    if len(history) >= DEPLOYMENT_HISTORY_LIMIT:
+        raise RuntimeError("Deployment history archive is full")
+
+    archived = {
+        "id": deployment_id,
+        "state": "reconciled_superseded",
+        "classification": "superseded_unactivated_deployment",
+        "reconciled_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "journal": deepcopy(rollback),
+        "core_receipts": receipts,
+        "migration_status": migration,
+        "live_readback": {
+            "health": health,
+            "deployment_status": status,
+            "host_process": identity,
+            "supervisor_service": service_identity,
+        },
+    }
+    if dry_run:
+        return {
+            "status": "dry_run_validated",
+            "proposed": {
+                "classification": archived["classification"],
+                "rollback_id": deployment_id,
+                "promotion_id": promotion["id"],
+                "active": active,
+                "clear_pending": candidate,
+                "core_receipts": {
+                    key: {
+                        "operation_id": value["operation_id"],
+                        "state": value["state"],
+                    }
+                    for key, value in receipts.items()
+                },
+                "live_readback": {
+                    "host_commit": health["commit"],
+                    "api_version": status["api_version"],
+                    "deployment_health": status["health"],
+                    "revision": status.get("revision"),
+                    "target_execution_version": status["target_execution_version"],
+                    "resident_versions": residents,
+                    "owned_projects": sum(
+                        row.get("runtime_id") is not None for row in projects
+                    ),
+                    "migration_head": migration["current_head"],
+                },
+            },
+        }
+    # Re-read live identity before changing the journal; the CLI holds the
+    # deploy lock, and an external host switch must fail this final check.
+    latest_health, latest_status = read_supervisor_health()
+    if (
+        current_release_version() != active
+        or unit_state(SERVICE) != "active"
+        or not isinstance(latest_health, dict)
+        or not isinstance(latest_status, dict)
+        or latest_health.get("commit") != active
+        or latest_status.get("api_version") != active
+        or latest_status.get("revision") != status.get("revision")
+        or supervisor_service_identity() != service_identity
+    ):
+        raise RuntimeError("Live Core changed during reconciliation")
+    record["runtime_deployment_history"] = [*history, archived]
+    record.pop("runtime_deployment", None)
+    record["pending"] = None
+    record["host_active"] = active
+    record["runtime_api_version"] = active
+    record["canonical_runtime_version"] = status["target_execution_version"]
+    atomic_json(STATE, record)
+    return {"status": "reconciled_superseded", "deployment": archived}
+
+
 def verified_release(sha: str) -> Path:
     if not SHA.fullmatch(sha):
         raise RuntimeError("release commit is invalid")
@@ -5488,6 +5732,7 @@ def main() -> int:
             "rollback",
             "reconcile-runtime-deployment",
             "reconcile-superseded-manual-deployment",
+            "reconcile-unactivated-supersession",
             "activate-host",
             "rollback-host",
             "offline-rollback",
@@ -5547,7 +5792,7 @@ def main() -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="validate a manual supersession reconciliation without changing deployer state",
+        help="validate a supported supersession reconciliation without changing deployer state",
     )
     args = parser.parse_args()
     checked_host()
@@ -5564,6 +5809,7 @@ def main() -> int:
     if args.deployment_id is not None and args.action not in {
         "reconcile-runtime-deployment",
         "reconcile-superseded-manual-deployment",
+        "reconcile-unactivated-supersession",
     }:
         raise RuntimeError("--deployment-id is supported only with reconciliation")
     if (
@@ -5571,6 +5817,7 @@ def main() -> int:
         in {
             "reconcile-runtime-deployment",
             "reconcile-superseded-manual-deployment",
+            "reconcile-unactivated-supersession",
         }
         and args.deployment_id is None
     ):
@@ -5596,7 +5843,10 @@ def main() -> int:
         raise RuntimeError(
             "--allow-degraded-baseline is supported only for manual supersession reconciliation"
         )
-    if args.dry_run and args.action != "reconcile-superseded-manual-deployment":
+    if args.dry_run and args.action not in {
+        "reconcile-superseded-manual-deployment",
+        "reconcile-unactivated-supersession",
+    }:
         raise RuntimeError(
             "--dry-run is supported only for manual supersession reconciliation"
         )
@@ -5620,6 +5870,10 @@ def main() -> int:
                 dry_run=args.dry_run,
             )
             if args.action == "reconcile-superseded-manual-deployment"
+            else reconcile_unactivated_supersession(
+                args.deployment_id, dry_run=args.dry_run
+            )
+            if args.action == "reconcile-unactivated-supersession"
             else activate_host(allow_degraded_workers=args.allow_degraded_workers)
             if args.action == "activate-host"
             else globals()[args.action.replace("-", "_")]()
