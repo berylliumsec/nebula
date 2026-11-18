@@ -1,23 +1,22 @@
 {
-  "change_digest": "c9e2c1f9d84ac12452a989712475cbe43ede5f742d51fed7859b8650d7e9d61f",
+  "change_digest": "96752db3aa26b56510559b81e0163070986a3f137f9ef2338d0d44cfd848a312",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "An approval whose harness adapter delivery a dead worker left 'unknown' could never be settled, and it held idle retirement, quiescence, project handoff and Core shutdown forever. Adds POST /approvals/{id}/adapter-delivery (operator outcome, revision-fenced, audited, never re-delivers) and Butler's nebula.work.resolve_delivery. Selected: the approval handoff suite (route + restart flow), the handoff participant suite (fenced resolution unpins the project; SQLite and PostgreSQL) and the Butler capability suite (discovery, use, scheduled-Butler refusal).",
-  "exclusions": "No UI, native or Playwright layer: no UI changed (a UI control needs an approved mockup first). The Butler workflow registry and UI API calls are unchanged.",
+  "reason": "Hosts without pidfd (a Python built without os.pidfd_open, older kernels, sandboxes refusing the call) could not spawn any worker, and could not retire a frozen project worker. process_identity now keeps pidfd where it works and otherwise re-reads the recorded kernel birth before each signal; spawn no longer requires pidfd. Selected: the process identity suite (pid reuse, frozen session kill, probe) and the runtime process suite, whose frozen/exited/never-force-retired tests now run with and without pidfd.",
+  "exclusions": "No UI, native or Playwright layer: no operator-visible interface changes; macOS local Core stays refused at startup and is not exercised.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 70,
+    "python": 51,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_butler_capabilities.py"
+    "tests/v3/test_process_identity.py",
+    "tests/v3/test_runtime_processes.py"
   ],
   "frontend": [],
   "native": [],

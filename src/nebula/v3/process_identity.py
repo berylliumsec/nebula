@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import functools
 import os
 from pathlib import Path
 import signal
@@ -12,6 +13,48 @@ import sys
 
 class ProcessIdentityUnavailable(RuntimeError):
     pass
+
+
+@functools.cache
+def pidfd_supported() -> bool:
+    """Whether this host can pin a process with a Linux pidfd.
+
+    Python builds without ``os.pidfd_open`` (some distributions of 3.11),
+    kernels before 5.3, sandboxes whose seccomp policy rejects the call, and
+    macOS all lack it. Those hosts use the portable birth-checked path below.
+    """
+    if (
+        not sys.platform.startswith("linux")
+        or not hasattr(os, "pidfd_open")
+        or not hasattr(signal, "pidfd_send_signal")
+    ):
+        return False
+    try:
+        descriptor = os.pidfd_open(os.getpid())
+    except OSError:
+        # diagnostic-expected: a kernel or sandbox without pidfd selects the portable path.
+        return False
+    os.close(descriptor)
+    return True
+
+
+def _signal_if_same(pid: int, birth: str, selected_signal: int) -> bool:
+    """Signal ``pid`` without a pidfd, only while it is the recorded process.
+
+    The kernel birth is read immediately before the signal, so a reused PID
+    is never mistaken for the worker. Without a pidfd nothing pins the PID
+    between those two system calls: the recorded process would have to exit
+    and the kernel reissue its PID to an unrelated process inside that gap,
+    which needs the PID counter to wrap within microseconds.
+    """
+    if not same_process(pid, birth):
+        return False
+    try:
+        os.kill(pid, selected_signal)
+    except ProcessLookupError:
+        # diagnostic-expected: the process exited after its birth was read.
+        return False
+    return True
 
 
 def process_birth(pid: int) -> str | None:
@@ -190,16 +233,19 @@ def kill_process_session(pid: int, birth: str) -> int:
     through its own pidfd. Members go first so none can outlive a leader
     whose PID could then be reused. Returns the number of processes
     signalled; 0 when the leader is already gone or not the recorded
-    incarnation. Never signals this process or its own session.
+    incarnation. Never signals this process or its own session. Without
+    pidfd support, the portable birth-checked path below is used instead.
     """
-    if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
+    if os.name != "posix":
         raise ProcessIdentityUnavailable(
-            "forced worker retirement requires Linux pidfd support"
+            "forced worker retirement requires a POSIX process session"
         )
     if pid in (os.getpid(), os.getppid()) or pid == os.getsid(0):
         raise ProcessIdentityUnavailable(
             "refusing to signal this supervisor or its own session"
         )
+    if not pidfd_supported():
+        return _kill_session_without_pidfd(pid, birth)
     try:
         leader = os.pidfd_open(pid)
     except ProcessLookupError:
@@ -241,13 +287,57 @@ def kill_process_session(pid: int, birth: str) -> int:
         os.close(leader)
 
 
+def _kill_session_without_pidfd(pid: int, birth: str) -> int:
+    """``kill_process_session`` for hosts without pidfd.
+
+    The leader's birth is checked first. While that leader lives no other
+    process can take its session or process-group id, so members are matched
+    by that id and the leader's birth is checked again before each signal.
+    Linux reads every session member from /proc; other POSIX hosts signal the
+    leader's own process group, which the worker created with its session.
+    """
+    if not same_process(pid, birth):
+        return 0
+    signalled = 0
+    if sys.platform.startswith("linux"):
+        if _session_of(pid) == pid:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit() or int(entry) == pid:
+                    continue
+                member = int(entry)
+                # Leader first, then the member's session right before its signal.
+                if not same_process(pid, birth) or _session_of(member) != pid:
+                    continue
+                try:
+                    os.kill(member, signal.SIGKILL)
+                    signalled += 1
+                except ProcessLookupError:
+                    # diagnostic-expected: a session member exited first.
+                    pass
+    else:
+        try:
+            group = os.getpgid(pid)
+        except ProcessLookupError:
+            # diagnostic-expected: the leader exited before its group was read.
+            return 0
+        if group == pid and same_process(pid, birth):
+            # The group holds the leader and the processes it started.
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except ProcessLookupError:
+                # diagnostic-expected: the whole group exited first.
+                return 0
+            return 1
+    return signalled + int(_signal_if_same(pid, birth, signal.SIGKILL))
+
+
 def signal_process(pid: int, birth: str, selected_signal: int = signal.SIGTERM) -> bool:
-    if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
-        # Other platforms use authenticated IPC for graceful exit. Never use a
-        # check-then-kill PID fallback that could signal a replacement process.
-        raise ProcessIdentityUnavailable(
-            "use authenticated worker shutdown on this host"
-        )
+    if not pidfd_supported():
+        if os.name != "posix":
+            raise ProcessIdentityUnavailable(
+                "use authenticated worker shutdown on this host"
+            )
+        return _signal_if_same(pid, birth, selected_signal)
     try:
         descriptor = os.pidfd_open(pid)
     except ProcessLookupError:
