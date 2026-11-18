@@ -43,6 +43,7 @@ from .deployment_protocol import (
     MAX_EXECUTION_VERSIONS,
     ProcessDeploymentStatus,
     ProjectDeploymentStatus,
+    ProjectRecoveryStatus,
     ReleaseManifest,
     ResourceSnapshot,
     SHARED_MEMORY_BOOTSTRAP_KEY,
@@ -2776,7 +2777,31 @@ class DeploymentCoordinator:
             owners = list(await session.scalars(select(ProjectOwnershipRow)))
             # A failed worker keeps its grant alive; say so instead of ready.
             failures = await self._owner_failures(session, owners)
+            # The recovery that granted each current owner, if one did. A
+            # target runtime receives at most one grant per fencing token.
+            owner_runtimes = {
+                owner.runtime_id for owner in owners if owner.runtime_id is not None
+            }
+            recoveries: dict[tuple[str, str | None, int], RuntimeRecoveryRow] = (
+                {
+                    (
+                        row.project_id,
+                        row.target_runtime_id,
+                        row.target_fencing_token,
+                    ): row
+                    for row in await session.scalars(
+                        select(RuntimeRecoveryRow).where(
+                            RuntimeRecoveryRow.target_runtime_id.in_(owner_runtimes)
+                        )
+                    )
+                }
+                if owner_runtimes
+                else {}
+            )
             for owner in owners:
+                recovery = recoveries.get(
+                    (owner.project_id, owner.runtime_id, owner.fencing_token)
+                )
                 process, handoff = (
                     processes.get(owner.runtime_id)
                     if owner.runtime_id is not None
@@ -2797,6 +2822,16 @@ class DeploymentCoordinator:
                             *([self._failure_blocker(failure)] if failure else []),
                         ],
                         admission_held=handoff.admission_held if handoff else False,
+                        recovery=ProjectRecoveryStatus(
+                            operation_id=recovery.operation_id,
+                            source_runtime_id=recovery.source_runtime_id,
+                            source_fencing_token=recovery.source_fencing_token,
+                            target_runtime_id=recovery.target_runtime_id,
+                            target_fencing_token=recovery.target_fencing_token,
+                            phase=recovery.phase,
+                        )
+                        if recovery is not None
+                        else None,
                     )
                 )
             resident = sorted(

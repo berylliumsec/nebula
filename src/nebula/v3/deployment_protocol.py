@@ -133,6 +133,22 @@ class WorkerIdentity(NebulaModel):
     endpoint: str = Field(min_length=1, max_length=4096)
 
 
+class ProjectRecoveryStatus(NebulaModel):
+    """The recovery that granted a project to its current owner.
+
+    A deployer whose handoff was overtaken by expired-owner recovery reads
+    this to prove that Core moved the project on from the exact source grant
+    it journaled, instead of guessing from a changed owner.
+    """
+
+    operation_id: str
+    source_runtime_id: str | None
+    source_fencing_token: int
+    target_runtime_id: str
+    target_fencing_token: int
+    phase: str
+
+
 class ProjectDeploymentStatus(NebulaModel):
     project_id: str
     runtime_id: str | None
@@ -142,6 +158,8 @@ class ProjectDeploymentStatus(NebulaModel):
     target_version: str | None = None
     blockers: list[str] = Field(default_factory=list)
     admission_held: bool = False
+    # None on older hosts and for an owner that a handoff or claim granted.
+    recovery: ProjectRecoveryStatus | None = None
 
 
 class ProcessDeploymentStatus(NebulaModel):

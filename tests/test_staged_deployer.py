@@ -470,3 +470,252 @@ def test_failed_migration_prevents_promotion_and_preserves_journal():
     assert "promote_api" not in [action for action, _ in host.calls]
     assert host.state["api_version"] == "v1"
     assert record["runtime_deployment"]["state"] == "running"
+
+
+def _stall_then_recover(
+    host, *, version="v2", source_fence=1, recovery_phase="verified"
+):
+    """Stall the first handoff, then let Core recover the project itself."""
+    stalled = []
+    original = host.post
+
+    def post(path, request):
+        receipt = original(path, request)
+        if request["action"] == "handoff" and not stalled:
+            # Core accepted the request, but the source never reached a safe
+            # boundary: ownership stays with the old worker.
+            stalled.append(request["parameters"]["target_runtime_id"])
+            host.state["projects"][0].update(
+                runtime_id="old",
+                runtime_version="v1",
+                fencing_token=1,
+                phase="finishing",
+                target_version="v2",
+                admission_held=True,
+            )
+        return receipt
+
+    return post, stalled
+
+
+def _recover(host, *, runtime_version, source_fence=1, phase="verified", blockers=None):
+    host.live_runtimes.pop("old", None)
+    host.live_runtimes["recovered"] = runtime_version
+    host._refresh_resident_versions()
+    host.state["projects"][0].update(
+        runtime_id="recovered",
+        runtime_version=runtime_version,
+        fencing_token=source_fence + 1,
+        phase=phase,
+        target_version=runtime_version,
+        admission_held=phase != "verified",
+        blockers=blockers or [],
+        recovery={
+            "operation_id": "auto-recovery",
+            "source_runtime_id": "old",
+            "source_fencing_token": source_fence,
+            "target_runtime_id": "recovered",
+            "target_fencing_token": source_fence + 1,
+            "phase": phase,
+        },
+    )
+    host.state["revision"] += 1
+
+
+def _with_processes(host):
+    get = host.get
+
+    def read(path):
+        value = get(path)
+        value["processes"] = [
+            {
+                "runtime_id": runtime_id,
+                "version": version,
+                "role": "execution",
+                "state": "ready",
+                "ready_verified": True,
+            }
+            for runtime_id, version in host.live_runtimes.items()
+        ]
+        return value
+
+    return read
+
+
+def _recovery_deployer(host, record):
+    deployer = host.deployer(record)
+    deployer.get = _with_processes(host)
+    return deployer
+
+
+def test_stalled_handoff_adopts_core_recovery_onto_the_new_version():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, stalled = _stall_then_recover(host)
+    assert deployer.promote("v2")["status"] == "waiting_for_handoffs"
+    target = stalled[0]
+
+    # The operator stops the stalled source; Core recovers the project onto a
+    # fresh worker of the target version that this deployer never prepared.
+    _recover(host, runtime_version="v2")
+    host.hold_unverified = False
+    result = _recovery_deployer(host, record).promote("v2")
+
+    assert result["status"] == "promoted"
+    assert target not in host.live_runtimes
+    assert [action for action, _ in host.calls].count("handoff") == 1
+    adopted = record["runtime_deployment"]["reconciled_recoveries"]["project"]
+    assert adopted["runtime_id"] == "recovered"
+    assert adopted["recovery_operation_id"] == "auto-recovery"
+    assert adopted["source_runtime_id"] == "old"
+
+
+def test_recovery_from_an_older_grant_is_not_adopted():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, _ = _stall_then_recover(host)
+    deployer.promote("v2")
+    # The journaled source grant was fence 1; a recovery that started from an
+    # earlier grant proves nothing about this deployment's source.
+    _recover(host, runtime_version="v2", source_fence=0)
+    host.state["projects"][0]["fencing_token"] = 2
+    host.state["projects"][0]["recovery"]["target_fencing_token"] = 2
+    result = _recovery_deployer(host, record).promote("v2")
+    assert result["status"] == "waiting_for_handoffs"
+    assert "reconciled_recoveries" not in record["runtime_deployment"]
+
+
+def test_unverified_recovery_keeps_waiting_with_its_blocker():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, _ = _stall_then_recover(host)
+    deployer.promote("v2")
+    _recover(
+        host,
+        runtime_version="v2",
+        phase="transferred",
+        blockers=["Target runtime recovered has not verified restoration"],
+    )
+    result = _recovery_deployer(host, record).promote("v2")
+    assert result["status"] == "waiting_for_handoffs"
+    assert "reconciled_recoveries" not in record["runtime_deployment"]
+
+
+def test_recovery_onto_the_old_version_hands_off_again_under_a_new_generation():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, stalled = _stall_then_recover(host)
+    deployer.promote("v2")
+    _recover(host, runtime_version="v1")
+    host.hold_unverified = False
+    result = _recovery_deployer(host, record).promote("v2")
+
+    assert result["status"] == "promoted"
+    project = host.state["projects"][0]
+    assert project["runtime_version"] == "v2"
+    assert "recovered" not in host.live_runtimes
+    assert stalled[0] not in host.live_runtimes
+    journal = record["runtime_deployment"]
+    assert journal["handoff_generation"] == {"project": 1}
+    handoffs = [step for step in journal["steps"] if step.startswith("handoff/")]
+    assert len(handoffs) == 2 and any(step.endswith(":g1") for step in handoffs)
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1_000.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _grace_deployer(host, record, clock, *, grace=60):
+    deployer = module.StagedDeployer(
+        record,
+        get=_with_processes(host),
+        post=host.post,
+        save=lambda value: host.saved.append(copy.deepcopy(value)),
+        verify=lambda version: (Path("/retained") / version, "a" * 64),
+        handoff_grace_seconds=grace,
+        recovery_wait_seconds=120,
+        poll_seconds=5,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    return deployer
+
+
+def _evict_then_recover(host, deployer, clock):
+    """Core's side: a stopped source's project is recovered a little later."""
+    stopped = []
+    post = deployer.post
+
+    def evicting_post(path, request):
+        receipt = post(path, request)
+        if request["action"] == "evict_execution":
+            owner = request["parameters"]["expected_owner"]
+            stopped.append((owner, clock.now))
+            host.live_runtimes.pop(owner["runtime_id"], None)
+            receipt["result"] = {**owner, "affected_project_ids": [owner["project_id"]]}
+        return receipt
+
+    get = deployer.get
+
+    def recovering_get(path):
+        if stopped and clock.now >= stopped[-1][1] + 20:
+            project = host.state["projects"][0]
+            if project.get("runtime_id") == stopped[-1][0]["runtime_id"]:
+                _recover(host, runtime_version="v2")
+        return get(path)
+
+    deployer.post, deployer.get = evicting_post, recovering_get
+    return stopped
+
+
+def test_stalled_handoff_stops_its_source_after_grace_and_completes():
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.hold_unverified = True
+    deployer = _grace_deployer(host, record, clock)
+    deployer.post, _ = _stall_then_recover(host)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    result = deployer.promote("v2")
+
+    assert result["status"] == "promoted"
+    assert len(stopped) == 1
+    owner, at = stopped[0]
+    assert owner == {"project_id": "project", "runtime_id": "old", "fencing_token": 1}
+    assert at - 1_000.0 >= 60
+    journal = record["runtime_deployment"]
+    assert journal["evicted_sources"]["project"]["runtime_id"] == "old"
+    assert journal["reconciled_recoveries"]["project"]["runtime_id"] == "recovered"
+    assert host.state["projects"][0]["runtime_version"] == "v2"
+
+
+def test_pinned_project_is_stopped_after_grace_instead_of_blocking():
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.pinned = True
+    deployer = _grace_deployer(host, record, clock)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    result = deployer.promote("v2")
+
+    assert result["status"] == "promoted"
+    assert [owner["runtime_id"] for owner, _ in stopped] == ["old"]
+    assert host.state["projects"][0]["runtime_id"] == "recovered"
+
+
+def test_without_grace_a_stalled_handoff_reports_and_never_stops_its_source():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, _ = _stall_then_recover(host)
+    assert deployer.promote("v2")["status"] == "waiting_for_handoffs"
+    assert "evict_execution" not in [action for action, _ in host.calls]

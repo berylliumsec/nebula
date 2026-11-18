@@ -1,21 +1,26 @@
 {
-  "change_digest": "1750b0ba89eb1b4797eccf5d55130ebd9bf389cc36996e4838ebb28a5c8e33d7",
-  "reviewed_by": "Claude after confirming CI job and matrix names in .github/workflows/ci.yml",
-  "reason": "CI-backed simulation preparation now matches each required CI job as a family (the exact job name or GitHub matrix instances named '<job> (...)') and requires every instance to succeed, and validation accepts legacy acceptance records listing the six exact terminal-client matrix jobs. The deployer protocol file covers family success, failed, cancelled, and unfinished instances, a missing family, bare-prefix isolation, and legacy-record validation.",
-  "exclusions": "No Core, UI, native app, or browser behavior changes; only the simulation deployer's CI acceptance gate and its README change. Playwright matrix validation semantics are unchanged.",
+  "change_digest": "c20da6f5e616af9481ed03cf7aaccb8654cf09712b4ffc25e64472ed1d652aa6",
+  "reviewed_by": "Claude after independent subagent root-cause validation of the unmatched recovery and the interrupted-command pin",
+  "reason": "Deployments must never stop on a project. Core status now names the recovery that granted each owner; the staged deployer adopts a verified recovery from its journaled source grant, stops a source that misses its handoff grace period through a new evict_execution operation, and polls until projects settle. An interrupted command record no longer pins handoff. The selected files cover recovery adoption, eviction and polling, status provenance, host stop scoping, the handoff inventory, and the resume suite (whose stale restart-boundary stub from #1210 is repaired). Also repairs a race in test_target_failed_before_activation_relinquishes_for_fresh_recovery (asserted the exit request before the failure was saved; reproduced with a delayed save).",
+  "exclusions": "No UI, native, or browser changes. Not run: a live staging replay of a stuck project, the full Python suite, and four simulation host tests that fail identically on origin/main in this environment (systemd and frozen-build dependent).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 27,
+    "python": 206,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_deployer_protocol.py"
+    "tests/test_staged_deployer.py",
+    "tests/test_simulation_deploy_resume.py",
+    "tests/v3/test_runtime_recovery.py",
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_recovery_reconciliation.py",
+    "tests/v3/test_runtime_processes.py"
   ],
   "frontend": [],
   "native": [],

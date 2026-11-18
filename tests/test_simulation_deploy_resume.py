@@ -35,6 +35,15 @@ REAL_RUNTIME_RELEASE = deployer.runtime_release
 REAL_PACKAGE_VERSION = deployer.runtime_package_version
 REAL_REQUIRE_PROCESS = deployer.require_runtime_process_in_service
 
+
+
+@pytest.fixture(autouse=True)
+def single_pass_handoffs(monkeypatch):
+    # These resume tests check one deployer pass at a time. The grace-period
+    # stop and its polling are covered in tests/test_staged_deployer.py.
+    monkeypatch.setattr(deployer, "HANDOFF_GRACE_SECONDS", None)
+
+
 OLD = "5" * 40
 NEW = "3" * 40
 OTHER = "4" * 40
@@ -377,7 +386,7 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
     monkeypatch.setattr(deployer, "CURRENT", tmp_path / "current")
     monkeypatch.setattr(deployer, "STATE", tmp_path / "deployer-state.json")
     monkeypatch.setattr(deployer, "api", lambda: core)
-    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
+    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda *_: {})
 
     def deployment_post(path, parameters):
         if path.endswith("/reconcile"):
@@ -545,7 +554,7 @@ def test_degraded_host_activation_then_resume_holds_execution_target(
     assert host.host_version == OLD and host.target == OLD
     assert host.restarts == 0
 
-    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
+    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda *_: {})
     activation = deployer.activate_host(allow_degraded_workers=True)
     assert activation["status"] == "host_activated"
     assert activation["version"] == NEW

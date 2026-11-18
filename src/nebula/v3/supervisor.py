@@ -1048,6 +1048,73 @@ class RuntimeSupervisor:
                 launch_origin=self.host.launch_origin,
             )
 
+    async def evict_execution(self, *, expected_owner: ProjectLease) -> dict:
+        """Stop a source worker whose deployment handoff ran out of time.
+
+        Used by a deployment after its grace period: the project's owner is
+        still the exact grant the deployer journaled and runs an execution
+        version behind the deployment target. Stopping the worker is a
+        planned crash; expired-owner recovery then settles what it left
+        without replaying any effect and restores every project it owned on
+        the target version. A refusal here changed nothing.
+        """
+        async with self._operations:
+            self._active()
+            async with self.coordinator.database.session() as session:
+                host = await session.get(DeploymentHostRow, "host")
+                owner = await session.get(
+                    ProjectOwnershipRow, expected_owner.project_id
+                )
+                process = (
+                    await session.get(RuntimeProcessRow, expected_owner.runtime_id)
+                    if owner is not None
+                    else None
+                )
+                affected = (
+                    sorted(
+                        await session.scalars(
+                            select(ProjectOwnershipRow.project_id).where(
+                                ProjectOwnershipRow.runtime_id
+                                == expected_owner.runtime_id
+                            )
+                        )
+                    )
+                    if process is not None
+                    else []
+                )
+            if owner is None or (owner.runtime_id, owner.fencing_token) != (
+                expected_owner.runtime_id,
+                expected_owner.fencing_token,
+            ):
+                raise OperationRejected(
+                    "Project ownership changed; read fresh deployment status"
+                )
+            if (
+                host is None
+                or host.target_version is None
+                or host.shutdown_requested
+                or process is None
+                or process.role != "execution"
+                or process.version == host.target_version
+                or host.api_runtime_id == process.runtime_id
+            ):
+                raise OperationRejected(
+                    "Only a source worker behind the deployment target can be stopped"
+                )
+            try:
+                signalled = await self.host.stop_overdue_source(process.runtime_id)
+            except RuntimeIpcError as error:
+                raise OperationRejected(str(error)) from error
+            return {
+                "project_id": expected_owner.project_id,
+                "runtime_id": expected_owner.runtime_id,
+                "fencing_token": expected_owner.fencing_token,
+                "version": process.version,
+                "affected_project_ids": affected,
+                "signalled": signalled,
+                "effects_replayed": False,
+            }
+
     async def recover_project(
         self,
         project_id: str,
