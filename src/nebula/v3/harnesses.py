@@ -289,6 +289,11 @@ STALE_WRITE_ATTEMPTS = 8
 HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
 HARNESS_INTERRUPT_TIMEOUT_SECONDS = 5.0
 CODEX_SESSION_LIST_TIMEOUT_SECONDS = 15.0
+# How long Codex may take to acknowledge input added to a running turn.
+CODEX_STEER_TIMEOUT_SECONDS = 15.0
+# How long a short-lived Codex app-server (fork, skill catalog) may take to
+# answer initialize while a project request waits for it.
+CODEX_REQUEST_INITIALIZE_TIMEOUT_SECONDS = 15.0
 # One Codex app-server message can carry a whole command output, echoed image
 # data URLs or a thread history, far beyond the MCP message bound. Codex itself
 # reads its input with no line limit.
@@ -3855,14 +3860,24 @@ class CodexAppServerConnection(HarnessConnection):
         if not self.active_turn_id:
             raise HarnessStateError("Codex session has no active turn to steer")
         try:
-            await self.rpc.request(
-                "turn/steer",
-                {
-                    "threadId": self.external_session_id,
-                    "input": [{"type": "text", "text": text}],
-                    "expectedTurnId": self.active_turn_id,
-                },
+            # Steer runs on the project's control lane, beside Stop: an
+            # app-server that never acknowledges it must not hold Stop.
+            await asyncio.wait_for(
+                self.rpc.request(
+                    "turn/steer",
+                    {
+                        "threadId": self.external_session_id,
+                        "input": [{"type": "text", "text": text}],
+                        "expectedTurnId": self.active_turn_id,
+                    },
+                ),
+                timeout=CODEX_STEER_TIMEOUT_SECONDS,
             )
+        except TimeoutError as exc:
+            raise HarnessTransportError(
+                "Codex did not acknowledge the input within "
+                f"{CODEX_STEER_TIMEOUT_SECONDS:g} s; it may still reach the turn"
+            ) from exc
         except HarnessProviderError as exc:
             if not _codex_steer_missed_turn(exc):
                 raise
@@ -4257,6 +4272,17 @@ class CodexAppServerAdapter(HarnessAdapter):
         finally:
             await rpc.close()
 
+    async def _initialize_within(self, rpc: Any) -> None:
+        try:
+            await asyncio.wait_for(
+                self._initialize(rpc), timeout=CODEX_REQUEST_INITIALIZE_TIMEOUT_SECONDS
+            )
+        except TimeoutError as exc:
+            raise HarnessTransportError(
+                "Codex app-server did not answer initialize within "
+                f"{CODEX_REQUEST_INITIALIZE_TIMEOUT_SECONDS:g} s"
+            ) from exc
+
     async def fork_thread(
         self,
         profile: HarnessProfile,
@@ -4270,7 +4296,9 @@ class CodexAppServerAdapter(HarnessAdapter):
 
         rpc = await self._connect(profile, credential_store, (), workspace)
         try:
-            await self._initialize(rpc)
+            # Runs inside a project request: an app-server that never answers
+            # must not hold that project's later work.
+            await self._initialize_within(rpc)
             result = await asyncio.wait_for(
                 rpc.request(
                     "thread/fork",
@@ -4300,7 +4328,8 @@ class CodexAppServerAdapter(HarnessAdapter):
 
         rpc = await self._connect(profile, credential_store, (), workspace)
         try:
-            await self._initialize(rpc)
+            # Runs before a skill chat starts, inside the project request.
+            await self._initialize_within(rpc)
             result = await asyncio.wait_for(
                 rpc.request(
                     "skills/list",

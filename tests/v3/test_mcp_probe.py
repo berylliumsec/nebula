@@ -575,4 +575,31 @@ async def test_probe_gives_up_on_a_server_that_stops_answering(tmp_path, method)
     assert f"did not answer {method} within 0.5 s" in (report.detail or "")
 
 
+async def test_http_session_close_gives_up_on_a_trickled_reply(monkeypatch):
+    # Each byte resets httpx's read timeout; ending the session must not hold
+    # a probe (project work) for as long as the server keeps trickling.
+    monkeypatch.setattr(mcp, "MCP_SESSION_CLOSE_TIMEOUT_SECONDS", 0.2)
+
+    class Trickle(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                yield b" "
+                await asyncio.sleep(0.05)
+
+    deletes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        deletes.append(request.method)
+        return httpx.Response(200, stream=Trickle())
+
+    client = mcp._HttpMcpClient("https://mcp.invalid/api", {}, 10)
+    client.session_id = "session-a"
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    await asyncio.wait_for(client.close(), timeout=5)
+
+    assert deletes == ["DELETE"]
+    assert client.client.is_closed
+
+
 pytestmark = pytest.mark.anyio

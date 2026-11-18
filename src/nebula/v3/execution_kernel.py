@@ -11469,7 +11469,12 @@ def create_execution_kernel(
                 heartbeat=True,
             ),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                # The resumed turn runs on its own; this only follows it.
+                FOLLOWS_TURN_HEADER: "1",
+            },
         )
 
     @app.get(
