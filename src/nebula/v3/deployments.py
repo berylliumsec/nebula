@@ -23,6 +23,7 @@ from .database import (
     DeploymentReceiptRow,
     EntityRow,
     MemoryJobRow,
+    ProjectAdmissionHoldRow,
     ProviderTurnQueueRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
@@ -37,6 +38,7 @@ from .database import (
 )
 from .deployment_protocol import (
     DeploymentStatus,
+    GLOBAL_EXECUTION_PROJECT,
     HandoffPhase,
     MAX_EXECUTION_VERSIONS,
     ProcessDeploymentStatus,
@@ -861,6 +863,30 @@ class DeploymentCoordinator:
                 RuntimeCommandRow.name != STORAGE_REPORT_COMMAND,
             ),
         )
+        if project_id is None:
+            # A queued request of a project whose worker Core is holding (it
+            # waits for memory, say) has not started and cannot start before
+            # the stop. It stays saved and runs when the project next gets a
+            # worker, so it never holds a shutdown.
+            command_blocks = and_(
+                command_blocks,
+                or_(
+                    RuntimeCommandRow.state != "queued",
+                    RuntimeCommandRow.project_id == GLOBAL_EXECUTION_PROJECT,
+                    select(ProjectOwnershipRow.project_id)
+                    .where(
+                        ProjectOwnershipRow.project_id == RuntimeCommandRow.project_id,
+                        ProjectOwnershipRow.runtime_id.is_not(None),
+                    )
+                    .exists(),
+                    ~select(ProjectAdmissionHoldRow.project_id)
+                    .where(
+                        ProjectAdmissionHoldRow.project_id
+                        == RuntimeCommandRow.project_id
+                    )
+                    .exists(),
+                ),
+            )
         for model, predicate, label in (
             (RuntimeCommandRow, command_blocks, "Command"),
             (RuntimeResourceRow, RuntimeResourceRow.state != "closed", "Resource"),
@@ -1065,8 +1091,10 @@ class DeploymentCoordinator:
                     "Hold host or project admission before quiescing a project"
                 )
             await self.coordination._check(session, lease, lock=True)
-            if project_retirement and await self._project_has_open_chat(
-                session, lease.project_id
+            if (
+                project_retirement
+                and await self._project_has_open_chat(session, lease.project_id)
+                and not await self._retiring_for_capacity(session, lease)
             ):
                 raise CoordinationConflict(
                     "An open chat still requires this project's worker"
@@ -1119,6 +1147,33 @@ class DeploymentCoordinator:
         )
 
     @staticmethod
+    async def _retiring_for_capacity(session, lease: ProjectLease) -> bool:
+        """Whether this exact owner's retirement makes room for another project.
+
+        Such a retirement may release a worker whose project still has open
+        chats: they are saved state, and the project gets a worker again when
+        its chats are used or viewed.
+        """
+        latest = await session.scalar(
+            select(DeploymentReceiptRow)
+            .where(
+                DeploymentReceiptRow.action == "project.retirement_requested",
+                DeploymentReceiptRow.result["project_id"].as_string()
+                == lease.project_id,
+                DeploymentReceiptRow.result["runtime_id"].as_string()
+                == lease.runtime_id,
+                DeploymentReceiptRow.result["fencing_token"].as_integer()
+                == lease.fencing_token,
+            )
+            .order_by(
+                DeploymentReceiptRow.occurred_at_ms.desc(),
+                DeploymentReceiptRow.id.desc(),
+            )
+            .limit(1)
+        )
+        return latest is not None and latest.result.get("reason") == "capacity"
+
+    @staticmethod
     async def _project_has_pending_chat_start(session, project_id: str) -> bool:
         return (
             await session.scalar(
@@ -1148,12 +1203,16 @@ class DeploymentCoordinator:
             )
         )
 
-    async def request_project_retirement(self, lease: ProjectLease) -> bool:
+    async def request_project_retirement(
+        self, lease: ProjectLease, *, for_capacity: bool = False
+    ) -> bool:
         """Fence one idle project's admission before its controller quiesces.
 
         A false result means an open chat, a pending chat start or queued
         project work still needs the owner. Other unresolved project work raises
-        a blocker and leaves the ownership grant unchanged.
+        a blocker and leaves the ownership grant unchanged. ``for_capacity``
+        retires an owner whose project has only open chats, to give its memory
+        to a project waiting for a worker.
         """
         async with self.coordination._write() as session:
             owner = await session.get(
@@ -1171,7 +1230,9 @@ class DeploymentCoordinator:
                 )
             await self.coordination._check(session, lease, lock=False)
             if not owner.retirement_requested:
-                if await self._project_has_open_chat(session, lease.project_id):
+                if not for_capacity and await self._project_has_open_chat(
+                    session, lease.project_id
+                ):
                     return False
                 if await self._project_has_pending_chat_start(
                     session, lease.project_id
@@ -1215,6 +1276,7 @@ class DeploymentCoordinator:
                     "project_id": lease.project_id,
                     "runtime_id": lease.runtime_id,
                     "fencing_token": lease.fencing_token,
+                    **({"reason": "capacity"} if for_capacity else {}),
                 },
             )
             return True

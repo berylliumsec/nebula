@@ -18,11 +18,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.memory-budgets",
     label: "Memory budgets",
-    description: "Set job memory, swap and total capacity; reserve Core and runtime memory; inspect enforced limits and usage",
+    description: "Set job memory, swap and total capacity; reserve Core and runtime memory so more projects run at once; inspect enforced limits and usage",
     category: "Automation",
     scope: "Workspace",
     target: "memory-budget-settings",
-    keywords: ["memory", "ram", "gib", "worker", "budget", "out of memory", "oom", "limits", "swap", "reserve", "compute", "pressure", "butler", "search service", "searxng"],
+    keywords: ["memory", "ram", "gib", "worker", "budget", "out of memory", "oom", "limits", "swap", "reserve", "compute", "pressure", "butler", "search service", "searxng", "waiting for memory", "core reserve", "project workers", "projects at once", "default reserve"],
   },
   {
     id: "settings.butler-instructions",

@@ -15,6 +15,36 @@ saved reserve, new compute waits until you increase Core reserve or retire an
 inactive runtime. Existing job limits stay unchanged. This service accounting is
 separate from each compute job's kernel-enforced limits.
 
+## Core reserve and project workers
+
+Each project in use runs its own worker, and every resident worker (and the API
+worker) holds 256 MiB of the Core reserve. A Core whose policy was never saved
+sizes its default reserve from host memory: the administrator's services floor
+plus a quarter of the host's capacity (its cgroup limit when Core runs in one)
+for resident workers, at least 3 and at most 16 workers, and no more than the
+PostgreSQL connection budget's declared processes allow. A 16 GiB host gets
+2 GiB plus 16 × 256 MiB = 6 GiB; a host of 2 GiB or less keeps the earlier
+default of 3 workers. Increasing the reserve leaves less for compute jobs.
+
+A saved policy is never changed. A policy whose last change was Core's own
+default (revision 1, or a recorded `policy.default_sized` change) is raised to
+this size when Core starts; the audit history records it. The reserve only
+grows, and never takes memory charged to compute jobs.
+
+When the reserve is full and a project needs a worker (a sent message, queued
+project work, an open project view or a storage alert), Core retires the least
+recently used resident worker whose project runs nothing, has no open view and
+no pending work, at once and without waiting for its idle grace. Open chats stay
+saved; that project gets a worker again when it is opened or used. A worker with
+running chats, goals, missions, terminals or other unresolved work is never
+retired for this. If every resident worker is busy, the project shows
+**Waiting for memory** with the projects holding it, and its requests fail after
+3 minutes (`NEBULA_WORKER_MEMORY_WAIT_SECONDS`, 10–3600) with a message naming
+those projects; nothing of them ran. Send it again when one finishes, or
+increase Core reserve to run more projects at once. A request still waiting
+when Core stops stays saved and runs after the restart; it never blocks
+`runtime-stop`.
+
 Set a per-job ceiling, an explicit swap allowance (zero by default), an optional
 pressure threshold where a runner supports it, and a total job budget. The total
 reserves each job's ceiling **plus swap** before launch. Increasing the Core

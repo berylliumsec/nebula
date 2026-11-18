@@ -19,7 +19,12 @@ from sqlalchemy import inspect
 from .database import Base, Database
 from .database_pool import PoolSettings
 from .deployments import DeploymentCoordinator
-from .diagnostics import configure_diagnostics, install_exception_hooks
+from .diagnostics import (
+    configure_diagnostics,
+    install_exception_hooks,
+    record_caught_exception,
+    record_diagnostic,
+)
 from .memory_budget import MemoryBudgetService
 from .process_identity import process_birth
 from .release_store import ReleaseStore
@@ -313,7 +318,12 @@ async def serve_runtime(
     )
     coordinator = DeploymentCoordinator(database)
     budgets = MemoryBudgetService(
-        database, runtime_defaults_bytes=3 * manifest.execution_reserve_bytes
+        database,
+        runtime_worker_bytes=manifest.execution_reserve_bytes,
+        # The supervisor is one of the PostgreSQL budget's declared processes.
+        runtime_process_ceiling=(
+            max(1, settings.peak_processes - 1) if settings is not None else None
+        ),
     )
     admission = RuntimeMemoryAdmission(budgets)
     process_host = RuntimeProcessHost(
@@ -369,6 +379,27 @@ async def serve_runtime(
             raise RuntimeError(
                 "The retained supervisor is incompatible with this database schema"
             )
+        try:
+            sized = await budgets.size_unsaved_default()
+        except Exception as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.memory_default.unsized",
+                "Core keeps its current default reserve; resident project workers may wait for memory sooner.",
+                error,
+                stage="startup",
+            )
+        else:
+            if sized is not None:
+                record_diagnostic(
+                    "info",
+                    "runtime",
+                    "runtime.memory_default.sized",
+                    f"Core sized its never-saved default reserve to {sized} bytes from host memory.",
+                    outcome="success",
+                    stage="startup",
+                    metadata={"reserve_bytes": sized},
+                )
         await supervisor.start()
         await supervisor.stage(bundle, manifest_sha256=manifest_sha256)
         await supervisor.select_recovery_release(manifest.version)

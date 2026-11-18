@@ -963,12 +963,16 @@ class RuntimeProcessHost:
             retired.append(runtime_id)
         return retired
 
-    async def retire_idle_project(self, project_id: str) -> bool:
+    async def retire_idle_project(
+        self, project_id: str, *, for_capacity: bool = False
+    ) -> bool:
         """Release and retire this project's worker only after its last chat closes.
 
         The SQL hold fences new project work before the worker is asked to
         quiesce. Lost replies are reconciled from the durable quiescence receipt;
         any uncertain intermediate state retains the worker for review.
+        ``for_capacity`` also retires a worker whose project keeps open chats
+        but runs nothing, to give its memory to a project waiting for one.
         """
         async with self.coordinator.database.session() as session:
             owner = await session.get(ProjectOwnershipRow, project_id)
@@ -1032,7 +1036,9 @@ class RuntimeProcessHost:
         }:
             return False
 
-        if not await self.coordinator.request_project_retirement(lease):
+        if not await self.coordinator.request_project_retirement(
+            lease, for_capacity=for_capacity
+        ):
             return False
         client = await self.rpc(runtime_id)
         try:

@@ -1338,6 +1338,38 @@ class RuntimeCoordination:
                 return False
             return await requeue_unbound_chat_start(session, row)
 
+    async def fail_unstarted_requests(
+        self, project_id: str, *, accepted_before_ms: int, result: dict[str, Any]
+    ) -> int:
+        """Fail a workerless project's queued requests that waited too long.
+
+        Only requests no worker has claimed are settled, and only while the
+        project still has no owner: under the ownership row lock that every
+        submit and claim takes, so none of them can have started. Storage
+        reports stay queued; they are durable and never hold anything.
+        """
+        _identifier(project_id, "project_id")
+        async with self._write() as session:
+            await self._lock_owner(session, project_id)
+            owner = await session.get(
+                ProjectOwnershipRow, project_id, populate_existing=True
+            )
+            if owner is None or owner.runtime_id is not None:
+                return 0
+            changed = await session.execute(
+                update(RuntimeCommandRow)
+                .where(
+                    RuntimeCommandRow.project_id == project_id,
+                    RuntimeCommandRow.state == "queued",
+                    RuntimeCommandRow.runtime_id.is_(None),
+                    RuntimeCommandRow.name != STORAGE_REPORT_COMMAND,
+                    RuntimeCommandRow.accepted_at_ms <= accepted_before_ms,
+                )
+                .values(state="failed", result=json.loads(_json(result)))
+                .execution_options(synchronize_session=False)
+            )
+            return int(changed.rowcount or 0)
+
     async def cancel_storage_reports(
         self,
         lease: ProjectLease,
