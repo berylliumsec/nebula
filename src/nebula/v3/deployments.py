@@ -1906,18 +1906,10 @@ class DeploymentCoordinator:
 
     async def _recovery_blockers(self, session, project_id, target_runtime_id):
         reasons = []
-        for identity in await session.scalars(
-            select(EntityRow.id)
-            .where(
-                EntityRow.engagement_id == project_id,
-                EntityRow.kind == "approvals",
-                EntityRow.payload["continuation"]["adapter_status"]
-                .as_string()
-                .in_(("pending", "unknown")),
-            )
-            .limit(101)
-        ):
-            reasons.append(f"Approval {identity} has unconfirmed adapter delivery")
+        # An approval whose adapter delivery is unconfirmed stays flagged on
+        # the approval itself. Its dead owner can never confirm it, and the
+        # decision is never sent again, so it does not hold project recovery;
+        # reconciliation records a pending delivery as unknown.
         for identity in await session.scalars(
             select(EntityRow.id)
             .where(
