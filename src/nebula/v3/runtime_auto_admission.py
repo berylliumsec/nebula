@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 import httpx
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 
 from .database import (
     DeploymentHostRow,
@@ -29,12 +29,14 @@ from .database import (
     RuntimeResourceRow,
 )
 from .deployment_protocol import (
+    GLOBAL_EXECUTION_PROJECT,
     IDLE_RETIREMENT_FEATURE,
     ReleaseManifest,
     WorkerIdentity,
 )
 from .diagnostics import record_caught_exception, record_diagnostic
 from .domain import Engagement
+from .memory_policy import MemoryBudgetError
 from .runtime_coordination import (
     CoordinationConflict,
     pending_storage_dispatches,
@@ -92,6 +94,49 @@ def idle_worker_grace_ms() -> int:
     return int(min(MAX_IDLE_WORKER_GRACE_SECONDS, max(0.0, seconds)) * 1000)
 
 
+# A project whose wanted worker the memory reserve refuses first gets the
+# memory of a resident worker that runs nothing (open chats are saved state
+# and need no worker). When every resident worker is busy, the project's
+# requests wait at most this long before they fail with the projects holding
+# the memory; the project's held state says so meanwhile. Bounded;
+# NEBULA_WORKER_MEMORY_WAIT_SECONDS overrides it.
+WORKER_MEMORY_WAIT_SECONDS = 180
+MIN_WORKER_MEMORY_WAIT_SECONDS = 10
+MAX_WORKER_MEMORY_WAIT_SECONDS = 3600
+# A resident worker that refused to give up its memory (it was quiescing work
+# SQL could not see) is not asked again for this long.
+_CAPACITY_RETIREMENT_RETRY_SECONDS = 30.0
+
+
+def worker_memory_wait_seconds() -> float:
+    raw = os.environ.get("NEBULA_WORKER_MEMORY_WAIT_SECONDS")
+    try:
+        seconds = float(raw) if raw is not None else WORKER_MEMORY_WAIT_SECONDS
+    except ValueError:
+        # diagnostic-expected: an unreadable override keeps the default wait.
+        seconds = WORKER_MEMORY_WAIT_SECONDS
+    if seconds != seconds:  # NaN
+        seconds = WORKER_MEMORY_WAIT_SECONDS
+    return min(
+        MAX_WORKER_MEMORY_WAIT_SECONDS, max(MIN_WORKER_MEMORY_WAIT_SECONDS, seconds)
+    )
+
+
+def memory_refusal(error: BaseException | None) -> MemoryBudgetError | None:
+    """The memory-reserve refusal behind an admission failure, if any.
+
+    The supervisor reports a refused start as OperationRejected raised from
+    the reserve's MemoryBudgetError.
+    """
+    seen = 0
+    while error is not None and seen < 8:
+        if isinstance(error, MemoryBudgetError):
+            return error
+        error = error.__cause__ or error.__context__
+        seen += 1
+    return None
+
+
 # A refused automatic recovery step proved no effect; it is asked again after
 # this long, so a transient refusal never blocks recovery for good.
 REFUSED_RECOVERY_RETRY_MS = 30_000
@@ -103,6 +148,13 @@ class _AdmissionRetry:
     signature: tuple[int, int | None]
     failures: int
     retry_at: float
+    # When this project first failed to get a worker, on the loop clock.
+    waiting_since: float = 0.0
+    # Whether the latest failure was the memory reserve's refusal.
+    memory: bool = False
+    # Whether a resident worker already gave its memory to this project since
+    # that failure; another is released only once this one is refused again.
+    released: bool = False
 
 
 class RuntimeAutoAdmission:
@@ -131,6 +183,10 @@ class RuntimeAutoAdmission:
         # The idle worker last noted as skipped, and why, so each skip is
         # recorded once instead of on every half-second pass.
         self._idle_skips: dict[str, str] = {}
+        self.memory_wait_seconds = worker_memory_wait_seconds()
+        # Resident projects whose worker refused a capacity retirement, and
+        # when they may be asked again (loop clock).
+        self._capacity_refused: dict[str, float] = {}
         self._serial = asyncio.Lock()
 
     def _note_api_hold(self, reason: str | None) -> None:
@@ -284,8 +340,18 @@ class RuntimeAutoAdmission:
                 # open chat. Once it lapses the worker keeps its idle grace,
                 # when the host has one, before it retires.
                 viewed = live_view_lease(ProjectOwnershipRow.project_id, now_ms)
+                # Demand beyond an open chat: something the operator asked
+                # for or is looking at. Only it takes memory from resident
+                # projects; an open chat alone waits for a free slot.
+                active_demand = or_(
+                    pending_chat_start,
+                    legacy_chat_start,
+                    queued_work,
+                    viewed,
+                    storage_alert,
+                )
                 demand_query = (
-                    select(ProjectOwnershipRow, queued_work)
+                    select(ProjectOwnershipRow, queued_work, active_demand)
                     # A verified quiescence clears the owner while retaining
                     # its fencing history. Reopening may claim the next fence;
                     # expired or uncertain owners still have a runtime ID.
@@ -322,11 +388,39 @@ class RuntimeAutoAdmission:
                             .limit(1)
                         )
                     ) is not None
+                # Projects whose active demand the memory reserve refused.
+                capacity_waiters: list[str] = []
+                memory_waiters = [
+                    project_id
+                    for project_id, retry in self._admission_retry.items()
+                    if retry.memory
+                ]
+                if memory_waiters:
+                    capacity_waiters = list(
+                        await session.scalars(
+                            select(ProjectOwnershipRow.project_id)
+                            .where(
+                                ProjectOwnershipRow.project_id.in_(memory_waiters),
+                                ProjectOwnershipRow.runtime_id.is_(None),
+                                ProjectOwnershipRow.retirement_requested.is_(False),
+                                active_demand,
+                            )
+                            .order_by(ProjectOwnershipRow.project_id)
+                            .limit(8)
+                        )
+                    )
                 if waiting:
                     demand_query = demand_query.where(
                         ProjectOwnershipRow.project_id.not_in(waiting)
                     )
-                demands = list(await session.execute(demand_query.limit(16)))
+                demands = list(
+                    await session.execute(
+                        demand_query.order_by(
+                            case((active_demand, 0), else_=1),
+                            ProjectOwnershipRow.project_id,
+                        ).limit(16)
+                    )
+                )
                 idle = [
                     ProjectOwnershipRow.runtime_id.is_not(None),
                     ProjectOwnershipRow.lease_expires_at_ms > now_ms,
@@ -395,6 +489,64 @@ class RuntimeAutoAdmission:
                     for project_id, runtime_id in idle_owners
                     if await self._retires_idle(session, project_id, runtime_id)
                 ]
+                # Resident workers whose project runs, views and awaits
+                # nothing (open chats aside), least recently used first. Each
+                # one retired makes room for one waiting project.
+                # A waiter that was already given memory tries it before it
+                # takes more.
+                wanting = [
+                    project_id
+                    for project_id in capacity_waiters
+                    if not self._admission_retry[project_id].released
+                ]
+                capacity_owners: list[tuple[str, str]] = []
+                needed = len(wanting) - len(idle_owners)
+                if needed > 0:
+                    loop_now = asyncio.get_running_loop().time()
+                    refused = [
+                        project_id
+                        for project_id, until in self._capacity_refused.items()
+                        if until > loop_now
+                    ]
+                    last_used = (
+                        select(func.max(RuntimeCommandRow.accepted_at_ms))
+                        .where(
+                            RuntimeCommandRow.project_id
+                            == ProjectOwnershipRow.project_id
+                        )
+                        .scalar_subquery()
+                    )
+                    capacity_query = select(
+                        ProjectOwnershipRow.project_id,
+                        ProjectOwnershipRow.runtime_id,
+                    ).where(
+                        ProjectOwnershipRow.runtime_id.is_not(None),
+                        ProjectOwnershipRow.lease_expires_at_ms > now_ms,
+                        ProjectOwnershipRow.retirement_requested.is_(False),
+                        ProjectOwnershipRow.project_id != GLOBAL_EXECUTION_PROJECT,
+                        ProjectOwnershipRow.project_id.not_in(
+                            [*capacity_waiters, *(p for p, _r in idle_owners)]
+                        ),
+                        ~pending_chat_start,
+                        ~legacy_chat_start,
+                        ~active_work,
+                        ~viewed,
+                        ~storage_alert,
+                    )
+                    if refused:
+                        capacity_query = capacity_query.where(
+                            ProjectOwnershipRow.project_id.not_in(refused)
+                        )
+                    capacity_owners = [
+                        (project_id, runtime_id)
+                        for project_id, runtime_id in await session.execute(
+                            capacity_query.order_by(
+                                func.coalesce(last_used, 0),
+                                ProjectOwnershipRow.project_id,
+                            ).limit(needed)
+                        )
+                        if await self._retires_idle(session, project_id, runtime_id)
+                    ]
                 api_id = host.api_runtime_id
             if api_id is None and self._blocked.get("api") != signature:
                 try:
@@ -441,8 +593,32 @@ class RuntimeAutoAdmission:
                                     "kind": "project",
                                 },
                             )
+                    released = 0
+                    for project_id, _runtime_id in capacity_owners:
+                        if await self._release_for_capacity(retire_idle, project_id):
+                            released += 1
+                    # A released worker's memory goes to the waiting projects
+                    # first: they are asked again at once, and projects with
+                    # only open chats wait while any of them still waits.
+                    for project_id in wanting[:released]:
+                        retry = self._admission_retry.get(project_id)
+                        if retry is not None:
+                            self._admission_retry[project_id] = _AdmissionRetry(
+                                retry.signature,
+                                retry.failures,
+                                0.0,
+                                retry.waiting_since,
+                                retry.memory,
+                                True,
+                            )
+                    if needed > 0 and not capacity_owners:
+                        # Nothing can be freed: requests that waited out the
+                        # bound fail, naming the projects holding the memory.
+                        await self._fail_memory_waits(wanting)
             await self._forget_settled_pending()
-            for demand, has_project_work in demands:
+            for demand, has_project_work, is_active in demands:
+                if capacity_waiters and not is_active:
+                    continue
                 retry = self._admission_retry.get(demand.project_id)
                 if (
                     retry is not None
@@ -507,13 +683,27 @@ class RuntimeAutoAdmission:
                     delay = _ADMISSION_BACKOFF_SECONDS[
                         min(failures, len(_ADMISSION_BACKOFF_SECONDS)) - 1
                     ]
+                    refusal = memory_refusal(error)
+                    memory = refusal is not None
                     # Say why first, so the retry delay runs from after the
                     # write and is not spent on it.
-                    await self._record_hold(demand.project_id, error, failures)
+                    await self._record_hold(
+                        demand.project_id,
+                        error,
+                        failures,
+                        reason=await self._memory_wait_reason(refusal, bool(is_active))
+                        if refusal is not None
+                        else None,
+                    )
+                    now = asyncio.get_running_loop().time()
                     self._admission_retry[demand.project_id] = _AdmissionRetry(
                         signature,
                         failures,
-                        asyncio.get_running_loop().time() + delay,
+                        # A project the reserve refuses is asked again soon:
+                        # memory frees when another project's worker retires.
+                        now + (min(delay, 5.0) if memory and is_active else delay),
+                        retry.waiting_since if retry is not None else now,
+                        memory,
                     )
                     record_caught_exception(
                         "runtime",
@@ -544,12 +734,11 @@ class RuntimeAutoAdmission:
         ``reason`` is quoted; any other refusal gets a generic reason. Best
         effort: admission and recovery keep retrying.
         """
-        from .memory_policy import MemoryBudgetError
-
         if reason is None:
+            refusal = memory_refusal(error)
             reason = (
-                str(error)[:1000]
-                if isinstance(error, MemoryBudgetError) and str(error)
+                str(refusal)[:1000]
+                if refusal is not None and str(refusal)
                 else "This project's worker could not start yet; Core keeps retrying automatically."
             )
         try:
@@ -604,6 +793,154 @@ class RuntimeAutoAdmission:
                 "attempt": attempts,
             },
         )
+
+    async def _memory_holders(self) -> list[str]:
+        """Labels of the projects whose resident workers hold Core memory."""
+        coordinator = self.supervisor.coordinator
+        async with coordinator.database.session() as session:
+            projects = list(
+                await session.scalars(
+                    select(ProjectOwnershipRow.project_id)
+                    .where(
+                        ProjectOwnershipRow.runtime_id.is_not(None),
+                        ProjectOwnershipRow.project_id != GLOBAL_EXECUTION_PROJECT,
+                    )
+                    .order_by(ProjectOwnershipRow.project_id)
+                    .limit(9)
+                )
+            )
+            labels = [
+                await coordinator._project_label_in(session, project_id)
+                for project_id in projects[:8]
+            ]
+        if len(projects) > 8:
+            labels.append("and more")
+        return labels
+
+    async def _memory_wait_reason(
+        self, refusal: MemoryBudgetError, active: bool
+    ) -> str:
+        try:
+            holders = await self._memory_holders()
+        except Exception as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.project_admission.holders_unread",
+                "A project waiting for memory says so without naming the projects holding it.",
+                error,
+                stage="admission",
+            )
+            holders = []
+        named = " Resident workers: " + ", ".join(holders) + "." if holders else ""
+        when = (
+            "Core gives it the memory of a resident worker as soon as one is idle."
+            if active
+            else "Its chats are saved; it starts when memory frees or when you "
+            "open or use the project."
+        )
+        # The gate's own words first: they say whether the reserve is full or
+        # below what resident runtimes already need.
+        return (str(refusal).strip() + " Waiting for memory: " + when + named)[:1000]
+
+    async def _release_for_capacity(self, retire_idle, project_id: str) -> bool:
+        """Retire one idle resident worker so a waiting project can start."""
+        if retire_idle is None:
+            return False
+        refused_until = (
+            asyncio.get_running_loop().time() + _CAPACITY_RETIREMENT_RETRY_SECONDS
+        )
+        try:
+            released = bool(await retire_idle(project_id, for_capacity=True))
+        except Exception as error:
+            self._capacity_refused[project_id] = refused_until
+            record_caught_exception(
+                "runtime",
+                "runtime.project_capacity.retained",
+                "An idle project's worker kept its memory; a project waiting for memory keeps waiting.",
+                error,
+                stage="admission",
+                metadata={"entity_id": project_id, "kind": "project"},
+            )
+            return False
+        if not released:
+            self._capacity_refused[project_id] = refused_until
+            return False
+        self._capacity_refused.pop(project_id, None)
+        record_diagnostic(
+            "info",
+            "runtime",
+            "runtime.project_capacity.released",
+            "An idle project's worker retired to give its memory to a project waiting for one; its chats stay saved.",
+            outcome="success",
+            stage="admission",
+            metadata={"entity_id": project_id, "kind": "project"},
+        )
+        return True
+
+    async def _fail_memory_waits(self, waiters: list[str]) -> None:
+        """End requests that waited too long for memory no worker can free."""
+        if not waiters:
+            return
+        loop_now = asyncio.get_running_loop().time()
+        expired = [
+            project_id
+            for project_id in waiters
+            if (retry := self._admission_retry.get(project_id)) is not None
+            and loop_now - retry.waiting_since >= self.memory_wait_seconds
+        ]
+        if not expired:
+            return
+        coordination = self.supervisor.coordinator.coordination
+        holders = await self._memory_holders()
+        seconds = round(self.memory_wait_seconds)
+        detail = (
+            f"This request waited {seconds} s for memory to start its "
+            "project's worker and did not run. The Core reserve is full and "
+            "every resident worker is busy"
+            + (": " + ", ".join(holders) if holders else "")
+            + ". Send it again when one of them finishes, or increase Core "
+            "reserve in Memory budgets."
+        )[:1000]
+        result = {
+            "http_status": 503,
+            "detail": detail,
+            "waiting_for_memory": True,
+            "not_started": True,
+        }
+        for project_id in expired:
+            try:
+                async with coordination.database.session() as session:
+                    now_ms = await coordination._clock_ms(session)
+                failed = await coordination.fail_unstarted_requests(
+                    project_id,
+                    accepted_before_ms=now_ms - seconds * 1000,
+                    result=result,
+                )
+            except Exception as error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.project_admission.wait_unsettled",
+                    "Requests waiting for memory stay queued; Core tries to settle them again.",
+                    error,
+                    stage="admission",
+                    metadata={"entity_id": project_id, "kind": "project"},
+                )
+                continue
+            if failed:
+                record_diagnostic(
+                    "warning",
+                    "runtime",
+                    "runtime.project_admission.memory_timeout",
+                    detail,
+                    outcome="failure",
+                    stage="admission",
+                    retryable=True,
+                    metadata={
+                        "entity_id": project_id,
+                        "kind": "project",
+                        "requests": failed,
+                    },
+                )
 
     async def _clear_hold(self, project_id: str) -> None:
         try:

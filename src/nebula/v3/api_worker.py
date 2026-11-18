@@ -331,6 +331,28 @@ def create_api_worker(
                 if page.state in {"uncertain", "failed"}:
                     if unsettled is not None:
                         return unsettled(command_id)
+                    unstarted = (
+                        await unstarted_failure(command_id)
+                        if page.state == "failed"
+                        else None
+                    )
+                    if unstarted is not None:
+                        # Settled before any worker ran it (it waited out the
+                        # memory bound): a final answer, nothing to reconcile.
+                        status, detail = unstarted
+                        return JSONResponse(
+                            {
+                                "detail": detail,
+                                "command_id": command_id,
+                                "state": page.state,
+                                "not_started": True,
+                            },
+                            status_code=status,
+                            headers={
+                                "X-Nebula-Command-Id": command_id,
+                                REQUEST_STATE_HEADER: REQUEST_COMPLETE,
+                            },
+                        )
                     return JSONResponse(
                         {
                             "detail": "The saved request needs reconciliation. It has not been retried.",
@@ -583,6 +605,21 @@ def create_api_worker(
             # diagnostic-expected: a full backlog is the sender's retryable 429.
             return storage_report_backlog(error)
         return None
+
+    async def unstarted_failure(command_id: str) -> tuple[int, str] | None:
+        """The status and reason of a request Core failed before it started."""
+        async with store.database.session() as session:
+            row = await session.get(RuntimeCommandRow, command_id)
+        result = (row.result if row is not None else None) or {}
+        status, detail = result.get("http_status"), result.get("detail")
+        if (
+            result.get("not_started") is not True
+            or type(status) is not int
+            or not 400 <= status <= 599
+            or not isinstance(detail, str)
+        ):
+            return None
+        return status, detail[:1000]
 
     # Sender reports wait in their own small pool: a source token never takes
     # the operator's viewer capacity, and a full pool acknowledges at once.

@@ -316,6 +316,18 @@ check-ins use stable request IDs; edits and check-ins use the current item
 revision. Butler reports the saved Core result and board link. A Work check-in
 does not run or complete an assigned assistant chat.
 
+### Waiting for memory
+
+A never-saved Core reserve is sized from host memory (services floor plus a
+quarter of capacity for 3 to 16 resident workers); a saved one is never changed.
+A project that shows **Waiting for memory** gets the memory of an idle resident
+project's worker automatically; when every resident worker is busy its
+requests fail after the bounded wait, naming the busy projects. To run more
+projects at once, Butler reads Memory budgets and proposes a higher Core reserve
+through `set_memory_budget` with the observed revision; it must not archive
+chats, stop work or retire workers to make room, and it reports the saved
+reserve only after reading it back from Core.
+
 ### Project workspace files
 
 Interactive Butler uses `nebula.workspace.list` to find a selected-project file or folder. It returns an opaque directory identity for the exact listed directory. File replacement or rename uses the current full SHA-256; folder creation, rename and deletion use directory identities and Core read-back. `nebula.workspace.upload_from_device` asks the requesting browser to choose a file for a listed directory. The browser hashes selected bytes on HTTP LAN origins, checks the current destination, confirms any overwrite, and sends bytes directly to authenticated Core with content and directory preconditions. It reports success only after exact entry-state read-back. Cancellation or an uncertain response requires inspecting Files before another attempt. `nebula.workspace.download_file` asks the requesting browser to verify bytes and start a local download. Butler never receives a device file path or binary payload.

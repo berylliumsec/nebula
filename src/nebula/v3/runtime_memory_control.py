@@ -79,6 +79,8 @@ class _DelegatedBudgets(MemoryBudgetService):
             base.database,
             administrator=base.administrator,
             runtime_defaults_bytes=base.runtime_defaults_bytes,
+            runtime_worker_bytes=base.runtime_worker_bytes,
+            runtime_process_ceiling=base.runtime_process_ceiling,
         )
         self.coordinator, self.base = coordinator, base
 

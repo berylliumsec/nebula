@@ -53,6 +53,32 @@ from .memory_policy import (
 POLICY_SCOPE = "host"
 _HELD = ("reserved", "starting", "running", "updating", "uncertain")
 
+# Resident runtimes (the API worker and one worker per active project) share
+# the Core reserve with essential services. A policy the operator never saved
+# gives them up to a quarter of the host's memory (its cgroup limit when Core
+# runs in one): never fewer slots than the earlier fixed default (the API plus
+# two projects) and never more than MAX_DEFAULT_RUNTIME_SLOTS, nor more
+# processes than a PostgreSQL connection budget declares.
+DEFAULT_RUNTIME_SHARE = 4
+MIN_DEFAULT_RUNTIME_SLOTS = 3
+MAX_DEFAULT_RUNTIME_SLOTS = 16
+# Audit action of Core sizing a never-saved default; an operator save is
+# "policy.save". Only a policy whose latest change is this action (or that was
+# never changed) is still Core's own default.
+DEFAULT_SIZED_ACTION = "policy.default_sized"
+
+
+def default_runtime_slots(
+    capacity_bytes: int, worker_bytes: int, *, process_ceiling: int | None = None
+) -> int:
+    """Resident runtime slots a never-saved Core reserve holds on this host."""
+    if worker_bytes <= 0:
+        raise MemoryBudgetError("a runtime reserve must be a positive byte count")
+    slots = capacity_bytes // DEFAULT_RUNTIME_SHARE // worker_bytes
+    if process_ceiling is not None:
+        slots = min(slots, process_ceiling)
+    return max(MIN_DEFAULT_RUNTIME_SLOTS, min(MAX_DEFAULT_RUNTIME_SLOTS, slots))
+
 
 class MemoryJob(NebulaModel):
     id: str
@@ -141,17 +167,36 @@ class MemoryBudgetService:
             [], MemoryAdministratorLimits
         ] = administrator_memory_limits,
         runtime_defaults_bytes: int = 0,
+        runtime_worker_bytes: int = 0,
+        runtime_process_ceiling: int | None = None,
     ):
-        if (
-            type(runtime_defaults_bytes) is not int
-            or not 0 <= runtime_defaults_bytes <= 1024**5
+        for value in (runtime_defaults_bytes, runtime_worker_bytes):
+            if type(value) is not int or not 0 <= value <= 1024**5:
+                raise MemoryBudgetError(
+                    "default runtime reserve must be a bounded byte count"
+                )
+        if runtime_process_ceiling is not None and (
+            type(runtime_process_ceiling) is not int or runtime_process_ceiling < 1
         ):
-            raise MemoryBudgetError(
-                "default runtime reserve must be a bounded byte count"
-            )
+            raise MemoryBudgetError("runtime process ceiling must be positive")
         self.database = database
         self.administrator = administrator
         self.runtime_defaults_bytes = runtime_defaults_bytes
+        # When set, the never-saved default reserve is sized from host memory
+        # in slots of this many bytes instead of the fixed amount above.
+        self.runtime_worker_bytes = runtime_worker_bytes
+        self.runtime_process_ceiling = runtime_process_ceiling
+
+    def default_reserve_bytes(self, administrator: MemoryAdministratorLimits) -> int:
+        """The Core reserve of a policy the operator has never saved."""
+        if not self.runtime_worker_bytes:
+            return administrator.minimum_reserve_bytes + self.runtime_defaults_bytes
+        slots = default_runtime_slots(
+            administrator.capacity_bytes,
+            self.runtime_worker_bytes,
+            process_ceiling=self.runtime_process_ceiling,
+        )
+        return administrator.minimum_reserve_bytes + slots * self.runtime_worker_bytes
 
     @asynccontextmanager
     async def _write(self) -> AsyncIterator[Any]:
@@ -171,7 +216,7 @@ class MemoryBudgetService:
         if existing is not None:
             return existing
         administrator = self.administrator()
-        reserve = administrator.minimum_reserve_bytes + self.runtime_defaults_bytes
+        reserve = self.default_reserve_bytes(administrator)
         aggregate = min(
             administrator.maximum_aggregate_bytes,
             administrator.capacity_bytes - reserve,
@@ -208,6 +253,93 @@ class MemoryBudgetService:
         row = await session.get(MemoryBudgetPolicyRow, POLICY_SCOPE)
         assert row is not None
         return row
+
+    async def size_unsaved_default(self) -> int | None:
+        """Raise a never-saved default reserve to this host's default size.
+
+        A policy counts as Core's own default while it was never changed
+        (revision 1) or its latest change is an earlier sizing. Any operator
+        save keeps its values exactly. The reserve only grows, and never
+        takes capacity already charged to compute jobs. Returns the new
+        reserve, or None when nothing changed.
+        """
+        if not self.runtime_worker_bytes:
+            return None
+        async with self._write() as session:
+            row = await self._policy(session)
+            if row.revision != 1:
+                latest = await session.scalar(
+                    select(MemoryBudgetAuditRow)
+                    .where(MemoryBudgetAuditRow.scope_key == POLICY_SCOPE)
+                    .order_by(
+                        MemoryBudgetAuditRow.created_at.desc(),
+                        MemoryBudgetAuditRow.id.desc(),
+                    )
+                    .limit(1)
+                )
+                if (
+                    latest is None
+                    or latest.action != DEFAULT_SIZED_ACTION
+                    or (latest.result or {}).get("saved_revision") != row.revision
+                ):
+                    return None
+            administrator = self.administrator()
+            policy = MemoryBudgetPolicy.model_validate(row.policy)
+            charged = int(
+                await session.scalar(
+                    select(func.sum(MemoryJobRow.reserved_bytes)).where(
+                        MemoryJobRow.state.in_(_HELD)
+                    )
+                )
+                or 0
+            )
+            target = min(
+                self.default_reserve_bytes(administrator),
+                administrator.capacity_bytes - charged,
+            )
+            if target <= policy.reserve_bytes:
+                return None
+            aggregate = min(
+                policy.aggregate_bytes,
+                administrator.maximum_aggregate_bytes,
+                administrator.capacity_bytes - target,
+            )
+            sized = policy.model_copy(
+                update={
+                    "reserve_bytes": target,
+                    "aggregate_bytes": aggregate,
+                    "default_job": policy.default_job.model_copy(
+                        update={
+                            "max_bytes": min(policy.default_job.max_bytes, aggregate)
+                        }
+                    ),
+                }
+            )
+            try:
+                sized = MemoryBudgetPolicy.model_validate(sized.model_dump())
+                validate_policy(sized, administrator)
+            except (MemoryBudgetError, ValueError):
+                # diagnostic-expected: a default that cannot be raised validly keeps its current, valid values.
+                return None
+            previous = row.policy
+            row.policy = sized.model_dump(mode="json")
+            row.revision += 1
+            row.updated_at = utc_now()
+            self._audit(
+                session,
+                "core",
+                POLICY_SCOPE,
+                DEFAULT_SIZED_ACTION,
+                previous,
+                row.policy,
+                {
+                    "saved_revision": row.revision,
+                    "application": "new_jobs",
+                    "running_limits_changed": False,
+                    "reason": "Core sized its never-saved default reserve from host memory",
+                },
+            )
+            return target
 
     @staticmethod
     def _audit(session, actor_id, scope, action, previous, proposed, result):

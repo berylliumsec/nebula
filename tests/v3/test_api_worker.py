@@ -212,6 +212,34 @@ async def test_receipt_answers_say_whether_a_202_is_the_final_response(boundary)
     assert unresolved.headers["x-nebula-request-state"] == "needs-reconciliation"
 
 
+async def test_a_request_failed_before_it_started_answers_with_its_reason(
+    boundary,
+):
+    _, client = boundary.api()
+    accepted = await client.post(
+        "/api/v1/synthetic", headers={**_AUTH, "Idempotency-Key": "waited"}, json={}
+    )
+    command = accepted.json()["receipt"]["command_id"]
+    detail = "This request waited 180 s for memory and did not run."
+    async with boundary.host.database.session() as session:
+        row = await session.get(RuntimeCommandRow, command)
+        row.state = "failed"
+        row.result = {
+            "http_status": 503,
+            "detail": detail,
+            "waiting_for_memory": True,
+            "not_started": True,
+        }
+    response = await client.get(
+        f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == detail
+    assert response.json()["not_started"] is True
+    assert response.headers["x-nebula-request-state"] == "complete"
+    assert response.headers["x-nebula-command-id"] == command
+
+
 async def test_chat_acceptance_is_pending_until_its_turn_stream_is_ready(
     boundary, monkeypatch
 ):
