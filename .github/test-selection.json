@@ -1,26 +1,24 @@
 {
-  "change_digest": "66ee4a705cd835675d3e2d79f06122aaea5973779333f26b8b8d3aa062863465",
+  "change_digest": "4d0266165fc9c0cfd5dcc559857c1ef8e5ca94fb693196c1149076d429fca6d7",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Blocking OS credential vault calls that ran on the worker's event loop (MCP secret resolution, browser-companion credentials, MCP import vault state, reuse, save and rollback) now run in a thread with a CREDENTIAL_VAULT_TIMEOUT_SECONDS bound, so a hung keyring fails the operation instead of freezing the worker. Selected: MCP probe (new hung-vault regression), MCP import, browser companion suites and credentials.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The worker-level effect was measured on a fake scratch Core with a scratch-only shim that makes vault resolution block forever.",
+  "reason": "GET /chat/sessions/{id}/state carries last_progress_at for an open harness turn (its latest recorded harness event other than Core status notices), so an idle-but-open turn is visible without any idle timeout. Selected: approval handoff session-state tests (new regression), session state, chat polling cost and stream follow suites.",
+  "exclusions": "No UI, native or Playwright layer: the field is additive and the GUI does not show it yet; the UI follow-up needs a Figma mockup first.",
   "python_versions": [
     "3.12"
   ],
-  "python_browser": true,
+  "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 154,
+    "python": 65,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_browser_companion_control_race.py",
-    "tests/v3/test_browser_companion_revision_races.py",
-    "tests/v3/test_credentials.py"
+    "tests/v3/test_approval_handoff.py",
+    "tests/v3/test_session_state.py",
+    "tests/v3/test_chat_polling_cost.py",
+    "tests/v3/test_chat_stream_follow.py"
   ],
   "frontend": [],
   "native": [],

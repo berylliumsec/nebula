@@ -8,6 +8,7 @@ to the underlying entity, and is independent of the wall clock.
 
 import hashlib
 import json
+from datetime import timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -360,6 +361,26 @@ async def _project(
         if runtime and session.harness_session_id
         else "unknown"
     )
+    # When the harness last reported anything for a turn that is still open,
+    # so an operator can tell a working turn from one that went quiet. Core
+    # adds no idle timeout: a vendor can legitimately be silent for long.
+    last_progress_at = None
+    if harness and execution not in TERMINAL:
+        latest = await database.scalar(
+            select(OperationEventRow.occurred_at)
+            .where(
+                OperationEventRow.operation_id == harness.id,
+                OperationEventRow.operation_kind == "harness_turn",
+                OperationEventRow.event_type != "harness.status",
+            )
+            .order_by(OperationEventRow.sequence.desc())
+            .limit(1)
+        )
+        progressed = latest or harness.started_at or harness.created_at
+        if progressed is not None and progressed.tzinfo is None:
+            # SQLite returns the stored UTC time without its zone.
+            progressed = progressed.replace(tzinfo=timezone.utc)
+        last_progress_at = progressed.isoformat() if progressed else None
     return {
         "schema": "nebula.session-state/v1",
         "session_id": session.id,
@@ -372,6 +393,7 @@ async def _project(
         "detail": detail,
         "connection": connection,
         "connection_scope": "harness_transport",
+        "last_progress_at": last_progress_at,
         "actions": [
             "check_status",
             *(["review"] if pending else []),
