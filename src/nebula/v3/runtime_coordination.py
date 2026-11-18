@@ -69,6 +69,19 @@ HTTP_FOLLOW_COMMAND = "http.follow/v1"
 # The internal response header a route sets to say its effects are committed
 # and the rest of its streamed body only follows durable state.
 FOLLOWS_TURN_HEADER = "x-nebula-follows-turn"
+# The request-state key of an awaitable a route calls when the rest of its
+# work only waits for or follows a turn it already started, such as a
+# non-streamed chat. The command then stops holding its project's work lane.
+RUNTIME_RELEASE_LANE_STATE = "runtime_release_lane"
+
+
+async def release_project_lane(state) -> None:
+    """Free this request's work lane if a durable runner is carrying it."""
+    release = getattr(state, RUNTIME_RELEASE_LANE_STATE, None)
+    if release is not None:
+        await release()
+
+
 _BATCH_BARRIER = "work.batch.barrier/v1"
 # A storage sender's report, saved by an API worker under a storage-source
 # principal. Recording it is atomic and idempotent by event ID, so a run that
