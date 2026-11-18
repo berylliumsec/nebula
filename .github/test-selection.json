@@ -1,25 +1,26 @@
 {
-  "change_digest": "9950a106cef45196d7250177e449fed02627bd69729d0b8ca631fd890b48e77e",
+  "change_digest": "06ba3dc2b0bcf08282c0d89b6eea6f24fef3074e736fdf2a21ce0f4021babf6f",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A work-lane HTTP command whose route already started its turn and only streams it (harness chat, provider chat start on http.invoke/v1) is renamed http.follow/v1 and lane heads skip it, so later project work no longer waits for the whole turn. Selected: durable delivery (new follow, inline/control and close regressions), runtime coordination claims, chat acceptance, the execution worker lane consumers, and the diagnostic-boundary worker test whose fake runner gained close(); SQLite and PostgreSQL.",
-  "exclusions": "No UI, native or Playwright layer: the viewer keeps reading the same durable response. The harness chat end to end (project keeps serving while a harness turn never finishes) was measured on a fake scratch Core with a fake Codex app-server.",
+  "reason": "The first attempt of a non-streamed model call now runs under the request allowance (plus a 5 s grace) as a total deadline, so a provider that trickles its answer can no longer hold a project's work-lane request (writing transform, scope import, non-streamed chat) forever. Selected: provider adapter suites with a new trickled-answer regression, provider contracts, inference timeout and native adapter request suites, and turn preflight latency.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. The project-level effect was measured on a fake scratch Core with a trickling provider stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 221,
+    "python": 256,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_runtime_diagnostic_boundaries.py",
-    "tests/v3/test_runtime_chat_acceptance.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_runtime_coordination.py"
+    "tests/v3/test_providers.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_provider_leftovers.py",
+    "tests/v3/test_inference_timeouts_probe_budget.py",
+    "tests/v3/test_native_adapter_requests.py",
+    "tests/v3/test_turn_preflight_latency.py"
   ],
   "frontend": [],
   "native": [],
