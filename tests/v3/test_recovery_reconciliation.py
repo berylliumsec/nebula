@@ -742,9 +742,10 @@ async def test_target_failed_before_activation_relinquishes_for_fresh_recovery(
     value.execution.application_factory = failing
     await value.execution.attach(asdict(lease))
     await until(lambda: value.execution.state == "failed")
-    # The failed target already asked its process to exit; while it still
-    # answers, the host also has it give the grant back at once.
-    assert exits == ["target"]
+    # The failed target asks its process to exit once its failure is saved
+    # (the state turns failed first); while it still answers, the host also
+    # has it give the grant back at once.
+    await until(lambda: exits == ["target"])
     root = value.new_supervisor()
     await root.advance_project_handoffs()
     assert value.execution.state == "fenced" and exits == ["target", "target"]
