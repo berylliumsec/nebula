@@ -1,5 +1,5 @@
 {
-  "change_digest": "669a688113a1904144eada297c6f2d459de553e3d3ca27b1e3964318b201db6d",
+  "change_digest": "61ebf42338159cd243fbecf49830c6f8e08a887172b61b86fba5c67dc215ea70",
   "reviewed_by": "Claude Code under operator request to add Claude back as a provided harness",
   "reason": "Claude Agent SDK becomes a provided harness kind again: API create validation, the Settings Add Claude dialog and card, test-turn sign-in failure classification, and settings assistant discovery and product help.",
   "exclusions": "Playwright: the changed interface.spec.ts dialog-contract test is not catalogued, and the critical-workspaces and dialog tests fail identically on origin/main locally (Findings baseline and Settings heading), so none is selected; the Settings baselines show the compact list, not the harness section. Native: no Rust changes. test_product_knowledge.py is limited to its digest, Chroma sync and new Claude cases because test_product_search_finds_headless_core_and_paired_butler_cli already fails on origin/main.",
@@ -9,7 +9,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 57,
+    "python": 56,
     "frontend": 64,
     "native": 0,
     "playwright": 0

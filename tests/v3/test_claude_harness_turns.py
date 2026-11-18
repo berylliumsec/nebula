@@ -753,8 +753,7 @@ async def test_claude_answer_excludes_subagent_text(
                 text="Failed to authenticate: OAuth session expired and could "
                 "not be refreshed",
             ),
-            "Failed to authenticate: OAuth session expired and could not be "
-            "refreshed",
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
             "authentication_failed",
         ),
     ],
