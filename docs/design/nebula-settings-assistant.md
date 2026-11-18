@@ -203,6 +203,13 @@ Butler can preserve an existing program while renaming the profile; constrained
 Codex endpoint profiles can still use nonsecret Settings CRUD. Unrestricted
 permission mode remains operator-owned.
 
+Assistant harnesses offer Codex, Grok and Claude. **Add Claude** creates a
+managed Claude Agent SDK process; the CLI path is optional because the SDK
+bundles one. It signs in with the host's existing `claude` login (`/login`) or
+an API key credential. Claude profiles use managed approvals only, have no
+separate account home folder, and do not offer browser, computer-use or image
+generation capabilities.
+
 Follow-up preferences use `body.expected_revision` from the current project
 settings. Butler may preserve an existing cloud confirmation for the same backend
 identity or revoke it. First consent, or consent after changing backend identity,

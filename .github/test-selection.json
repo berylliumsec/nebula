@@ -1,23 +1,31 @@
 {
-  "change_digest": "b4bb1afe654e6c02258b0b8fb7c75d389682e6db9a05ab118d4685ebff247d81",
-  "reviewed_by": "Claude, after reproducing both failures with a 50/200/300-process load test against a root runner",
-  "reason": "Fixes two host memory runner failures under parallel Host commands: a credential snapshot read before setpriv exec'd could fail verification and refuse the command (fail-closed), and the 64-entry Unix accept backlog overflowed into EAGAIN connect failures. The selection is the runner's own test file, including a new 200-command burst kernel test.",
-  "exclusions": "The kernel tests in test_host_memory_runner.py (including the new burst test) skip in CI because they need a root runner; they pass locally against nebula-memory-runner@agent (18 passed). No Core, UI, or packaging behaviour outside the runner and its client changes. Full suite and browser not run.",
+  "change_digest": "61ebf42338159cd243fbecf49830c6f8e08a887172b61b86fba5c67dc215ea70",
+  "reviewed_by": "Claude Code under operator request to add Claude back as a provided harness",
+  "reason": "Claude Agent SDK becomes a provided harness kind again: API create validation, the Settings Add Claude dialog and card, test-turn sign-in failure classification, and settings assistant discovery and product help.",
+  "exclusions": "Playwright: the changed interface.spec.ts dialog-contract test is not catalogued, and the critical-workspaces and dialog tests fail identically on origin/main locally (Findings baseline and Settings heading), so none is selected; the Settings baselines show the compact list, not the harness section. Native: no Rust changes. test_product_knowledge.py is limited to its digest, Chroma sync and new Claude cases because test_product_search_finds_headless_core_and_paired_butler_cli already fails on origin/main.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 18,
-    "frontend": 0,
+    "python": 56,
+    "frontend": 64,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_host_memory_runner.py"
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_claude_harness_turns.py",
+    "tests/v3/test_harness_test_turn_reason.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_adding_a_claude_harness",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts"
+  ],
   "native": [],
   "playwright": [],
   "checks": []

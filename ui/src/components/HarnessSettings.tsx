@@ -23,8 +23,16 @@ function mcpNextStep(server: McpServerProfile): string | undefined {
   return undefined;
 }
 
+function harnessVendorLabel(kind: HarnessProfile["kind"]): string {
+  if (kind === "grok_acp") return "Grok Build · ACP";
+  if (kind === "claude_agent_sdk") return "Claude Agent SDK";
+  return "Codex App Server";
+}
+
 function harnessRecovery(profile: HarnessProfile): string | undefined {
-  if (profile.authenticationState === "failed") return `Sign in with ${profile.kind === "grok_acp" ? "grok" : "codex"} on the Nebula host, then use Check.`;
+  if (profile.authenticationState === "failed") return profile.kind === "claude_agent_sdk"
+    ? profile.authMode === "existing_session" ? "Run claude on the Nebula host and use /login, then use Check." : "Replace the API key credential in Edit, then use Check."
+    : `Sign in with ${profile.kind === "grok_acp" ? "grok" : "codex"} on the Nebula host, then use Check.`;
   switch (profile.lastTurnFailureReason) {
     case "quota_exhausted": return "Provider balance exhausted. Restore balance or wait for reset before another turn.";
     case "session_not_found": return "The provider session is missing. The saved transcript remains available; start a new conversation.";
@@ -247,12 +255,13 @@ export function HarnessSettings() {
         connection_mode: connectionMode,
         transport,
         executable: connectionMode === "spawn" && executable.trim() ? executable.trim() : null,
-        home_directory: connectionMode === "spawn" ? homeDirectory.trim() || null : null,
+        home_directory: connectionMode === "spawn" && kind !== "claude_agent_sdk" ? homeDirectory.trim() || null : null,
         endpoint: connectionMode === "endpoint" ? endpoint.trim() : null,
         auth_mode: harnessAuthMode,
         secret_ref: harnessAuthMode === "existing_session" ? null : secretRef,
         default_model: model.trim() || null,
-        permission_mode: permissionMode,
+        // Core accepts unrestricted host access only for Codex and Grok.
+        permission_mode: kind === "claude_agent_sdk" ? "managed" : permissionMode,
         enabled: editingHarness?.enabled ?? true,
         privacy: {
           local_only: harnessLocalOnly,
@@ -429,11 +438,11 @@ export function HarnessSettings() {
 
   return <>
     <section className="settings-section" id="harness-settings">
-      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Add a named profile for each Codex or Grok account.</p></div><div className="integration-card-actions"><a className="button quiet" href="/settings#usage-settings">Usage</a><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
+      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Add a named profile for each Codex, Grok or Claude account.</p></div><div className="integration-card-actions"><a className="button quiet" href="/settings#usage-settings">Usage</a><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "claude_agent_sdk")}><Plus size={16} /> Add Claude</button><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
       {catalogError && <div role="status"><p>{catalogError}</p><button className="button quiet" type="button" onClick={() => void reload()}>Retry catalogs</button></div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card harness-settings-card" key={profile.id}>
-        <header className="integration-card-heading"><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{profile.kind === "grok_acp" ? "Grok Build · ACP" : "Codex App Server"}</small><h3>{profile.name}</h3></div></header>
+        <header className="integration-card-heading"><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{harnessVendorLabel(profile.kind)}</small><h3>{profile.name}</h3></div></header>
         <p className="integration-card-summary">{profile.detail ?? `${profile.connectionMode} · ${profile.transport}${profile.transport === "websocket" ? " · experimental" : ""}`}</p>
         <p className="integration-card-summary" role="status">Sign-in: {profile.authenticationState ?? "unverified"} · Session: {profile.sessionState ?? "unverified"} · Model turn: {profile.turnState ?? "unverified"}{profile.lastSuccessfulTurnAt ? ` · Last success ${new Date(profile.lastSuccessfulTurnAt).toLocaleString()}` : ""}{profile.lastTurnFailureReason ? ` · ${profile.lastTurnFailureReason.replaceAll("_", " ")}` : ""}</p>
         {!!profile.exercisedCapabilities?.length && <p className="integration-card-summary">Verified in use: {profile.exercisedCapabilities.map(item => item.replaceAll("_", " ")).join(", ")}.</p>}
@@ -450,7 +459,7 @@ export function HarnessSettings() {
         <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><button className="button quiet" type="button" title="Runs a small real model turn and uses provider quota" disabled={busy === profile.id || !profile.enabled} onClick={() => void testSavedHarness(profile)}>Test turn</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} title="Edit harness" type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} title="Delete harness" type="button" disabled={busy === profile.id} onClick={() => void removeHarness(profile)}><Trash2 size={14} /></button></div></footer>
         {busy === profile.id && <p role="status" className="integration-card-summary">Working on this harness…</p>}
         {deleteError?.id === profile.id && <div role="alert" className="integration-card-summary"><p>{deleteError.message}</p><button className="button quiet" type="button" onClick={() => void removeHarness(profile)}>Retry delete</button></div>}
-      </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
+      </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex, Grok or Claude when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings" data-guide="mcp-settings">
       <div className="section-heading"><div><h2>MCP servers</h2><p>Shared tools and Notebook access for the selected project</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => setImportDialog(true)}><FileUp size={16} /> Import</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div></div>
@@ -466,21 +475,26 @@ export function HarnessSettings() {
       </article>)}</div> : <div className="empty-state compact"><Network size={23} /><strong>No MCP server profiles</strong><p>Add one, or import the mcp.json you already use with Claude Desktop, Cursor, or VS Code. Profiles are never launched until an explicit probe or selected agent runtime uses them.</p><button className="button secondary" type="button" disabled={previewMode} onClick={() => setImportDialog(true)}><FileUp size={16} /> Import from file</button></div>}
     </section>
     {harnessDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="harness-dialog-title" onClose={() => { if (!busy) setHarnessDialog(false); }} onSubmit={(event) => void submitHarness(event)}>
-        <header><div><small>Agent harness</small><h2 id="harness-dialog-title">{editingHarness ? "Edit harness" : kind === "grok_acp" ? "Add Grok ACP" : "Add Codex"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close harness dialog" onClick={() => setHarnessDialog(false)}><X size={17} /></button></header>
+        <header><div><small>Agent harness</small><h2 id="harness-dialog-title">{editingHarness ? "Edit harness" : kind === "grok_acp" ? "Add Grok ACP" : kind === "claude_agent_sdk" ? "Add Claude" : "Add Codex"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close harness dialog" onClick={() => setHarnessDialog(false)}><X size={17} /></button></header>
         <label>Name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label>Harness<input value={kind === "grok_acp" ? "Grok Build · ACP stdio" : "Codex App Server"} disabled /></label>
+        <label>Harness<input value={kind === "grok_acp" ? "Grok Build · ACP stdio" : harnessVendorLabel(kind)} disabled /></label>
         {kind === "grok_acp" ? <>
           <label>Connection<input value="Managed stdio process" disabled /></label>
           <label>Absolute Grok executable path<input required value={executable} placeholder="/usr/local/bin/grok" onChange={(event) => setExecutable(event.target.value)} /></label>
           <label>Authentication<input value="Cached Grok login (cached_token)" disabled /></label>
 
+        </> : kind === "claude_agent_sdk" ? <>
+          <label>Connection<input value="Managed process" disabled /></label>
+          <label>Claude CLI path<input value={executable} placeholder="Bundled with the Claude Agent SDK" onChange={(event) => setExecutable(event.target.value)} /></label>
+          <label>Authentication<select value={harnessAuthMode} onChange={(event) => { setHarnessAuthMode(event.target.value as HarnessProfile["authMode"]); setHarnessSecret(""); }}><option value="existing_session">Existing Claude sign-in</option><option value="secret_ref">API key credential</option></select></label>
+          {harnessAuthMode === "existing_session" ? <p className="provider-dialog-note">Run <code>claude</code> on the Nebula host and sign in with <code>/login</code>, then use Check.</p> : <><label>{editingHarness?.secretRef ? "Replacement credential" : "Credential"}<input type="password" autoComplete="new-password" value={harnessSecret} placeholder={editingHarness?.secretRef ? "Leave blank to keep current authentication" : "Write-only secret"} onChange={(event) => setHarnessSecret(event.target.value)} /></label>{vault.available ? <label className="provider-consent"><input type="checkbox" checked={harnessSessionCredential} onChange={(event) => setHarnessSessionCredential(event.target.checked)} /><span><strong>Use for this session only</strong><small>Otherwise Core stores it in the operating-system credential vault.</small></span></label> : <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "credential")}</p>}</>}
         </> : <>
           <label>Connection<select value={connectionMode} onChange={(event) => { const next = event.target.value as HarnessProfile["connectionMode"]; setConnectionMode(next); setTransport(next === "spawn" ? "stdio" : "unix"); setHarnessAuthMode("existing_session"); setHarnessSecret(""); }}><option value="spawn">Managed process</option><option value="endpoint">Pre-launched endpoint</option></select></label>
           {connectionMode === "spawn" ? <label>Absolute executable path<input required value={executable} placeholder="/usr/local/bin/codex" onChange={(event) => setExecutable(event.target.value)} /></label> : <><label>Transport<select value={transport} onChange={(event) => setTransport(event.target.value as HarnessProfile["transport"])}><option value="unix">Unix socket</option><option value="websocket">Loopback WebSocket (experimental)</option></select></label><label>Endpoint<input required value={endpoint} placeholder={transport === "unix" ? "unix:///path/to/socket" : "ws://127.0.0.1:4500"} onChange={(event) => setEndpoint(event.target.value)} /></label></>}
           <label>Authentication<select value={harnessAuthMode} onChange={(event) => { setHarnessAuthMode(event.target.value as HarnessProfile["authMode"]); setHarnessSecret(""); }}><option value="existing_session">Existing vendor sign-in</option><option value={connectionMode === "endpoint" ? "endpoint_bearer" : "secret_ref"}>{connectionMode === "endpoint" ? "Endpoint bearer token" : "API key credential"}</option></select></label>
           {harnessAuthMode !== "existing_session" && <><label>{editingHarness?.secretRef ? "Replacement credential" : "Credential"}<input type="password" autoComplete="new-password" value={harnessSecret} placeholder={editingHarness?.secretRef ? "Leave blank to keep current authentication" : "Write-only secret"} onChange={(event) => setHarnessSecret(event.target.value)} /></label>{vault.available ? <label className="provider-consent"><input type="checkbox" checked={harnessSessionCredential} onChange={(event) => setHarnessSessionCredential(event.target.checked)} /><span><strong>Use for this session only</strong><small>Otherwise Core stores it in the operating-system credential vault.</small></span></label> : <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "credential")}</p>}</>}
         </>}
-        {connectionMode === "spawn" && <details open={homeDirectory ? true : undefined}>
+        {connectionMode === "spawn" && kind !== "claude_agent_sdk" && <details open={homeDirectory ? true : undefined}>
           <summary>Account folder</summary>
           <label>Account home folder<input value={homeDirectory} placeholder="Default host account" onChange={(event) => setHomeDirectory(event.target.value)} aria-describedby="harness-account-help" /></label>
           <HostFolderPicker purpose="account" api={api} value={homeDirectory} onSelect={setHomeDirectory} />
@@ -489,8 +503,8 @@ export function HarnessSettings() {
         </details>}
         <label>Default model<select value={model} disabled={!harnessModelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{harnessModelOptions.length ? "Automatic (harness default)" : "Discovered after saving"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
         <p className="provider-dialog-note">{harnessModelOptions.length ? "Choose a model reported by the harness, or use its automatic default." : "Saving runs a harness check and discovers available models and modes."}</p>
-        <label className="harness-permission-field">Harness permissions<select value={permissionMode} onChange={(event) => setPermissionMode(event.target.value as HarnessProfile["permissionMode"])}><option value="managed">Managed approvals</option><option value="unrestricted">Unrestricted host access</option></select></label>
-        <p className="provider-dialog-note">{permissionMode === "unrestricted" ? "Requires Host mode and project authorization Allow all. The vendor agent can access the host filesystem and network without tool approval prompts: Codex uses danger-full-access; Grok uses always-approve with its sandbox off. Docker-mode sessions stay contained. Operating-system and Mercury controls still apply." : "Nebula uses the project's approval policy and the vendor sandbox. Docker-mode sessions keep host tools disabled. New sessions freeze this choice."}</p>
+        {kind === "claude_agent_sdk" ? <label className="harness-permission-field">Harness permissions<input value="Managed approvals" disabled /></label> : <label className="harness-permission-field">Harness permissions<select value={permissionMode} onChange={(event) => setPermissionMode(event.target.value as HarnessProfile["permissionMode"])}><option value="managed">Managed approvals</option><option value="unrestricted">Unrestricted host access</option></select></label>}
+        <p className="provider-dialog-note">{kind !== "claude_agent_sdk" && permissionMode === "unrestricted" ? "Requires Host mode and project authorization Allow all. The vendor agent can access the host filesystem and network without tool approval prompts: Codex uses danger-full-access; Grok uses always-approve with its sandbox off. Docker-mode sessions stay contained. Operating-system and Mercury controls still apply." : "Nebula uses the project's approval policy and the vendor sandbox. Docker-mode sessions keep host tools disabled. New sessions freeze this choice."}</p>
         <label className="provider-consent"><input type="checkbox" checked={harnessLocalOnly} onChange={(event) => setHarnessLocalOnly(event.target.checked)} /><span><strong>Model runtime is local</strong><small>Only enable when prompts and outputs do not leave this machine.</small></span></label>
         <label className="provider-consent"><input type="checkbox" checked={harnessSensitiveData} onChange={(event) => { setHarnessSensitiveData(event.target.checked); if (!event.target.checked) setHarnessAutoShareToolResults(false); }} /><span><strong>Permit project/document data</strong><small>Allow bounded excerpts in knowledge-enabled requests. Local-only items remain blocked.</small></span></label>
         {harnessSensitiveData && !harnessLocalOnly && <label className="provider-consent"><input type="checkbox" checked={harnessAutoShareToolResults} onChange={(event) => setHarnessAutoShareToolResults(event.target.checked)} /><span><strong>Share tool results without asking each turn</strong><small>Standing consent for bounded tool inputs and results. Canonical output stays local and risky calls still require approval.</small></span></label>}

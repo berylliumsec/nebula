@@ -6464,16 +6464,27 @@ def _claude_turn_failure(message: Any) -> HarnessTurnFailedError:
 
     status = _claude_result_status(message)
     api_status = status["api_error_status"]
+    text = str(_bounded(_claude_result_error_text(message), limit=1_000))
+    reason_code = (
+        _CLAUDE_API_STATUS_REASON_CODES.get(api_status)
+        if isinstance(api_status, int)
+        else None
+    )
+    # The CLI reports its own sign-in failures (an expired OAuth login that
+    # cannot refresh, a missing login) without an HTTP status.
+    if reason_code is None and _CLAUDE_SIGN_IN_FAILURE.search(text):
+        reason_code = "authentication_failed"
     return HarnessTurnFailedError(
-        "Claude turn failed: "
-        + str(_bounded(_claude_result_error_text(message), limit=1_000)),
-        reason_code=(
-            _CLAUDE_API_STATUS_REASON_CODES.get(api_status)
-            if isinstance(api_status, int)
-            else None
-        ),
+        "Claude turn failed: " + text,
+        reason_code=reason_code,
         vendor_error_info=status,
     )
+
+
+_CLAUDE_SIGN_IN_FAILURE = re.compile(
+    r"failed to authenticate|not logged in|please run /login|invalid api key",
+    re.IGNORECASE,
+)
 
 
 def _claude_result_error_text(message: Any) -> str:

@@ -747,6 +747,15 @@ async def test_claude_answer_excludes_subagent_text(
             "API error (HTTP 500)",
             "dependency_unavailable",
         ),
+        (
+            result(
+                is_error=True,
+                text="Failed to authenticate: OAuth session expired and could "
+                "not be refreshed",
+            ),
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
+            "authentication_failed",
+        ),
     ],
 )
 async def test_claude_error_result_reports_the_cli_reason(
