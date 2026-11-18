@@ -17,6 +17,16 @@ from nebula.v3.settings_assistant_api import SettingsAssistantApi
 from nebula.v3.storage import NebulaStore
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture(autouse=True)
+def _no_host_memory_runner(tmp_path, monkeypatch):
+    """Keep a runner installed on the developer's host out of these results."""
+    monkeypatch.setenv(
+        "NEBULA_HOST_MEMORY_RUNNER_SOCKET", str(tmp_path / "absent-runner.sock")
+    )
+
+
 TOKEN = "synthetic-memory-budget"
 PATH = "/api/v1/memory-budgets"
 

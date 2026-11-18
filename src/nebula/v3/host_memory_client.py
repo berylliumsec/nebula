@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import os
+import pwd
 import socket
 from pathlib import Path
 from typing import Any
@@ -40,10 +41,8 @@ UNAVAILABLE_DETAIL = (
 
 def _core_user() -> str:
     try:
-        import pwd
-
         return pwd.getpwuid(os.getuid()).pw_name
-    except (ImportError, KeyError):
+    except KeyError:
         # diagnostic-expected: a host without a passwd entry has no default runner.
         return "<user>"
 
