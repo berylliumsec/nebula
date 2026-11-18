@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import json
 import re
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import Field, model_validator
@@ -92,6 +92,78 @@ REQUEST_STATE_HEADER = "X-Nebula-Request-State"
 REQUEST_COMPLETE = "complete"
 REQUEST_PENDING = "pending"
 REQUEST_NEEDS_RECONCILIATION = "needs-reconciliation"
+UNANSWERED_REQUEST_DETAIL = (
+    "The saved request needs reconciliation. It has not been retried."
+)
+
+
+def _check_target(method: str | None, path: str | None) -> str:
+    """What an operator checks to learn what an unanswered request did."""
+    if not path:
+        return "the item this request changes"
+    if path == "/api/v1/chat/completions":
+        return "the conversation for your message"
+    if re.fullmatch(r"/api/v1/chat/sessions/[^/]+/goal(?:/.*)?", path):
+        return "the conversation's goal"
+    if re.fullmatch(r"/api/v1/chat-sessions/[^/]+", path):
+        return (
+            "whether the conversation still exists"
+            if method == "DELETE"
+            else "the conversation's title, archive state and settings"
+        )
+    if re.fullmatch(r"/api/v1/chat/(?:sessions|turns)/.+", path):
+        return "the conversation"
+    if path == "/api/v1/chat/control-assistant/session":
+        return "Butler's conversation for this project"
+    if re.fullmatch(r"/api/v1/engagements/[^/]+(?:/.*)?", path):
+        return "the project's settings and data"
+    return f"what {method or 'this request'} {path} changes"
+
+
+def unanswered_request(
+    state: str, result: Any, method: str | None, path: str | None
+) -> dict[str, Any]:
+    """Detail and code for a request that ended with no saved response."""
+    result = result if isinstance(result, dict) else {}
+    target = _check_target(method, path)
+    if result.get("saved_turn") is True:
+        return {
+            "code": "runtime.request.saved_turn",
+            "detail": "Your message was saved before the project worker "
+            "stopped or failed, and it was not sent again. Reload the "
+            "conversation to see its turn.",
+        }
+    if result.get("saved_changes") is True:
+        return {
+            "code": "runtime.request.saved_changes",
+            "detail": "Your request was saved before the project worker "
+            f"stopped or failed, and it was not run again. Reload {target} "
+            "to see what it changed.",
+        }
+    if result.get("saved_changes") is False:
+        return {
+            "code": "runtime.request.not_saved",
+            "detail": "The project worker stopped or failed before this "
+            "request saved anything, and it could not run again. Nothing was "
+            "saved; send it again.",
+        }
+    if (
+        state == "uncertain"
+        or result.get("interrupted_by_runtime_stop") is True
+        or (result.get("failed_in_worker") is True)
+    ):
+        return {
+            "code": "runtime.request.outcome_unknown",
+            "detail": "The project worker stopped or failed while this "
+            "request ran, so Core cannot tell whether it applied. It was not "
+            f"retried. Check {target} before you send it again.",
+        }
+    return {
+        "code": "runtime.request.not_answered",
+        "detail": UNANSWERED_REQUEST_DETAIL,
+    }
+
+
 _REPLAY_EXCLUDED_HEADERS = {
     "content-length",
     "transfer-encoding",
@@ -416,6 +488,28 @@ class RuntimeDelivery:
             purpose=self._intent_purpose(actor),
         )
         return HttpIntent.model_validate_json(raw)
+
+    async def unanswered(self, actor_id: str, command_id: str) -> dict[str, Any]:
+        """The viewer's answer for a request that ended without a response.
+
+        Its command result records what recovery or its owner proved: that
+        it saved changes, saved nothing, or may have partly applied. The
+        answer says which, with a stable ``code``, and names what to check.
+        """
+        self._intent_purpose(actor_id)
+        async with self.coordination.database.session() as session:
+            command = await session.get(RuntimeCommandRow, command_id)
+            if command is None or command.actor_id != actor_id:
+                raise NotFoundError("accepted request is unavailable")
+            state, result, payload = command.state, command.result, command.payload
+        method = path = None
+        try:
+            intent = await self.peek_intent(payload or {}, actor_id)
+            method, path = intent.method, intent.path
+        except (RuntimeIpcError, OSError, ValueError, KeyError):
+            # diagnostic-expected: a pruned or unreadable intent only makes the answer name a generic target.
+            pass
+        return unanswered_request(state, result, method, path)
 
     async def request(self, command: ClaimedCommand) -> tuple[HttpIntent, str]:
         async with self.coordination.database.session() as session:

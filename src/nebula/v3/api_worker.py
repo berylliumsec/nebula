@@ -355,7 +355,9 @@ def create_api_worker(
                         )
                     return JSONResponse(
                         {
-                            "detail": "The saved request needs reconciliation. It has not been retried.",
+                            # What its command result proved: saved changes,
+                            # nothing saved, or an unknown outcome to check.
+                            **(await delivery.unanswered(actor, command_id)),
                             "command_id": command_id,
                             "state": page.state,
                         },

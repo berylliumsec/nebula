@@ -1,23 +1,24 @@
 {
-  "change_digest": "38c6c12fd10461e48ede2d32029caca88acdf1d5d8f6370adabae170fc355be8",
-  "reviewed_by": "Claude Code after a route audit (independent subagent inventory, re-traced by hand) and scratch-Core reproduction",
-  "reason": "runtime_routes.rerunnable_request now also allows every PATCH /chat-sessions/{id}, every goal action plus goal create/edit, Butler harness session reservation, and harness chats (streamed or not): each commits only Core SQL through the execution scope before any other effect, and a harness chat reaches the vendor only from start_chat_turn on its saved queued turn. Selected: the allowlist regression and the API-worker re-run tests, orphan recovery and runtime coordination that settle by the write record; SQLite and PostgreSQL.",
-  "exclusions": "No UI, native or Playwright layer: viewers receive the re-run's normal answer. The harness path was exercised on a fake scratch Core with a fake Codex app-server that logs every turn/start.",
+  "change_digest": "de528596399a823ce00b9a7a45a4452db925951fc3b42458d41386b93bf3976d",
+  "reviewed_by": "Claude Code after scratch-Core reproduction (text and code change; no UI element added)",
+  "reason": "The API's 409 for a request that ended without a response now reads the command result recorded by recovery or its owner: saved_changes, saved_turn, nothing saved, or an unknown outcome with the route-specific thing to check, each with a stable code (runtime.request.*). Status, X-Nebula-Request-State, state and command_id are unchanged for the web UI, iOS (bundled web UI) and TUI. Selected: the new API-worker regression, durable delivery, storage report backlog (its own unsettled answer is unchanged) and the TUI transport tests that read this 409.",
+  "exclusions": "No frontend or Playwright change: the web UI shows the 409 detail string as before (ui/src/api/client.ts reads detail; durableRequests reads state and the header), so only wording changes. Native iOS bundles the same web UI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 264,
+    "python": 129,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
     "tests/v3/test_api_worker.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_runtime_coordination.py"
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_storage_report_backlog.py",
+    "tests/test_terminal_transport.py"
   ],
   "frontend": [],
   "native": [],
