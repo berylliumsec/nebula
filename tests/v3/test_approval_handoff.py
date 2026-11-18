@@ -75,6 +75,47 @@ async def test_decision_response_distinguishes_waiter_delivery_from_adapter_hand
     (await scenario())
 
 
+async def test_session_state_shows_when_an_open_harness_turn_last_progressed(
+    tmp_path,
+):
+    # A turn that is open but quiet is visible as such; Core adds no idle
+    # timeout. Core's own status notices are not vendor progress.
+    async def scenario():
+        _app, store, runtime, _approval, turn, owner = await fixture(
+            tmp_path, "read_fixture"
+        )
+        current = await store.get(HarnessTurn, turn.id)
+        (
+            await store.update(
+                HarnessTurn,
+                turn.id,
+                {"status": "running"},
+                expected_revision=current.revision,
+            )
+        )
+        progressed = await store.append_operation_event(
+            turn.id,
+            "harness_turn",
+            current.engagement_id,
+            "harness.message_delta",
+            {"delta": "working"},
+        )
+        await store.append_operation_event(
+            turn.id,
+            "harness_turn",
+            current.engagement_id,
+            "harness.status",
+            {"phase": "queued"},
+        )
+        state = await session_state(
+            store, (await store.get(ChatSession, owner.session_id)), runtime
+        )
+        assert state["busy"] is True
+        assert state["last_progress_at"] == progressed.occurred_at.isoformat()
+
+    (await scenario())
+
+
 @pytest.mark.parametrize("status", ["sent", "failed"])
 async def test_adapter_handoff_is_bound_idempotent_and_does_not_claim_execution(
     tmp_path, status
