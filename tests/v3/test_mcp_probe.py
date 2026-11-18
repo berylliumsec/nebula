@@ -602,4 +602,54 @@ async def test_http_session_close_gives_up_on_a_trickled_reply(monkeypatch):
     assert client.client.is_closed
 
 
+async def test_a_hung_vault_fails_the_probe_not_the_event_loop(tmp_path, monkeypatch):
+    # A locked Secret Service collection can wait forever on a prompt nobody
+    # sees. Its blocking call must fail this probe, not freeze the worker.
+    import threading
+
+    from nebula.v3 import credentials as credentials_module
+
+    monkeypatch.setattr(credentials_module, "CREDENTIAL_VAULT_TIMEOUT_SECONDS", 0.3)
+    release = threading.Event()
+
+    class HungVault(CredentialStore):
+        def resolve(self, reference):
+            release.wait(30)
+            raise AssertionError("the hung vault was released")
+
+    store = NebulaStore(tmp_path / "mcp.db")
+    profile = await store.create(
+        McpServerProfile(
+            name="vaulted",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="https://mcp.invalid/api",
+            auth_mode="bearer",
+            bearer_secret_ref="vault:" + "a" * 32,
+        )
+    )
+    service = McpProbeService(
+        store, credential_store=HungVault(), workspace_resolver=lambda _: tmp_path
+    )
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.02)
+
+    running = asyncio.create_task(ticker())
+    try:
+        report = await asyncio.wait_for(
+            service.probe(profile.id, engagement_id="eng"), timeout=10
+        )
+    finally:
+        running.cancel()
+        release.set()
+    assert report.compatible is False
+    assert "credential vault did not answer within 0.3 s" in (report.detail or "")
+    # The event loop kept running while the vault call hung.
+    assert ticks >= 5
+
+
 pytestmark = pytest.mark.anyio

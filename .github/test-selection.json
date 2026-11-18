@@ -1,23 +1,26 @@
 {
-  "change_digest": "0279bc2ee6046c9dac8e2fe38dc62ffc881a104f568a4ecfc3ea8ad7c7ed16d7",
+  "change_digest": "66ee4a705cd835675d3e2d79f06122aaea5973779333f26b8b8d3aa062863465",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A storage dispatch retry hands its dispatch to the running dispatch loop and waits at most RETRY_WAIT_SECONDS for it, instead of running the whole N x 15 s scan inline on the project's work lane. Selected: the new bounded-retry regression and the existing retry routes, plus the storage integration suite. test_an_expired_owner_with_storage_work_is_recovered is excluded: it already fails on origin/main f3045ee.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. Not reproduced end to end on a scratch Core (it needs an enrolled storage source with many failing incident dispatches); covered by the focused route regression.",
+  "reason": "Blocking OS credential vault calls that ran on the worker's event loop (MCP secret resolution, browser-companion credentials, MCP import vault state, reuse, save and rollback) now run in a thread with a CREDENTIAL_VAULT_TIMEOUT_SECONDS bound, so a hung keyring fails the operation instead of freezing the worker. Selected: MCP probe (new hung-vault regression), MCP import, browser companion suites and credentials.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. The worker-level effect was measured on a fake scratch Core with a scratch-only shim that makes vault resolution block forever.",
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
+  "python_browser": true,
   "python_node": false,
   "expected_tests": {
-    "python": 21,
+    "python": 154,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_storage_alert_dispatch.py::test_retry_waits_a_bounded_time_for_a_busy_dispatch_loop",
-    "tests/v3/test_storage_alert_dispatch.py::test_retry_refuses_an_alert_whose_source_is_gone",
-    "tests/v3/test_storage_integrations.py"
+    "tests/v3/test_mcp_probe.py",
+    "tests/v3/test_mcp_import.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_browser_companion_control_race.py",
+    "tests/v3/test_browser_companion_revision_races.py",
+    "tests/v3/test_credentials.py"
   ],
   "frontend": [],
   "native": [],
