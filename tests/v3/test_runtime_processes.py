@@ -590,8 +590,23 @@ def _zombie(pid):
     return stat.rsplit(")", 1)[1].split()[0] == "Z"
 
 
+@pytest.fixture(params=["pidfd", "no_pidfd"])
+def pidfd_mode(request, monkeypatch):
+    """Both the pidfd path and the birth-checked path of hosts without one."""
+    from tests.v3.test_process_identity import forget_pidfd_probe
+
+    if request.param == "no_pidfd":
+        # As on a Python built without os.pidfd_open (macOS, some 3.11 builds).
+        monkeypatch.delattr(os, "pidfd_open", raising=False)
+        monkeypatch.delattr(signal, "pidfd_send_signal", raising=False)
+    forget_pidfd_probe()
+    yield request.param
+    monkeypatch.undo()
+    forget_pidfd_probe()
+
+
 async def test_frozen_execution_worker_is_killed_with_its_session_after_grace(
-    managed, tmp_path, monkeypatch
+    managed, tmp_path, monkeypatch, pidfd_mode
 ):
     recorded = []
     monkeypatch.setattr(
@@ -637,7 +652,9 @@ async def test_frozen_execution_worker_is_killed_with_its_session_after_grace(
     assert "liveness call failed" in fields["safe_failure_cause"]
 
 
-async def test_responsive_api_or_unverified_worker_is_never_force_retired(managed):
+async def test_responsive_api_or_unverified_worker_is_never_force_retired(
+    managed, pidfd_mode
+):
     await managed.stage("v1")
     execution = await managed.host.spawn("v1", "execution")
     api = await managed.host.spawn("v1", "api")
@@ -660,7 +677,7 @@ async def test_responsive_api_or_unverified_worker_is_never_force_retired(manage
             os.kill(identity.pid, signal.SIGCONT)
 
 
-async def test_exited_worker_is_reaped_and_reported_gone(managed):
+async def test_exited_worker_is_reaped_and_reported_gone(managed, pidfd_mode):
     await managed.stage("v1")
     identity = await managed.host.spawn("v1", "execution")
     signal_process(identity.pid, identity.process_birth, signal.SIGKILL)

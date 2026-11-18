@@ -631,13 +631,11 @@ class RuntimeProcessHost:
                 raise RuntimeError(
                     "acquire the active supervisor lock before launching workers"
                 )
-            if (
-                not sys.platform.startswith("linux")
-                or not hasattr(os, "pidfd_open")
-                or not hasattr(signal, "pidfd_send_signal")
-            ):
+            # A pidfd pins a worker for cleanup where the kernel offers one;
+            # other hosts signal only after re-reading the recorded birth.
+            if not sys.platform.startswith("linux"):
                 raise CoordinationConflict(
-                    "Detached startup requires verified pidfd cleanup on this host; configure a supported worker agent before admission"
+                    "Detached startup requires verified process cleanup on this host; configure a supported worker agent before admission"
                 )
             own_birth = process_birth(os.getpid())
             if own_birth is None or not signal_process(os.getpid(), own_birth, 0):
@@ -1306,8 +1304,9 @@ class RuntimeProcessHost:
 
         Only an execution incarnation recorded by this host's namespace, whose
         runtime lease expired more than ``grace_ms`` ago on the database clock,
-        that fails a fresh authenticated liveness call, and whose pidfd-pinned
-        kernel birth still matches is killed, with its whole session. The API
+        that fails a fresh authenticated liveness call, and whose kernel birth
+        still matches (pinned by a pidfd where the host has one) is killed,
+        with its whole session. The API
         worker and this supervisor are never signalled. Its SQL authority is
         already gone (an expired lease can never be renewed and every
         execution transaction checks it), so killing only ends a process that

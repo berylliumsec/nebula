@@ -87,7 +87,10 @@ grace margin on the database clock (`UNRESPONSIVE_WORKER_GRACE_MS`, default
 15 seconds, overridden with `NEBULA_V3_UNRESPONSIVE_WORKER_GRACE_SECONDS`,
 clamped to 5–600 seconds) and a fresh authenticated liveness call to it fails,
 the supervisor pins the process with a pidfd, verifies its recorded kernel
-birth, and SIGKILLs it together with every process in its session. It records
+birth, and SIGKILLs it together with every process in its session. A host
+without pidfd (a Python built without `os.pidfd_open`, an older kernel, or a
+sandbox that refuses the call) re-reads that birth immediately before each
+signal instead, so a reused PID is never signalled. It records
 `runtime.worker.unresponsive_retired` with the runtime, PID, overdue time and
 reason, and ordinary dead-owner recovery follows in the same pass. A process
 whose identity cannot be verified, the API worker and the supervisor are never
