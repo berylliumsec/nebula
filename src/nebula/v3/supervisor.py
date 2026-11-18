@@ -176,6 +176,10 @@ class RuntimeSupervisor:
                 raise ValueError(
                     "runtime admission and deployment must share the host database"
                 )
+            if worker_admission.exited is None:
+                # A worker this host proves dead holds no memory; counting it
+                # would refuse the very replacement that retires it.
+                worker_admission.exited = getattr(host, "proven_exited", None)
             self.coordinator.runtime_admission = worker_admission.check
         self.routing = RuntimeRouting(
             self.coordinator.coordination, host.credentials.directory

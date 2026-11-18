@@ -2,12 +2,14 @@
 
 import asyncio
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from nebula.v3.database import Database, RuntimeInstanceRow
+from nebula.v3.database import Database, RuntimeInstanceRow, RuntimeProcessRow
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.memory_budget import MemoryBudgetService
@@ -18,7 +20,9 @@ from nebula.v3.memory_policy import (
     MemoryBudgetError,
     MemoryBudgetUpdate,
 )
+from nebula.v3.process_identity import process_birth, process_origin
 from nebula.v3.runtime_memory import RuntimeMemoryAdmission
+from nebula.v3.runtime_processes import RuntimeProcessHost
 from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_deployment_lifecycle import manifest
 from tests.v3.test_memory_budget import budgets as budgets
@@ -134,6 +138,56 @@ async def test_expired_runtime_lease_keeps_service_memory_until_verified_abort(p
     assert (await pool.budgets[1].status()).runtime_reserved_bytes == _BYTES
 
 
+async def test_proven_exited_runtime_does_not_refuse_its_replacement(pool):
+    # The default reserve fits one resident runtime here. A SIGKILLed worker
+    # stays unretired until recovery moves its project, so recovery's
+    # replacement must not be refused for the reserve the dead process held.
+    await resize(pool.budgets[0], 2 * GIB + _BYTES)
+    dead = await reserve(pool.coordinators[0])
+    async with pool.budgets[0].database.session() as session:
+        row = await session.get(RuntimeProcessRow, dead)
+        row.pid, row.process_birth, row.state = 4242, "linux:boot:77", "ready"
+    with pytest.raises(MemoryBudgetError, match="Core reserve needs"):
+        await reserve(pool.coordinators[1], "v2")
+    # A live (or unproven) incarnation keeps its reserve.
+    pool.guards[1].exited = lambda pid, birth: False
+    with pytest.raises(MemoryBudgetError, match="Core reserve needs"):
+        await reserve(pool.coordinators[1], "v2")
+    proofs = []
+
+    def exited(pid, birth):
+        proofs.append((pid, birth))
+        return (pid, birth) == (4242, "linux:boot:77")
+
+    pool.guards[1].exited = exited
+    replacement = await reserve(pool.coordinators[1], "v2")
+    assert (4242, "linux:boot:77") in proofs
+    # The replacement is charged; a further admission is still refused while
+    # the replacement is live (pid 0: a reservation is never proven exited).
+    with pytest.raises(MemoryBudgetError, match="Core reserve needs"):
+        await reserve(pool.coordinators[1], "v2")
+    assert replacement
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux procfs")
+def test_host_proves_only_an_ended_incarnation_from_its_own_boot():
+    host = RuntimeProcessHost.__new__(RuntimeProcessHost)
+    host.launch_origin = process_origin()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        birth = process_birth(child.pid)
+        assert birth and not host.proven_exited(child.pid, birth)
+    finally:
+        child.kill()
+        child.wait()
+    assert host.proven_exited(child.pid, birth)
+    # No spawned process, another boot, or an unknown namespace is no proof.
+    assert not host.proven_exited(0, "pending")
+    assert not host.proven_exited(child.pid, "linux:another-boot:1")
+    host.launch_origin = None
+    assert not host.proven_exited(child.pid, birth)
+
+
 async def test_changed_policy_after_preflight_is_rechecked_at_atomic_reservation(pool):
     await resize(pool.budgets[0], 2 * GIB + _BYTES)
     await pool.guards[0](manifest("v1", execution_reserve_bytes=_BYTES), "api")
@@ -201,6 +255,8 @@ async def test_supervisor_binds_real_process_admission_to_saved_memory_policy(ma
     )
     await root.start()
     try:
+        # Admission takes this host's proof of process exit.
+        assert root.worker_admission.exited == managed.host.proven_exited
         await managed.stage("v1", _API_WORKER)
         identity = await root.prepare_api("v1")
         assert (await budgets.status()).runtime_reserved_bytes == _BYTES

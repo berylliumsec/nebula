@@ -7,7 +7,7 @@ enforcement. Managed compute still requires its independently verified group.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from sqlalchemy import select
 
@@ -27,15 +27,27 @@ class RuntimeMemoryFootprint:
 
 
 async def runtime_memory_footprint(
-    session, *, services_floor: int
+    session,
+    *,
+    services_floor: int,
+    exited: Callable[[int, str], bool] | None = None,
 ) -> RuntimeMemoryFootprint:
-    processes = list(
-        await session.scalars(
+    """Reserve held by unretired runtimes.
+
+    ``exited`` proves that a recorded incarnation (PID and kernel birth) has
+    ended. Such a process holds no memory: a SIGKILLed worker stays unretired
+    until recovery moves its project, and that recovery must not be refused
+    for the reserve the dead process no longer uses.
+    """
+    processes = [
+        process
+        for process in await session.scalars(
             select(RuntimeProcessRow).where(
                 RuntimeProcessRow.state != "retired",
             )
         )
-    )
+        if exited is None or not exited(process.pid, process.process_birth)
+    ]
     manifests = {}
     reserved = 0
     for process in processes:
@@ -55,8 +67,15 @@ async def runtime_memory_footprint(
 class RuntimeMemoryAdmission:
     """Reserve-worker checks share the policy lock used by save/job admission."""
 
-    def __init__(self, budgets: MemoryBudgetService):
+    def __init__(
+        self,
+        budgets: MemoryBudgetService,
+        *,
+        exited: Callable[[int, str], bool] | None = None,
+    ):
         self.budgets = budgets
+        # The process host's proof that a recorded incarnation has ended.
+        self.exited = exited
 
     async def check(self, session, manifest: ReleaseManifest, role: str):
         if role not in {"api", "execution"}:
@@ -68,7 +87,9 @@ class RuntimeMemoryAdmission:
         policy = MemoryBudgetPolicy.model_validate(row.policy)
         validate_policy(policy, administrator)
         current = await runtime_memory_footprint(
-            session, services_floor=administrator.minimum_reserve_bytes
+            session,
+            services_floor=administrator.minimum_reserve_bytes,
+            exited=self.exited,
         )
         required = current.minimum_core_reserve_bytes + manifest.execution_reserve_bytes
         if required > policy.reserve_bytes:

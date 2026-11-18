@@ -1,22 +1,21 @@
 {
-  "change_digest": "96752db3aa26b56510559b81e0163070986a3f137f9ef2338d0d44cfd848a312",
+  "change_digest": "5c00a27eec206eb67747f3524d3118d8dd642e4028d84531b332fc4cbcd59456",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Hosts without pidfd (a Python built without os.pidfd_open, older kernels, sandboxes refusing the call) could not spawn any worker, and could not retire a frozen project worker. process_identity now keeps pidfd where it works and otherwise re-reads the recorded kernel birth before each signal; spawn no longer requires pidfd. Selected: the process identity suite (pid reuse, frozen session kill, probe) and the runtime process suite, whose frozen/exited/never-force-retired tests now run with and without pidfd.",
-  "exclusions": "No UI, native or Playwright layer: no operator-visible interface changes; macOS local Core stays refused at startup and is not exercised.",
+  "reason": "Memory admission charged a SIGKILLed project worker's execution reserve until recovery retired it, so on the default Core reserve (services + API + two workers) recovery of a dead worker could never admit its replacement. Admission now skips incarnations the process host proves ended (same launch namespace and boot, kernel no longer reports the PID birth). Selected: the runtime memory suite, with the new dead-incarnation admission test, the host proof test and the supervisor binding check.",
+  "exclusions": "No UI, native or Playwright layer: no operator-visible interface change. Scratch-Core reproduction (STUCK on main, PASS on the branch) is recorded in the PR.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 51,
+    "python": 19,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_process_identity.py",
-    "tests/v3/test_runtime_processes.py"
+    "tests/v3/test_runtime_memory.py"
   ],
   "frontend": [],
   "native": [],

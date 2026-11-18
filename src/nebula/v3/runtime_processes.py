@@ -1279,6 +1279,27 @@ class RuntimeProcessHost:
             )
         return all(birth_boot(birth) != boot for birth in births)
 
+    def proven_exited(self, pid: int, birth: str) -> bool:
+        """Whether this exact recorded incarnation has provably ended.
+
+        Memory admission uses it so a dead worker's resident reserve never
+        blocks the replacement its own recovery needs. Only a birth from this
+        host's launch namespace and current kernel boot that the kernel no
+        longer reports is proof; an unspawned reservation, a foreign
+        namespace, an earlier boot or an unreadable identity stays resident.
+        """
+        if not pid or not birth:
+            return False
+        if self.launch_origin is None or self.launch_origin != process_origin():
+            return False
+        if birth_boot(birth) != origin_boot(self.launch_origin):
+            return False
+        try:
+            return not same_process(pid, birth)
+        except (ProcessIdentityUnavailable, ValueError):
+            # diagnostic-expected: an unreadable identity is not proof of exit; the worker keeps its reserve.
+            return False
+
     def reap_exited_children(self) -> list[str]:
         """Collect the exit status of every worker this host spawned that ended.
 
