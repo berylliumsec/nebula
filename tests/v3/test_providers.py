@@ -2933,6 +2933,37 @@ async def test_quota_exhaustion_is_not_retried_or_called_an_overload():
     assert len(limited) == 3
 
 
+async def test_trickled_answer_ends_at_the_request_allowance(monkeypatch):
+    # Each byte resets httpx's read timeout, so only a total deadline ends a
+    # body trickled forever; the first attempt has one too.
+    monkeypatch.setattr(providers, "_FIRST_ATTEMPT_GRACE_SECONDS", 0.0)
+    attempts: list[int] = []
+
+    class Trickle(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                yield b" "
+                await asyncio.sleep(0.05)
+
+    def trickle(_request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(
+            200, stream=Trickle(), headers={"content-type": "application/json"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("trickle", request_timeout_seconds=0.5),
+        transport=httpx.MockTransport(trickle),
+    )
+
+    with pytest.raises(ProviderOverloadedError) as failure:
+        await asyncio.wait_for(provider.complete(_chat_request()), timeout=10)
+    assert attempts == [1]
+    assert str(failure.value) == (
+        "provider request timed out: no answer within the 0.5 s request allowance"
+    )
+
+
 async def test_transport_failures_become_provider_errors_with_a_reason():
     timeouts: list[int] = []
 

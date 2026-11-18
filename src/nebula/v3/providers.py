@@ -1180,6 +1180,11 @@ def _native_http_timeout(config: ProviderConfig) -> httpx.Timeout:
     return httpx.Timeout(read, connect=min(_NATIVE_CONNECT_TIMEOUT_SECONDS, read))
 
 
+# How long past its allowance a first inference attempt may run before the
+# total deadline ends it, so a silent stall still ends as httpx's read timeout.
+_FIRST_ATTEMPT_GRACE_SECONDS = 5.0
+
+
 @dataclass(frozen=True)
 class _InferenceDeadline:
     """One non-streamed generation's allowance, shared by its resends.
@@ -1319,15 +1324,26 @@ async def _send_with_retry(
     while True:
         status_code: int | None = None
         try:
-            if deadline is None or attempt == 1:
+            if deadline is None:
                 response = await send()
             else:
+                # The read timeout only bounds silence between bytes, so a
+                # body trickled just faster than it never ends. The first
+                # attempt gets the whole allowance plus a moment for httpx's
+                # own timeout to name a silent stall first.
+                allowance = deadline.remaining() + (
+                    _FIRST_ATTEMPT_GRACE_SECONDS if attempt == 1 else 0.0
+                )
                 try:
-                    async with asyncio.timeout(deadline.remaining()):
+                    async with asyncio.timeout(allowance):
                         response = await send()
                 except TimeoutError as exc:
                     # diagnostic-expected: raised as the exhausted allowance
-                    raise _exhausted(deadline.spent(), attempt) from exc
+                    raise (
+                        _exhausted(deadline.spent(), attempt)
+                        if attempt > 1
+                        else deadline.spent()
+                    ) from exc
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # A connection that was never established cannot have reached the
             # provider, so the same request is safe to send again.
