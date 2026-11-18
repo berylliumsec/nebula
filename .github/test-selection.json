@@ -1,37 +1,29 @@
 {
-  "change_digest": "18af2e03171d440863550da72f18908d7507933e37c4e7c473ccfc890ebb3dd3",
+  "change_digest": "b524894dd4fd916c3f5f6e81bf5463efc18779e3beee829fd1adacb22e468448",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A fresh Core's default reserve admitted only the API and two project workers, a project with any open chat kept its worker forever, so a third project's request waited indefinitely, its held reason hid the memory refusal, and its queued command refused runtime-stop. The never-saved default reserve is now sized from host memory (an operator-saved policy is never changed), a project with active demand takes the memory of the least recently used resident that runs nothing, a project that cannot be served shows 'Waiting for memory' naming the residents and its unstarted requests fail after a bound, and a held workerless project's queued request no longer blocks host shutdown. Selected: the new capacity, sizing and knowledge regressions, plus the admission, retirement, quiescence, shutdown, view-lease, memory-budget, runtime-memory and API worker suites these paths touch, and the settings-catalog discovery test.",
-  "exclusions": "test_runtime_memory_control.py, test_storage_alert_dispatch.py and test_product_knowledge.py each have one failure already present on clean main (unchanged by this branch) and are excluded; they ran locally with no new failures. No native layer: no Rust change. No Playwright: no UI component changed; the held reason and request error reach existing UI fields. Real-Core evidence (STUCK on main, PASS on the branch, restart and upgrade checks) is in the PR, not executed by CI. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set; they passed locally.",
+  "reason": "A live worker's failed http.invoke/v1 request no longer stays 'uncertain' at its lane head. The run's write tracker stays active and is fenced (CommandSettled) before settle_failed_request reads the write record: unsaved and unpublished requests are re-queued (bounded), saved ones fail with saved_changes, untracked ones fail as 'may have partly applied'. Selected: the new execution-scope and API-worker regressions, durable delivery (updated uncertain expectations), runtime coordination, orphan recovery, chat acceptance and storage report suites; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: viewers read the same saved answers; the API's wording is a separate change. Process-level worker suites (test_execution_worker.py) were not run locally because children import the primary checkout; the live-worker failure was exercised on a fake scratch Core instead.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 302,
-    "frontend": 1,
+    "python": 478,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_worker_memory_capacity.py",
-    "tests/v3/test_worker_memory_wait_knowledge.py",
+    "tests/v3/test_execution_scope.py",
     "tests/v3/test_api_worker.py",
-    "tests/v3/test_shutdown_admission.py",
-    "tests/v3/test_project_view_leases.py",
-    "tests/v3/test_admission_retry.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_runtime_memory.py",
-    "tests/v3/test_memory_budget.py",
-    "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_mixed_release_idle_retirement.py",
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_worker_read_quiescence.py"
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_storage_report_backlog.py"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.memoryWait.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "checks": []
