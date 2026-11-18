@@ -1,23 +1,25 @@
 {
-  "change_digest": "ce78e71334c770fee3ea6575940c8d4c46bd143cec2d79e7b24ce02b24b26c47",
+  "change_digest": "b5885bede411d97275db901601cfd1d4f665e57fa99223c16bf5ec61f9720a57",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Bounds four calls a project request awaited forever: Codex turn/steer on the control lane (15 s), Codex initialize for fork and the skill catalog (15 s), the HTTP MCP session-close DELETE (10 s, client always closed), and marks an http.invoke chat resume as turn-following so it frees the work lane. Selected: harness adapter suite (new silent-initialize and silent-steer regressions), MCP probe suite (new trickled-close regression) and the Codex transport suite.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The steer-holds-Stop and resume cases were measured on a fake scratch Core with a fake Codex app-server and a stalling provider stub.",
+  "reason": "The durable runner offers routes a release callback that renames the running command http.follow/v1 (as the follows-turn header does); a non-streamed chat calls it once its turn is saved and started (harness after start_chat_turn, provider before capacity admission), so it no longer holds the project's work lane while it waits. Selected: durable delivery (new release regression), runtime coordination, execution worker lane consumers, chat acceptance and diagnostic boundaries; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: the caller gets the same response. The project-level effect was measured on a fake scratch Core with a fake Codex app-server and a trickling provider stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 138,
+    "python": 223,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_codex_transport.py"
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_coordination.py"
   ],
   "frontend": [],
   "native": [],
