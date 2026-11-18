@@ -759,6 +759,164 @@ def test_reconcile_superseded_manual_archives_full_uncertain_journal_and_aligns(
     assert live_readback["identity_source"] == "current_manual_release_and_live_process_image"
 
 
+def _unactivated_supersession_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
+    old_id, _prefix, manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployer.reconcile_superseded_manual_deployment(old_id, manual_prefix=_prefix)
+    host.processes["exec-prior-2"]["version"] = OTHER
+    promotion_id = "a" * 32
+    rollback_id = "b" * 32
+
+    def step(
+        deployment_id: str, name: str, action: str, parameters: dict, result: dict
+    ):
+        operation_id = f"{deployment_id}:{name}"
+        receipt = {
+            "operation_id": operation_id,
+            "action": action,
+            "state": "succeeded",
+            "result": result,
+        }
+        host.ledger[operation_id] = receipt
+        return {
+            "operation_id": operation_id,
+            "action": action,
+            "parameters": parameters,
+            "receipt": receipt,
+        }
+
+    promotion = {
+        "id": promotion_id,
+        "action": "promote",
+        "version": NEW,
+        "previous": OLD,
+        "state": "running",
+        "steps": {
+            "stage": step(
+                promotion_id,
+                "stage",
+                "stage",
+                {"source": str(host.releases / NEW), "manifest_sha256": digest(NEW)},
+                {"version": NEW, "manifest_sha256": digest(NEW)},
+            ),
+            "migrate": step(
+                promotion_id,
+                "migrate",
+                "migrate",
+                {"version": NEW, "expected_revision": 50},
+                {
+                    "version": NEW,
+                    "state": "current",
+                    "target_head": "head",
+                    "current_head": "head",
+                },
+            ),
+        },
+        "host_activation": {
+            "operation_id": promotion_id + ":host-activation",
+            "state": "requested",
+            "version": NEW,
+        },
+    }
+    rollback = {
+        "id": rollback_id,
+        "action": "rollback",
+        "version": OLD,
+        "previous": manual,
+        "state": "running",
+        "superseded": promotion,
+        "steps": {
+            "stage": step(
+                rollback_id,
+                "stage",
+                "stage",
+                {"source": str(host.releases / OLD), "manifest_sha256": digest(OLD)},
+                {"version": OLD, "manifest_sha256": digest(OLD)},
+            )
+        },
+        "host_activation": {
+            "operation_id": rollback_id + ":host-activation",
+            "state": "requested",
+            "version": OLD,
+        },
+    }
+    record = deployer.state()
+    record["runtime_deployment"] = rollback
+    record["pending"] = NEW
+    record["host_active"] = OLD
+    deployer.atomic_json(deployer.STATE, record)
+    monkeypatch.setattr(
+        deployer,
+        "migration_status",
+        lambda version: {
+            "version": version,
+            "current_head": "head",
+            "target_head": "head",
+        },
+    )
+    return rollback_id, manual
+
+
+def test_unactivated_supersession_dry_run_and_archive(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+):
+    rollback_id, manual = _unactivated_supersession_fixture(host, monkeypatch)
+    before = Path(deployer.STATE).read_bytes()
+    preview = deployer.reconcile_unactivated_supersession(rollback_id, dry_run=True)
+    assert preview["status"] == "dry_run_validated"
+    assert preview["proposed"]["clear_pending"] == NEW
+    assert Path(deployer.STATE).read_bytes() == before
+    result = deployer.reconcile_unactivated_supersession(rollback_id)
+    assert result["status"] == "reconciled_superseded"
+    saved = deployer.state()
+    assert saved["pending"] is None
+    assert "runtime_deployment" not in saved
+    assert saved["active"] == saved["host_active"] == manual
+    assert saved["canonical_runtime_version"] == OTHER
+    assert (
+        saved["runtime_deployment_history"][-1]["journal"]["superseded"]["id"]
+        == "a" * 32
+    )
+    assert (
+        deployer.reconcile_unactivated_supersession(rollback_id)["status"]
+        == "already_reconciled"
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", ["pending", "activation", "receipt", "old_runtime", "migration"]
+)
+def test_unactivated_supersession_refuses_unproven_state(
+    host: Host, monkeypatch: pytest.MonkeyPatch, failure: str
+):
+    rollback_id, _manual = _unactivated_supersession_fixture(host, monkeypatch)
+    record = deployer.state()
+    if failure == "pending":
+        record["pending"] = None
+    elif failure == "activation":
+        record["runtime_deployment"]["host_activation"]["state"] = "complete"
+    elif failure == "receipt":
+        record["runtime_deployment"]["steps"]["stage"]["receipt"]["result"][
+            "version"
+        ] = NEW
+    elif failure == "old_runtime":
+        host.processes["exec-prior-2"]["version"] = OLD
+    else:
+        monkeypatch.setattr(
+            deployer,
+            "migration_status",
+            lambda version: {
+                "version": version,
+                "current_head": "later",
+                "target_head": "head",
+            },
+        )
+    deployer.atomic_json(deployer.STATE, record)
+    before = Path(deployer.STATE).read_bytes()
+    with pytest.raises(RuntimeError):
+        deployer.reconcile_unactivated_supersession(rollback_id)
+    assert Path(deployer.STATE).read_bytes() == before
+
+
 def test_reconcile_superseded_manual_accepts_manual_binary_without_acceptance_receipt(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ):
