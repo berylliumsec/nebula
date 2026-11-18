@@ -6,7 +6,7 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
+  "python_browser": true,
   "python_node": false,
   "expected_tests": {
     "python": 154,
