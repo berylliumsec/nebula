@@ -319,7 +319,12 @@ async def test_switch_preflight_estimates_history_images_for_the_target_model(tm
     (await store.create(_provider_profile("vision", vision=True)))
     (await store.create(_provider_profile("vision-b", vision=True)))
     (await store.create(_provider_profile("text-only", vision=False)))
-    _, session = await _image_session(store, artifacts, "vision", images=3)
+    (await store.create(_provider_profile("text-current", vision=False)))
+    # The conversation runs on a text-only model, which receives its images as
+    # placeholders and so sends it whole: only a switch to a vision model
+    # compacts it. (A switch between runtimes with equal limits compacts
+    # nothing the current one would not, so it never asks.)
+    _, session = await _image_session(store, artifacts, "text-current", images=3)
     service = ChatService(
         store, provider_factory=_provider_factory, artifact_store=artifacts
     )

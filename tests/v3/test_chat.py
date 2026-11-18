@@ -5,14 +5,19 @@ from tests.v3.async_test_support import (
 import asyncio
 import hashlib
 import json
+import os
 from dataclasses import replace
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 
 import nebula.v3.chat as chat_module
 from nebula.v3.chat_goals import ChatGoalService
+from nebula.v3.database import Database
 from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.chat_subagents import is_subagent_session
 from nebula.v3.chat import (
@@ -364,6 +369,143 @@ async def test_runtime_switch_requires_revision_bound_compaction_confirmation(
         ]
         == "catalog-1"
     )
+
+
+@pytest.fixture(params=["sqlite", "postgresql"])
+def equal_switch_store_url(request, tmp_path):
+    if request.param == "sqlite":
+        yield str(tmp_path / "chat-runtime-switch-equal.db")
+        return
+    configured = os.getenv("NEBULA_TEST_POSTGRES_URL")
+    if not configured:
+        pytest.skip("NEBULA_TEST_POSTGRES_URL is required for the PostgreSQL case")
+    url = make_url(Database._normalize_sync_url(configured))
+    schema = "nebula_switch_" + uuid4().hex[:12]
+    engine = create_engine(url, pool_size=1, max_overflow=0, pool_timeout=10)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+    scoped = url.update_query_dict({"options": f"-csearch_path={schema}"})
+    try:
+        yield scoped.render_as_string(hide_password=False)
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
+        engine.dispose()
+
+
+async def test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target(
+    equal_switch_store_url, monkeypatch
+):
+    """A conversation already over its own runtime's target (its background
+    precompaction lost to a worker restart) switches to a runtime with the same
+    limits without a confirmation: its own next turn would compact it anyway.
+    A smaller runtime still asks first."""
+
+    store = NebulaStore(equal_switch_store_url)
+    service: ChatService | None = None
+    try:
+        engagement = await store.create(Engagement(id="eng-equal", name="Equal switch"))
+        descriptor = {"context_window": 4_000, "max_input_tokens": 3_500}
+        payload = _profile(local=True).model_dump(mode="python")
+        payload["model_allowlist"] = ["model-a", "model-small"]
+        payload["metadata"] = {
+            "default_model": "model-a",
+            "model_descriptors": [
+                {"id": "model-a", **descriptor, "max_output_tokens": 500},
+                {
+                    "id": "model-small",
+                    "context_window": 2_000,
+                    "max_input_tokens": 1_500,
+                    "max_output_tokens": 250,
+                },
+            ],
+        }
+        profile = await store.create(ProviderProfile.model_validate(payload))
+        twin_payload = {**payload, "id": "provider-twin", "name": "Provider twin"}
+        twin_payload["model_allowlist"] = ["model-a"]
+        twin = await store.create(ProviderProfile.model_validate(twin_payload))
+        session = await store.create(
+            ChatSession(
+                id="session-equal",
+                engagement_id=engagement.id,
+                title="Switch between equals",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        (
+            await store.create_many(
+                [
+                    ChatMessage(
+                        engagement_id=engagement.id,
+                        session_id=session.id,
+                        sequence=index + 1,
+                        role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
+                        content=(f"history-{index} " + "evidence " * 90),
+                    )
+                    for index in range(20)
+                ]
+            )
+        )
+        provider = FakeProvider(profile.id, local=True)
+        provider.config.model_allowlist.append("model-small")
+        monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+        service = ChatService(store)
+
+        own = await service.context_status(session.id)
+        assert own.estimated_input_tokens > own.target_input_tokens
+
+        to_twin = await service.runtime_switch_preflight(
+            session.id,
+            ChatRuntimeSwitchPreflightRequest(
+                provider_id=twin.id,
+                model="model-a",
+                expected_session_revision=session.revision,
+            ),
+        )
+        assert to_twin.compatible is True
+        assert to_twin.estimated_active_input_tokens > to_twin.target_input_tokens
+        assert to_twin.target_input_tokens == own.target_input_tokens
+        assert to_twin.requires_compaction_confirmation is False
+        assert to_twin.confirmation_token is None
+
+        to_small = await service.runtime_switch_preflight(
+            session.id,
+            ChatRuntimeSwitchPreflightRequest(
+                provider_id=profile.id,
+                model="model-small",
+                expected_session_revision=session.revision,
+            ),
+        )
+        assert to_small.requires_compaction_confirmation is True
+        assert to_small.confirmation_token
+
+        # The follow-up on the twin is accepted without a confirmation token and
+        # compacts in-turn, as a turn on the conversation's own runtime does.
+        prepared = await service.prepare(
+            ChatCompletionRequest(
+                provider_id=twin.id,
+                engagement_id=engagement.id,
+                session_id=session.id,
+                model="model-a",
+                messages=[{"role": "user", "content": "continue on the twin"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        assert prepared.context_snapshot is not None
+        (await service.complete(prepared))
+        switched = await store.get(ChatSession, session.id)
+        assert switched.provider_profile_id == twin.id
+        assert switched.model == "model-a"
+    finally:
+        # Let the turn's background precompaction finish before the store
+        # (and, on PostgreSQL, its schema) goes away.
+        for state in list(service._precompactions.values()) if service else []:
+            if state.task is not None:
+                await asyncio.gather(state.task, return_exceptions=True)
+        (await store.event_history.close())
+        (await store.database.dispose())
 
 
 @pytest.mark.parametrize("reject_attempts", [1, 2])
