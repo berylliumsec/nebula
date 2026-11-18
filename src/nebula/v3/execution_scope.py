@@ -77,14 +77,30 @@ class CommandWrites:
 
     While ``active``, every committed project write in the task's context also
     marks the command's ``runtime_command_writes`` row in the same
-    transaction. The runner deactivates it when the route returns, so a task
-    that outlives its request never marks it.
+    transaction. When the route returns, the runner deactivates it, so a task
+    that outlives a finished request never marks it.
+
+    When the route raises instead, the tracker stays active and becomes
+    ``failed``: a task the route started may still be writing, and each of
+    its commits must then find the record still held by this run, or roll
+    back. Once the runner starts settling the request (``settling``), no
+    commit of this run can succeed at all, so a request settled as having
+    saved nothing never gains a late write, and a re-run cannot apply it twice.
     """
 
-    __slots__ = ("command_id", "project_id", "active")
+    __slots__ = ("command_id", "project_id", "active", "failed", "settling")
 
     def __init__(self, command_id: str, project_id: str):
-        self.command_id, self.project_id, self.active = command_id, project_id, True
+        self.command_id, self.project_id = command_id, project_id
+        self.active, self.failed, self.settling = True, False, False
+
+    def release(self) -> None:
+        """Let this run's remaining tasks commit untracked, as after success."""
+        self.active = self.failed = self.settling = False
+
+
+class CommandSettled(CoordinationConflict):
+    """A late write of a failed request whose outcome was already settled."""
 
 
 _command_writes: ContextVar[CommandWrites | None] = ContextVar(
@@ -93,14 +109,22 @@ _command_writes: ContextVar[CommandWrites | None] = ContextVar(
 
 
 @contextmanager
-def tracking_command_writes(command_id: str, project_id: str) -> Iterator[None]:
+def tracking_command_writes(
+    command_id: str, project_id: str
+) -> Iterator[CommandWrites]:
     """Mark this command written by each project write committed in this context."""
     tracker = CommandWrites(command_id, project_id)
     token = _command_writes.set(tracker)
     try:
-        yield
-    finally:
+        yield tracker
+    except BaseException:
+        # Tasks the route started may outlive it: keep recording their
+        # writes, under the stricter check, until the runner settles it.
+        tracker.failed = True
+        raise
+    else:
         tracker.active = False
+    finally:
         _command_writes.reset(token)
 
 
@@ -822,6 +846,10 @@ class ExecutionSQLScope:
                 and context is not None
                 and context.project_id == tracker.project_id
             ):
+                if tracker.settling:
+                    raise CommandSettled(
+                        "this request's outcome was settled; a late write of it is discarded"
+                    )
                 # Committed atomically with these writes: once set, the
                 # command is never run again after its worker dies.
                 cursor.execute(
@@ -846,6 +874,31 @@ class ExecutionSQLScope:
                         False,
                     ),
                 )
+                if tracker.failed:
+                    # The route already failed. Its record must still be this
+                    # run's: one the runner settled (and deleted) or that a
+                    # new run replaced no longer admits this write.
+                    cursor.execute(
+                        "SELECT wrote FROM runtime_command_writes WHERE command_id = "
+                        + placeholder
+                        + " AND project_id = "
+                        + placeholder
+                        + " AND runtime_id = "
+                        + placeholder
+                        + " AND fencing_token = "
+                        + placeholder,
+                        (
+                            tracker.command_id,
+                            tracker.project_id,
+                            self.runtime_id,
+                            context.fencing_token,
+                        ),
+                    )
+                    record = cursor.fetchone()
+                    if record is None or not record[0] or tracker.settling:
+                        raise CommandSettled(
+                            "this request's outcome was settled; a late write of it is discarded"
+                        )
         finally:
             cursor.close()
 

@@ -1323,3 +1323,88 @@ async def test_tracked_request_is_marked_written_only_by_its_committed_writes(
     ended.set()
     await task
     assert await wrote() is False
+
+
+async def test_failed_request_admits_no_late_write_once_it_is_settled(execution):
+    """A task started by a request whose route raised may still be writing.
+
+    The live owner used to leave such a request unresolved, holding its lane,
+    because nothing stopped that task from committing after any settlement.
+    Its writes keep marking the record, but once settling starts, or the
+    record is gone or no longer marked by this run, none of them commits;
+    a released run (its saved changes are its outcome) writes freely again.
+    """
+    from nebula.v3.database import RuntimeCommandWriteRow
+    from nebula.v3.execution_scope import CommandSettled, tracking_command_writes
+
+    control, runtime, coordinator, lease = execution
+    receipt = await coordinator.submit(
+        project_id="mine",
+        actor_id="operator",
+        idempotency_key="failed-tracked-request",
+        name="http.invoke/v1",
+        payload={},
+    )
+    claimed = await coordinator.claim_next(lease, lane="work")
+    assert claimed is not None and claimed.receipt.command_id == receipt.command_id
+    command_id = receipt.command_id
+    assert await coordinator.track_command_writes(lease, command_id)
+
+    def session_row(name):
+        return ChatSession(
+            id=name,
+            engagement_id="mine",
+            title="x",
+            model="m",
+            provider_profile_id="provider",
+        )
+
+    async def record():
+        async with control.database.session() as session:
+            return await session.get(RuntimeCommandWriteRow, command_id)
+
+    async def saved(name):
+        async with control.database.session() as session:
+            return await session.get(EntityRow, name) is not None
+
+    steps = {
+        name: asyncio.Event() for name in ("early", "late", "orphaned", "released")
+    }
+
+    async def straggler(name):
+        await steps[name].wait()
+        await runtime.create(session_row(name))
+
+    with execution_context(lease):
+        with pytest.raises(RuntimeError):
+            with tracking_command_writes(command_id, "mine") as tracker:
+                tasks = {name: asyncio.create_task(straggler(name)) for name in steps}
+                raise RuntimeError("the route failed")
+    assert tracker.active and tracker.failed
+
+    # Before settlement a late write still counts as the request's write.
+    steps["early"].set()
+    await tasks["early"]
+    assert (await record()).wrote is True and await saved("early")
+
+    tracker.settling = True
+    steps["late"].set()
+    with pytest.raises(CommandSettled):
+        await tasks["late"]
+    assert not await saved("late")
+
+    # A record settled away (or replaced by another run) admits nothing,
+    # even before this process marks the run settling.
+    tracker.settling = False
+    async with control.database.session() as session:
+        await session.delete(await session.get(RuntimeCommandWriteRow, command_id))
+        await session.commit()
+    steps["orphaned"].set()
+    with pytest.raises(CommandSettled):
+        await tasks["orphaned"]
+    assert not await saved("orphaned")
+
+    tracker.release()
+    steps["released"].set()
+    await tasks["released"]
+    assert await saved("released")
