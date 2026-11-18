@@ -1,22 +1,28 @@
 {
-  "change_digest": "96752db3aa26b56510559b81e0163070986a3f137f9ef2338d0d44cfd848a312",
+  "change_digest": "7c71e19599d2533795773a9d32e58953b62cab29ece3d81f02d9a0e60ace26c3",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Hosts without pidfd (a Python built without os.pidfd_open, older kernels, sandboxes refusing the call) could not spawn any worker, and could not retire a frozen project worker. process_identity now keeps pidfd where it works and otherwise re-reads the recorded kernel birth before each signal; spawn no longer requires pidfd. Selected: the process identity suite (pid reuse, frozen session kill, probe) and the runtime process suite, whose frozen/exited/never-force-retired tests now run with and without pidfd.",
-  "exclusions": "No UI, native or Playwright layer: no operator-visible interface changes; macOS local Core stays refused at startup and is not exercised.",
+  "reason": "Re-runnable http.invoke/v1 requests (provider non-streamed chat and Butler completions, goal start/pause/resume/cancel, unarchive, Butler provider session reservation) get a runtime_command_writes record that their route's first committed project write marks in the same transaction (execution_scope commit hook). Dead-owner reconcile and the lane-head path requeue a fenced owner's request that saved nothing, and settle saved ones with a precise result. Migration 0053 is additive. Selected: the new scope, orphan-recovery, API-worker and route regressions, runtime coordination, durable delivery, chat acceptance, migrations and runtime bundle compatibility; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: viewers see the same response once the request runs again. Worker death was exercised on a fake scratch Core (SIGKILL before and after the first write for each request kind). test_database_migration.py errors and hangs locally on SQLite on both main and this branch; it is left to CI's database-migrations job.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 51,
+    "python": 468,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_process_identity.py",
-    "tests/v3/test_runtime_processes.py"
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_api_worker.py",
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_migrations.py"
   ],
   "frontend": [],
   "native": [],
