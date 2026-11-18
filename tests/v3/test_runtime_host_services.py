@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 import secrets
 import threading
+from uuid import uuid4
 from types import SimpleNamespace
 
 import httpx
@@ -586,6 +587,62 @@ async def test_queued_pressure_callers_share_one_host_wait(tmp_path):
     finally:
         await shared_client.close()
     assert len(calls) == 1 and all(not sample.busy for sample in samples)
+
+
+async def test_host_services_serve_more_live_workers_than_the_old_fixed_cap(shared):
+    # Memory admission decides how many workers a host runs; the peer table
+    # must not refuse the seventeenth (it used to, killing that worker).
+    managed = shared.managed
+    coordination = managed.coordinator.coordination
+    identities = []
+    for index in range(20):
+        runtime_id = f"synthetic-worker-{index}"
+        reference = str(uuid4())
+        managed.host.credentials.create(reference=reference)
+        await coordination.register_runtime(runtime_id, "v1")
+        async with managed.database.session() as session:
+            session.add(
+                RuntimeProcessRow(
+                    runtime_id=runtime_id,
+                    version="v1",
+                    role="execution",
+                    pid=0,
+                    process_birth="synthetic-no-process",
+                    endpoint="unix:///synthetic/" + runtime_id,
+                    credential_reference=reference,
+                    state="ready",
+                    updated_at_ms=1,
+                )
+            )
+        identities.append(runtime_id)
+    for runtime_id in identities:
+        assert await shared.services._peer(runtime_id) is not None
+    assert set(identities) <= set(shared.services._peers)
+    # A retired worker leaves the table when the next new peer arrives.
+    async with managed.database.session() as session:
+        (await session.get(RuntimeProcessRow, identities[0])).state = "retired"
+    await shared.services._peer(shared.identity.runtime_id)
+    assert identities[0] not in shared.services._peers
+
+
+async def test_busy_host_services_ask_a_starting_worker_to_resend(shared):
+    # A full request budget or peer table dispatches nothing; the worker's
+    # startup call waits and resends instead of ending the worker.
+    calls = []
+    original = shared.services._peer
+
+    async def busy_then_ready(runtime_id):
+        calls.append(runtime_id)
+        if len(calls) < 3:
+            from nebula.v3.runtime_host_services import HostPeersBusy
+
+            raise HostPeersBusy("Shared host services already serve 1024 live workers")
+        return await original(runtime_id)
+
+    shared.services._peer = busy_then_ready
+    result = await shared.remote.client.call("host.services/v1", {})
+    assert result["protocol"] == "nebula.host-services/v1"
+    assert len(calls) == 3
 
 
 async def test_peer_failures_fail_at_once_and_only_replacement_is_resent(shared):
