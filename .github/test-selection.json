@@ -1,26 +1,33 @@
 {
-  "change_digest": "c20da6f5e616af9481ed03cf7aaccb8654cf09712b4ffc25e64472ed1d652aa6",
-  "reviewed_by": "Claude after independent subagent root-cause validation of the unmatched recovery and the interrupted-command pin",
-  "reason": "Deployments must never stop on a project. Core status now names the recovery that granted each owner; the staged deployer adopts a verified recovery from its journaled source grant, stops a source that misses its handoff grace period through a new evict_execution operation, and polls until projects settle. An interrupted command record no longer pins handoff. The selected files cover recovery adoption, eviction and polling, status provenance, host stop scoping, the handoff inventory, and the resume suite (whose stale restart-boundary stub from #1210 is repaired). Also repairs a race in test_target_failed_before_activation_relinquishes_for_fresh_recovery (asserted the exit request before the failure was saved; reproduced with a delayed save).",
-  "exclusions": "No UI, native, or browser changes. Not run: a live staging replay of a stuck project, the full Python suite, and four simulation host tests that fail identically on origin/main in this environment (systemd and frozen-build dependent).",
+  "change_digest": "27c44743f6b3c4c5f2ef861690f7f9d1b2803954ba6b7733992a252b2f6b0d50",
+  "reviewed_by": "Claude, with kernel tests against a disposable root runner and a fake staging Core replay",
+  "reason": "Host commands now run inside a protected local memory runner (nebula.memory-runner/v1): a root service that creates a root-owned cgroup-v2 group per Host worker job, verifies limits by kernel readback, starts each command inside it with no capabilities, no_new_privs, cleared groups and hidden daemon sockets, and proves cleanup with cgroup.kill plus group removal. The selection covers host job admission, OOM settlement, lost-create and unverified-cleanup handling, dead-owner reconciliation with runner authority checks, running-limit readback, the held path without a runner, the memory budgets API (local capability), supervisor memory control, and the DEB mapping for the runner and its unit.",
+  "exclusions": "Not run in CI: the two kernel tests in test_host_memory_runner.py (they need NEBULA_TEST_HOST_MEMORY_RUNNER_SOCKET pointing at a root runner; run locally against nebula-memory-runner@agent and passing), PostgreSQL parametrizations, the full suite, and the browser. Excluded because they fail identically on origin/main: test_runtime_memory_control.py::test_saved_floor_policy_is_repaired_through_host_before_api_admission (reserve floor) and test_packaging.py::test_nebula3_runtime_has_no_conditional_import_fallbacks (five pre-existing modules; this branch adds none). tests/v3/test_automation_runtime.py is excluded: 9 Host-mode tests fail on main because of the memory hold; with a runner present 6 of them now pass, and the other 3 fail for unrelated pre-existing reasons (consent policy, Kali runtime, scope bypass default).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 206,
+    "python": 119,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_staged_deployer.py",
-    "tests/test_simulation_deploy_resume.py",
-    "tests/v3/test_runtime_recovery.py",
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_runtime_processes.py"
+    "tests/v3/test_host_memory_runner.py",
+    "tests/v3/test_memory_paths.py",
+    "tests/v3/test_memory_recovery.py",
+    "tests/v3/test_runtime_memory_recovery.py",
+    "tests/v3/test_memory_api.py",
+    "tests/v3/test_memory_prelaunch.py",
+    "tests/v3/test_runtime_host_memory_apply.py",
+    "tests/v3/test_runtime_memory_control.py::test_host_memory_api_retains_auth_revision_and_actor_safeguards[sqlite]",
+    "tests/v3/test_runtime_memory_control.py::test_bound_private_butler_uses_the_same_validated_policy_api_and_audit[sqlite]",
+    "tests/v3/test_runtime_memory_control.py::test_private_memory_request_cannot_forge_peer_project_or_target_another_api[sqlite]",
+    "tests/v3/test_runtime_memory_control.py::test_durable_memory_job_identity_selects_its_current_project_owner[sqlite]",
+    "tests/v3/test_runtime_memory_control.py::test_actual_project_kernel_butler_can_save_and_read_back_host_budgets[sqlite]",
+    "tests/v3/test_packaging.py::test_linux_deb_declares_bundled_chromium_runtime_dependencies"
   ],
   "frontend": [],
   "native": [],
