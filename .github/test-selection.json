@@ -1,23 +1,25 @@
 {
-  "change_digest": "c9e2c1f9d84ac12452a989712475cbe43ede5f742d51fed7859b8650d7e9d61f",
+  "change_digest": "ff1a8d56ddaf721fa22532991d47e5880e594142d386305e07121f28ec55c8b5",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "An approval whose harness adapter delivery a dead worker left 'unknown' could never be settled, and it held idle retirement, quiescence, project handoff and Core shutdown forever. Adds POST /approvals/{id}/adapter-delivery (operator outcome, revision-fenced, audited, never re-delivers) and Butler's nebula.work.resolve_delivery. Selected: the approval handoff suite (route + restart flow), the handoff participant suite (fenced resolution unpins the project; SQLite and PostgreSQL) and the Butler capability suite (discovery, use, scheduled-Butler refusal).",
-  "exclusions": "No UI, native or Playwright layer: no UI changed (a UI control needs an approved mockup first). The Butler workflow registry and UI API calls are unchanged.",
+  "reason": "A non-streamed project chat with no tools, goal or hooks kept no durable turn, so #1187's lane release never ran and it held the project's work lane for the whole provider call. When a durable runner holds the lane, the chat route now requests a durable turn so the lane is released before provider admission. Selected: the new lane-turn regression, durable delivery (#1187 release), chat acceptance, chat leftovers and Butler resource paths that assert the in-process turnless behaviour; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: the caller receives the same response. The project-level effect was measured on a fake scratch Core with a trickling provider stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 70,
+    "python": 96,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_butler_capabilities.py"
+    "tests/v3/test_chat_lane_turn.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_butler_resources.py"
   ],
   "frontend": [],
   "native": [],
