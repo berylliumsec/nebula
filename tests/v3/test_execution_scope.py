@@ -1241,3 +1241,85 @@ async def test_insert_resolves_bound_owner_values(execution, kind):
             )
             == 0
         )
+
+
+async def test_tracked_request_is_marked_written_only_by_its_committed_writes(
+    execution,
+):
+    """A re-runnable request's write record turns true with its first commit.
+
+    Recovery runs such a request again only while the record still says it
+    saved nothing, so the mark must commit atomically with the write and
+    never with a read, a rolled-back write or a write after the route ended.
+    """
+    from nebula.v3.database import RuntimeCommandWriteRow
+    from nebula.v3.execution_scope import tracking_command_writes
+
+    control, runtime, coordinator, lease = execution
+    receipt = await coordinator.submit(
+        project_id="mine",
+        actor_id="operator",
+        idempotency_key="tracked-request",
+        name="http.invoke/v1",
+        payload={},
+    )
+    claimed = await coordinator.claim_next(lease, lane="work")
+    assert claimed is not None and claimed.receipt.command_id == receipt.command_id
+    command_id = receipt.command_id
+    assert await coordinator.track_command_writes(lease, command_id)
+
+    async def wrote():
+        async with control.database.session() as session:
+            row = await session.get(RuntimeCommandWriteRow, command_id)
+            return row.wrote
+
+    assert await wrote() is False
+    with execution_context(lease), tracking_command_writes(command_id, "mine"):
+        await runtime.get(ChatTurn, "turn-mine")
+        with pytest.raises(RuntimeError):
+            async with runtime.transaction() as transaction:
+                await transaction.add(
+                    ChatSession(
+                        id="rolled-back",
+                        engagement_id="mine",
+                        title="x",
+                        model="m",
+                        provider_profile_id="provider",
+                    )
+                )
+                raise RuntimeError("the route failed before its commit")
+        assert await wrote() is False
+        await runtime.create(
+            ChatSession(
+                id="saved",
+                engagement_id="mine",
+                title="x",
+                model="m",
+                provider_profile_id="provider",
+            )
+        )
+        assert await wrote() is True
+
+    # A task that outlives its request never marks it.
+    async with control.database.session() as session:
+        (await session.get(RuntimeCommandWriteRow, command_id)).wrote = False
+        await session.commit()
+    ended = asyncio.Event()
+
+    async def outlives_request():
+        await ended.wait()
+        await runtime.create(
+            ChatSession(
+                id="later",
+                engagement_id="mine",
+                title="y",
+                model="m",
+                provider_profile_id="provider",
+            )
+        )
+
+    with execution_context(lease), tracking_command_writes(command_id, "mine"):
+        task = asyncio.create_task(outlives_request())
+    ended.set()
+    await task
+    assert await wrote() is False

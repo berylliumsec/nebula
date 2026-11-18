@@ -172,7 +172,7 @@ def test_compatibility_reviews_the_storage_open_row_indexes():
     # so the schema family is unchanged and an older release can keep serving.
     compatibility = runtime_bundle.load_compatibility()
 
-    assert compatibility["migration_head"] == "0052_linked_memory"
+    assert compatibility["migration_head"] == "0053_runtime_command_writes"
     assert compatibility["schema_family"] == 5
     assert compatibility["schema_min"] == 5
     assert compatibility["schema_max"] == 5

@@ -81,3 +81,37 @@ def forwarding_lane(scope: dict) -> Literal["read", "work", "control"]:
     if method == "POST" and _GOAL_ACTIONS.fullmatch(path):
         return "control"
     return command_lane(path, method=method)
+
+
+_CHAT_SESSION = re.compile(r"^/api/v1/chat-sessions/[^/]+$")
+_RERUNNABLE_GOAL_ACTIONS = frozenset({"start", "pause", "resume", "cancel"})
+
+
+def rerunnable_request(method: str, path: str, body: bytes | None) -> bool:
+    """Whether a request may run again after its worker died having saved nothing.
+
+    Every effect of these routes is a project SQL write, or follows one (a
+    provider call before it has no durable effect), so a run that committed
+    no write applied nothing. Harness chats are excluded: a vendor session
+    can act before Core saves anything.
+    """
+    try:
+        parsed = json.loads(body) if body else {}
+    except (ValueError, UnicodeError, RecursionError):
+        # diagnostic-expected: request validation answers a malformed body; it never runs again.
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    if method == "POST" and path == "/api/v1/chat/completions":
+        return (
+            parsed.get("stream") is not True
+            and parsed.get("backend", "provider") == "provider"
+        )
+    if method == "POST" and _GOAL_ACTIONS.fullmatch(path):
+        return parsed.get("action") in _RERUNNABLE_GOAL_ACTIONS
+    if method == "PATCH" and _CHAT_SESSION.fullmatch(path):
+        # Unarchive only: archiving may close a live harness session first.
+        return parsed == {"archived": False}
+    if method == "POST" and path == "/api/v1/chat/control-assistant/session":
+        return parsed.get("backend") == "provider"
+    return False
