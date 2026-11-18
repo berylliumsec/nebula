@@ -64,6 +64,8 @@ class WorkerContext:
 
 
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
+# A timer firing this late means the event loop was blocked, not SQL.
+LOOP_STALL_SECONDS = 2.0
 
 
 async def keep_lease(
@@ -71,6 +73,7 @@ async def keep_lease(
     renewal: LeaseRenewal,
     *,
     interval: float,
+    lock_wait: Callable[[], str | None] | None = None,
 ) -> NoReturn:
     """Renew this incarnation's leases until ownership can no longer be proven.
 
@@ -80,39 +83,76 @@ async def keep_lease(
     attempt still unanswered when that bound is spent is abandoned. LeaseLost
     or any other answer from SQL ends at once. This returns only by raising,
     and the caller then stops the worker as before.
+
+    ``lock_wait`` names a SQL lock the latest renewal waited on, when that
+    (not an unreachable server) is why renewals did not complete. A timer that
+    fired well past its deadline means this process's event loop was blocked
+    (CPU-bound work in the worker), which is reported as that instead.
     """
     failures = 0
     cause: BaseException | None = None
+    waited: str | None = None
+    stalled = 0.0
+
+    def overran(deadline: float) -> None:
+        nonlocal stalled
+        late = renewal.clock() - deadline
+        if late > LOOP_STALL_SECONDS:
+            stalled = max(stalled, late)
+
     while True:
         if renewal.spent:
+            if waited is not None:
+                raise LeaseLost(
+                    "Lease renewal stayed blocked on a SQL lock until this runtime "
+                    f"could no longer prove its lease ({waited}); SQL was reachable. "
+                    "It stops before the lease can expire"
+                ) from cause
+            if stalled:
+                raise LeaseLost(
+                    f"This worker's event loop was blocked for {stalled:.0f} s past a "
+                    "lease renewal deadline (CPU-bound work in the worker), so it "
+                    "could no longer prove its lease; it stops before the lease can "
+                    "expire"
+                ) from cause
             raise LeaseLost(
                 "SQL stayed unreachable until this runtime could no longer prove "
                 "its lease; it stops before the lease can expire"
             ) from cause
         started = renewal.clock()
+        budget = renewal.remaining()
         try:
             if renewal.renewed_at is None:
                 await renew()
             else:
-                async with asyncio.timeout(renewal.remaining()):
+                async with asyncio.timeout(budget):
                     await renew()
         except Exception as error:
             if renewal.renewed_at is None or not transient_database_error(error):
                 raise
+            if isinstance(error, TimeoutError):
+                overran(started + budget)
             cause = error
             failures += 1
+            waited = lock_wait() if lock_wait is not None else None
             if failures == 1:
                 record_caught_exception(
                     "runtime",
                     "runtime.lease.renewal_waiting",
-                    "A lease renewal failed while SQL was unreachable; it is retried only while the leases are provably live.",
+                    "A lease renewal waited on a SQL lock; it is retried only while the leases are provably live."
+                    if waited is not None
+                    else "A lease renewal failed while SQL was unreachable; it is retried only while the leases are provably live.",
                     error,
                     stage="lease",
-                    metadata={"seconds_left": round(renewal.remaining(), 1)},
+                    metadata={
+                        "seconds_left": round(renewal.remaining(), 1),
+                        **({"lock_wait": waited} if waited is not None else {}),
+                    },
                 )
-            await asyncio.sleep(
-                min(interval, 0.25 * 2 ** min(failures - 1, 5), renewal.remaining())
-            )
+            delay = min(interval, 0.25 * 2 ** min(failures - 1, 5), renewal.remaining())
+            wake = renewal.clock() + delay
+            await asyncio.sleep(delay)
+            overran(wake)
             continue
         renewal.renewed(started)
         if failures:
@@ -125,8 +165,10 @@ async def keep_lease(
                 stage="lease",
                 metadata={"failed_attempts": failures},
             )
-        failures, cause = 0, None
+        failures, cause, waited, stalled = 0, None, None, 0.0
+        wake = renewal.clock() + interval
         await asyncio.sleep(interval)
+        overran(wake)
 
 
 async def run_migration(bootstrap: MigrationBootstrap) -> dict:
@@ -413,6 +455,7 @@ async def run_worker(
                     ),
                     renewal,
                     interval=HEARTBEAT_SECONDS,
+                    lock_wait=lambda: coordinator.coordination.renewal_wait,
                 )
             except BaseException:
                 if server is not None:

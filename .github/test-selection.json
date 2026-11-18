@@ -1,5 +1,5 @@
 {
-  "change_digest": "b5885bede411d97275db901601cfd1d4f665e57fa99223c16bf5ec61f9720a57",
+  "change_digest": "626693d3b4b258c37840d3dd4eb32a38095960640624d475cefa39d1fc5b243c",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
   "reason": "The durable runner offers routes a release callback that renames the running command http.follow/v1 (as the follows-turn header does); a non-streamed chat calls it once its turn is saved and started (harness after start_chat_turn, provider before capacity admission), so it no longer holds the project's work lane while it waits. Selected: durable delivery (new release regression), runtime coordination, execution worker lane consumers, chat acceptance and diagnostic boundaries; SQLite and PostgreSQL.",
   "exclusions": "No UI, native or Playwright layer: the caller gets the same response. The project-level effect was measured on a fake scratch Core with a fake Codex app-server and a trickling provider stub.",

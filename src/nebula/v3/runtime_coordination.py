@@ -12,6 +12,7 @@ The worker extraction must route *all* execution writes through this boundary.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -24,6 +25,7 @@ from uuid import uuid4
 from sqlalchemy import BigInteger, cast, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .advisory_keys import per_id_key
@@ -39,9 +41,12 @@ from .database import (
     RuntimeProcessRow,
 )
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
+from .diagnostics import record_caught_exception
 from .domain import utc_now
 
 HEARTBEAT_SECONDS = 5
+# A renewal still waiting this long asks SQL which sessions block it.
+RENEWAL_PROBE_SECONDS = 2.0
 LEASE_MS = 30_000
 # A worker that cannot reach SQL keeps acting only while a renewal SQL
 # acknowledged still proves its lease live, less this margin for stopping its
@@ -338,9 +343,15 @@ def _receipt(row: RuntimeCommandRow) -> CommandReceipt:
     return CommandReceipt(row.id, row.project_id, row.sequence, row.accepted_at_ms)
 
 
+def _renewal_tag(runtime_id: str) -> str:
+    return "nebula-lease-renewal:" + runtime_id[:36]
+
+
 class RuntimeCoordination:
     def __init__(self, database: Database) -> None:
         self.database = database
+        # What the current lease renewal waits on, when it waits on a lock.
+        self.renewal_wait: str | None = None
 
     async def _clock_ms(self, session: AsyncSession) -> int:
         # PostgreSQL CURRENT_TIMESTAMP freezes at transaction start; using it
@@ -411,7 +422,90 @@ class RuntimeCoordination:
                 )
 
     async def heartbeat(self, runtime_id: str) -> None:
+        """Renew this incarnation's runtime and project leases.
+
+        A renewal that is still waiting after ``RENEWAL_PROBE_SECONDS`` reads,
+        on another connection, which SQL sessions block it. ``renewal_wait``
+        then describes that lock wait until a renewal succeeds, so a lease
+        lost this way says it waited on a lock, not that SQL was unreachable.
+        """
+        renewal = asyncio.ensure_future(self._renew(runtime_id))
+        try:
+            done, _ = await asyncio.wait({renewal}, timeout=RENEWAL_PROBE_SECONDS)
+            if not done:
+                try:
+                    async with asyncio.timeout(RENEWAL_PROBE_SECONDS):
+                        wait = await self._renewal_blockers(runtime_id)
+                except (SQLAlchemyError, OSError, TimeoutError) as error:
+                    # diagnostic-expected: the probe only words a later
+                    # LeaseLost; the renewal itself decides the outcome.
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.lease.renewal_probe_failed",
+                        "Could not read which SQL session blocks a slow lease renewal.",
+                        error,
+                        stage="lease",
+                    )
+                else:
+                    if wait is not None:
+                        self.renewal_wait = wait
+            await renewal
+        finally:
+            if not renewal.done():
+                renewal.cancel()
+                await asyncio.gather(renewal, return_exceptions=True)
+        self.renewal_wait = None
+
+    async def _renewal_blockers(self, runtime_id: str) -> str | None:
+        """Describe the sessions a waiting renewal of ``runtime_id`` waits on."""
+        if self.database.engine.dialect.name != "postgresql":
+            return None
+        async with self.database.session() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        # Follow the lock queue to the sessions that hold it:
+                        # waiters queued ahead also show up as blockers.
+                        "WITH RECURSIVE waiter AS ("
+                        "SELECT pid, wait_event_type, wait_event FROM pg_stat_activity "
+                        "WHERE application_name = :tag LIMIT 1), "
+                        "chain(pid, depth) AS ("
+                        "SELECT unnest(pg_blocking_pids(waiter.pid)), 1 FROM waiter "
+                        "UNION SELECT unnest(pg_blocking_pids(chain.pid)), chain.depth + 1 "
+                        "FROM chain WHERE chain.depth < 4) "
+                        "SELECT blocker.pid, blocker.application_name, blocker.state, "
+                        "CAST(EXTRACT(EPOCH FROM clock_timestamp() - blocker.xact_start) "
+                        "AS INTEGER), LEFT(REGEXP_REPLACE(blocker.query, '\\s+', ' ', 'g'), 160), "
+                        "waiter.wait_event_type, waiter.wait_event "
+                        "FROM (SELECT DISTINCT pid FROM chain) AS held "
+                        "JOIN pg_stat_activity AS blocker ON blocker.pid = held.pid "
+                        "CROSS JOIN waiter "
+                        "ORDER BY blocker.wait_event_type IS NOT DISTINCT FROM 'Lock', "
+                        "blocker.xact_start LIMIT 3"
+                    ),
+                    {"tag": _renewal_tag(runtime_id)},
+                )
+            ).all()
+        if not rows:
+            return None
+        waited = f"{rows[0][5]}:{rows[0][6]}"
+        holders = "; ".join(
+            f"backend {pid} ({name or 'unnamed'}, {state}, transaction open {age} s: {query})"
+            for pid, name, state, age, query, _, _ in rows
+        )
+        return f"lock wait ({waited}) behind {holders}"
+
+    async def _renew(self, runtime_id: str) -> None:
         async with self._write() as session:
+            if self.database.engine.dialect.name == "postgresql":
+                # Lets a probe on another connection find this waiting renewal.
+                await session.execute(
+                    select(
+                        func.set_config(
+                            "application_name", _renewal_tag(runtime_id), True
+                        )
+                    )
+                )
             await session.execute(
                 update(RuntimeInstanceRow)
                 .where(
@@ -426,8 +520,10 @@ class RuntimeCoordination:
                 )
                 .values(command_sequence=ProjectOwnershipRow.command_sequence)
             )
-            # A heartbeat may have waited behind an authoritative transaction.
-            # Its old timestamp must not resurrect a lease that expired there.
+            # A heartbeat may have waited behind a claim, transfer or fenced
+            # write (FOR UPDATE). Its old timestamp must not resurrect a lease
+            # that expired there. Project-scoped transactions hold only a key
+            # share on these rows, which this renewal does not wait for.
             now = await self._clock_ms(session)
             renewed = await session.execute(
                 update(RuntimeInstanceRow)
@@ -517,16 +613,10 @@ class RuntimeCoordination:
                 raise CoordinationConflict(
                     "the project worker is closing; retry chat admission after retirement"
                 )
-            # UPDATE is a row lock on PostgreSQL and a writer lock on SQLite.
-            # Read the clock after waiting for the lock, not before it.
-            await session.execute(
-                update(ProjectOwnershipRow)
-                .where(
-                    ProjectOwnershipRow.project_id == project_id,
-                    ProjectOwnershipRow.retirement_requested.is_(False),
-                )
-                .values(command_sequence=ProjectOwnershipRow.command_sequence)
-            )
+            # FOR UPDATE waits for every transaction of a previous owner, which
+            # holds this row key-shared until it commits; on SQLite the writer
+            # lock is already held. Read the clock after the lock, not before.
+            await self._lock_owner(session, project_id)
             still_admitting = await session.scalar(
                 select(ProjectOwnershipRow.project_id).where(
                     ProjectOwnershipRow.project_id == project_id,
@@ -565,17 +655,26 @@ class RuntimeCoordination:
                 raise CoordinationConflict("project still has a live execution owner")
             return ProjectLease(project_id, runtime_id, token)
 
+    @staticmethod
+    async def _lock_owner(session: AsyncSession, project_id: str) -> None:
+        """Lock one ownership row against the owner's in-flight transactions.
+
+        Project-scoped execution transactions hold their ownership rows
+        ``FOR KEY SHARE`` until they commit (see ``execution_scope``). Only
+        ``FOR UPDATE`` waits for them; a plain UPDATE of non-key columns, like
+        the heartbeat's renewal, does not.
+        """
+        await session.execute(
+            select(ProjectOwnershipRow.project_id)
+            .where(ProjectOwnershipRow.project_id == project_id)
+            .with_for_update()
+        )
+
     async def _check(
         self, session: AsyncSession, lease: ProjectLease, *, lock: bool
     ) -> None:
         if lock:
-            await session.execute(
-                update(ProjectOwnershipRow)
-                .where(
-                    ProjectOwnershipRow.project_id == lease.project_id,
-                )
-                .values(command_sequence=ProjectOwnershipRow.command_sequence)
-            )
+            await self._lock_owner(session, lease.project_id)
         now = await self._clock_ms(session)
         now = await self._live_execution(session, lease.runtime_id, now)
         found = await session.scalar(
