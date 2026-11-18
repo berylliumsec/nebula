@@ -467,6 +467,7 @@ from .execution_ai import (
 )
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
+    MAX_SOURCE_FETCH_SECONDS,
     BrowserRuntimeUnavailableError,
     DocumentTooLargeError,
     FetchedUrlDocument,
@@ -10018,7 +10019,17 @@ def create_execution_kernel(
         # Validate ownership before performing any outbound network request.
         (await store.get(Engagement, request.engagement_id))
         try:
-            fetched = await asyncio.to_thread(url_fetcher, request.url)
+            # The fetcher bounds itself; this frees the project's work lane
+            # even if a socket read inside it outlives that bound.
+            try:
+                fetched = await asyncio.wait_for(
+                    asyncio.to_thread(url_fetcher, request.url),
+                    timeout=MAX_SOURCE_FETCH_SECONDS + 30,
+                )
+            except TimeoutError as exc:
+                raise SourceFetchError(
+                    f"source URL did not finish within {MAX_SOURCE_FETCH_SECONDS:g} s"
+                ) from exc
             created = await ingest_document(
                 store=store,
                 artifact_store=artifact_store,
