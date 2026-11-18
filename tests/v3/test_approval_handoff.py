@@ -528,3 +528,112 @@ async def test_missing_exact_binding_does_not_guess_a_turn_from_chat_history(tmp
 
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.mark.parametrize("resolution", ["delivered", "discarded"])
+async def test_operator_resolves_unknown_delivery_once_without_resending(
+    tmp_path, resolution
+):
+    """A restart leaves the handoff unknown; only the operator's outcome settles it."""
+
+    async def scenario():
+        app, store, runtime, approval, turn, owner = await fixture(
+            tmp_path, "read_fixture"
+        )
+        call = await store.get(ToolCall, approval.tool_call_id)
+        await store.update(
+            ToolCall,
+            call.id,
+            {"metadata": {**call.metadata, "adapter_handoff": "transport_write"}},
+            expected_revision=call.revision,
+        )
+        runtime._approval_futures[approval.id] = (
+            asyncio.get_running_loop().create_future()
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": "Bearer fixture"},
+        ) as client:
+            decided = await client.post(
+                f"/api/v1/approvals/{approval.id}/decision",
+                json={"decision": "approve"},
+            )
+            assert decided.status_code == 200, decided.text
+            path = f"/api/v1/approvals/{approval.id}/adapter-delivery"
+            pending = await store.get(Approval, approval.id)
+            assert pending.continuation.adapter_status == "pending"
+            # A live handoff is not the operator's to settle.
+            refused = await client.post(
+                path,
+                json={
+                    "expected_revision": pending.revision,
+                    "resolution": resolution,
+                },
+            )
+            assert refused.status_code == 409, refused.text
+
+            await runtime.startup()
+            unknown = await store.get(Approval, approval.id)
+            assert unknown.continuation.adapter_status == "unknown"
+            chat = await store.get(ChatSession, owner.session_id)
+            assert (await session_state(store, chat, runtime))[
+                "execution"
+            ] == "interrupted"
+            futures_before = dict(runtime._approval_futures)
+
+            invalid = await client.post(
+                path,
+                json={"expected_revision": unknown.revision, "resolution": "resend"},
+            )
+            assert invalid.status_code == 422
+            stale = await client.post(
+                path,
+                json={
+                    "expected_revision": unknown.revision - 1,
+                    "resolution": resolution,
+                },
+            )
+            assert stale.status_code == 409
+            body = {
+                "expected_revision": unknown.revision,
+                "resolution": resolution,
+                "reason": "Checked the harness transcript",
+            }
+            saved = await client.post(path, json=body)
+            assert saved.status_code == 200, saved.text
+            replay = await client.post(path, json=body)
+            assert replay.status_code == 200, replay.text
+            assert replay.json()["revision"] == saved.json()["revision"]
+            other = "discarded" if resolution == "delivered" else "delivered"
+            conflicting = await client.post(path, json={**body, "resolution": other})
+            assert conflicting.status_code == 409
+            missing = await client.post(
+                "/api/v1/approvals/missing/adapter-delivery", json=body
+            )
+            assert missing.status_code == 404
+
+        current = await store.get(Approval, approval.id)
+        assert current.revision == unknown.revision + 1
+        assert current.status.value == "approved"
+        assert current.continuation.status == unknown.continuation.status
+        assert current.continuation.adapter_status == (
+            "sent" if resolution == "delivered" else "failed"
+        )
+        events = await store.replay_operation_events(approval.id)
+        assert [
+            (event.event_type, event.payload["resolution"], event.payload["replayed"])
+            for event in events
+        ] == [("approval.adapter_delivery_resolved", resolution, False)]
+        # Nothing was sent to an adapter or resumed by the resolution.
+        assert runtime._approval_futures == futures_before
+        assert (await store.get(HarnessTurn, turn.id)).status.value == "interrupted"
+        # The response itself stayed interrupted; its decision now shows the
+        # operator's outcome instead of an unknown delivery.
+        state = await session_state(store, chat, runtime)
+        assert state["execution"] == "interrupted"
+        assert [
+            item["continuation"]["adapter_status"] for item in state["decisions"]
+        ] == [current.continuation.adapter_status]
+
+    (await scenario())

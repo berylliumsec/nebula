@@ -29,7 +29,8 @@ from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_capacity import RuntimeCapacity
 from nebula.v3.runtime_coordination import CoordinationConflict
 from nebula.v3.runtime_project_handoff import restored_checkpoint
-from nebula.v3.storage import NebulaStore
+from nebula.v3.approval_delivery import resolve_unknown_delivery
+from nebula.v3.storage import ConflictError, NebulaStore
 from tests.v3.test_chat import FakeProvider
 from tests.v3.test_project_handoff_agent import agent as agent
 from tests.v3.test_deployment_lifecycle import host as host, manifest, worker
@@ -443,6 +444,79 @@ async def test_unknown_approval_delivery_pins_without_replaying(project, agent, 
     )
     assert not status.admission_held
     assert any("without replay" in item for item in status.blockers)
+
+
+async def test_operator_outcome_of_unknown_delivery_unpins_the_project(
+    project, agent, source
+):
+    """The operator settles a dead worker's unknown delivery; nothing is resent."""
+    await session(project, "approval")
+    await project.durable.create(
+        Approval(
+            id="unknown-delivery",
+            engagement_id="one",
+            run_id="waiting",
+            origin="chat",
+            chat_session_id="approval",
+            risk_class="passive",
+            policy_rationale="Fixture",
+            requested_by="operator",
+            exact_request={"tool_name": "read_file"},
+            status="approved",
+            continuation={
+                "harness_turn_id": "vendor-turn",
+                "status": "delivered",
+                "adapter_handoff": "transport_write",
+                "adapter_status": "unknown",
+            },
+        )
+    )
+    with execution_context(project.lease):
+        assert await agent.tick() == "finishing"
+    async with project.coordinator.coordination._write() as database:
+        assert any(
+            "unknown-delivery" in blocker
+            for blocker in await project.coordinator._shutdown_blockers(
+                database, "one", allow_queued_commands=True
+            )
+        )
+
+    with execution_context(project.lease):
+        with pytest.raises(ConflictError):
+            await resolve_unknown_delivery(
+                project.store,
+                "unknown-delivery",
+                expected_revision=2,
+                resolution="discarded",
+                reason=None,
+                actor_id="operator",
+            )
+        saved = await resolve_unknown_delivery(
+            project.store,
+            "unknown-delivery",
+            expected_revision=1,
+            resolution="discarded",
+            reason="Checked the harness: it never ran",
+            actor_id="operator",
+        )
+    assert saved.continuation.adapter_status == "failed"
+    assert saved.continuation.status == "delivered"
+    assert "Nothing was sent again" in saved.continuation.adapter_detail
+    events = await project.durable.replay_operation_events("unknown-delivery")
+    assert [(event.event_type, event.actor_id) for event in events] == [
+        ("approval.adapter_delivery_resolved", "operator")
+    ]
+    assert events[0].payload["resolution"] == "discarded"
+    assert events[0].payload["replayed"] is False
+    async with project.coordinator.coordination._write() as database:
+        assert not any(
+            "unknown-delivery" in blocker
+            for blocker in await project.coordinator._shutdown_blockers(
+                database, "one", allow_queued_commands=True
+            )
+        )
+    with execution_context(project.lease):
+        assert await agent.tick() == "transferable"
 
 
 async def test_missing_callback_result_pins_without_starting_a_provider(

@@ -17,6 +17,7 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI
 from jsonschema import Draft202012Validator, ValidationError
+from sqlalchemy import select
 
 from .chat import (
     ChatCompletionRequest,
@@ -86,7 +87,8 @@ from .harnesses import HarnessRuntimeService, _session_native_capabilities
 from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
-from .storage import NebulaStore, NotFoundError
+from .database import EntityRow
+from .storage import NebulaStore, NotFoundError, readable_entities
 from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch
 
 
@@ -392,6 +394,17 @@ DECIDE_APPROVAL_SCHEMA: dict[str, Any] = {
         "reason": {"type": "string", "maxLength": 1000},
     },
     "required": ["action_id", "expected_revision", "decision"],
+}
+RESOLVE_DELIVERY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **ACTION_TARGET_SCHEMA["properties"],
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "resolution": {"type": "string", "enum": ["delivered", "discarded"]},
+        "reason": {"type": "string", "maxLength": 1000},
+    },
+    "required": ["action_id", "expected_revision", "resolution"],
 }
 ANSWER_QUESTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -2510,6 +2523,29 @@ class ControlAssistantWork:
             )
         raise ValueError("approval has no supported chat or mission owner")
 
+    async def _reviewable_approval(
+        self, project_id: str, action_id: Any
+    ) -> tuple[Approval, str, str | None]:
+        """An approval to read or resolve, including one whose owner is gone.
+
+        A delivery left unknown can outlive its chat or mission; it still
+        needs the operator's outcome, so it is readable without its owner.
+        """
+        try:
+            return await self._approval(project_id, action_id)
+        except (NotFoundError, ValueError):
+            # diagnostic-expected: only a flagged delivery of this project is readable without its owner; anything else is rethrown.
+            approval = await self.store.get(
+                Approval, _text(action_id, "action_id", 200)
+            )
+            if (
+                approval.engagement_id != project_id
+                or approval.continuation is None
+                or approval.continuation.adapter_status != "unknown"
+            ):
+                raise
+            return approval, "Deleted chat or mission", None
+
     async def _question(
         self, project_id: str, action_id: Any
     ) -> tuple[HarnessInteraction, str, str]:
@@ -2564,6 +2600,37 @@ class ControlAssistantWork:
                     "requested_at": approval.requested_at.isoformat(),
                 }
             )
+        for approval in await self._unknown_deliveries(project_id):
+            _, title, flagged_url = await self._reviewable_approval(
+                project_id, approval.id
+            )
+            continuation = approval.continuation
+            items.append(
+                {
+                    "kind": "unconfirmed_delivery",
+                    "action_id": approval.id,
+                    "owner_kind": approval.origin.value,
+                    "owner_id": approval.chat_session_id
+                    if approval.origin == ToolCallOrigin.CHAT
+                    else approval.run_id,
+                    "owner": title,
+                    "url": flagged_url,
+                    "summary": (
+                        f"{approval.status.value} decision for "
+                        + str(
+                            approval.exact_request.get("tool_name") or "a tool request"
+                        )[:200]
+                        + ": its delivery outcome is unknown. Resolve it with "
+                        "nebula.work.resolve_delivery after the operator checks."
+                    ),
+                    "risk": approval.risk_class.value,
+                    "requested_at": (
+                        continuation.updated_at
+                        if continuation is not None
+                        else approval.updated_at
+                    ).isoformat(),
+                }
+            )
         for question in await self.store.find_entities(
             HarnessInteraction,
             {"status": HarnessInteractionStatus.PENDING.value},
@@ -2596,8 +2663,73 @@ class ControlAssistantWork:
         )
         return {"project_id": project_id, "items": items, "count": len(items)}
 
+    async def _unknown_deliveries(self, project_id: str) -> list[Approval]:
+        """Decisions whose adapter delivery a dead worker left ``unknown``."""
+        async with self.store.database.session() as database:
+            return readable_entities(
+                await database.scalars(
+                    select(EntityRow)
+                    .where(
+                        EntityRow.engagement_id == project_id,
+                        EntityRow.kind == Approval.entity_kind,
+                        EntityRow.payload["continuation"]["adapter_status"].as_string()
+                        == "unknown",
+                    )
+                    .order_by(EntityRow.updated_at.desc())
+                    .limit(100)
+                ),
+                Approval,
+            )
+
+    async def resolve_delivery(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Record the operator's outcome for one unknown adapter delivery."""
+        approval, _, url = await self._reviewable_approval(
+            project_id, arguments.get("action_id")
+        )
+        continuation = approval.continuation
+        if continuation is None or continuation.adapter_status != "unknown":
+            raise ValueError(
+                "this approval has no unknown delivery to resolve; read it again"
+            )
+        if approval.revision != arguments.get("expected_revision"):
+            raise ValueError(
+                "approval changed; read its current revision before resolving"
+            )
+        resolution = arguments.get("resolution")
+        if resolution not in {"delivered", "discarded"}:
+            raise ValueError("choose delivered or discarded")
+        reason = arguments.get("reason")
+        if reason is not None:
+            reason = _text(reason, "reason", 1000)
+        await self._request(
+            "POST",
+            f"/api/v1/approvals/{quote(approval.id, safe='')}/adapter-delivery",
+            {
+                "expected_revision": approval.revision,
+                "resolution": resolution,
+                "reason": reason,
+            },
+        )
+        saved = await self.store.get(Approval, approval.id)
+        saved_status = saved.continuation.adapter_status if saved.continuation else None
+        return {
+            "action_id": saved.id,
+            "revision": saved.revision,
+            "delivery": saved_status,
+            "resolved": saved_status in {"sent", "failed"},
+            "url": url,
+            "result": "outcome saved in Core; nothing was sent again. "
+            + (
+                "Start a new response to redo the work if it is still needed."
+                if resolution == "discarded"
+                else "The harness's own result shows whether the work finished."
+            ),
+        }
+
     async def approval_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
-        approval, title, url = await self._approval(project_id, action_id)
+        approval, title, url = await self._reviewable_approval(project_id, action_id)
         exact = approval.exact_request
         return {
             "action_id": approval.id,
@@ -2619,6 +2751,14 @@ class ControlAssistantWork:
             "requested_by": approval.requested_by,
             "expires_at": approval.expires_at.isoformat()
             if approval.expires_at
+            else None,
+            "delivery": {
+                "status": approval.continuation.adapter_status,
+                "detail": approval.continuation.adapter_detail,
+                "needs_operator_outcome": approval.continuation.adapter_status
+                == "unknown",
+            }
+            if approval.continuation is not None
             else None,
         }
 
@@ -3898,13 +4038,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.attention",
-        "List pending approvals and questions in the selected project's assistant chats and missions. Use this before choosing a request; do not guess IDs.",
+        "List pending approvals and questions in the selected project's assistant chats and missions, and decisions whose delivery is unknown after a worker stopped. Use this before choosing a request; do not guess IDs.",
         EMPTY_SCHEMA,
         True,
     ),
     (
         "nebula.work.approval",
-        "Read the exact pending approval, risk, target, and expected effects before deciding. Use an action_id from nebula.work.attention.",
+        "Read the exact pending approval, risk, target, expected effects and delivery status before deciding or resolving. Use an action_id from nebula.work.attention.",
         ACTION_TARGET_SCHEMA,
         True,
     ),
@@ -3912,6 +4052,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "nebula.work.decide_approval",
         "Approve, reject, or stop one exact pending chat or mission request after the operator explicitly directs that decision. Under project Act authority, background Butler may approve only its triggering local-read or passive request after reading the exact approval. Pass its revision. A saved approval is not proof that the work finished.",
         DECIDE_APPROVAL_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.resolve_delivery",
+        "Record the operator's outcome for one decision whose adapter delivery is unknown because its project worker stopped mid-handoff (attention kind unconfirmed_delivery). Only on the operator's explicit instruction, after they checked the harness: delivered means it received the decision; discarded means treat it as not delivered. Read nebula.work.approval first and pass its revision. Core never sends the decision again; a discarded one needs a new response to redo the work. Resolving lets the project retire, hand off and shut down again.",
+        RESOLVE_DELIVERY_SCHEMA,
         False,
     ),
     (
@@ -4110,6 +4256,8 @@ async def dispatch_work_tool(
         return await work.approval_detail(project_id, arguments.get("action_id"))
     if name == "nebula.work.decide_approval":
         return await work.decide_approval(project_id, arguments)
+    if name == "nebula.work.resolve_delivery":
+        return await work.resolve_delivery(project_id, arguments)
     if name == "nebula.work.question":
         return await work.question_detail(project_id, arguments.get("action_id"))
     if name == "nebula.work.answer_question":

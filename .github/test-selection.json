@@ -1,26 +1,23 @@
 {
-  "change_digest": "9affb5a9d8f50d65ba3b0de89056d6548ef4281c6ba18cc86e1138f40de63b7d",
+  "change_digest": "c9e2c1f9d84ac12452a989712475cbe43ede5f742d51fed7859b8650d7e9d61f",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A Codex harness turn whose app-server stays alive but silent now gets a bounded thread/read status check after 60 s of silence; it ends with a recorded error only when the check goes unanswered, the process exited, or Codex reports no running turn twice, and keeps running while Codex reports the turn active. Grok is checked for process exit. Selected: the adapter suite with the new silent-turn regressions, plus the Codex transport/outcome, Grok ACP, harness goal and turn lifecycle suites that exercise the same run loops and failure path.",
-  "exclusions": "No UI, native or Playwright layer: the error reaches the existing chat turn error and goal blocked reason surfaces. test_harnesses.py has two failures already on main (gateway catalog refresh) and test_harness_stopped_turns.py flaked on clean main under PostgreSQL, so they are not selected.",
+  "reason": "An approval whose harness adapter delivery a dead worker left 'unknown' could never be settled, and it held idle retirement, quiescence, project handoff and Core shutdown forever. Adds POST /approvals/{id}/adapter-delivery (operator outcome, revision-fenced, audited, never re-delivers) and Butler's nebula.work.resolve_delivery. Selected: the approval handoff suite (route + restart flow), the handoff participant suite (fenced resolution unpins the project; SQLite and PostgreSQL) and the Butler capability suite (discovery, use, scheduled-Butler refusal).",
+  "exclusions": "No UI, native or Playwright layer: no UI changed (a UI control needs an approved mockup first). The Butler workflow registry and UI API calls are unchanged.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 218,
+    "python": 70,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_codex_transport.py",
-    "tests/v3/test_codex_turn_outcomes.py",
-    "tests/v3/test_grok_acp_compliance.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_harness_turn_lifecycle.py"
+    "tests/v3/test_approval_handoff.py",
+    "tests/v3/test_handoff_participants.py",
+    "tests/v3/test_butler_capabilities.py"
   ],
   "frontend": [],
   "native": [],
