@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .action_registry import ActionRegistry
+from .diagnostics import create_diagnostic_task
 from .database import EntityRow, SearchDocumentRow
 from .domain import (
     ActionResolutionRequest,
@@ -43,6 +45,11 @@ class SearchProjection:
     breadcrumb: str = ""
     content: str = ""
 
+
+# Rows a stale-projection repair reads or rewrites per transaction.
+REPAIR_PAGE = 1000
+# How long a search waits for a repair before answering from a partial index.
+REPAIR_WAIT_SECONDS = 5.0
 
 INDEXED_ENTITY_KINDS = (
     "engagements",
@@ -432,13 +439,38 @@ class FederatedSearch:
     def __init__(self, store: NebulaStore, actions: ActionRegistry) -> None:
         self.store = store
         self.actions = actions
+        self._repair: asyncio.Task[bool] | None = None
+
+    async def _repair_for_search(self) -> bool:
+        """Repair a stale projection, waiting at most ``REPAIR_WAIT_SECONDS``.
+
+        A large project's repair can take minutes. It keeps running in the
+        background while this search answers from the current index and says
+        the index is partial; the next search finds it done or still running.
+        """
+        repair = self._repair
+        started = repair is None or repair.done()
+        if repair is None or started:
+            repair = self._repair = create_diagnostic_task(
+                self.repair_stale_projection(),
+                feature="search",
+                event_code="search.projection.repair_failed",
+                failure_message="Repairing the search index stopped; the next search retries it.",
+                name="nebula-search-projection-repair",
+            )
+        done, _ = await asyncio.wait({repair}, timeout=REPAIR_WAIT_SECONDS)
+        if not done:
+            return True
+        repaired = bool(repair.result())
+        # A search that joined another search's finished repair reads a
+        # complete index; only the search that ran it reports the repair.
+        return repaired if started else False
 
     async def repair_stale_projection(self) -> bool:
         async with self.store.search_projection_lock:
             return await self._repair_stale_projection()
 
     async def _repair_stale_projection(self) -> bool:
-        repaired = False
         async with self.store.database.session(bulk=True) as session:
             entity_signature = (
                 await session.execute(
@@ -458,59 +490,126 @@ class FederatedSearch:
                     ).where(SearchDocumentRow.id == SearchDocumentRow.resource_id)
                 )
             ).one()
-            if entity_signature == document_signature:
-                return False
-            rows = list(
-                (
+        if entity_signature == document_signature:
+            return False
+        # A project can hold millions of projected rows. Repair a bounded page
+        # per transaction and yield between pages, so neither one transaction
+        # nor this event loop is held for the whole table: other work of the
+        # project, and the worker's lease renewal, run in between.
+        repaired = await self._repair_stale_documents()
+        return await self._remove_orphaned_documents() or repaired
+
+    async def _repair_stale_documents(self) -> bool:
+        repaired, cursor = False, ""
+        while True:
+            async with self.store.database.session(bulk=True) as session:
+                window = (
+                    await session.execute(
+                        select(EntityRow.id, EntityRow.revision)
+                        .where(projected_entity_rows(), EntityRow.id > cursor)
+                        .order_by(EntityRow.id)
+                        .limit(REPAIR_PAGE)
+                    )
+                ).all()
+                if not window:
+                    return repaired
+                documents: dict[str, int] = {
+                    document_id: revision
+                    for document_id, revision in (
+                        await session.execute(
+                            select(
+                                SearchDocumentRow.id, SearchDocumentRow.revision
+                            ).where(
+                                SearchDocumentRow.id.in_(
+                                    [entity_id for entity_id, _ in window]
+                                )
+                            )
+                        )
+                    ).all()
+                }
+                stale = [
+                    entity_id
+                    for entity_id, revision in window
+                    if documents.get(entity_id) != revision
+                ]
+                rows = (
+                    list(
+                        await session.scalars(
+                            select(EntityRow).where(EntityRow.id.in_(stale))
+                        )
+                    )
+                    if stale
+                    else []
+                )
+                for row in rows:
+                    await upsert_search_document(session, row)
+                    repaired = True
+            if len(window) < REPAIR_PAGE:
+                return repaired
+            cursor = window[-1][0]
+            await asyncio.sleep(0)
+
+    async def _remove_orphaned_documents(self) -> bool:
+        repaired, cursor = False, ""
+        while True:
+            async with self.store.database.session(bulk=True) as session:
+                documents = (
+                    await session.execute(
+                        select(SearchDocumentRow.id, SearchDocumentRow.revision)
+                        .where(SearchDocumentRow.id > cursor)
+                        .order_by(SearchDocumentRow.id)
+                        .limit(REPAIR_PAGE)
+                    )
+                ).all()
+                if not documents:
+                    return repaired
+                owners = {
+                    document_id.split("::tab::", 1)[0] for document_id, _ in documents
+                }
+                rows = list(
                     await session.scalars(
-                        select(EntityRow).where(projected_entity_rows())
+                        select(EntityRow).where(
+                            projected_entity_rows(), EntityRow.id.in_(owners)
+                        )
                     )
                 )
-            )
-            documents = {
-                item.id: item
-                for item in (await session.scalars(select(SearchDocumentRow)))
-            }
-            row_ids = {row.id for row in rows}
-            source_revisions = {row.id: row.revision for row in rows}
-            for row in rows:
-                if row.kind == "browser_sessions":
-                    raw_tabs = row.payload.get("tabs")
-                    if isinstance(raw_tabs, list):
-                        row_ids.update(
-                            f"{row.id}::tab::{tab['id']}"
-                            for tab in raw_tabs
-                            if isinstance(tab, dict) and tab.get("id")
-                        )
-            for row in rows:
-                document = documents.get(row.id)
-                if document is None or document.revision != row.revision:
-                    (await upsert_search_document(session, row))
-                    repaired = True
-            for document in documents.values():
-                if document.id not in row_ids:
-                    owner_id = document.id.split("::tab::", 1)[0]
+                row_ids = {row.id for row in rows}
+                source_revisions = {row.id: row.revision for row in rows}
+                for row in rows:
+                    if row.kind == "browser_sessions":
+                        raw_tabs = row.payload.get("tabs")
+                        if isinstance(raw_tabs, list):
+                            row_ids.update(
+                                f"{row.id}::tab::{tab['id']}"
+                                for tab in raw_tabs
+                                if isinstance(tab, dict) and tab.get("id")
+                            )
+                for document_id, revision in documents:
+                    if document_id in row_ids:
+                        continue
+                    owner_id = document_id.split("::tab::", 1)[0]
                     source = select(EntityRow.id).where(EntityRow.id == owner_id)
                     snapshot_revision = source_revisions.get(owner_id)
-                    # New owners or tabs can commit after the repair's source
-                    # scan. Delete only while that scan still describes the owner.
+                    # New owners or tabs can commit after this page's source
+                    # read. Delete only while that read still describes the owner.
                     if snapshot_revision is None:
                         still_orphaned = ~exists(source.where(projected_entity_rows()))
                     else:
                         still_orphaned = exists(
                             source.where(EntityRow.revision == snapshot_revision)
                         )
-                    (
-                        await session.execute(
-                            delete(SearchDocumentRow).where(
-                                SearchDocumentRow.id == document.id,
-                                SearchDocumentRow.revision <= document.revision,
-                                still_orphaned,
-                            )
+                    await session.execute(
+                        delete(SearchDocumentRow).where(
+                            SearchDocumentRow.id == document_id,
+                            SearchDocumentRow.revision <= revision,
+                            still_orphaned,
                         )
                     )
                     repaired = True
-        return repaired
+            if len(documents) < REPAIR_PAGE:
+                return repaired
+            cursor = documents[-1][0]
+            await asyncio.sleep(0)
 
     async def search(
         self,
@@ -524,7 +623,7 @@ class FederatedSearch:
         exclude_private_chats: bool = False,
     ) -> SearchResponse:
         offset = _decode_search_cursor(cursor)
-        repaired = await self.repair_stale_projection()
+        repaired = await self._repair_for_search()
         terms = [term.casefold() for term in query.split() if term]
         async with self.store.database.session(bulk=True) as session:
             # Ranking needs these scalar projection fields, not 2,000 ORM
