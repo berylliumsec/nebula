@@ -2,6 +2,7 @@ from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
+import asyncio
 import json
 import sys
 import textwrap
@@ -523,6 +524,55 @@ async def test_stdio_exit_message_waits_briefly_for_stderr(tmp_path):
     assert report.compatible is False
     assert "exited during discovery" in (report.detail or "")
     assert "boom: missing config" in (report.detail or "")
+
+
+# A server that answers initialize and then reads, but never answers, one
+# named method: the probe would otherwise wait on it forever.
+SILENT_SERVER = textwrap.dedent(
+    """
+    import json, sys
+
+    capabilities = json.loads(sys.argv[1])
+    silent = json.loads(sys.argv[2])
+    results = {
+        "initialize": {"protocolVersion": "2025-06-18", "capabilities": capabilities},
+        "tools/list": {"tools": []},
+        "resources/list": {"resources": []},
+        "resources/templates/list": {"resourceTemplates": []},
+    }
+    for line in sys.stdin:
+        request = json.loads(line)
+        if "id" not in request or request["method"] in silent:
+            continue
+        message = {"jsonrpc": "2.0", "id": request["id"]}
+        message["result"] = results[request["method"]]
+        print(json.dumps(message), flush=True)
+    """
+)
+
+
+@pytest.mark.parametrize("method", ["tools/list", "resources/list", "prompts/list"])
+async def test_probe_gives_up_on_a_server_that_stops_answering(tmp_path, method):
+    store, profile, service, _ = await _stdio_service(
+        tmp_path,
+        {"tools": {}, "resources": {}, "prompts": {}},
+        {method: True},
+        source=SILENT_SERVER,
+    )
+    profile = await store.update(
+        McpServerProfile,
+        profile.id,
+        {"startup_timeout_seconds": 0.5},
+        expected_revision=profile.revision,
+    )
+
+    # Before the bound, this probe never returned.
+    report = await asyncio.wait_for(
+        service.probe(profile.id, engagement_id="eng"), timeout=10
+    )
+
+    assert report.compatible is False
+    assert f"did not answer {method} within 0.5 s" in (report.detail or "")
 
 
 pytestmark = pytest.mark.anyio
