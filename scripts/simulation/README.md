@@ -43,7 +43,9 @@ requires exactly one distinct successful `main` push run from the active
 live-baseline-to-head chain. Each run must match that exact commit and its first
 parent. The deployer verifies each run's selection artifact SHA-256, validates
 the committed selection against that commit's diff, and requires all selected
-jobs to have completed successfully. The immutable acceptance record retains
+jobs to have completed successfully. A selected terminal client test requires
+all six Ubuntu/macOS and Python 3.11–3.13 matrix jobs by their exact GitHub
+job names. The immutable acceptance record retains
 the ordered per-commit receipts and selected-job conclusions; the reviewed
 selection union must cover the entire first-parent range. Missing, repeated,
 reordered, or mismatched runs fail closed. This mode skips local test collection
