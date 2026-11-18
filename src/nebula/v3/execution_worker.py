@@ -894,6 +894,8 @@ class ProjectExecution:
 
                         async def join_consumers():
                             await asyncio.gather(*tasks, return_exceptions=True)
+                            # Responses that only follow a turn end with it.
+                            await runner.close()
 
                         await finish_cleanup(join_consumers())
         except asyncio.CancelledError:

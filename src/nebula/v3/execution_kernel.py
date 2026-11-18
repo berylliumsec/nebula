@@ -596,7 +596,7 @@ from .storage import (
     RevisionConflict,
     revision_conflict,
 )
-from .runtime_coordination import LeaseLost
+from .runtime_coordination import FOLLOWS_TURN_HEADER, LeaseLost
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
     CHAT_RESUME_COMMAND,
@@ -11081,7 +11081,13 @@ def create_execution_kernel(
                     heartbeat=True,
                 ),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Accel-Buffering": "no",
+                    # The turn is started and runs on its own; this response
+                    # only follows it, so it must not hold the project's work.
+                    FOLLOWS_TURN_HEADER: "1",
+                },
             )
 
         service = chat_service()
@@ -11211,6 +11217,9 @@ def create_execution_kernel(
             headers={
                 "Cache-Control": "no-store",
                 "X-Accel-Buffering": "no",
+                # A started provider turn runs on its own and this response
+                # only follows it; an inline stream keeps the project's work.
+                **({FOLLOWS_TURN_HEADER: "1"} if turn_id is not None else {}),
             },
         )
 

@@ -11,7 +11,12 @@ from nebula.v3.database import RuntimeCommandRow, RuntimeDeliveryRow
 from nebula.v3.domain import PairedDeviceSession, utc_now
 from nebula.v3.execution_scope import current_execution_lease
 from nebula.v3.memory_actor import memory_actor
-from nebula.v3.runtime_coordination import CoordinationConflict, LEASE_MS, LeaseLost
+from nebula.v3.runtime_coordination import (
+    FOLLOWS_TURN_HEADER,
+    CoordinationConflict,
+    LEASE_MS,
+    LeaseLost,
+)
 from nebula.v3.runtime_delivery import DurableHttpRunner, HttpIntent, RuntimeDelivery
 from nebula.v3.runtime_routes import command_lane, forwarding_lane
 from nebula.v3.runtime_vault import RuntimeVault
@@ -357,3 +362,142 @@ async def test_browser_companion_control_bypasses_uncertain_work(cluster, tmp_pa
     assert effects[0][0] == path
     assert (await delivery.page("operator", command.command_id)).state == "succeeded"
     assert (await delivery.page("operator", work.command_id)).state == "uncertain"
+
+
+async def test_turn_following_response_frees_the_work_lane(cluster, tmp_path):
+    (first, second), _, _ = cluster
+    delivery = RuntimeDelivery(first, RuntimeVault(tmp_path / "payloads"))
+    following = await accept(delivery, key="harness-chat")
+    later = await accept(delivery, key="later-chat")
+    lease = await first.claim_project("project", "old")
+    streaming, finish = asyncio.Event(), asyncio.Event()
+    invoked = []
+
+    async def app(scope, receive, send):
+        invoked.append(scope["state"]["runtime_command_id"])
+        if scope["state"]["runtime_command_id"] != following.command_id:
+            await reply(scope, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/event-stream"),
+                    (FOLLOWS_TURN_HEADER.encode(), b"1"),
+                ],
+            }
+        )
+        await send(
+            {"type": "http.response.body", "body": b"data: a\n\n", "more_body": True}
+        )
+        streaming.set()
+        await finish.wait()
+        await send({"type": "http.response.body", "body": b"data: done\n\n"})
+
+    runner = DurableHttpRunner(delivery, app, operator_token="synthetic")
+    # The consumer returns once the response only follows its turn.
+    assert await asyncio.wait_for(runner.run_one(lease, lane="work"), 5)
+    await asyncio.wait_for(streaming.wait(), 5)
+    page = await delivery.page("operator", following.command_id)
+    assert page.state == "running"
+    head = json.loads(page.frames[0].content)
+    assert all(key != FOLLOWS_TURN_HEADER for key, _ in head["headers"])
+    # Later project work runs while the turn is still followed.
+    assert await asyncio.wait_for(runner.run_one(lease, lane="work"), 5)
+    assert invoked == [following.command_id, later.command_id]
+    assert (await delivery.page("operator", later.command_id)).state == "succeeded"
+    snapshot = await second.dispatch_snapshot(lease)
+    assert "work" not in snapshot.lanes
+    # The followed response still completes with its whole body.
+    finish.set()
+    async with asyncio.timeout(5):
+        while (
+            await delivery.page("operator", following.command_id)
+        ).state == "running":
+            await asyncio.sleep(0.02)
+    done = await delivery.page("operator", following.command_id)
+    assert done.state == "succeeded"
+    assert [frame.content for frame in done.frames if frame.kind == "body"] == [
+        b"data: a\n\n",
+        b"data: done\n\n",
+    ]
+    # Resubmitting the same request still returns its receipt.
+    assert (
+        await accept(delivery, key="harness-chat")
+    ).command_id == following.command_id
+
+
+async def test_unmarked_or_control_streams_keep_their_lane(cluster, tmp_path):
+    (first, second), _, _ = cluster
+    delivery = RuntimeDelivery(first, RuntimeVault(tmp_path / "payloads"))
+    inline = await accept(delivery, key="inline")
+    await accept(delivery, key="behind-inline")
+    control = await accept(delivery, key="control", lane="control")
+    lease = await first.claim_project("project", "old")
+    finish = asyncio.Event()
+
+    def streaming(follows):
+        async def app(_scope, _receive, send):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(FOLLOWS_TURN_HEADER.encode(), b"1")]
+                    if follows
+                    else [],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"x", "more_body": True})
+            await finish.wait()
+            await send({"type": "http.response.body", "body": b""})
+
+        return app
+
+    work = asyncio.create_task(
+        DurableHttpRunner(delivery, streaming(False), operator_token="t").run_one(
+            lease, lane="work"
+        )
+    )
+    controls = asyncio.create_task(
+        DurableHttpRunner(delivery, streaming(True), operator_token="t").run_one(
+            lease, lane="control"
+        )
+    )
+    await asyncio.sleep(0.5)
+    # Neither an inline stream nor a control command leaves its lane early.
+    assert not work.done() and not controls.done()
+    assert await second.claim_next(lease, lane="work") is None
+    finish.set()
+    assert await asyncio.wait_for(work, 5)
+    assert await asyncio.wait_for(controls, 5)
+    for receipt in (inline, control):
+        assert (await delivery.page("operator", receipt.command_id)).state == (
+            "succeeded"
+        )
+
+
+async def test_closing_the_runner_leaves_a_followed_command_uncertain(
+    cluster, tmp_path
+):
+    (first, _), _, _ = cluster
+    delivery = RuntimeDelivery(first, RuntimeVault(tmp_path / "payloads"))
+    following = await accept(delivery, key="followed")
+    lease = await first.claim_project("project", "old")
+
+    async def app(_scope, _receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(FOLLOWS_TURN_HEADER.encode(), b"1")],
+            }
+        )
+        await asyncio.Event().wait()
+
+    runner = DurableHttpRunner(delivery, app, operator_token="t")
+    assert await asyncio.wait_for(runner.run_one(lease, lane="work"), 5)
+    await runner.close()
+    assert (await delivery.page("operator", following.command_id)).state == (
+        "uncertain"
+    )

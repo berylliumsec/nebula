@@ -57,6 +57,13 @@ COMMAND_LANES = ("work", "control", REPORT_LANE)
 # A source owner keeps ticking its handoff only in these phases.
 TICK_PHASES = frozenset({"requested", "finishing", "transferable"})
 _DISPATCH_STATES = ("queued", "running", "uncertain")
+# A work-lane HTTP command whose response only follows a turn that its route
+# already started and committed. It keeps streaming to its viewer, but it no
+# longer holds its lane: later project work runs while the turn continues.
+HTTP_FOLLOW_COMMAND = "http.follow/v1"
+# The internal response header a route sets to say its effects are committed
+# and the rest of its streamed body only follows durable state.
+FOLLOWS_TURN_HEADER = "x-nebula-follows-turn"
 _BATCH_BARRIER = "work.batch.barrier/v1"
 # A storage sender's report, saved by an API worker under a storage-source
 # principal. Recording it is atomic and idempotent by event ID, so a run that
@@ -798,6 +805,35 @@ class RuntimeCoordination:
             row.name = name
             return True
 
+    async def release_follow(self, lease: ProjectLease, command_id: str) -> bool:
+        """Let later work-lane commands run past this owner's turn-following one.
+
+        Its route committed every effect before it began streaming, and the
+        rest of its response only follows a turn that runs on its own. Under
+        this owner's fence the running ``http.invoke/v1`` command is renamed
+        ``http.follow/v1``, which lane heads skip; its request identity ignores
+        the transport name, and its outcome and response stay unchanged.
+        """
+        async with self.fenced(lease) as session:
+            row = await session.get(
+                RuntimeCommandRow,
+                command_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.project_id != lease.project_id
+                or row.state != "running"
+                or (row.runtime_id, row.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+                or row.name != "http.invoke/v1"
+                or row.lane != "work"
+            ):
+                return False
+            row.name = HTTP_FOLLOW_COMMAND
+            return True
+
     async def claim_next(
         self,
         lease: ProjectLease,
@@ -827,6 +863,7 @@ class RuntimeCoordination:
                 .where(
                     RuntimeCommandRow.project_id == lease.project_id,
                     RuntimeCommandRow.state.in_(_DISPATCH_STATES),
+                    RuntimeCommandRow.name != HTTP_FOLLOW_COMMAND,
                     *(
                         [RuntimeCommandRow.lane == selected_lane]
                         if selected_lane is not None
@@ -970,6 +1007,7 @@ class RuntimeCoordination:
                         .where(
                             RuntimeCommandRow.project_id == lease.project_id,
                             RuntimeCommandRow.state.in_(_DISPATCH_STATES),
+                            RuntimeCommandRow.name != HTTP_FOLLOW_COMMAND,
                             RuntimeCommandRow.lane == lane,
                         )
                         .order_by(RuntimeCommandRow.sequence)
