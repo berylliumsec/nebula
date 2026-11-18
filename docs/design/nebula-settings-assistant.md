@@ -1173,7 +1173,9 @@ Keep any configured administration credential in `NEBULA_V3_API_TOKEN` for this
 command. Adoption preserves the database and files in place; it does not merge
 different desktop data directories. New roots need no adoption step.
 
-Local detached workers currently require Linux pidfd support. Other desktop
+Local detached workers currently require Linux. Core pins a worker with a
+pidfd where the Python build and kernel offer one; otherwise it signals a
+worker only after re-reading its recorded kernel birth. Other desktop
 platforms can connect to a remote Core; local continuity on them remains
 unavailable. The retained runtime rejects unauthenticated remote mode explicitly.
 

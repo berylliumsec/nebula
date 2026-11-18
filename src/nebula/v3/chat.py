@@ -16699,7 +16699,9 @@ class ChatService:
                 runtime=(profile.id, request.model),
             )
         ).estimated_input_tokens
-        requires_confirmation = active_tokens > limits.target_input_tokens
+        requires_confirmation = active_tokens > limits.target_input_tokens and not (
+            await self._current_runtime_compacts_too(session, request, limits)
+        )
         confirmation = (
             self._runtime_switch_token(
                 session=session.model_copy(update={"revision": _confirmation_revision})
@@ -16731,6 +16733,46 @@ class ChatService:
             target_max_output_tokens=limits.max_output_tokens,
             metadata_revision=limits.metadata_revision,
         )
+
+    async def _current_runtime_compacts_too(
+        self,
+        session: ChatSession,
+        request: ChatRuntimeSwitchPreflightRequest,
+        target: ContextLimits,
+    ) -> bool:
+        """Whether the conversation's own runtime would compact it as well.
+
+        Confirmation warns that a switch compacts context the current runtime
+        would send whole. A conversation already over its own runtime's input
+        target is compacted by its next turn without asking (a background
+        precompaction lost to a restart leaves it there), so a switch to a
+        runtime whose target is at least as large compacts nothing more and
+        needs no confirmation. Unknown current limits keep the confirmation.
+        """
+
+        if (
+            session.backend != ChatBackend.PROVIDER
+            or not session.provider_profile_id
+            or not session.model
+        ):
+            return False
+        try:
+            profile = await self.store.get(ProviderProfile, session.provider_profile_id)
+            current = resolve_context_limits(
+                profile,
+                model=session.model,
+                requested_output_tokens=request.max_output_tokens,
+                required_parameters={"tools"} if request.tools_enabled else None,
+            )
+        except (
+            NotFoundError,
+            ContextCapacityError,
+        ):  # diagnostic-expected: without the current runtime's limits the switch keeps asking for confirmation
+            return False
+        if target.target_input_tokens < current.target_input_tokens:
+            return False
+        own = await self.context_status(session.id)
+        return own.estimated_input_tokens > current.target_input_tokens
 
     async def _harness_to_provider_blocker(self, session: ChatSession) -> str | None:
         return await self.runtime_switcher.reason(session)
