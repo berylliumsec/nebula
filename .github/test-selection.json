@@ -1,23 +1,23 @@
 {
-  "change_digest": "ce78e71334c770fee3ea6575940c8d4c46bd143cec2d79e7b24ce02b24b26c47",
+  "change_digest": "0279bc2ee6046c9dac8e2fe38dc62ffc881a104f568a4ecfc3ea8ad7c7ed16d7",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Bounds four calls a project request awaited forever: Codex turn/steer on the control lane (15 s), Codex initialize for fork and the skill catalog (15 s), the HTTP MCP session-close DELETE (10 s, client always closed), and marks an http.invoke chat resume as turn-following so it frees the work lane. Selected: harness adapter suite (new silent-initialize and silent-steer regressions), MCP probe suite (new trickled-close regression) and the Codex transport suite.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The steer-holds-Stop and resume cases were measured on a fake scratch Core with a fake Codex app-server and a stalling provider stub.",
+  "reason": "A storage dispatch retry hands its dispatch to the running dispatch loop and waits at most RETRY_WAIT_SECONDS for it, instead of running the whole N x 15 s scan inline on the project's work lane. Selected: the new bounded-retry regression and the existing retry routes, plus the storage integration suite. test_an_expired_owner_with_storage_work_is_recovered is excluded: it already fails on origin/main f3045ee.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. Not reproduced end to end on a scratch Core (it needs an enrolled storage source with many failing incident dispatches); covered by the focused route regression.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 138,
+    "python": 21,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_codex_transport.py"
+    "tests/v3/test_storage_alert_dispatch.py::test_retry_waits_a_bounded_time_for_a_busy_dispatch_loop",
+    "tests/v3/test_storage_alert_dispatch.py::test_retry_refuses_an_alert_whose_source_is_gone",
+    "tests/v3/test_storage_integrations.py"
   ],
   "frontend": [],
   "native": [],

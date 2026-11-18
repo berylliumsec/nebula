@@ -65,6 +65,10 @@ SEVERITY = {"healthy": 0, "warning": 1, "critical": 2, "unavailable": 3}
 _SOURCE_GONE = "The storage source no longer exists; this alert cannot be dispatched"
 # Pending dispatches are read in pages of this size.
 DISPATCH_PAGE = 100
+# How long a retry request waits for the dispatch loop to pick up its
+# dispatch. The loop handles every pending dispatch of the project at up to
+# CALLBACK_DEADLINE_SECONDS each, so the request must not wait for all of them.
+RETRY_WAIT_SECONDS = 2 * CALLBACK_DEADLINE_SECONDS
 # The Storage page lists at most this many incidents, actions and dispatches.
 DASHBOARD_ROWS = 2000
 EntityT = TypeVar("EntityT", bound=Entity)
@@ -314,6 +318,26 @@ class StorageIntegrationService:
     def wake_dispatch(self) -> None:
         """Ask the dispatch loop to scan now, without waiting for its callbacks."""
         self._dispatch_wake.set()
+
+    async def retry_dispatch(self, dispatch_id: str) -> StorageDispatch:
+        """Hand a pending dispatch to the loop and wait a bounded time for it.
+
+        The loop dispatches every pending alert of the project, each bounded by
+        its callback deadline, so its whole scan has no bound a project request
+        could wait for. Without a running loop (a single-process Core) the scan
+        runs inline as before.
+        """
+        if self._task is None or self._task.done():
+            await self.dispatch_pending()
+            return await self.store.get(StorageDispatch, dispatch_id)
+        self.wake_dispatch()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RETRY_WAIT_SECONDS
+        while True:
+            current = await self.store.get(StorageDispatch, dispatch_id)
+            if current.status != "pending" or loop.time() >= deadline:
+                return current
+            await asyncio.sleep(0.25)
 
     async def _validate_runtime(
         self, engagement_id: str, backend: ChatBackend, profile_id: str, model: str
@@ -1364,8 +1388,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
             {"status": "pending", "error": None},
             expected_revision=dispatch.revision,
         )
-        await service.dispatch_pending()
-        return (await service.store.get(StorageDispatch, dispatch.id)).model_dump(
+        return (await service.retry_dispatch(dispatch.id)).model_dump(
             mode="json", exclude={"prompt"}
         )
 
