@@ -13,6 +13,7 @@ from nebula.v3.execution_scope import current_execution_lease
 from nebula.v3.memory_actor import memory_actor
 from nebula.v3.runtime_coordination import (
     FOLLOWS_TURN_HEADER,
+    RUNTIME_RELEASE_LANE_STATE,
     CoordinationConflict,
     LEASE_MS,
     LeaseLost,
@@ -475,6 +476,39 @@ async def test_unmarked_or_control_streams_keep_their_lane(cluster, tmp_path):
         assert (await delivery.page("operator", receipt.command_id)).state == (
             "succeeded"
         )
+
+
+async def test_a_route_waiting_on_its_started_turn_frees_the_work_lane(
+    cluster, tmp_path
+):
+    # A non-streamed chat starts its turn, then only waits for its answer
+    # (or for provider capacity) before it can respond at all.
+    (first, _), _, _ = cluster
+    delivery = RuntimeDelivery(first, RuntimeVault(tmp_path / "payloads"))
+    waiting = await accept(delivery, key="non-streamed-chat")
+    later = await accept(delivery, key="later-chat")
+    lease = await first.claim_project("project", "old")
+    answer = asyncio.Event()
+    invoked = []
+
+    async def app(scope, receive, send):
+        invoked.append(scope["state"]["runtime_command_id"])
+        if scope["state"]["runtime_command_id"] == waiting.command_id:
+            await scope["state"][RUNTIME_RELEASE_LANE_STATE]()
+            await answer.wait()
+        await reply(scope, receive, send)
+
+    runner = DurableHttpRunner(delivery, app, operator_token="synthetic")
+    assert await asyncio.wait_for(runner.run_one(lease, lane="work"), 5)
+    assert (await delivery.page("operator", waiting.command_id)).state == "running"
+    assert await asyncio.wait_for(runner.run_one(lease, lane="work"), 5)
+    assert invoked == [waiting.command_id, later.command_id]
+    assert (await delivery.page("operator", later.command_id)).state == "succeeded"
+    answer.set()
+    async with asyncio.timeout(5):
+        while (await delivery.page("operator", waiting.command_id)).state == "running":
+            await asyncio.sleep(0.02)
+    assert (await delivery.page("operator", waiting.command_id)).state == ("succeeded")
 
 
 async def test_closing_the_runner_leaves_a_followed_command_uncertain(

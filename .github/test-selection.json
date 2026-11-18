@@ -1,28 +1,25 @@
 {
-  "change_digest": "79315217317e111fa37c0570e5a8da7733e66f6a23167491c2241f69fd919757",
-  "reviewed_by": "Claude Code after scratch-Core reproduction on main and independent subagent root-cause validation",
-  "reason": "Project-scoped execution transactions hold ownership rows FOR KEY SHARE (claims and fenced checks lock FOR UPDATE) so a worker's own long transaction cannot starve its lease renewal or API acceptance; a 120 s runaway guard bounds them; LeaseLost names a blocking lock or a blocked event loop; the search projection repair runs in bounded pages and searches wait at most 5 s for it. Selected: the new lease, fencing, guard, stall and paged-repair regressions, the ownership-change and coordination lock-order tests, worker SQL outage, runtime coordination, checkpoint heartbeat, federated search and read-responsiveness suites, on SQLite and PostgreSQL.",
-  "exclusions": "No UI, native, browser or Playwright layer: no operator-visible control changed, only a worker diagnostic message. test_execution_locks.py::test_handoff_waits_for_an_in_flight_source_write is excluded because it already fails on origin/main. Process-level worker suites are excluded (locally they import the primary checkout); the worker path was verified on a scratch Core instead. No settings or settings-assistant destination changed.",
+  "change_digest": "626693d3b4b258c37840d3dd4eb32a38095960640624d475cefa39d1fc5b243c",
+  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
+  "reason": "The durable runner offers routes a release callback that renames the running command http.follow/v1 (as the follows-turn header does); a non-streamed chat calls it once its turn is saved and started (harness after start_chat_turn, provider before capacity admission), so it no longer holds the project's work lane while it waits. Selected: durable delivery (new release regression), runtime coordination, execution worker lane consumers, chat acceptance and diagnostic boundaries; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: the caller gets the same response. The project-level effect was measured on a fake scratch Core with a fake Codex app-server and a trickling provider stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 183,
+    "python": 223,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_worker_long_transaction_lease.py",
-    "tests/v3/test_execution_locks.py::test_ownership_change_waits_for_the_owner_and_fences_it_after",
-    "tests/v3/test_execution_locks.py::test_project_coordination_waits_for_its_open_transaction",
-    "tests/v3/test_worker_sql_outage.py",
-    "tests/v3/test_runtime_coordination.py",
-    "tests/v3/test_checkpoint_heartbeat.py",
-    "tests/v3/test_federated_search.py",
-    "tests/v3/test_load_read_responsiveness.py"
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_diagnostic_boundaries.py",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_execution_worker.py",
+    "tests/v3/test_runtime_coordination.py"
   ],
   "frontend": [],
   "native": [],
