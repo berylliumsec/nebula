@@ -546,32 +546,109 @@ def test_selected_ci_jobs_reject_playwright_not_run_on_push():
         deployer.selected_ci_jobs(_ci_plan(playwright=["assistant.spec.ts"]))
 
 
+TERMINAL_CLIENT_MATRIX_JOBS = sorted(
+    f"terminal-client ({runner}, {version})"
+    for runner in ("ubuntu-latest", "macos-15")
+    for version in ("3.11", "3.12", "3.13")
+)
+
+
+def _successful_jobs(names):
+    return [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in names
+    ]
+
+
 def test_terminal_client_ci_acceptance_requires_every_matrix_job():
     required = deployer.selected_ci_jobs(
         _ci_plan(python=["tests/test_terminal_transport.py"])
     )
-    assert required == {
-        "selection",
-        "security",
-        "python (3.12)",
-        *deployer.TERMINAL_CLIENT_CI_JOBS,
-    }
-    jobs = [
-        {"name": name, "status": "completed", "conclusion": "success"}
-        for name in required
-    ]
+    assert required == {"selection", "security", "python (3.12)", "terminal-client"}
+    jobs = _successful_jobs(
+        ["selection", "security", "python (3.12)", *TERMINAL_CLIENT_MATRIX_JOBS]
+    )
     assert deployer.require_ci_jobs(jobs, required) == {
         name: "success" for name in required
     }
-    for missing in deployer.TERMINAL_CLIENT_CI_JOBS:
+    # A changed matrix (new runner or Python) still satisfies the family.
+    expanded = [*jobs, *_successful_jobs(["terminal-client (windows-2025, 3.14)"])]
+    assert deployer.require_ci_jobs(expanded, required)["terminal-client"] == "success"
+    for conclusion, status in (
+        ("failure", "completed"),
+        ("cancelled", "completed"),
+        (None, "in_progress"),
+    ):
+        broken = [dict(job) for job in jobs]
+        broken[-1].update(status=status, conclusion=conclusion)
         with pytest.raises(RuntimeError, match="terminal-client"):
-            deployer.require_ci_jobs(
-                [job for job in jobs if job["name"] != missing], required
-            )
-    failed = sorted(deployer.TERMINAL_CLIENT_CI_JOBS)[0]
-    next(job for job in jobs if job["name"] == failed)["conclusion"] = "failure"
+            deployer.require_ci_jobs(broken, required)
+    without_family = [
+        job for job in jobs if not job["name"].startswith("terminal-client")
+    ]
     with pytest.raises(RuntimeError, match="terminal-client"):
+        deployer.require_ci_jobs(without_family, required)
+
+
+def test_required_ci_job_family_never_crosses_a_bare_prefix():
+    required = {"python (3.12)", "security"}
+    jobs = _successful_jobs(
+        ["python (3.11)", "python (3.13)", "security-audit", "securityscan (x)"]
+    )
+    with pytest.raises(
+        RuntimeError, match=r"did not succeed: python \(3\.12\), security$"
+    ):
         deployer.require_ci_jobs(jobs, required)
+    # A failure in a neighbouring family does not taint an exact match.
+    jobs = _successful_jobs(["python (3.12)", "security"]) + [
+        {"name": "python (3.11)", "status": "completed", "conclusion": "failure"},
+        {"name": "security-audit", "status": "completed", "conclusion": "failure"},
+    ]
+    assert deployer.require_ci_jobs(jobs, required) == {
+        "python (3.12)": "success",
+        "security": "success",
+    }
+    assert not deployer.ci_job_in_family("terminal-clientx (a)", "terminal-client")
+    assert not deployer.ci_job_in_family("terminal-client(a)", "terminal-client")
+    assert deployer.ci_job_in_family("terminal-client (a)", "terminal-client")
+
+
+def test_recorded_terminal_client_jobs_accept_family_or_exact_legacy_form():
+    expected = {
+        name: "success"
+        for name in deployer.selected_ci_jobs(
+            _ci_plan(python=["tests/test_terminal_transport.py"])
+        )
+    }
+    assert deployer.recorded_ci_jobs_match(dict(expected), expected)
+    legacy = {
+        **{
+            name: value
+            for name, value in expected.items()
+            if name != "terminal-client"
+        },
+        **dict.fromkeys(TERMINAL_CLIENT_MATRIX_JOBS, "success"),
+    }
+    assert deployer.recorded_ci_jobs_match(legacy, expected)
+    # Anything but the exact legacy expansion is rejected.
+    assert not deployer.recorded_ci_jobs_match(
+        {**legacy, "terminal-client": "success"}, expected
+    )
+    assert not deployer.recorded_ci_jobs_match(
+        {k: v for k, v in legacy.items() if k != TERMINAL_CLIENT_MATRIX_JOBS[0]},
+        expected,
+    )
+    assert not deployer.recorded_ci_jobs_match(
+        {**legacy, TERMINAL_CLIENT_MATRIX_JOBS[0]: "failure"}, expected
+    )
+    assert not deployer.recorded_ci_jobs_match(
+        {k: v for k, v in expected.items() if k != "security"}, expected
+    )
+    # Without a terminal-client family, the legacy names are never accepted.
+    plain = {"selection": "success", "security": "success"}
+    assert not deployer.recorded_ci_jobs_match(
+        {**plain, **dict.fromkeys(TERMINAL_CLIENT_MATRIX_JOBS, "success")}, plain
+    )
 
 
 def test_ci_acceptance_rejects_incomplete_artifact_listing():
