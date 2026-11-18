@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from .async_utils import async_done_callback, call_async, finish_cleanup
 
-from .async_utils import resolve_workspace
+from .async_utils import off_loop, resolve_workspace
 
 from .diagnostics import (
     create_diagnostic_task,
@@ -1391,6 +1391,11 @@ class _Precompaction:
     # Set once its compactor call begins: a turn arriving before then
     # cancels it and compacts itself; one arriving after waits for it.
     started: bool = False
+
+
+def _covered_digest(messages: Sequence[ChatMessage]) -> str:
+    """The digest a snapshot records for exactly these archived messages."""
+    return source_digest(_chat_context_sources(messages))
 
 
 def _chat_context_sources(messages: Sequence[ChatMessage]) -> list[ContextSource]:
@@ -6023,8 +6028,10 @@ class ChatService:
                     "chat session already has an active response; resume or resolve it before sending another message"
                 )
             stored_messages = await self._session_messages(session)
-            incoming, _ = self._merge_history(stored_messages, incoming)
-            _, new_messages = self._merge_history(stored_messages, durable_incoming)
+            incoming, _ = await self._merge_history_off_loop(stored_messages, incoming)
+            _, new_messages = await self._merge_history_off_loop(
+                stored_messages, durable_incoming
+            )
             # Peer messages are already present as system transcript entries, so
             # this turn receives them through canonical history. Mark them before
             # routing to avoid injecting the same content a second time.
@@ -16437,23 +16444,28 @@ class ChatService:
             ),
             None,
         )
-        estimated_forms = {
-            message.id: _estimation_message(
-                message.role,
-                _stored_model_text(message),
-                message.content_blocks,
-                images_supported=images_supported,
-            )
-            for message in messages
-        }
         limits = resolve_context_limits(profile, model=model)
         base_instructions = await self._estimated_base_instructions(
             session.engagement_id
         )
-        estimated = calibrated_estimate(
-            estimate_messages(estimated_forms.values(), base_instructions) + reserved,
-            calibration,
+
+        def estimate_history() -> tuple[dict[str, Any], int]:
+            forms = {
+                message.id: _estimation_message(
+                    message.role,
+                    _stored_model_text(message),
+                    message.content_blocks,
+                    images_supported=images_supported,
+                )
+                for message in messages
+            }
+            return forms, estimate_messages(forms.values(), base_instructions)
+
+        # Seconds of work for a conversation of hundreds of thousands of messages.
+        estimated_forms, history_tokens = await off_loop(
+            len(messages), estimate_history
         )
+        estimated = calibrated_estimate(history_tokens + reserved, calibration)
         active_estimated = estimated
         latest = (
             (
@@ -16484,22 +16496,27 @@ class ChatService:
             ]
             through = latest.compacted_through
             if latest.memory is not None:
-                # The memory leads the first message after the boundary, as
-                # _model_context sends it (or the next one, when none is).
-                first = uncompacted[0] if uncompacted else None
-                forms = [
-                    _estimation_message(
-                        first.role if first else ChatRole.USER,
-                        _compacted_memory_text(
-                            latest.memory, _stored_model_text(first) if first else ""
+                memory = latest.memory
+
+                def estimate_active() -> int:
+                    # The memory leads the first message after the boundary, as
+                    # _model_context sends it (or the next one, when none is).
+                    first = uncompacted[0] if uncompacted else None
+                    forms = [
+                        _estimation_message(
+                            first.role if first else ChatRole.USER,
+                            _compacted_memory_text(
+                                memory, _stored_model_text(first) if first else ""
+                            ),
+                            first.content_blocks if first else [],
+                            images_supported=images_supported,
                         ),
-                        first.content_blocks if first else [],
-                        images_supported=images_supported,
-                    ),
-                    *(estimated_forms[message.id] for message in uncompacted[1:]),
-                ]
+                        *(estimated_forms[message.id] for message in uncompacted[1:]),
+                    ]
+                    return estimate_messages(forms, base_instructions)
+
                 active_estimated = calibrated_estimate(
-                    estimate_messages(forms, base_instructions) + reserved,
+                    await off_loop(len(uncompacted), estimate_active) + reserved,
                     calibration,
                 )
             # A turn keeps the snapshot while everything after its boundary
@@ -16827,14 +16844,20 @@ class ChatService:
     async def _next_sequence(self, session: ChatSession) -> int:
         """Reserve the next transcript slot above every message, replaced or not."""
 
-        stored = await self._session_messages(session, include_replaced=True)
+        # One indexed aggregate, not every stored message of a long chat.
+        stored = await self.store.max_chat_message_sequence(session.id)
         recorded = session.metadata.get("last_sequence")
         return (
-            max(
-                [message.sequence for message in stored]
-                + [int(recorded) if isinstance(recorded, int) else 0]
-            )
-            + 1
+            max([stored or 0] + [int(recorded) if isinstance(recorded, int) else 0]) + 1
+        )
+
+    @classmethod
+    async def _merge_history_off_loop(
+        cls, stored: list[ChatMessage], incoming: list[ChatRequestMessage]
+    ) -> tuple[list[ChatRequestMessage], list[ChatRequestMessage]]:
+        """``_merge_history``; a long conversation's runs off the event loop."""
+        return await off_loop(
+            len(stored) + len(incoming), cls._merge_history, stored, incoming
         )
 
     @staticmethod
@@ -17098,7 +17121,7 @@ class ChatService:
                     if reference.source_kind == "chat_message"
                 }
                 == {message.id for message in covered}
-                and source_digest(_chat_context_sources(covered))
+                and await off_loop(len(covered), _covered_digest, covered)
                 == latest.source_sha256
             ):
                 return None
@@ -17116,7 +17139,12 @@ class ChatService:
                 reused, latest = served_now
                 return reused, instructions, ChatTokenUsage(), latest, session
 
-        sizes = [_estimated_message_tokens(estimated_form(item)) for item in messages]
+        sizes = await off_loop(
+            len(messages),
+            lambda: [
+                _estimated_message_tokens(estimated_form(item)) for item in messages
+            ],
+        )
         roles = [message.role for message in messages]
         instruction_tokens = estimate_tokens(instructions)
 
@@ -17154,7 +17182,9 @@ class ChatService:
                     provider=provider,
                     model=model,
                     compacted_through=archived[-1].sequence,
-                    sources=_chat_context_sources(archived),
+                    sources=await off_loop(
+                        len(archived), _chat_context_sources, archived
+                    ),
                     objective=objective,
                     budget=_remaining_context_budget(budget, usage, cost),
                 )
@@ -17544,7 +17574,7 @@ class ChatService:
                     if reference.source_kind == "chat_message"
                 }
                 == {message.id for message in covered}
-                and source_digest(_chat_context_sources(covered))
+                and await off_loop(len(covered), _covered_digest, covered)
                 == latest.source_sha256
             ):
                 led = _estimation_message(

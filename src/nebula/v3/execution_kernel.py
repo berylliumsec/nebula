@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .authentication import secret_matches as _secret_matches
 
-from .async_utils import resolve_workspace
+from .async_utils import OFF_LOOP_ITEMS, resolve_workspace
 
 from .host_load import HostLoadGate
 from .memory_budget import MemoryBudgetService
@@ -77,6 +77,7 @@ from pydantic import (
     Field,
     SecretStr,
     StringConstraints,
+    TypeAdapter,
     ValidationError,
     model_validator,
 )
@@ -846,6 +847,23 @@ class ChatServerTimingMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_timing)
+
+
+_CHAT_MESSAGES_JSON = TypeAdapter(list[ChatMessage])
+
+
+async def _json_array_chunks(
+    messages: list[ChatMessage], *, size: int = 1000
+) -> AsyncIterator[bytes]:
+    """``messages`` as one JSON array, encoded a slice at a time off the loop."""
+    yield b"["
+    for start in range(0, len(messages), size):
+        encoded = await asyncio.to_thread(
+            _CHAT_MESSAGES_JSON.dump_json, messages[start : start + size], by_alias=True
+        )
+        # Each slice is a JSON array; join the items into the outer one.
+        yield (b"," if start else b"") + encoded[1:-1]
+    yield b"]"
 
 
 # Output room for the capability probe. Thinking models (Claude Fable 5.1
@@ -12434,7 +12452,7 @@ def create_execution_kernel(
         include_replaced: bool = False,
         limit: int | None = Query(default=None, ge=1, le=200),
         before_message_id: str | None = None,
-    ) -> list[ChatMessage]:
+    ) -> list[ChatMessage] | StreamingResponse:
         if limit is not None:
             if not include_replaced:
                 raise HTTPException(
@@ -12454,8 +12472,16 @@ def create_execution_kernel(
                 else item
                 for item in page
             ]
-        return await chat_service().session_messages(
+        messages = await chat_service().session_messages(
             session_id, include_replaced=include_replaced
+        )
+        if len(messages) <= OFF_LOOP_ITEMS:
+            return messages
+        # A full transcript of hundreds of thousands of messages is hundreds
+        # of MB of JSON. Encode (and let compression run) a slice at a time,
+        # off the event loop, instead of one multi-second response body.
+        return StreamingResponse(
+            _json_array_chunks(messages), media_type="application/json"
         )
 
     @app.get(
