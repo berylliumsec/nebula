@@ -50,7 +50,7 @@ A fresh Core data directory starts with empty Butler memory. Its SQLite records 
 
 ## Work
 
-Use Codex or Grok as harnesses, or connect Claude, OpenRouter, Ollama, or vLLM. Docker or Podman powers Kali and container-mode automation; Host mode uses the host's filesystem and network after explicit acknowledgement. Optional OpenVPN routes container traffic, while [Mercury](https://github.com/berylliumsec/mercury) can add independent controls when enrolled.
+Use Codex, Grok or Claude as harnesses, or connect Claude, OpenRouter, Ollama, or vLLM as providers. Docker or Podman powers Kali and container-mode automation; Host mode uses the host's filesystem and network after explicit acknowledgement. Optional OpenVPN routes container traffic, while [Mercury](https://github.com/berylliumsec/mercury) can add independent controls when enrolled.
 
 ## Install
 

@@ -276,18 +276,24 @@ async def test_generic_create_rejects_server_managed_fields(api, field, value):
 async def test_generic_harness_create_allows_only_provided_kinds(api):
     client, store = api
 
-    unsupported = await client.post(
+    unknown = await client.post(
         "/api/v1/harnesses",
         headers=_auth(),
-        json={"name": "Claude", "kind": "claude_agent_sdk"},
+        json={"name": "Unknown", "kind": "unknown_vendor"},
     )
 
-    assert unsupported.status_code == 422
-    assert (
-        "harness kind 'claude_agent_sdk' is not provided"
-        in unsupported.json()["detail"]
-    )
+    assert unknown.status_code == 422
     assert (await store.count(HarnessProfile)) == 0
+
+    claude = await client.post(
+        "/api/v1/harnesses",
+        headers=_auth(),
+        json={"name": "Claude", "kind": HarnessKind.CLAUDE_AGENT_SDK.value},
+    )
+
+    assert claude.status_code == 201, claude.text
+    assert claude.json()["kind"] == HarnessKind.CLAUDE_AGENT_SDK.value
+    assert (await store.count(HarnessProfile)) == 1
 
     supported = await client.post(
         "/api/v1/harnesses",

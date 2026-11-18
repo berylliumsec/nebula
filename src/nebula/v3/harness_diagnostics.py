@@ -142,7 +142,10 @@ async def run_harness_test_turn(
             await connection.close()
             connection = None
     except Exception as exc:
-        reason = reason_code_for(exc, feature="harnesses")
+        # A vendor turn failure carries its own classification, as chat turns use.
+        reason = reason_code_for(
+            exc, feature="harnesses", supplied=getattr(exc, "reason_code", None)
+        )
         record_caught_exception(
             "harnesses",
             "harnesses.test_turn_failed",

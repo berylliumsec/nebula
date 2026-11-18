@@ -363,11 +363,12 @@ class ChatBackend(StringEnum):
 class HarnessKind(StringEnum):
     CODEX_APP_SERVER = "codex_app_server"
     GROK_ACP = "grok_acp"
-    # Retained only so historical profiles and activity records remain readable.
     CLAUDE_AGENT_SDK = "claude_agent_sdk"
 
 
-PROVIDED_HARNESS_KINDS = frozenset({HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP})
+PROVIDED_HARNESS_KINDS = frozenset(
+    {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP, HarnessKind.CLAUDE_AGENT_SDK}
+)
 
 
 class HarnessConnectionMode(StringEnum):
