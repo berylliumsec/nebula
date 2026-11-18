@@ -33,6 +33,7 @@ from .deployment_protocol import GLOBAL_EXECUTION_PROJECT, ReleaseManifest
 from .diagnostics import record_caught_exception
 from .domain import Engagement, WorkItem, WorkUpdate
 from .runtime_coordination import (
+    HTTP_FOLLOW_COMMAND,
     CommandReceipt,
     CoordinationConflict,
     LeaseLost,
@@ -59,6 +60,11 @@ WORK_BATCH_COMMAND = "global.work-batch/v1"
 WORK_BATCH_BARRIER = "work.batch.barrier/v1"
 WORK_BATCH_CAPABILITY = "host.work-batches.capability/v1"
 _ACTIVE = ("queued", "running", "uncertain")
+# How long an accepted Work batch may wait for its participating projects'
+# earlier work. A batch is SQL-only and atomic, so failing it changes nothing;
+# without a bound one project's uncertain or endless command would hold every
+# other participant's work lane behind the batch barrier forever.
+WORK_BATCH_WAIT_SECONDS = 120.0
 
 
 class _Waiting(Exception):
@@ -824,6 +830,8 @@ class RuntimeWorkBatches:
                 RuntimeCommandRow.project_id == participant.project_id,
                 RuntimeCommandRow.lane == "work",
                 RuntimeCommandRow.state.in_(_ACTIVE),
+                # Lane heads skip a released turn follower, as claims do.
+                RuntimeCommandRow.name != HTTP_FOLLOW_COMMAND,
             )
             .order_by(RuntimeCommandRow.sequence)
             .limit(1)
@@ -833,17 +841,42 @@ class RuntimeWorkBatches:
             or head.id != participant.barrier_command_id
             or head.state != "queued"
         ):
-            raise _Waiting("Earlier project work must finish before the Work batch")
+            raise _Waiting(
+                f"Project {participant.project_id} must finish earlier work first: "
+                + (
+                    f"command {head.id} ({head.name}) is {head.state}"
+                    + (
+                        " and needs explicit reconciliation"
+                        if head.state == "uncertain"
+                        else ""
+                    )
+                    if head is not None and head.id != participant.barrier_command_id
+                    else "its Work batch barrier is not at the head of its lane"
+                )
+            )
+        # A command that only follows a turn it already started (http.follow/v1)
+        # has committed its effects and no longer holds its lane, so it does not
+        # hold the batch either.
         unknown = await session.scalar(
-            select(RuntimeCommandRow.id)
+            select(RuntimeCommandRow)
             .where(
                 RuntimeCommandRow.project_id == participant.project_id,
                 RuntimeCommandRow.state.in_(("running", "uncertain")),
+                RuntimeCommandRow.name != HTTP_FOLLOW_COMMAND,
             )
+            .order_by(RuntimeCommandRow.sequence)
             .limit(1)
         )
         if unknown is not None:
-            raise _Waiting("A participating project has unfinished or uncertain work")
+            raise _Waiting(
+                f"Project {participant.project_id} has {unknown.state} command "
+                f"{unknown.id} ({unknown.name}, {unknown.lane} lane)"
+                + (
+                    " that needs explicit reconciliation"
+                    if unknown.state == "uncertain"
+                    else ""
+                )
+            )
 
     async def _import(self, body):
         results = []
@@ -1067,12 +1100,31 @@ class RuntimeWorkBatches:
         except (_Waiting, LeaseLost) as error:
             # diagnostic-expected: readiness/fencing holds preserve both the
             # queued receipt and exact lane barriers for later host progress.
+            expired = False
             async with self.coordination._write() as session:
                 parent = await session.get(
                     RuntimeCommandRow, batch_id, with_for_update=True
                 )
                 if parent is not None and parent.state == "queued":
                     parent.result = {"detail": str(error)}
+                    waited_ms = (
+                        await self.coordination._clock_ms(session)
+                    ) - parent.accepted_at_ms
+                    expired = (
+                        isinstance(error, _Waiting)
+                        and waited_ms > WORK_BATCH_WAIT_SECONDS * 1000
+                    )
+            if expired:
+                # Nothing of the batch was applied. Its barriers are retired so
+                # every participant's lane moves on, and the waiting caller
+                # learns exactly which work blocked it.
+                await self._failure(
+                    batch_id,
+                    409,
+                    "The Work batch was not applied: it waited "
+                    f"{WORK_BATCH_WAIT_SECONDS:g} s for earlier project work. "
+                    + str(error),
+                )
         except HTTPException as error:
             # diagnostic-expected: expired/revoked accepting actors receive a
             # durable authentication response after the SQL attempt rolls back.
