@@ -601,6 +601,7 @@ from .storage import (
 from .runtime_coordination import (
     FOLLOWS_TURN_HEADER,
     LeaseLost,
+    RUNTIME_RELEASE_LANE_STATE,
     release_project_lane,
 )
 from .runtime_chat_acceptance import (
@@ -11165,6 +11166,12 @@ def create_execution_kernel(
             request._runtime_command_id = getattr(
                 http_request.state, "runtime_command_id", None
             )
+        if not request.stream and (
+            getattr(http_request.state, RUNTIME_RELEASE_LANE_STATE, None) is not None
+        ):
+            # This request holds its project's work lane. A durable turn lets
+            # the lane go before the provider is called (see below).
+            request._lane_turn = True
         prepared = await service.prepare_async(request)
         if not request.stream:
             if prepared.turn is not None:
