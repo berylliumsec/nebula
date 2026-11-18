@@ -1,23 +1,25 @@
 {
-  "change_digest": "156b9cf1182d8fe7e24d9056cf719b176f29db475fa4e146f25aa7386836f781",
+  "change_digest": "78b674d83e2b1284f59ac1521e0b70e170e9d9ac8e28c1520d740365793601b0",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A chat over its runtime's input target (background precompaction lost to a worker kill) refused every turn on another provider/model with 422 'requires confirmed context compaction', even when the target had identical limits. The switch gate now asks only when the switch compacts something the current runtime would not. Selected: test_chat.py (new equal-limit switch regression on SQLite and PostgreSQL, existing smaller-model confirmation test), test_history_content_fidelity.py (image-aware switch estimate, now from a text-only current runtime) and test_async_runtime_switching.py (deferred switch apply/confirmation).",
-  "exclusions": "No UI, native or Playwright layer: no UI code changed; the composer already handles a preflight that needs no confirmation. Butler and the assistant-config route call the same preflight and are covered through it.",
+  "reason": "A non-streamed project chat with no tools, goal or hooks kept no durable turn, so #1187's lane release never ran and it held the project's work lane for the whole provider call. When a durable runner holds the lane, the chat route now requests a durable turn so the lane is released before provider admission. Selected: the new lane-turn regression, durable delivery (#1187 release), chat acceptance, chat leftovers and Butler resource paths that assert the in-process turnless behaviour; SQLite and PostgreSQL.",
+  "exclusions": "No UI, native or Playwright layer: the caller receives the same response. The project-level effect was measured on a fake scratch Core with a trickling provider stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 117,
+    "python": 96,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_history_content_fidelity.py",
-    "tests/v3/test_async_runtime_switching.py"
+    "tests/v3/test_chat_lane_turn.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_runtime_chat_acceptance.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_butler_resources.py"
   ],
   "frontend": [],
   "native": [],

@@ -695,6 +695,11 @@ async def resolve_chat_model_content(
 class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     _runtime_command_id: str | None = PrivateAttr(default=None)
+    # Set by the chat route when a durable runner holds the project's work
+    # lane for this non-streamed request. A project chat then keeps a durable
+    # turn, so the lane is released before the provider is called and later
+    # project work need not wait for the answer.
+    _lane_turn: bool = PrivateAttr(default=False)
     # Core-only recovery context; never accepted from the public request body.
     _butler_recovery_case_id: str | None = PrivateAttr(default=None)
     _butler_recovery_instructions: str | None = PrivateAttr(default=None)
@@ -7492,7 +7497,7 @@ class ChatService:
                 },
             )
         elif engagement_id is not None and (
-            request.stream or goal is not None or hook_snapshots
+            request.stream or request._lane_turn or goal is not None or hook_snapshots
         ):
             session_id = (
                 session.id
