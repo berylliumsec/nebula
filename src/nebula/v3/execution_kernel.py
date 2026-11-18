@@ -597,7 +597,11 @@ from .storage import (
     RevisionConflict,
     revision_conflict,
 )
-from .runtime_coordination import FOLLOWS_TURN_HEADER, LeaseLost
+from .runtime_coordination import (
+    FOLLOWS_TURN_HEADER,
+    LeaseLost,
+    release_project_lane,
+)
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
     CHAT_RESUME_COMMAND,
@@ -10799,6 +10803,10 @@ def create_execution_kernel(
             if companion_ids:
                 (await browser_companion.bind(next(iter(companion_ids)), chat.id))
             (await harness_runtime.start_chat_turn(harness_turn.id))
+            if not request.stream:
+                # The turn runs on its own; a non-streamed answer only waits
+                # for it, so later project work need not wait too.
+                await release_project_lane(http_request.state)
 
             async def harness_events() -> Any:
                 # Bind browser navigation before any runtime event or login failure.
@@ -11112,6 +11120,10 @@ def create_execution_kernel(
             )
         prepared = await service.prepare_async(request)
         if not request.stream:
+            if prepared.turn is not None:
+                # The turn is saved; waiting for provider capacity and the
+                # answer must not hold later work in the project.
+                await release_project_lane(http_request.state)
             result = await service.complete(prepared)
             accepted_turn_id = result.turn_id
         else:

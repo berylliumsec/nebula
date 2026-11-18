@@ -36,6 +36,7 @@ from .execution_scope import execution_context
 from .memory_actor import memory_actor
 from .runtime_coordination import (
     FOLLOWS_TURN_HEADER,
+    RUNTIME_RELEASE_LANE_STATE,
     ClaimedCommand,
     CommandReceipt,
     CoordinationConflict,
@@ -1009,6 +1010,19 @@ class DurableHttpRunner:
                 (b"content-length", str(len(body)).encode()),
             ]
         )
+
+        async def release_lane() -> bool:
+            """Let later work run past this command; its route has committed
+            its effects and only waits for, or follows, a turn now."""
+            if released is None or buffered is not None or name != HTTP_INVOKE_COMMAND:
+                return False
+            if released.is_set():
+                return True
+            if await self.delivery.coordination.release_follow(lease, command_id):
+                released.set()
+                return True
+            return False
+
         scope = {
             "type": "http",
             "asgi": {"version": "3.0", "spec_version": "2.4"},
@@ -1026,6 +1040,9 @@ class DurableHttpRunner:
                 "runtime_command_id": command_id,
                 "runtime_chat_acceptance": name == CHAT_ACCEPT_COMMAND,
                 "runtime_chat_resume": name == CHAT_RESUME_COMMAND,
+                # A route calls this once the rest of its work only waits for
+                # or follows a turn; see RUNTIME_RELEASE_LANE_STATE.
+                RUNTIME_RELEASE_LANE_STATE: release_lane,
             },
         }
         consumed, started, ended, status_code = False, False, False, 0
@@ -1068,16 +1085,8 @@ class DurableHttpRunner:
                 else:
                     await self.delivery.append(lease, command_id, "head", head)
                 started = True
-                if (
-                    follows
-                    and released is not None
-                    and buffered is None
-                    and name == HTTP_INVOKE_COMMAND
-                    and await self.delivery.coordination.release_follow(
-                        lease, command_id
-                    )
-                ):
-                    released.set()
+                if follows:
+                    await release_lane()
             elif message["type"] == "http.response.body":
                 if not started or ended:
                     raise RuntimeIpcError("runtime response body is out of order")
