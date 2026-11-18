@@ -1,31 +1,22 @@
 {
-  "change_digest": "8b0a2f980c19cf1920721425b09752a6dd050dac34585eb365dc967566340d33",
-  "reviewed_by": "Claude Code after scratch-Core reproduction on main (300k-message chat) and event-loop stall sampling",
-  "reason": "A conversation's history is read in bounded keyset pages, one transaction each; CPU-heavy pure steps over it (history merge, context sources, compaction preparation, grouping, merging, digests, size estimates, context status estimation) run off the event loop above 2000 items; compaction source validation reads the session's own messages instead of offset-scanning the project; appends take MAX(sequence); a large full transcript streams. Selected: the new long-history regressions on SQLite and PostgreSQL (paged order, limits and cursors, aggregate sequence, off-loop equivalence, source validation, streamed transcript equality, loop responsiveness) and the chat API, context, retrieval, context assembly, chat switch, catch-up, recent page, polling cost and agent message suites; runtime coordination provides the PostgreSQL runtime.",
-  "exclusions": "No UI, native, browser or Playwright layer: no response shape or control changed (the streamed transcript is the same JSON array). No settings or settings-assistant destination changed. The 300k-message worker behaviour was verified on scratch Cores by script.",
+  "change_digest": "319dca01210fea2bb12d71ecfaaf49062937056a27fe9c429ccce5d8c37e097e",
+  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
+  "reason": "A typed chat start (chat.accept/v1, chat.resume/v1) interrupted before it saved its turn (no runtime_chat_bindings row, no response frame) is queued again for the next owner, bounded to three runs, on the dead-owner reconcile, fenced-claim and worker-cleanup paths, instead of being failed as 'may have partly applied' and losing the operator's message; a start whose turn was saved is settled from that turn. Selected: the orphan-recovery suite (requeue, saved-turn settlement, attempt bound, published-response cases) and the API-worker regression covering worker cleanup and the fenced claim, in SQLite and PostgreSQL.",
+  "exclusions": "No UI, settings or native change. test_runtime_coordination, test_runtime_delivery and test_runtime_auto_recovery were run locally with results identical to clean main and are not selected. The loss was reproduced on a fresh fake Core on main (STUCK) and on this branch (PASS, three runs).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 332,
+    "python": 110,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_long_chat_history.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_context.py",
-    "tests/v3/test_context_retrieval.py",
-    "tests/v3/test_chat_context_assembly.py",
-    "tests/v3/test_chat_switch_performance.py",
-    "tests/v3/test_chat_catchup.py",
-    "tests/v3/test_chat_session_recent_page.py",
-    "tests/v3/test_chat_polling_cost.py",
-    "tests/v3/test_chat_agent_messages.py",
-    "tests/v3/test_runtime_coordination.py"
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_api_worker.py::test_an_interrupted_chat_start_that_saved_nothing_runs_again"
   ],
   "frontend": [],
   "native": [],
