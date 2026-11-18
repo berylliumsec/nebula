@@ -1,21 +1,22 @@
 {
-  "change_digest": "621d925f3dfb4378362b9e1d61beb50cc3ec809c76907832fb08ea97f9121e3e",
-  "reviewed_by": "Codex after independent root-cause validation against exact successful CI matrix jobs",
-  "reason": "CI-backed simulation preparation must accept all six successful terminal-client matrix jobs under their actual GitHub names. The selected deployer protocol file covers required-job calculation and rejection of a missing or failed matrix entry.",
-  "exclusions": "No Core, UI, native app, or browser behavior changes. Operator requested no local test execution or backups; this file was collected only, and CI executes its reviewed selection.",
+  "change_digest": "7dfaa11cb91d94b7ed131857eb605ac558bb0c6172a0550b37cae2fd5ae77142",
+  "reviewed_by": "Codex after independent dead-worker recovery diagnosis",
+  "reason": "The simulation host restart guard now accepts one exact proven-dead worker only with an operator acceptance record and verifies any resulting Core recovery. The selected process-level host restart tests cover the gate, exact owner continuity, and refusal paths.",
+  "exclusions": "No Nebula UI, frontend, native app, or browser journey changes. The deployer runs only on the simulation host, so a disposable LAN Core cannot exercise its service and PostgreSQL activation path. The operator requested no local tests; selected Python tests run in CI only.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 25,
+    "python": 14,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_deployer_protocol.py"
+    "tests/test_simulation_host_restart.py",
+    "tests/test_simulation_dead_owner_activation.py"
   ],
   "frontend": [],
   "native": [],
