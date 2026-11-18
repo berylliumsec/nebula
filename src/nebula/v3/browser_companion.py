@@ -46,7 +46,7 @@ from .domain import (
 )
 from .artifacts import ArtifactStore
 from .storage import ConflictError, NebulaStore, revise_latest
-from .credentials import CredentialStore, CredentialCreateRequest
+from .credentials import CredentialStore, CredentialCreateRequest, vault_call
 from .runtime_browser_bridge import BRIDGE_UNAVAILABLE, CurrentVisibleAdapter
 
 
@@ -401,7 +401,7 @@ class BrowserCompanion:
             return entries
 
         checked(await self.session(session_id))
-        credential = self.credentials.create(request)
+        credential = await vault_call(self.credentials.create, request)
         alias = uuid4().hex
 
         def associate(session: BrowserSession) -> dict[str, Any]:
@@ -418,7 +418,7 @@ class BrowserCompanion:
             (await self._change_session(session_id, associate))
         except Exception:
             # diagnostic-expected: roll back the secret if its association was not saved.
-            self.credentials.delete(credential.reference)
+            await vault_call(self.credentials.delete, credential.reference)
             raise
         return await self.credential_catalog(session_id)
 
@@ -438,16 +438,18 @@ class BrowserCompanion:
             return {"metadata": {**session.metadata, "browser_credentials": entries}}
 
         (await self._change_session(session_id, detach))
-        self.credentials.delete(removed["reference"])
+        await vault_call(self.credentials.delete, removed["reference"])
         return await self.credential_catalog(session_id)
 
     async def protected_values(self, session_id: str) -> dict[str, str]:
         session = await self.session(session_id)
         values = {}
         for alias, entry in session.metadata.get("browser_credentials", {}).items():
-            if self.credentials.status(entry["reference"]).available:
-                values[alias] = self.credentials.resolve(
-                    entry["reference"]
+            if (
+                await vault_call(self.credentials.status, entry["reference"])
+            ).available:
+                values[alias] = (
+                    await vault_call(self.credentials.resolve, entry["reference"])
                 ).get_secret_value()
         return values
 

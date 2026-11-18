@@ -12,7 +12,7 @@ import httpx
 import pytest
 from sqlalchemy import select, update
 
-from nebula.v3 import runtime_auto_admission
+from nebula.v3 import runtime_auto_admission, storage_integrations
 from nebula.v3.database import DeploymentHostRow, EntityRow, ProjectOwnershipRow
 from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.domain import (
@@ -409,6 +409,40 @@ async def test_retry_refuses_an_alert_whose_source_is_gone(host):
         retried = await client.post(f"/api/v1/storage/dispatches/{live.id}/retry")
         assert retried.status_code == 200, retried.text
         assert retried.json()["status"] == "pending"
+
+
+async def test_retry_waits_a_bounded_time_for_a_busy_dispatch_loop(host, monkeypatch):
+    # The loop's scan handles every pending alert at up to 15 s each; a retry
+    # request (project work) must hand its alert over and return, not wait
+    # for the whole scan.
+    _, store = host
+    monkeypatch.setattr(storage_integrations, "RETRY_WAIT_SECONDS", 0.3)
+    source = await _source(store, "one")
+    failed = await _alert(store, source, status="failed")
+    service = StorageIntegrationService(store, None, None, None)
+    scans = []
+
+    async def endless_scan():
+        scans.append(1)
+        await asyncio.Event().wait()
+
+    service.dispatch_pending = endless_scan
+    service._task = asyncio.create_task(asyncio.Event().wait())
+    app = FastAPI()
+    app.include_router(storage_router(service, lambda: "operator"))
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://core.test"
+        ) as client:
+            retried = await asyncio.wait_for(
+                client.post(f"/api/v1/storage/dispatches/{failed.id}/retry"), 10
+            )
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["status"] == "pending"
+        assert scans == []
+        assert service._dispatch_wake.is_set()
+    finally:
+        service._task.cancel()
 
 
 async def test_project_less_storage_rows_route_to_their_sources_project(host, tmp_path):
