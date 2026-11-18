@@ -311,6 +311,54 @@ JSONRPC_INVALID_REQUEST = -32600
 # previous one completes. A goal that stays active without one is left alone.
 CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
 GROK_SESSION_LIST_TIMEOUT_SECONDS = 30.0
+# A running harness turn whose app-server sends nothing for this long is
+# checked, never ended for the silence itself: a quiet command, a gateway tool
+# or a model still thinking is legitimate. Codex is asked for its thread
+# status (thread/read answers in about a millisecond, "active" while a turn or
+# a long command runs); the Codex and Grok processes are checked for exit.
+# NEBULA_HARNESS_SILENCE_CHECK_SECONDS overrides it; 0 turns the check off.
+HARNESS_SILENCE_CHECK_SECONDS = 60.0
+# How long that status check may go unanswered before the app-server counts
+# as unresponsive. NEBULA_HARNESS_STATUS_CHECK_TIMEOUT_SECONDS overrides it.
+HARNESS_STATUS_CHECK_TIMEOUT_SECONDS = 30.0
+# Consecutive checks, one silence interval apart, in which Codex must report
+# no running turn before Nebula treats the turn's end as lost.
+CODEX_ENDED_TURN_CHECKS = 2
+
+
+def _seconds_setting(name: str, default: float, *, maximum: float) -> float:
+    raw = os.environ.get(name)
+    try:
+        seconds = float(raw) if raw is not None else default
+    except ValueError:
+        # diagnostic-expected: an unreadable override keeps the default bound.
+        seconds = default
+    if seconds != seconds:  # NaN
+        seconds = default
+    return min(maximum, max(0.0, seconds))
+
+
+def harness_silence_bounds() -> tuple[float, float] | None:
+    """The silence before a running turn is checked, and the check's bound.
+
+    None when the operator turned the check off.
+    """
+
+    silence = _seconds_setting(
+        "NEBULA_HARNESS_SILENCE_CHECK_SECONDS",
+        HARNESS_SILENCE_CHECK_SECONDS,
+        maximum=86_400.0,
+    )
+    if silence <= 0:
+        return None
+    timeout = _seconds_setting(
+        "NEBULA_HARNESS_STATUS_CHECK_TIMEOUT_SECONDS",
+        HARNESS_STATUS_CHECK_TIMEOUT_SECONDS,
+        maximum=600.0,
+    )
+    return silence, timeout if timeout > 0 else HARNESS_STATUS_CHECK_TIMEOUT_SECONDS
+
+
 _HARNESS_GOAL_CONTINUE_INSTRUCTION = (
     "Review the active Nebula goal and its completion criteria. Continue concrete work now. "
     "If all criteria are met, give an evidence-backed completion summary. "
@@ -1282,6 +1330,18 @@ class HarnessProviderError(HarnessTransportError):
             else None
         )
         super().__init__(f"{provider} request failed: {self.data}")
+
+
+class HarnessUnresponsiveError(HarnessTransportError):
+    """A running turn's app-server is gone, stopped answering, or lost the turn.
+
+    A transport error, so the runtime discards the connection and the next
+    turn opens a fresh app-server. ``reason_code`` is the diagnostic reason.
+    """
+
+    def __init__(self, message: str, *, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(message)
 
 
 class HarnessTurnFailedError(HarnessError):
@@ -2726,6 +2786,132 @@ class CodexAppServerConnection(HarnessConnection):
             return await self.rpc.events.get()
         return await asyncio.wait_for(self.rpc.events.get(), timeout)
 
+    async def _next_turn_frame(self) -> dict[str, Any] | BaseException:
+        """The running turn's next frame, checking an app-server gone silent.
+
+        Silence alone never ends a turn. After each silent interval Codex is
+        asked for the thread's status: a turn it reports active (a long
+        command, a gateway tool, an approval) keeps waiting. The turn ends with
+        HarnessUnresponsiveError only when the process exited, the status check
+        goes unanswered, or Codex reports no running turn on consecutive
+        checks while its turn/completed never arrived.
+        """
+
+        bounds = harness_silence_bounds()
+        if bounds is None or self._backlog:
+            return await self._next_frame()
+        silence, check_timeout = bounds
+        ended_checks = 0
+        while True:
+            try:
+                return await self._next_frame(silence)
+            except TimeoutError:
+                # diagnostic-expected: silence only starts the status check below.
+                pass
+            verdict, detail = await self._check_running_turn(check_timeout)
+            if not self.rpc.events.empty():
+                # Codex spoke while it was checked: it is not silent.
+                continue
+            if verdict == "ended":
+                ended_checks += 1
+                if ended_checks < CODEX_ENDED_TURN_CHECKS:
+                    continue
+            elif verdict != "unresponsive":
+                ended_checks = 0
+                continue
+            raise self._silent_turn_error(verdict, detail, silence, check_timeout)
+
+    async def _await_turn_start(self, params: dict[str, Any]) -> Any:
+        """Send turn/start, ending the wait only if the app-server stops answering."""
+
+        bounds = harness_silence_bounds()
+        if bounds is None:
+            return await self.rpc.request("turn/start", params)
+        silence, check_timeout = bounds
+        # diagnostic-expected: the request is awaited here or cancelled in finally.
+        request = asyncio.ensure_future(self.rpc.request("turn/start", params))
+        try:
+            while True:
+                done, _ = await asyncio.wait({request}, timeout=silence)
+                if done:
+                    return request.result()
+                verdict, detail = await self._check_running_turn(check_timeout)
+                if request.done():
+                    return request.result()
+                # No turn exists yet, so only an app-server that is gone or
+                # stopped answering ends the wait.
+                if verdict == "unresponsive":
+                    raise self._silent_turn_error(
+                        verdict, detail, silence, check_timeout
+                    )
+        finally:
+            if not request.done():
+                request.cancel()
+                await asyncio.wait({request})
+
+    async def _check_running_turn(
+        self, timeout: float
+    ) -> tuple[Literal["active", "answered", "ended", "unresponsive"], str]:
+        """Ask a silent app-server whether this thread still runs a turn."""
+
+        process = getattr(self.rpc, "process", None)
+        if process is not None and process.returncode is not None:
+            return "unresponsive", f"exited with code {process.returncode}"
+        try:
+            result = await asyncio.wait_for(
+                self.rpc.request("thread/read", {"threadId": self.external_session_id}),
+                timeout,
+            )
+        except TimeoutError:
+            # diagnostic-expected: an unanswered check is the verdict, raised by the caller.
+            return "unresponsive", f"did not answer a status check within {timeout:g} s"
+        except HarnessProviderError:
+            # diagnostic-expected: an error reply still proves the app-server answers.
+            return "answered", "answered the status check with an error"
+        except (HarnessTransportError, OSError) as exc:
+            # diagnostic-expected: a transport that cannot carry the check is the verdict.
+            return "unresponsive", f"could not be reached ({type(exc).__name__})"
+        thread = result.get("thread") if isinstance(result, dict) else None
+        status = thread.get("status") if isinstance(thread, dict) else None
+        kind = status.get("type") if isinstance(status, dict) else None
+        if kind == "active":
+            return "active", "reports the turn active"
+        if kind in {"idle", "systemError", "notLoaded"}:
+            return "ended", f"reports the thread {kind}"
+        return "answered", "answered the status check"
+
+    def _silent_turn_error(
+        self, verdict: str, detail: str, silence: float, check_timeout: float
+    ) -> HarnessUnresponsiveError:
+        record_diagnostic(
+            "warning",
+            "harnesses",
+            "harnesses.codex.silent_turn_ended",
+            "A Codex turn ended because its app-server went silent.",
+            outcome=verdict,
+            stage="turn",
+            metadata={
+                "silence_seconds": silence,
+                "check_timeout_seconds": check_timeout,
+                "detail": detail,
+            },
+        )
+        if verdict == "ended":
+            return HarnessUnresponsiveError(
+                f"The Codex app-server {detail} with no turn running, but the "
+                f"turn's end never reached Nebula (checked after {silence:g} s "
+                "of silence, twice). Nebula ended the turn; any answer Codex "
+                "gave was not received. The next message starts a fresh "
+                "app-server.",
+                reason_code="stale_state",
+            )
+        return HarnessUnresponsiveError(
+            f"The Codex app-server stopped responding: it sent nothing for "
+            f"{silence:g} s and {detail}. Nebula ended the turn; the next "
+            "message starts a fresh app-server.",
+            reason_code="timeout",
+        )
+
     async def _await_operator(
         self, request_id: Any, decision: asyncio.Future[Any]
     ) -> Any | None:
@@ -2806,10 +2992,7 @@ class CodexAppServerConnection(HarnessConnection):
                     ),
                 },
             }
-        result = await self.rpc.request(
-            "turn/start",
-            turn_params,
-        )
+        result = await self._await_turn_start(turn_params)
         turn = result.get("turn") if isinstance(result, dict) else None
         if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
             raise HarnessTransportError("Codex turn/start omitted the turn id")
@@ -2847,7 +3030,7 @@ class CodexAppServerConnection(HarnessConnection):
         continuation_deadline: float | None = None
         while True:
             if continuation_deadline is None:
-                raw = await self._next_frame()
+                raw = await self._next_turn_frame()
             else:
                 try:
                     raw = await self._next_frame(
@@ -7259,6 +7442,10 @@ class GrokAcpConnection(HarnessConnection):
             vendor=HarnessKind.GROK_ACP,
             external_session_id=self.external_session_id,
         )
+        bounds = harness_silence_bounds()
+        # Grok is only checked for exit: whether it answers a request while a
+        # prompt runs is not established, so a silent but live Grok waits.
+        silence_check = bounds[0] if bounds else None
         try:
             while True:
                 if request.done():
@@ -7270,12 +7457,29 @@ class GrokAcpConnection(HarnessConnection):
                     # diagnostic-expected: event_task is consumed here or cancelled/drained in finally.
                     event_task = asyncio.create_task(self.rpc.events.get())
                     await asyncio.wait(
-                        {request, event_task}, return_when=asyncio.FIRST_COMPLETED
+                        {request, event_task},
+                        timeout=silence_check,
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
                     if not event_task.done():
                         event_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await event_task
+                        process = getattr(self.rpc, "process", None)
+                        if (
+                            not request.done()
+                            and process is not None
+                            and process.returncode is not None
+                        ):
+                            # A tool's child can keep stdout open after Grok
+                            # exits, so no end of stream ever reaches the turn.
+                            raise HarnessUnresponsiveError(
+                                f"The Grok ACP process exited with code "
+                                f"{process.returncode} while its turn was running. "
+                                "Nebula ended the turn; the next message starts "
+                                "a fresh Grok process.",
+                                reason_code="transport_closed",
+                            )
                         continue
                     raw = event_task.result()
                 if isinstance(raw, BaseException):
@@ -14141,7 +14345,9 @@ class HarnessRuntimeService:
                     event_code="harnesses.turn.failed",
                     supplied=(
                         exc.reason_code
-                        if isinstance(exc, HarnessTurnFailedError)
+                        if isinstance(
+                            exc, (HarnessTurnFailedError, HarnessUnresponsiveError)
+                        )
                         else None
                     ),
                 )
