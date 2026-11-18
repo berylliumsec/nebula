@@ -483,9 +483,12 @@ class Runner:
         while True:
             if process.poll() is not None:
                 raise RunnerError("launch_failed", "stage exited before release")
+            # Read the command line first: once it shows the exec'd stage 2,
+            # the process is blocked at its gate and its credentials are final.
+            # A status read taken before that exec can predate the drop.
             try:
-                status = _status(process.pid)
                 command = Path(f"/proc/{process.pid}/cmdline").read_bytes()
+                status = _status(process.pid)
             except OSError as error:
                 raise RunnerError(
                     "launch_failed", "stage exited before release"
@@ -622,7 +625,8 @@ class Runner:
         server.bind(str(self.socket_path))
         os.chown(self.socket_path, 0, self.client_gid)
         os.chmod(self.socket_path, 0o660)
-        server.listen(64)
+        # Bursts of parallel Host commands must queue, not fail to connect.
+        server.listen(socket.SOMAXCONN)
         print(
             json.dumps(
                 {"event": "ready", "socket": str(self.socket_path), **self.info()}

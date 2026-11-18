@@ -462,3 +462,26 @@ def test_linux_deb_ships_the_runner_and_its_per_user_unit():
     assert "Delegate=memory pids" in unit and "KillMode=control-group" in unit
     assert "ProtectHome" not in unit and "ProtectSystem" not in unit
     assert {"python3 (>= 3.9)", "util-linux"} <= set(deb["depends"])
+
+
+@real
+async def test_real_burst_of_parallel_commands_all_admit(budgets, tmp_path):
+    """Parallel spawns once raced the privilege check and overflowed the backlog."""
+    _store, controller = budgets
+    runner = HostMemoryRunner(Path(REAL_SOCKET))
+    handle = await _open(controller, runner, job_id="session-burst")
+    try:
+
+        async def one():
+            process = await runner.spawn(
+                "session-burst", ["/bin/true"], str(tmp_path), {"PATH": "/usr/bin:/bin"}
+            )
+            code = await process.wait()
+            await process.close()
+            return code
+
+        assert await asyncio.gather(*(one() for _ in range(200))) == [0] * 200
+    finally:
+        await handle.close()
+    job = await controller.service.get_job("session-burst")
+    assert job.state == "finished" and job.reserved_bytes == 0
