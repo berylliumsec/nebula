@@ -1,23 +1,28 @@
 {
-  "change_digest": "ce78e71334c770fee3ea6575940c8d4c46bd143cec2d79e7b24ce02b24b26c47",
-  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Bounds four calls a project request awaited forever: Codex turn/steer on the control lane (15 s), Codex initialize for fork and the skill catalog (15 s), the HTTP MCP session-close DELETE (10 s, client always closed), and marks an http.invoke chat resume as turn-following so it frees the work lane. Selected: harness adapter suite (new silent-initialize and silent-steer regressions), MCP probe suite (new trickled-close regression) and the Codex transport suite.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The steer-holds-Stop and resume cases were measured on a fake scratch Core with a fake Codex app-server and a stalling provider stub.",
+  "change_digest": "79315217317e111fa37c0570e5a8da7733e66f6a23167491c2241f69fd919757",
+  "reviewed_by": "Claude Code after scratch-Core reproduction on main and independent subagent root-cause validation",
+  "reason": "Project-scoped execution transactions hold ownership rows FOR KEY SHARE (claims and fenced checks lock FOR UPDATE) so a worker's own long transaction cannot starve its lease renewal or API acceptance; a 120 s runaway guard bounds them; LeaseLost names a blocking lock or a blocked event loop; the search projection repair runs in bounded pages and searches wait at most 5 s for it. Selected: the new lease, fencing, guard, stall and paged-repair regressions, the ownership-change and coordination lock-order tests, worker SQL outage, runtime coordination, checkpoint heartbeat, federated search and read-responsiveness suites, on SQLite and PostgreSQL.",
+  "exclusions": "No UI, native, browser or Playwright layer: no operator-visible control changed, only a worker diagnostic message. test_execution_locks.py::test_handoff_waits_for_an_in_flight_source_write is excluded because it already fails on origin/main. Process-level worker suites are excluded (locally they import the primary checkout); the worker path was verified on a scratch Core instead. No settings or settings-assistant destination changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 138,
+    "python": 183,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_codex_transport.py"
+    "tests/v3/test_worker_long_transaction_lease.py",
+    "tests/v3/test_execution_locks.py::test_ownership_change_waits_for_the_owner_and_fences_it_after",
+    "tests/v3/test_execution_locks.py::test_project_coordination_waits_for_its_open_transaction",
+    "tests/v3/test_worker_sql_outage.py",
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_checkpoint_heartbeat.py",
+    "tests/v3/test_federated_search.py",
+    "tests/v3/test_load_read_responsiveness.py"
   ],
   "frontend": [],
   "native": [],

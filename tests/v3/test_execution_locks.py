@@ -373,8 +373,16 @@ async def test_ownership_change_waits_for_the_owner_and_fences_it_after(fleet):
         runtimes["alpha"], leases["alpha"], _rename("alpha", "kept")
     ) as holder:
         # Expiring and reclaiming the project serializes on the ownership row.
+        # Ownership changes lock it FOR UPDATE: the owner's transactions hold
+        # it key-shared, which a plain lease renewal does not wait for.
         async def reclaim():
             async with control.database.session() as session:
+                await session.execute(
+                    text(
+                        "SELECT project_id FROM project_ownership "
+                        "WHERE project_id = 'alpha' FOR UPDATE"
+                    )
+                )
                 await session.execute(
                     text(
                         "UPDATE project_ownership SET lease_expires_at_ms = 0 "
