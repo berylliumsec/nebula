@@ -110,6 +110,15 @@ class HostServiceClient(RuntimeRpcClient):
             delay = min(delay * 2, 2.0)
 
 
+# A guard on the peer table, not a capacity policy: memory admission decides
+# how many workers a host runs, and every cached peer is a live worker.
+MAX_HOST_PEERS = 1024
+
+
+class HostPeersBusy(RuntimeIpcError):
+    """The peer table is full; nothing was dispatched, so callers resend."""
+
+
 def host_service_client(bootstrap, secret: bytes) -> RuntimeRpcClient:
     if not bootstrap.identity.endpoint.startswith("unix:///"):
         raise RuntimeIpcError("Host services require a private local runtime endpoint")
@@ -205,17 +214,29 @@ class HostSharedServices:
                     # such peers, retaining live nonce windows through cache use.
                     live = set(
                         await session.scalars(
-                            select(RuntimeInstanceRow.id).where(
+                            select(RuntimeInstanceRow.id)
+                            .join(
+                                RuntimeProcessRow,
+                                RuntimeProcessRow.runtime_id == RuntimeInstanceRow.id,
+                            )
+                            .where(
                                 RuntimeInstanceRow.id.in_(tuple(self._peers)),
                                 RuntimeInstanceRow.lease_expires_at_ms > now,
+                                RuntimeProcessRow.state == "ready",
                             )
                         )
                     )
                     self._peers = {
                         key: value for key, value in self._peers.items() if key in live
                     }
-                    if len(self._peers) >= 16:
-                        raise RuntimeIpcError("Shared host peer capacity is busy")
+                    # Every cached peer is now a live, ready worker, so the
+                    # table is bounded by the workers memory admission let
+                    # this host run. The fixed bound only guards the table
+                    # itself; it is far above any host's real capacity.
+                    if len(self._peers) >= MAX_HOST_PEERS:
+                        raise HostPeersBusy(
+                            f"Shared host services already serve {len(self._peers)} live workers"
+                        )
                     secret = self.host.credentials.read(process.credential_reference)
                     rpc = RuntimeRpcServer(secret)
 
@@ -316,8 +337,12 @@ class HostSharedServices:
             )(scope, receive, send)
             return
         if self._slots.locked():
+            # Nothing was dispatched: the caller resends instead of failing,
+            # so a worker starting while others are busy does not die.
             await JSONResponse(
-                {"detail": "Shared host services are busy"}, status_code=503
+                {"detail": "Shared host services are busy"},
+                status_code=503,
+                headers={UNDISPATCHED_HEADER: "1"},
             )(scope, receive, send)
             return
         peers = [
@@ -336,6 +361,21 @@ class HostSharedServices:
         try:
             try:
                 peer = await self._peer(peers[0].decode("ascii"))
+            except HostPeersBusy as error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.host_services.peers_busy",
+                    "Shared host services refused a new worker; it retries "
+                    "while other workers retire.",
+                    error,
+                    stage="host-services",
+                )
+                await JSONResponse(
+                    {"detail": "Shared host peer capacity is busy"},
+                    status_code=503,
+                    headers={UNDISPATCHED_HEADER: "1"},
+                )(scope, receive, send)
+                return
             except (RuntimeIpcError, OSError):
                 # diagnostic-expected: a missing or rejected private peer yields a bounded unavailable response.
                 # Peer capacity and credential failures do not heal by
