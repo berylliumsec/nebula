@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
+
 from .diagnostics import record_caught_exception
 
 import os
@@ -10,7 +13,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 from uuid import uuid4
 
 import keyring
@@ -92,6 +95,28 @@ class CredentialStatus(NebulaModel):
         "environment_missing",
         "service_credential_missing",
     ]
+
+
+# How long one call into the OS credential vault (keyring, Secret Service
+# over D-Bus) may take. Those calls block; a vault that never answers (a
+# locked collection waiting on a prompt nobody sees) must fail the operation
+# that asked, not freeze the event loop of the worker that serves a project.
+CREDENTIAL_VAULT_TIMEOUT_SECONDS = 30.0
+_T = TypeVar("_T")
+
+
+async def vault_call(call: Callable[..., _T], *args: Any) -> _T:
+    """Run a blocking credential call in a thread with a bounded wait."""
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(call, *args), timeout=CREDENTIAL_VAULT_TIMEOUT_SECONDS
+        )
+    except TimeoutError as exc:
+        raise CredentialUnavailableError(
+            "the system credential vault did not answer within "
+            f"{CREDENTIAL_VAULT_TIMEOUT_SECONDS:g} s"
+        ) from exc
 
 
 @dataclass

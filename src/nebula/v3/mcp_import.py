@@ -36,7 +36,12 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, ValidationError
 
 from .diagnostics import record_caught_exception
-from .credentials import CredentialCreateRequest, CredentialError, CredentialStore
+from .credentials import (
+    CredentialCreateRequest,
+    CredentialError,
+    CredentialStore,
+    vault_call,
+)
 from .domain import (
     MCP_DESCRIPTION_MAX_CHARS,
     McpApprovalMode,
@@ -275,7 +280,10 @@ async def import_mcp_config(
                 )
             elif current and request.on_conflict == "update":
                 entry.profile_id = current.id
-                _plan_update(draft, current, request, credential_store)
+                # Reusing saved secrets reads the vault, off the event loop.
+                await vault_call(
+                    _plan_update, draft, current, request, credential_store
+                )
                 if entry.action == "update":
                     drafts.append(draft)
             else:
@@ -292,7 +300,11 @@ async def import_mcp_config(
         entries.append(entry)
 
     if any(draft.literals for draft in drafts):
-        vault_state = credential_store.vault_state
+        try:
+            vault_state = await vault_call(lambda: credential_store.vault_state)
+        except CredentialError:
+            # diagnostic-expected: a vault that does not answer is unavailable.
+            vault_state = "unavailable"
         if request.literal_secrets == "vault" and vault_state != "available":
             reason = (
                 "vault is locked" if vault_state == "locked" else "vault is unavailable"
@@ -967,13 +979,14 @@ async def _apply(
     try:
         references: dict[str, str] = {}
         for target, value in draft.literals.items():
-            status = credential_store.create(
+            status = await vault_call(
+                credential_store.create,
                 CredentialCreateRequest(
                     secret=SecretStr(value),
                     persistence="session"
                     if request.literal_secrets == "session"
                     else "vault",
-                )
+                ),
             )
             references[target] = status.reference
             stored.append(status.reference)
@@ -1036,7 +1049,7 @@ async def _apply(
         )
         for reference in stored:
             try:
-                credential_store.delete(reference)
+                await vault_call(credential_store.delete, reference)
             except Exception:  # diagnostic-expected: best-effort rollback
                 pass
         entry.action = "invalid"
@@ -1106,7 +1119,7 @@ async def _release_orphaned(
         in_use |= _owned_references(profile)
     for reference in references - in_use:
         try:
-            credential_store.delete(reference)
+            await vault_call(credential_store.delete, reference)
         except Exception:  # diagnostic-expected: an orphan is harmless if kept
             pass
 

@@ -1,23 +1,26 @@
 {
-  "change_digest": "ce78e71334c770fee3ea6575940c8d4c46bd143cec2d79e7b24ce02b24b26c47",
+  "change_digest": "66ee4a705cd835675d3e2d79f06122aaea5973779333f26b8b8d3aa062863465",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Bounds four calls a project request awaited forever: Codex turn/steer on the control lane (15 s), Codex initialize for fork and the skill catalog (15 s), the HTTP MCP session-close DELETE (10 s, client always closed), and marks an http.invoke chat resume as turn-following so it frees the work lane. Selected: harness adapter suite (new silent-initialize and silent-steer regressions), MCP probe suite (new trickled-close regression) and the Codex transport suite.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The steer-holds-Stop and resume cases were measured on a fake scratch Core with a fake Codex app-server and a stalling provider stub.",
+  "reason": "Blocking OS credential vault calls that ran on the worker's event loop (MCP secret resolution, browser-companion credentials, MCP import vault state, reuse, save and rollback) now run in a thread with a CREDENTIAL_VAULT_TIMEOUT_SECONDS bound, so a hung keyring fails the operation instead of freezing the worker. Selected: MCP probe (new hung-vault regression), MCP import, browser companion suites and credentials.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. The worker-level effect was measured on a fake scratch Core with a scratch-only shim that makes vault resolution block forever.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 138,
+    "python": 154,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
     "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_codex_transport.py"
+    "tests/v3/test_mcp_import.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_browser_companion_control_race.py",
+    "tests/v3/test_browser_companion_revision_races.py",
+    "tests/v3/test_credentials.py"
   ],
   "frontend": [],
   "native": [],

@@ -28,7 +28,7 @@ import httpx
 from jsonschema import Draft202012Validator, SchemaError
 from pydantic import Field
 
-from .credentials import CredentialError, CredentialStore
+from .credentials import CredentialError, CredentialStore, vault_call
 from .domain import (
     McpAuthMode,
     McpApprovalMode,
@@ -644,7 +644,7 @@ class McpProbeService:
                 cwd = Path(profile.cwd or "")
             environment = dict(profile.environment)
             for name, reference in profile.environment_secret_refs.items():
-                environment[name] = self._secret(reference)
+                environment[name] = await self._secret(reference)
             process = await asyncio.create_subprocess_exec(
                 str(command),
                 *profile.arguments,
@@ -658,11 +658,11 @@ class McpProbeService:
             return _StdioMcpClient(process, response_limit=response_limit)
         headers: dict[str, str] = {}
         if profile.auth_mode == McpAuthMode.BEARER and profile.bearer_secret_ref:
-            headers["Authorization"] = "Bearer " + self._secret(
+            headers["Authorization"] = "Bearer " + await self._secret(
                 profile.bearer_secret_ref
             )
         for name, reference in profile.header_secret_refs.items():
-            headers[name] = self._secret(reference)
+            headers[name] = await self._secret(reference)
         return _HttpMcpClient(
             profile.url or "",
             headers,
@@ -783,9 +783,11 @@ class McpProbeService:
         finally:
             await client.close()
 
-    def _secret(self, reference: str) -> str:
+    async def _secret(self, reference: str) -> str:
         try:
-            return self.credential_store.resolve(reference).get_secret_value()
+            # The vault call blocks; off the event loop, and bounded.
+            resolved = await vault_call(self.credential_store.resolve, reference)
+            return resolved.get_secret_value()
         except (CredentialError, ValueError) as exc:
             record_caught_exception(
                 "harnesses",
