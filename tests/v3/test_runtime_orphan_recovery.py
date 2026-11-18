@@ -13,6 +13,7 @@ from nebula.v3.database import (
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
     RuntimeCapacityReservationRow,
+    RuntimeChatBindingRow,
     RuntimeCommandRow,
     RuntimeInstanceRow,
     RuntimeResourceRow,
@@ -1373,3 +1374,106 @@ async def test_missing_death_proof_keeps_harness_claims_and_requests(orphan):
         await value.reconcile()
     saved = await value.store.get(ChatTurn, turn.id)
     assert saved.execution_claim_id == "live-harness-turn"
+
+
+def _chat_command(value, identity, sequence, *, name="chat.accept/v1"):
+    return RuntimeCommandRow(
+        id=identity,
+        project_id="one",
+        actor_id="operator",
+        idempotency_key=identity,
+        sequence=sequence,
+        name=name,
+        lane="work",
+        payload={},
+        payload_hash="0" * 64,
+        chat_start=True,
+        accepted_at_ms=0,
+        state="running",
+        runtime_id=value.lease.runtime_id,
+        fencing_token=value.lease.fencing_token,
+    )
+
+
+async def test_dead_owner_requeues_chat_start_that_saved_nothing(orphan):
+    """A message accepted as a saved request was silently lost when its worker
+    died before saving the turn: the request failed "may have partly applied"
+    while nothing of it existed. It now runs once more on the next owner."""
+    value = orphan
+    async with value.coordinator.database.session() as sql:
+        sql.add(_chat_command(value, "unsaved-accept", 1))
+        sql.add(_chat_command(value, "unsaved-resume", 2, name="chat.resume/v1"))
+        sql.add(_chat_command(value, "saved-accept", 3))
+        sql.add(
+            RuntimeChatBindingRow(
+                command_id="saved-accept",
+                project_id="one",
+                turn_id=value.turn.id,
+                session_id=value.session.id,
+                runtime_id=value.lease.runtime_id,
+                fencing_token=value.lease.fencing_token,
+            )
+        )
+        sql.add(_chat_command(value, "plain-request", 4, name="http.invoke/v1"))
+    await value.expire()
+
+    result = await value.reconcile()
+
+    assert result["requeued_command_ids"] == ["unsaved-accept", "unsaved-resume"]
+    assert result["settled_command_ids"] == ["saved-accept", "plain-request"]
+    async with value.coordinator.database.session() as sql:
+        for identity in ("unsaved-accept", "unsaved-resume"):
+            row = await sql.get(RuntimeCommandRow, identity)
+            assert (row.state, row.runtime_id, row.fencing_token) == (
+                "queued",
+                None,
+                None,
+            )
+            assert row.result == {"interrupted_runs": 1}
+        saved = await sql.get(RuntimeCommandRow, "saved-accept")
+        assert saved.state == "failed"
+        assert saved.result["saved_turn"] is True
+        assert saved.result["turn_id"] == value.turn.id
+        assert "may have partly applied" not in saved.result["detail"]
+        plain = await sql.get(RuntimeCommandRow, "plain-request")
+        assert plain.state == "failed"
+        assert plain.result["interrupted_by_runtime_stop"] is True
+        assert not await value.coordinator._recovery_blockers(
+            sql, "one", value.lease.runtime_id
+        )
+    assert await value.reconcile() == result
+
+
+async def test_repeatedly_interrupted_chat_start_stops_being_requeued(orphan):
+    value = orphan
+    async with value.coordinator.database.session() as sql:
+        row = _chat_command(value, "unlucky-accept", 1)
+        row.result = {"interrupted_runs": 2}
+        sql.add(row)
+    await value.expire()
+    result = await value.reconcile()
+    assert result["requeued_command_ids"] == []
+    async with value.coordinator.database.session() as sql:
+        assert (await sql.get(RuntimeCommandRow, "unlucky-accept")).state == "failed"
+
+
+async def test_chat_start_that_published_a_response_is_not_requeued(orphan):
+    from nebula.v3.database import RuntimeDeliveryRow
+
+    value = orphan
+    async with value.coordinator.database.session() as sql:
+        sql.add(_chat_command(value, "answered-accept", 1))
+        sql.add(
+            RuntimeDeliveryRow(
+                id="frame-1",
+                project_id="one",
+                command_id="answered-accept",
+                sequence=1,
+                kind="head",
+                content_reference="0" * 64,
+            )
+        )
+    await value.expire()
+    result = await value.reconcile()
+    assert result["requeued_command_ids"] == []
+    assert result["settled_command_ids"] == ["answered-accept"]

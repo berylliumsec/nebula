@@ -12,6 +12,7 @@ from .database import (
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
     RuntimeCapacityReservationRow,
+    RuntimeChatBindingRow,
     RuntimeCommandRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
@@ -42,7 +43,9 @@ from .runtime_coordination import (
     STORAGE_REPORT_COMMAND,
     CoordinationConflict,
     ProjectLease,
+    requeue_unbound_chat_start,
 )
+from .runtime_chat_acceptance import CHAT_COMMANDS as CHAT_START_COMMANDS
 from .storage import NebulaStore, NotFoundError, StoreTransaction
 
 MAX_ORPHAN_ROWS = 100
@@ -58,6 +61,14 @@ INTERRUPTED_COMMAND_RESULT = {
     "http_status": 503,
     "detail": "The project worker stopped while this request ran. It was not retried and may have partly applied.",
     "interrupted_by_runtime_stop": True,
+}
+# A chat start whose turn and messages were saved before its worker stopped.
+# The turn is the durable outcome; the request itself is not run again.
+SAVED_CHAT_START_RESULT = {
+    "http_status": 409,
+    "detail": "The project worker stopped after this message was saved. Its turn records what happened; the request was not retried.",
+    "interrupted_by_runtime_stop": True,
+    "saved_turn": True,
 }
 
 
@@ -287,7 +298,7 @@ async def reconcile_dead_project(
             released_claims = await _release_harness_claims(
                 session, transaction, expected_owner.project_id
             )
-            settled_commands = await _settle_interrupted_commands(
+            settled_commands, requeued_commands = await _settle_interrupted_commands(
                 session, expected_owner
             )
             unconfirmed_deliveries = await _mark_unconfirmed_adapter_deliveries(
@@ -417,6 +428,7 @@ async def reconcile_dead_project(
                 "released_failed_provider_claim_ids": released_ended_claims,
                 "goal_review_turn_ids": review_turns,
                 "settled_command_ids": settled_commands,
+                "requeued_command_ids": requeued_commands,
                 "unconfirmed_delivery_approval_ids": unconfirmed_deliveries,
                 "effects_replayed": False,
             }
@@ -979,12 +991,19 @@ async def _close_dead_resident_handles(
     return closed
 
 
-async def _settle_interrupted_commands(session, owner: ProjectLease) -> list[str]:
+async def _settle_interrupted_commands(
+    session, owner: ProjectLease
+) -> tuple[list[str], list[str]]:
     """Fail requests the dead owner left running, and earlier uncertain ones.
 
     No worker runs them again, so each answers its waiting client as failed
     instead of holding recovery for an outcome nobody can supply. Storage
-    reports keep their own requeue in ``begin_recovery``.
+    reports keep their own requeue in ``begin_recovery``. A typed chat start
+    of the dead owner that saved nothing (no turn binding, no response) is
+    queued for the next owner instead, so an accepted message is not lost;
+    one whose turn was saved is settled from that turn.
+
+    Returns the settled and the requeued command IDs.
     """
     rows = list(
         await session.scalars(
@@ -1004,7 +1023,32 @@ async def _settle_interrupted_commands(session, owner: ProjectLease) -> list[str
             .order_by(RuntimeCommandRow.sequence)
         )
     )
+    settled, requeued = [], []
     for row in rows:
-        row.result = {**INTERRUPTED_COMMAND_RESULT, "previous_state": row.state}
+        if (row.runtime_id, row.fencing_token) == (
+            owner.runtime_id,
+            owner.fencing_token,
+        ) and await requeue_unbound_chat_start(session, row):
+            # The dead owner saved nothing of this chat start: the next owner
+            # runs it, instead of losing the operator's accepted message.
+            requeued.append(row.id)
+            continue
+        binding = (
+            await session.get(RuntimeChatBindingRow, row.id)
+            if row.name in CHAT_START_COMMANDS
+            else None
+        )
+        if binding is not None:
+            # Its turn was saved: that durable record carries the outcome
+            # (reconciled above like any other turn), not this request.
+            row.result = {
+                **SAVED_CHAT_START_RESULT,
+                "turn_id": binding.turn_id,
+                "session_id": binding.session_id,
+                "previous_state": row.state,
+            }
+        else:
+            row.result = {**INTERRUPTED_COMMAND_RESULT, "previous_state": row.state}
         row.state = "failed"
-    return [row.id for row in rows]
+        settled.append(row.id)
+    return settled, requeued

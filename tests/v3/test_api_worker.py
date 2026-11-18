@@ -258,6 +258,65 @@ async def test_chat_acceptance_is_pending_until_its_turn_stream_is_ready(
     assert stream.headers["x-nebula-request-state"] == "complete"
 
 
+async def test_an_interrupted_chat_start_that_saved_nothing_runs_again(boundary):
+    """The operator's accepted message is not lost when its worker stops first.
+
+    A chat start's turn, messages and binding commit together, so without a
+    binding (and with no published response) nothing of it was applied.
+    """
+    from nebula.v3.runtime_chat_acceptance import CHAT_ACCEPT_COMMAND
+    from nebula.v3.runtime_coordination import CHAT_START_ATTEMPTS
+
+    _, client = boundary.api()
+    accepted = await client.post(
+        "/api/v1/chat/completions",
+        headers=_AUTH | {"Idempotency-Key": "lost-message"},
+        json={"stream": True, "backend": "provider"},
+    )
+    assert accepted.status_code == 202, accepted.text
+    command_id = accepted.json()["receipt"]["command_id"]
+    async with boundary.host.database.session() as session:
+        # As the API saves it when the project's owner serves typed chats.
+        (await session.get(RuntimeCommandRow, command_id)).name = CHAT_ACCEPT_COMMAND
+        await session.commit()
+
+    async def stopped(_scope, _receive, _send):
+        raise RuntimeError("the execution worker stopped before saving the turn")
+
+    with pytest.raises(RuntimeError):
+        await DurableHttpRunner(
+            boundary.delivery,
+            stopped,
+            operator_token=_TOKEN,
+            typed_chat_commands=frozenset({CHAT_ACCEPT_COMMAND}),
+        ).run_one(boundary.lease, lane="work")
+    async with boundary.host.database.session() as session:
+        interrupted = await session.get(RuntimeCommandRow, command_id)
+    assert interrupted.name == CHAT_ACCEPT_COMMAND
+    assert (interrupted.state, interrupted.runtime_id) == ("queued", None)
+    assert interrupted.result == {"interrupted_runs": 1}
+
+    # A chat start a lost owner left running is queued again for the next
+    # owner, not left uncertain; past its attempts it is no longer retried.
+    for attempt in range(2, CHAT_START_ATTEMPTS + 1):
+        async with boundary.host.database.session() as session:
+            row = await session.get(RuntimeCommandRow, command_id)
+            row.state, row.runtime_id, row.fencing_token = "running", "lost-owner", 9
+            await session.commit()
+        assert (
+            await boundary.coordination.claim_next(boundary.lease, lane="work") is None
+        )
+        async with boundary.host.database.session() as session:
+            lost = await session.get(RuntimeCommandRow, command_id)
+        if attempt < CHAT_START_ATTEMPTS:
+            assert (lost.state, lost.result) == (
+                "queued",
+                {"interrupted_runs": attempt},
+            )
+        else:
+            assert lost.state == "uncertain"
+
+
 async def test_live_memory_apply_uses_control_while_original_work_is_running(boundary):
     _, client = boundary.api()
     work_entered, release_work = asyncio.Event(), asyncio.Event()

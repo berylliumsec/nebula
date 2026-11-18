@@ -891,6 +891,12 @@ class DurableHttpRunner:
                         lease, command.receipt.command_id
                     )
                     return
+                # A chat start that saved no turn has no effect to reconcile;
+                # it runs again rather than losing the operator's message.
+                if await self.delivery.coordination.requeue_chat_start(
+                    lease, command.receipt.command_id
+                ):
+                    return
                 await self.delivery.coordination.finish_command(
                     lease,
                     command.receipt.command_id,

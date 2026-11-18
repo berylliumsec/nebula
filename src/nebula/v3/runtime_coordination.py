@@ -224,6 +224,46 @@ def pending_storage_dispatches(project_id, dialect: str) -> Any:
     )
 
 
+# Typed chat starts. Their accepted turn, messages and the command's binding
+# commit in one transaction (``bind_chat_command``), so a command without a
+# binding has written nothing of its conversation.
+_CHAT_START_COMMANDS = frozenset(("chat.accept/v1", "chat.resume/v1"))
+CHAT_START_ATTEMPTS = 3
+
+
+async def requeue_unbound_chat_start(session, row: RuntimeCommandRow) -> bool:
+    """Run an interrupted chat start again when it provably saved nothing.
+
+    The binding commits atomically with the accepted turn and its messages,
+    and fencing makes a stale owner's binding transaction roll back once the
+    command is queued again, so an unbound start that also published no
+    response is safe to dispatch once more. It is never retried past
+    ``CHAT_START_ATTEMPTS`` runs. Returns whether the command was queued.
+    """
+    from .database import RuntimeChatBindingRow, RuntimeDeliveryRow
+
+    if row.name not in _CHAT_START_COMMANDS or row.state not in {
+        "running",
+        "uncertain",
+    }:
+        return False
+    if await session.get(RuntimeChatBindingRow, row.id) is not None:
+        return False
+    if await session.scalar(
+        select(RuntimeDeliveryRow.id)
+        .where(RuntimeDeliveryRow.command_id == row.id)
+        .limit(1)
+    ):
+        return False
+    runs = (row.result or {}).get("interrupted_runs")
+    runs = (runs if type(runs) is int and runs >= 0 else 0) + 1
+    if runs >= CHAT_START_ATTEMPTS:
+        return False
+    row.state, row.runtime_id, row.fencing_token = "queued", None, None
+    row.result = {"interrupted_runs": runs}
+    return True
+
+
 def requeue_interrupted_storage_report(row: RuntimeCommandRow) -> None:
     """Run an interrupted storage report again instead of leaving it uncertain.
 
@@ -993,7 +1033,7 @@ class RuntimeCoordination:
                 if row.name == STORAGE_REPORT_COMMAND:
                     # Re-running a storage report is safe; never block the lane.
                     requeue_interrupted_storage_report(row)
-                else:
+                elif not await requeue_unbound_chat_start(session, row):
                     row.state = "uncertain"
                 return None
             row.state, row.runtime_id, row.fencing_token = (
@@ -1195,6 +1235,20 @@ class RuntimeCoordination:
             ):
                 raise CoordinationConflict("command is not running under this owner")
             requeue_interrupted_storage_report(row)
+
+    async def requeue_chat_start(self, lease: ProjectLease, command_id: str) -> bool:
+        """Queue this owner's interrupted chat start again if it saved nothing."""
+        async with self.fenced(lease) as session:
+            row = await session.get(RuntimeCommandRow, command_id, with_for_update=True)
+            if (
+                row is None
+                or row.project_id != lease.project_id
+                or row.state != "running"
+                or (row.runtime_id, row.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+            ):
+                return False
+            return await requeue_unbound_chat_start(session, row)
 
     async def cancel_storage_reports(
         self,
