@@ -14,6 +14,7 @@ import json
 import os
 import pwd
 import socket
+import time
 from pathlib import Path
 from typing import Any
 
@@ -227,8 +228,21 @@ class HostMemoryRunner:
         )
 
         def send() -> None:
+            # A Unix socket connect fails with EAGAIN instead of waiting while
+            # the runner's accept backlog is full; retry within the deadline.
+            deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
+            delay = 0.005
+            while True:
+                try:
+                    connection.connect(str(self.socket_path))
+                    break
+                except BlockingIOError:
+                    # diagnostic-expected: a full accept backlog is retried until the deadline.
+                    if time.monotonic() + delay > deadline:
+                        raise
+                    time.sleep(delay)
+                    delay = min(delay * 2, 0.2)
             connection.settimeout(REQUEST_TIMEOUT_SECONDS)
-            connection.connect(str(self.socket_path))
             socket.send_fds(connection, [message], child)
             connection.setblocking(False)
 
