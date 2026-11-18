@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 
 from .database import (
     DeploymentReceiptRow,
@@ -14,6 +14,7 @@ from .database import (
     RuntimeCapacityReservationRow,
     RuntimeChatBindingRow,
     RuntimeCommandRow,
+    RuntimeCommandWriteRow,
     RuntimeInstanceRow,
     RuntimeProcessRow,
     RuntimeResourceRow,
@@ -44,6 +45,7 @@ from .runtime_coordination import (
     CoordinationConflict,
     ProjectLease,
     requeue_unbound_chat_start,
+    unwritten_request,
 )
 from .runtime_chat_acceptance import CHAT_COMMANDS as CHAT_START_COMMANDS
 from .storage import NebulaStore, NotFoundError, StoreTransaction
@@ -69,6 +71,23 @@ SAVED_CHAT_START_RESULT = {
     "detail": "The project worker stopped after this message was saved. Its turn records what happened; the request was not retried.",
     "interrupted_by_runtime_stop": True,
     "saved_turn": True,
+}
+# A re-runnable request (see runtime_routes.rerunnable_request) that saved
+# changes before its worker stopped. Those changes are the outcome; running
+# it again could apply them twice.
+SAVED_REQUEST_RESULT = {
+    "http_status": 409,
+    "detail": "The project worker stopped after this request saved changes. It was not run again; reload to see what it saved.",
+    "interrupted_by_runtime_stop": True,
+    "saved_changes": True,
+}
+# A re-runnable request that saved nothing, but cannot run again: it already
+# published part of a response, or its worker stopped on every attempt.
+UNSAVED_REQUEST_RESULT = {
+    "http_status": 503,
+    "detail": "The project worker stopped while this request ran. Nothing of it was saved; send it again.",
+    "interrupted_by_runtime_stop": True,
+    "saved_changes": False,
 }
 
 
@@ -1048,7 +1067,24 @@ async def _settle_interrupted_commands(
                 "previous_state": row.state,
             }
         else:
-            row.result = {**INTERRUPTED_COMMAND_RESULT, "previous_state": row.state}
+            unwritten = await unwritten_request(session, row)
+            row.result = {
+                **(
+                    INTERRUPTED_COMMAND_RESULT
+                    if unwritten is None
+                    else UNSAVED_REQUEST_RESULT
+                    if unwritten
+                    else SAVED_REQUEST_RESULT
+                ),
+                "previous_state": row.state,
+            }
         row.state = "failed"
         settled.append(row.id)
+    if settled:
+        # The settled results carry what the write records proved.
+        await session.execute(
+            delete(RuntimeCommandWriteRow).where(
+                RuntimeCommandWriteRow.command_id.in_(settled)
+            )
+        )
     return settled, requeued

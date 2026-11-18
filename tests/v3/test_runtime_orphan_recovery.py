@@ -1477,3 +1477,81 @@ async def test_chat_start_that_published_a_response_is_not_requeued(orphan):
     result = await value.reconcile()
     assert result["requeued_command_ids"] == []
     assert result["settled_command_ids"] == ["answered-accept"]
+
+
+async def test_dead_owner_requeues_tracked_request_that_saved_nothing(orphan):
+    """A non-streamed request (stream:false chat, goal action, unarchive) whose
+    worker died before saving anything failed "may have partly applied". Its
+    write record now proves nothing was saved, so it runs once more; one that
+    saved changes is settled from them and never run again."""
+    from nebula.v3.database import RuntimeCommandWriteRow
+    from nebula.v3.runtime_orphan_recovery import (
+        SAVED_REQUEST_RESULT,
+        UNSAVED_REQUEST_RESULT,
+    )
+
+    value = orphan
+
+    def tracked(identity, *, wrote, fencing_token=None):
+        return RuntimeCommandWriteRow(
+            command_id=identity,
+            project_id="one",
+            runtime_id=value.lease.runtime_id,
+            fencing_token=value.lease.fencing_token
+            if fencing_token is None
+            else fencing_token,
+            wrote=wrote,
+        )
+
+    async with value.coordinator.database.session() as sql:
+        for sequence, identity in enumerate(
+            ("unsaved", "saved", "untracked", "stale-record", "exhausted"), 1
+        ):
+            row = _chat_command(value, identity, sequence, name="http.invoke/v1")
+            if identity == "exhausted":
+                row.result = {"interrupted_runs": 2}
+            sql.add(row)
+        sql.add(tracked("unsaved", wrote=False))
+        sql.add(tracked("saved", wrote=True))
+        # A record from an earlier owner says nothing about this run.
+        sql.add(
+            tracked(
+                "stale-record", wrote=False, fencing_token=value.lease.fencing_token - 1
+            )
+        )
+        sql.add(tracked("exhausted", wrote=False))
+    await value.expire()
+
+    result = await value.reconcile()
+
+    assert result["requeued_command_ids"] == ["unsaved"]
+    assert result["settled_command_ids"] == [
+        "saved",
+        "untracked",
+        "stale-record",
+        "exhausted",
+    ]
+    async with value.coordinator.database.session() as sql:
+        unsaved = await sql.get(RuntimeCommandRow, "unsaved")
+        assert (unsaved.state, unsaved.runtime_id, unsaved.result) == (
+            "queued",
+            None,
+            {"interrupted_runs": 1},
+        )
+        # The next owner records its own run.
+        assert await sql.get(RuntimeCommandWriteRow, "unsaved") is None
+        saved = await sql.get(RuntimeCommandRow, "saved")
+        assert saved.state == "failed"
+        assert saved.result == {**SAVED_REQUEST_RESULT, "previous_state": "running"}
+        # Settled results carry what the records proved; the records go.
+        assert await sql.get(RuntimeCommandWriteRow, "saved") is None
+        for identity in ("untracked", "stale-record"):
+            row = await sql.get(RuntimeCommandRow, identity)
+            assert row.state == "failed"
+            assert "may have partly applied" in row.result["detail"]
+        exhausted = await sql.get(RuntimeCommandRow, "exhausted")
+        assert exhausted.result == {
+            **UNSAVED_REQUEST_RESULT,
+            "previous_state": "running",
+        }
+    assert await value.reconcile() == result

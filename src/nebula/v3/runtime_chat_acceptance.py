@@ -4,14 +4,17 @@ from dataclasses import dataclass
 
 from .database import RuntimeChatBindingRow, RuntimeCommandRow
 from .execution_scope import current_execution_lease
-from .runtime_coordination import CoordinationConflict, LeaseLost
+from .runtime_coordination import (
+    HTTP_INVOKE_COMMAND as HTTP_INVOKE_COMMAND,
+    CoordinationConflict,
+    LeaseLost,
+)
 
 CHAT_ACCEPT_COMMAND = "chat.accept/v1"
 CHAT_ACCEPT_FEATURE = "chat.accept/v1"
 CHAT_RESUME_COMMAND = "chat.resume/v1"
 CHAT_RESUME_FEATURE = "chat.resume/v1"
 CHAT_COMMANDS = frozenset((CHAT_ACCEPT_COMMAND, CHAT_RESUME_COMMAND))
-HTTP_INVOKE_COMMAND = "http.invoke/v1"
 
 
 @dataclass(frozen=True)

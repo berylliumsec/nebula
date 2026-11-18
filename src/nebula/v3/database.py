@@ -413,6 +413,23 @@ class RuntimeChatBindingRow(Base):
     stream_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
+class RuntimeCommandWriteRow(Base):
+    """Whether a re-runnable HTTP command's route committed any project write.
+
+    The owner that claims such a command records this row (``wrote`` false)
+    before it runs the route. Its execution transactions set ``wrote`` in the
+    same transaction as their writes, so a command whose row still says false
+    when its owner died saved nothing and may run again.
+    """
+
+    __tablename__ = "runtime_command_writes"
+    command_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    runtime_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    wrote: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
 class RuntimeReleaseRow(Base):
     __tablename__ = "runtime_releases"
     version: Mapped[str] = mapped_column(String(200), primary_key=True)
