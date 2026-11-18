@@ -1,21 +1,21 @@
 {
-  "change_digest": "550d6a3e2e52ac82ac03af670e3ed28d4e3bef9640fabd4dae55a6335efd1764",
+  "change_digest": "fb2a321da2df24f5c89703983ef8920fad9b8f3332798662993174a312831c0d",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "Dead-owner reconciliation (runtime_orphan_recovery.py) now settles four states that held recovery forever: claimed WAITING_APPROVAL turns (claim released while the decision is pending; interrupted with the started call kept unknown when the approved call was resuming), claimed WAITING_CALLBACK turns whose last step no longer matches (interrupted for operator review), pending harness adapter deliveries (recorded unknown, no longer a recovery blocker in deployments._recovery_blockers), and the dead owner's handoff inventory handles. Selected: the orphan-recovery suite with the new regressions, in SQLite and PostgreSQL.",
-  "exclusions": "No API, UI, settings or native change. test_approval_handoff, test_handoff_participants, test_recovery_reconciliation and test_runtime_auto_recovery were run locally with no new failures (one pre-existing pidfd failure in test_recovery_reconciliation) and are not selected. Each window was reproduced STUCK on a fresh fake Core on main and PASS on this branch.",
+  "reason": "The MCP probe now bounds notifications/initialized and every list request with the profile's startup timeout, so a stdio server that stops answering after initialize no longer holds the probe (and its project's work lane) forever. Selected: the MCP probe suite with new regressions for tools/list, resources/list and prompts/list.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. The project-level effect (other chats in the project keep being served) was measured on a fake scratch Core with a silent stdio MCP stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 102,
+    "python": 23,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py"
+    "tests/v3/test_mcp_probe.py"
   ],
   "frontend": [],
   "native": [],
