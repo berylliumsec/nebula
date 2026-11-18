@@ -1,33 +1,21 @@
 {
-  "change_digest": "27c44743f6b3c4c5f2ef861690f7f9d1b2803954ba6b7733992a252b2f6b0d50",
-  "reviewed_by": "Claude, with kernel tests against a disposable root runner and a fake staging Core replay",
-  "reason": "Host commands now run inside a protected local memory runner (nebula.memory-runner/v1): a root service that creates a root-owned cgroup-v2 group per Host worker job, verifies limits by kernel readback, starts each command inside it with no capabilities, no_new_privs, cleared groups and hidden daemon sockets, and proves cleanup with cgroup.kill plus group removal. The selection covers host job admission, OOM settlement, lost-create and unverified-cleanup handling, dead-owner reconciliation with runner authority checks, running-limit readback, the held path without a runner, the memory budgets API (local capability), supervisor memory control, and the DEB mapping for the runner and its unit.",
-  "exclusions": "Not run in CI: the two kernel tests in test_host_memory_runner.py (they need NEBULA_TEST_HOST_MEMORY_RUNNER_SOCKET pointing at a root runner; run locally against nebula-memory-runner@agent and passing), PostgreSQL parametrizations, the full suite, and the browser. Excluded because they fail identically on origin/main: test_runtime_memory_control.py::test_saved_floor_policy_is_repaired_through_host_before_api_admission (reserve floor) and test_packaging.py::test_nebula3_runtime_has_no_conditional_import_fallbacks (five pre-existing modules; this branch adds none). tests/v3/test_automation_runtime.py is excluded: 9 Host-mode tests fail on main because of the memory hold; with a runner present 6 of them now pass, and the other 3 fail for unrelated pre-existing reasons (consent policy, Kali runtime, scope bypass default).",
+  "change_digest": "b4bb1afe654e6c02258b0b8fb7c75d389682e6db9a05ab118d4685ebff247d81",
+  "reviewed_by": "Claude, after reproducing both failures with a 50/200/300-process load test against a root runner",
+  "reason": "Fixes two host memory runner failures under parallel Host commands: a credential snapshot read before setpriv exec'd could fail verification and refuse the command (fail-closed), and the 64-entry Unix accept backlog overflowed into EAGAIN connect failures. The selection is the runner's own test file, including a new 200-command burst kernel test.",
+  "exclusions": "The kernel tests in test_host_memory_runner.py (including the new burst test) skip in CI because they need a root runner; they pass locally against nebula-memory-runner@agent (18 passed). No Core, UI, or packaging behaviour outside the runner and its client changes. Full suite and browser not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 119,
+    "python": 18,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_host_memory_runner.py",
-    "tests/v3/test_memory_paths.py",
-    "tests/v3/test_memory_recovery.py",
-    "tests/v3/test_runtime_memory_recovery.py",
-    "tests/v3/test_memory_api.py",
-    "tests/v3/test_memory_prelaunch.py",
-    "tests/v3/test_runtime_host_memory_apply.py",
-    "tests/v3/test_runtime_memory_control.py::test_host_memory_api_retains_auth_revision_and_actor_safeguards[sqlite]",
-    "tests/v3/test_runtime_memory_control.py::test_bound_private_butler_uses_the_same_validated_policy_api_and_audit[sqlite]",
-    "tests/v3/test_runtime_memory_control.py::test_private_memory_request_cannot_forge_peer_project_or_target_another_api[sqlite]",
-    "tests/v3/test_runtime_memory_control.py::test_durable_memory_job_identity_selects_its_current_project_owner[sqlite]",
-    "tests/v3/test_runtime_memory_control.py::test_actual_project_kernel_butler_can_save_and_read_back_host_budgets[sqlite]",
-    "tests/v3/test_packaging.py::test_linux_deb_declares_bundled_chromium_runtime_dependencies"
+    "tests/v3/test_host_memory_runner.py"
   ],
   "frontend": [],
   "native": [],
