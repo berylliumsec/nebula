@@ -116,8 +116,11 @@ def test_sharded_core_api_and_shell_entries_deduplicate():
     real_core = [
         entry for entry in result["include"] if entry["project"] == "real-core"
     ]
-    assert len(real_core) == 4
-    assert {(entry["area"], entry["shard"]) for entry in real_core} == {
+    assert len(real_core) == 7
+    legacy = [entry for entry in real_core if entry["test_match"] == "tests/real-core.spec.ts"]
+    assert len(legacy) == 4
+    assert all(entry["area"] == "core-api+desktop-shell" for entry in real_core)
+    assert {(entry["area"], entry["shard"]) for entry in legacy} == {
         ("core-api+desktop-shell", f"{shard}/4") for shard in range(1, 5)
     }
 
@@ -337,18 +340,23 @@ def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():
         ("entry:full/real-core", {f"{shard}/6" for shard in range(1, 7)}),
     ):
         entries = selected_entries(MANIFEST, [selector])
-        assert {entry["shard"] for entry in entries} == shards
+        assert {entry["shard"] for entry in entries if entry["test_match"] == "tests/real-core.spec.ts"} == shards
+        assert {entry["test_match"] for entry in entries} == {
+            "tests/real-core.spec.ts", "tests/authentication-real-core.spec.ts",
+            "tests/first-user-real-core.spec.ts", "tests/runtime-settings-real-core.spec.ts",
+        }
         for entry in entries:
             assert entry["project"] == "real-core"
-            assert entry["test_match"] == "tests/real-core.spec.ts"
+            if entry["test_match"] != "tests/real-core.spec.ts":
+                assert entry["shard"] == "1/1"
             assert not entry.get("grep")
             assert entry["runtime"] == "real-core"
 
 
 def test_assistant_real_core_uses_bounded_shards():
     entries = selected_entries(MANIFEST, ["entry:assistant/assistant-real-desktop"])
-    assert {entry["shard"] for entry in entries} == {"1/4", "2/4", "3/4", "4/4"}
-    assert all(entry["test_match"] == "tests/real-core.spec.ts" for entry in entries)
+    assert {entry["shard"] for entry in entries if entry["test_match"] == "tests/real-core.spec.ts"} == {"1/4", "2/4", "3/4", "4/4"}
+    assert {entry["test_match"] for entry in entries} == {"tests/real-core.spec.ts", "tests/authentication-real-core.spec.ts", "tests/first-user-real-core.spec.ts", "tests/runtime-settings-real-core.spec.ts"}
     assert all(entry["runtime"] == "real-core" for entry in entries)
 
 
@@ -416,7 +424,7 @@ def test_first_user_selection_covers_only_the_onboarding_journey():
           for width in (320, 390, 430)),
     }
     for entry in entries:
-        assert entry["test_match"] == "tests/real-core.spec.ts"
+        assert entry["test_match"] == "tests/first-user-real-core.spec.ts"
         assert entry["grep"] == (
             "assistant upgrade first-time user configures a provider uploads a document and analyses it"
         )
@@ -435,9 +443,37 @@ def test_authentication_recovery_selection_is_bounded_to_real_core_cases():
           for width in (320, 390, 430)),
     }
     for entry in entries:
-        assert entry["test_match"] == "tests/real-core.spec.ts"
+        assert entry["test_match"] == "tests/authentication-real-core.spec.ts"
         assert entry["grep"] == "assistant upgrade authentication recovery rejects"
         assert entry["runtime"] == "real-core"
         assert entry["shard"] == "1/1"
     assert "authentication-recovery" in areas(plan(["ui/src/api/runtime.ts"]))
     assert "authentication-recovery" in areas(plan(["src/nebula/v3/authentication.py"]))
+
+
+@pytest.mark.parametrize("spec", [
+    "tests/authentication-real-core.spec.ts",
+    "tests/first-user-real-core.spec.ts",
+    "tests/runtime-settings-real-core.spec.ts",
+])
+def test_isolated_journey_entry_args_bound_workers_and_keep_grep(spec):
+    import subprocess
+    code = """
+      import {entryArgs} from './scripts/playwright_entry_args.mjs';
+      console.log(JSON.stringify(entryArgs(JSON.parse(process.argv[1]))));
+    """
+    args = json.loads(subprocess.check_output([
+        "node", "--input-type=module", "-e", code,
+        json.dumps({"project": "assistant-real-desktop", "testMatch": spec, "grep": "one|two", "shard": "1/1"}),
+    ], cwd=ROOT, text=True))
+    assert args == [spec, "--project", "assistant-real-desktop", "--workers", "2", "--shard", "1/1", "--grep", "one|two"]
+
+
+def test_legacy_entry_args_keep_serial_execution_and_test_level_sharding():
+    import subprocess
+    code = """
+      import {entryArgs} from './scripts/playwright_entry_args.mjs';
+      console.log(JSON.stringify(entryArgs({project:'real-core', testMatch:'tests/real-core.spec.ts', shard:'2/6'})));
+    """
+    args = json.loads(subprocess.check_output(["node", "--input-type=module", "-e", code], cwd=ROOT, text=True))
+    assert args == ["tests/real-core.spec.ts", "--project", "real-core", "--workers", "1", "--shard", "2/6", "--fully-parallel"]
