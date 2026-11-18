@@ -1,37 +1,26 @@
 {
-  "change_digest": "18af2e03171d440863550da72f18908d7507933e37c4e7c473ccfc890ebb3dd3",
-  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A fresh Core's default reserve admitted only the API and two project workers, a project with any open chat kept its worker forever, so a third project's request waited indefinitely, its held reason hid the memory refusal, and its queued command refused runtime-stop. The never-saved default reserve is now sized from host memory (an operator-saved policy is never changed), a project with active demand takes the memory of the least recently used resident that runs nothing, a project that cannot be served shows 'Waiting for memory' naming the residents and its unstarted requests fail after a bound, and a held workerless project's queued request no longer blocks host shutdown. Selected: the new capacity, sizing and knowledge regressions, plus the admission, retirement, quiescence, shutdown, view-lease, memory-budget, runtime-memory and API worker suites these paths touch, and the settings-catalog discovery test.",
-  "exclusions": "test_runtime_memory_control.py, test_storage_alert_dispatch.py and test_product_knowledge.py each have one failure already present on clean main (unchanged by this branch) and are excluded; they ran locally with no new failures. No native layer: no Rust change. No Playwright: no UI component changed; the held reason and request error reach existing UI fields. Real-Core evidence (STUCK on main, PASS on the branch, restart and upgrade checks) is in the PR, not executed by CI. PostgreSQL variants run where NEBULA_TEST_POSTGRES_URL is set; they passed locally.",
+  "change_digest": "f59d1220504a4539f5ac93670845b65e13bf58e6e55baf40ed658aec9e77dc2c",
+  "reviewed_by": "Claude Code after scratch-Core reproduction (text and code change; no UI element added)",
+  "reason": "The API's 409 for a request that ended without a response now reads the command result recorded by recovery or its owner: saved_changes, saved_turn, nothing saved, or an unknown outcome with the route-specific thing to check, each with a stable code (runtime.request.*). Status, X-Nebula-Request-State, state and command_id are unchanged for the web UI, iOS (bundled web UI) and TUI. Selected: the new API-worker regression, durable delivery, storage report backlog (its own unsettled answer is unchanged) and the TUI transport tests that read this 409.",
+  "exclusions": "No frontend or Playwright change: the web UI shows the 409 detail string as before (ui/src/api/client.ts reads detail; durableRequests reads state and the header), so only wording changes. Native iOS bundles the same web UI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 302,
-    "frontend": 1,
+    "python": 129,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_worker_memory_capacity.py",
-    "tests/v3/test_worker_memory_wait_knowledge.py",
     "tests/v3/test_api_worker.py",
-    "tests/v3/test_shutdown_admission.py",
-    "tests/v3/test_project_view_leases.py",
-    "tests/v3/test_admission_retry.py",
-    "tests/v3/test_deployment_lifecycle.py",
-    "tests/v3/test_runtime_memory.py",
-    "tests/v3/test_memory_budget.py",
-    "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_mixed_release_idle_retirement.py",
-    "tests/v3/test_runtime_quiescence.py",
-    "tests/v3/test_worker_read_quiescence.py"
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_storage_report_backlog.py",
+    "tests/test_terminal_transport.py"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.memoryWait.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "checks": []

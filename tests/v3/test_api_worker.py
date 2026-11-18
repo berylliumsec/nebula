@@ -240,6 +240,105 @@ async def test_a_request_failed_before_it_started_answers_with_its_reason(
     assert response.headers["x-nebula-command-id"] == command
 
 
+async def test_an_unanswered_request_says_what_its_settlement_proved(boundary):
+    """A request settled without a response used to answer only "The saved
+    request needs reconciliation", even when recovery had proved that it
+    saved its changes or saved nothing. The 409 keeps its state, header and
+    command ID, and its detail and stable code now carry that outcome."""
+    from nebula.v3.database import RuntimeCommandRow
+    from nebula.v3.runtime_orphan_recovery import (
+        INTERRUPTED_COMMAND_RESULT,
+        SAVED_CHAT_START_RESULT,
+        SAVED_REQUEST_RESULT,
+        UNSAVED_REQUEST_RESULT,
+    )
+
+    _, client = boundary.api()
+    cases = [
+        (
+            "PATCH",
+            "/api/v1/chat-sessions/s",
+            "failed",
+            SAVED_REQUEST_RESULT,
+            "runtime.request.saved_changes",
+            "Reload the conversation's title, archive state and settings",
+        ),
+        (
+            "POST",
+            "/api/v1/chat/sessions/s/goal/actions",
+            "failed",
+            UNSAVED_REQUEST_RESULT,
+            "runtime.request.not_saved",
+            "Nothing was saved; send it again.",
+        ),
+        (
+            "POST",
+            "/api/v1/chat/completions",
+            "failed",
+            SAVED_CHAT_START_RESULT,
+            "runtime.request.saved_turn",
+            "Reload the conversation",
+        ),
+        (
+            "POST",
+            "/api/v1/chat/sessions/s/fork",
+            "failed",
+            INTERRUPTED_COMMAND_RESULT,
+            "runtime.request.outcome_unknown",
+            "Check the conversation before you send it again.",
+        ),
+        (
+            "DELETE",
+            "/api/v1/chat-sessions/s",
+            "uncertain",
+            {"detail": "Execution outcome needs explicit reconciliation"},
+            "runtime.request.outcome_unknown",
+            "Check whether the conversation still exists",
+        ),
+        (
+            "POST",
+            "/api/v1/engagements/p/workspace/file",
+            "failed",
+            {"http_status": 500, "failed_in_worker": True},
+            "runtime.request.outcome_unknown",
+            "Check the project's settings and data",
+        ),
+        (
+            "POST",
+            "/api/v1/synthetic",
+            "failed",
+            {},
+            "runtime.request.not_answered",
+            "The saved request needs reconciliation. It has not been retried.",
+        ),
+    ]
+    for index, (method, path, state, result, code, detail) in enumerate(cases):
+        accepted = await client.request(
+            method,
+            path,
+            headers=_AUTH | {"Idempotency-Key": f"unanswered-{index}"},
+            json={} if method != "DELETE" else None,
+        )
+        assert accepted.status_code == 202, accepted.text
+        command = accepted.json()["receipt"]["command_id"]
+        async with boundary.host.database.session() as session:
+            row = await session.get(RuntimeCommandRow, command)
+            row.state, row.result = state, result
+            await session.commit()
+        answered = await client.get(
+            f"/api/v1/runtime/requests/{command}/response", headers=_AUTH
+        )
+        assert answered.status_code == 409
+        assert answered.headers["x-nebula-request-state"] == "needs-reconciliation"
+        body = answered.json()
+        assert (body["code"], body["state"], body["command_id"]) == (
+            code,
+            state,
+            command,
+        )
+        assert detail in body["detail"], body["detail"]
+
+
 async def test_chat_acceptance_is_pending_until_its_turn_stream_is_ready(
     boundary, monkeypatch
 ):
