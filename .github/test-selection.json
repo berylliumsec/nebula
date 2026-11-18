@@ -1,22 +1,20 @@
 {
-  "change_digest": "621d925f3dfb4378362b9e1d61beb50cc3ec809c76907832fb08ea97f9121e3e",
-  "reviewed_by": "Codex after independent root-cause validation against exact successful CI matrix jobs",
-  "reason": "CI-backed simulation preparation must accept all six successful terminal-client matrix jobs under their actual GitHub names. The selected deployer protocol file covers required-job calculation and rejection of a missing or failed matrix entry.",
-  "exclusions": "No Core, UI, native app, or browser behavior changes. Operator requested no local test execution or backups; this file was collected only, and CI executes its reviewed selection.",
+  "change_digest": "7dfaa11cb91d94b7ed131857eb605ac558bb0c6172a0550b37cae2fd5ae77142",
+  "reviewed_by": "Codex under explicit operator instruction to run no local or CI tests",
+  "reason": "Operator requested merge and deployment without running tests. The exact dead-owner guard and continuity behavior will be checked against live Core during the authorized deployment.",
+  "exclusions": "No Python, frontend, native, or Playwright tests are selected because the operator explicitly prohibited local and CI tests. This leaves automated behavior unverified; the deployer and Core readbacks remain the live acceptance evidence.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 25,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/test_deployer_protocol.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],

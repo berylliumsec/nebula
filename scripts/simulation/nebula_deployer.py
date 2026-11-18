@@ -3647,11 +3647,129 @@ def host_status_snapshot(
     }
 
 
+class DeadOwnerRecoveryPending(RuntimeError):
+    """The exact accepted dead owner has moved but recovery is not verified yet."""
+
+
+def _exact_uuid(value: Any) -> bool:
+    from uuid import UUID
+
+    try:
+        return isinstance(value, str) and str(UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def _readonly_postgres_rows(query: str) -> list[str]:
+    settings = configured_postgres(TOKEN_FILE)
+    if settings is None:
+        raise RuntimeError("Dead-worker acceptance requires the configured PostgreSQL deployment")
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+    if "PGPASSFILE" in os.environ:
+        environment["PGPASSFILE"] = os.environ["PGPASSFILE"]
+    result = subprocess.run(
+        ["psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set=ON_ERROR_STOP=1",
+         "--command", "BEGIN READ ONLY; " + query + "; COMMIT;"],
+        env={**environment, **settings}, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, timeout=20, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Dead-worker readback failed; inspect PostgreSQL access")
+    return [line for line in result.stdout.splitlines() if line not in {"", "BEGIN", "COMMIT"}]
+
+
+def load_dead_owner_acceptance(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("Dead-worker acceptance must be a regular file")
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or set(value) != {
+        "project_id", "runtime_id", "fencing_token", "turn_ids",
+        "failed_turn_ids", "effect_call_ids", "acceptance"
+    }:
+        raise RuntimeError("Dead-worker acceptance has an invalid shape")
+    turns, failed, effects = (
+        value["turn_ids"], value["failed_turn_ids"], value["effect_call_ids"]
+    )
+    if (
+        not _exact_uuid(value["project_id"])
+        or not _exact_uuid(value["runtime_id"])
+        or type(value["fencing_token"]) is not int
+        or value["fencing_token"] < 1
+        or not isinstance(turns, list) or not turns
+        or not all(_exact_uuid(item) for item in turns)
+        or len(turns) != len(set(turns))
+        or not isinstance(failed, list) or not failed
+        or not all(_exact_uuid(item) for item in failed)
+        or len(failed) != len(set(failed))
+        or not isinstance(effects, list) or not effects
+        or not all(_exact_uuid(item) for item in effects)
+        or len(effects) != len(set(effects))
+        or value["acceptance"] != "accept unconfirmed effects without replay"
+    ):
+        raise RuntimeError("Dead-worker acceptance has invalid exact identities")
+    return value
+
+
+def prove_dead_owner(accepted: dict[str, Any]) -> dict[str, Any]:
+    runtime_id = accepted["runtime_id"]
+    rows = _readonly_postgres_rows(
+        "SELECT pid, process_birth, role, state FROM runtime_processes "
+        f"WHERE runtime_id = '{runtime_id}'"
+    )
+    if len(rows) != 1:
+        raise RuntimeError("The accepted worker has no exact process record")
+    fields = rows[0].split("|")
+    if len(fields) != 4 or fields[2] != "execution" or fields[3] == "retired":
+        raise RuntimeError("The accepted worker is not a resident execution process")
+    pid = int(fields[0])
+    birth = fields[1]
+    if not birth.startswith("linux:") or linux_process_birth(pid) == birth:
+        raise RuntimeError("The accepted worker process has not proven to exit")
+    failed = ",".join(f"'{item}'" for item in accepted["failed_turn_ids"])
+    failed_turns = _readonly_postgres_rows(
+        "SELECT id FROM entities "
+        f"WHERE engagement_id = '{accepted['project_id']}' AND kind = 'chat_turns' "
+        "AND payload->>'backend' = 'provider' AND payload->>'status' = 'failed' "
+        "AND payload->>'execution_claim_id' IS NOT NULL"
+    )
+    if set(failed_turns) != set(accepted["failed_turn_ids"]):
+        raise RuntimeError("The accepted failed turn claims changed")
+    effects = _readonly_postgres_rows(
+        "SELECT id, payload->>'status', payload->>'risk_class' FROM entities "
+        f"WHERE engagement_id = '{accepted['project_id']}' AND kind = 'tool_calls' "
+        f"AND payload->>'chat_turn_id' IN ({failed}) "
+        "AND payload->>'status' NOT IN ('complete','denied','cancelled') "
+        "AND NOT (payload->>'status' = 'failed' AND payload->>'risk_class' = 'local_read')"
+    )
+    observed = {parts[0] for row in effects if len(parts := row.split("|")) == 3
+                and parts[1] == "failed" and parts[2] == "workspace_write"}
+    if observed != set(accepted["effect_call_ids"]):
+        raise RuntimeError("The accepted failed write-call identities changed")
+    return {"pid": pid, "process_birth": birth}
+
+
+def verified_dead_owner_recovery(
+    accepted: dict[str, Any], current: dict[str, Any]
+) -> bool:
+    if not _exact_uuid(current["runtime_id"]):
+        return False
+    rows = _readonly_postgres_rows(
+        "SELECT operation_id FROM runtime_recoveries WHERE "
+        f"project_id = '{accepted['project_id']}' AND "
+        f"source_runtime_id = '{accepted['runtime_id']}' AND "
+        f"source_fencing_token = {accepted['fencing_token']} AND "
+        f"target_runtime_id = '{current['runtime_id']}' AND "
+        f"target_fencing_token = {current['fencing_token']} AND phase = 'verified'"
+    )
+    return len(rows) == 1
+
+
 def require_preserved_workers(
     before: dict[str, Any],
     after: dict[str, Any],
     *,
     admitted_version: str | None = None,
+    accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     previous_projects = before["projects"]
     current_projects = after["projects"]
@@ -3682,6 +3800,20 @@ def require_preserved_workers(
             or current["runtime_version"] != previous["runtime_version"]
             or current["fencing_token"] != previous["fencing_token"]
         ):
+            accepted_transition = (
+                accepted_dead_owner is not None
+                and project_id == accepted_dead_owner["project_id"]
+                and previous["runtime_id"] == accepted_dead_owner["runtime_id"]
+                and previous["fencing_token"] == accepted_dead_owner["fencing_token"]
+                and current["fencing_token"] > previous["fencing_token"]
+                and current["runtime_version"] == admitted_version
+            )
+            if accepted_transition:
+                if verified_dead_owner_recovery(accepted_dead_owner, current):
+                    continue
+                raise DeadOwnerRecoveryPending(
+                    f"Accepted dead owner recovery is not verified for project {project_id}"
+                )
             raise RuntimeError(
                 f"Host restart changed the existing execution owner for project {project_id}"
             )
@@ -3809,6 +3941,7 @@ def wait_supervisor_host_ready(
     allow_degraded_workers: bool = False,
     degraded_baseline: bool = False,
     restart_exited: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
     timeout: int = 480,
 ) -> dict[str, Any]:
     expected_package_version = runtime_package_version(version)
@@ -3868,7 +4001,10 @@ def wait_supervisor_host_ready(
                 )
             continuity = (
                 require_preserved_workers(
-                    prior_status, snapshot, admitted_version=version
+                    prior_status,
+                    snapshot,
+                    admitted_version=version,
+                    accepted_dead_owner=accepted_dead_owner,
                 )
                 if prior_status is not None
                 else {"retained": 0}
@@ -3888,7 +4024,7 @@ def wait_supervisor_host_ready(
                 "runtime_process_birth": identity["process_birth"],
                 "host_starts": starts,
             }
-        except (OSError, ValueError, HTTPError) as error:
+        except (OSError, ValueError, HTTPError, DeadOwnerRecoveryPending) as error:
             last_problem = str(error)[:300]
             time.sleep(2)
     raise RuntimeError(
@@ -3943,6 +4079,12 @@ def _restart_boundary_activity(client: CoreClient) -> dict[str, dict[str, Any]]:
                         if isinstance(item, dict)
                         and isinstance(item.get("turn_id"), str)
                     }
+                ),
+                "unidentified_turns": sum(
+                    1 for item in pending
+                    if not isinstance(item, dict)
+                    or not isinstance(item.get("turn_id"), str)
+                    or not item.get("turn_id")
                 ),
             }
     return busy
@@ -4030,7 +4172,9 @@ def _unavailable_owner_blocker(
     )
 
 
-def wait_quiet_restart_boundary() -> dict[str, Any]:
+def wait_quiet_restart_boundary(
+    accepted_dead_owner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Wait, bounded, until no chat turn would cross the host restart.
 
     Supervisor workers outlive the host, but a worker without #1023 fails a
@@ -4053,6 +4197,31 @@ def wait_quiet_restart_boundary() -> dict[str, Any]:
         if not busy:
             return {"quiet_after_seconds": round(time.monotonic() - started, 1)}
         stuck = _unavailable_turn_owners(client, busy)
+        if accepted_dead_owner is not None:
+            project_id = accepted_dead_owner["project_id"]
+            if (
+                set(busy) == {project_id}
+                and set(busy[project_id]["turns"])
+                == set(accepted_dead_owner["turn_ids"])
+                and busy[project_id].get("unidentified_turns", 0) == 0
+                and project_id in stuck
+                and stuck[project_id]["runtime_id"]
+                == accepted_dead_owner["runtime_id"]
+            ):
+                status = client.get("deployment/status")
+                owner = next(
+                    (item for item in status["projects"]
+                     if item.get("project_id") == project_id), None
+                )
+                if owner is not None and owner.get("fencing_token") == accepted_dead_owner["fencing_token"]:
+                    return {
+                        "quiet_after_seconds": round(time.monotonic() - started, 1),
+                        "accepted_dead_owner": accepted_dead_owner,
+                        "dead_process": prove_dead_owner(accepted_dead_owner),
+                    }
+            raise RuntimeError(
+                "Dead-worker acceptance no longer matches the exact busy turns and owner"
+            )
         now = time.monotonic()
         unavailable_since = {
             (project_id, owner["runtime_id"]): unavailable_since.get(
@@ -4215,6 +4384,7 @@ def _switch_supervisor_host(
         allow_degraded_workers=allow_degraded_workers,
         degraded_baseline=prior_status.get("health") == "degraded",
         restart_exited=True,
+        accepted_dead_owner=journal.get("accepted_dead_owner"),
     )
     journal["state"] = "complete"
     journal["readback"] = readback
@@ -4284,6 +4454,7 @@ def activate_supervisor_host(
     version: str,
     *,
     allow_degraded_workers: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Restart only the foreground supervisor from an accepted staged release."""
     if record.get("deployment_mode") != "supervisor":
@@ -4324,6 +4495,10 @@ def activate_supervisor_host(
     )
     existing = record.get("host_activation")
     if isinstance(existing, dict) and existing.get("version") == version:
+        recorded_dead_owner = existing.get("accepted_dead_owner")
+        if accepted_dead_owner is not None and accepted_dead_owner != recorded_dead_owner:
+            raise RuntimeError("A retry cannot change the accepted dead owner")
+        accepted_dead_owner = recorded_dead_owner
         recorded_allow_degraded = existing.get("allow_degraded_workers") is True
         if allow_degraded_workers and not recorded_allow_degraded:
             raise RuntimeError(
@@ -4444,6 +4619,7 @@ def activate_supervisor_host(
                             prior_status=prior,
                             allow_degraded_workers=allow_degraded_workers,
                             degraded_baseline=prior.get("health") == "degraded",
+                            accepted_dead_owner=accepted_dead_owner,
                         )
                     except Exception as error:
                         existing["readback_error"] = str(error)[:1000]
@@ -4539,7 +4715,7 @@ def activate_supervisor_host(
                     raise RuntimeError(
                         "Previous supervisor does not match the interrupted activation journal"
                     )
-            existing["restart_boundary"] = wait_quiet_restart_boundary()
+            existing["restart_boundary"] = wait_quiet_restart_boundary(accepted_dead_owner)
             readback = _switch_supervisor_host(
                 version,
                 release=release,
@@ -4579,7 +4755,7 @@ def activate_supervisor_host(
             "already_active": True,
             **readback,
         }
-    restart_boundary = wait_quiet_restart_boundary()
+    restart_boundary = wait_quiet_restart_boundary(accepted_dead_owner)
     service_identity = supervisor_service_identity()
     prior_host = host_connection()
     if prior_host is None:
@@ -4638,6 +4814,7 @@ def activate_supervisor_host(
         "prior_service": service_identity,
         "operations": operations,
         "restart_boundary": restart_boundary,
+        "accepted_dead_owner": accepted_dead_owner,
         "allow_degraded_workers": allow_degraded_workers,
         "degraded_baseline_reason": (
             "Accepted aggregate degraded status attributed by read-only diagnosis to stale old execution-worker leases; individual failed-worker equality is not asserted."
@@ -4722,7 +4899,10 @@ def activate_supervisor_host(
     }
 
 
-def activate_host(*, allow_degraded_workers: bool = False) -> dict[str, Any]:
+def activate_host(
+    *, allow_degraded_workers: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     record = state()
     pending = record.get("pending")
     if not isinstance(pending, str):
@@ -4730,7 +4910,8 @@ def activate_host(*, allow_degraded_workers: bool = False) -> dict[str, Any]:
             "No accepted pending candidate is available for host activation"
         )
     return activate_supervisor_host(
-        record, pending, allow_degraded_workers=allow_degraded_workers
+        record, pending, allow_degraded_workers=allow_degraded_workers,
+        accepted_dead_owner=accepted_dead_owner,
     )
 
 
@@ -5780,6 +5961,11 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--accepted-dead-owner-file",
+        type=Path,
+        help="exact operator acceptance of one proven-dead worker and its unfinished turns",
+    )
+    parser.add_argument(
         "--deployment-id",
         help="exact unresolved runtime_deployment journal ID for guarded reconciliation",
     )
@@ -5810,6 +5996,10 @@ def main() -> int:
     if args.allow_degraded_workers and args.action != "activate-host":
         raise RuntimeError(
             "--allow-degraded-workers is supported only with activate-host"
+        )
+    if args.accepted_dead_owner_file is not None and args.action != "activate-host":
+        raise RuntimeError(
+            "--accepted-dead-owner-file is supported only with activate-host"
         )
     if args.deployment_id is not None and args.action not in {
         "reconcile-runtime-deployment",
@@ -5879,7 +6069,13 @@ def main() -> int:
                 args.deployment_id, dry_run=args.dry_run
             )
             if args.action == "reconcile-unactivated-supersession"
-            else activate_host(allow_degraded_workers=args.allow_degraded_workers)
+            else activate_host(
+                allow_degraded_workers=args.allow_degraded_workers,
+                accepted_dead_owner=(
+                    load_dead_owner_acceptance(args.accepted_dead_owner_file)
+                    if args.accepted_dead_owner_file is not None else None
+                ),
+            )
             if args.action == "activate-host"
             else globals()[args.action.replace("-", "_")]()
         )
