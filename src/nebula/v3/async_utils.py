@@ -14,6 +14,25 @@ _T = TypeVar("_T")
 MaybeAsync = Callable[_P, _T | Awaitable[_T]]
 
 WorkspaceResolver = Callable[[str], Path | Awaitable[Path]]
+# CPU-bound work over more items than this runs in a worker thread.
+OFF_LOOP_ITEMS = 2000
+
+
+async def off_loop(
+    size: int, function: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs
+) -> _T:
+    """Run synchronous ``function`` off the event loop when ``size`` is large.
+
+    A conversation of hundreds of thousands of messages makes some pure
+    functions run for seconds. On the event loop that stalls every request of
+    the process and its lease renewal; in a worker thread the loop keeps
+    running. Small inputs stay inline, where a thread hop would only add
+    latency. ``function`` must not touch the event loop or shared state that
+    other tasks change while it runs.
+    """
+    if size <= OFF_LOOP_ITEMS:
+        return function(*args, **kwargs)
+    return await asyncio.to_thread(function, *args, **kwargs)
 
 
 async def resolve_workspace(resolver: WorkspaceResolver, project_id: str) -> Path:

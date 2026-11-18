@@ -445,6 +445,11 @@ def _row_to_entity(row: EntityRow, expected: type[EntityT] | None = None) -> Ent
         raise CorruptRecordError(f"record {row.id} failed validation") from exc
 
 
+# Records a long conversation read loads and validates per step; each step
+# runs off the event loop.
+HISTORY_PARTITION = 1000
+
+
 def readable_entities(rows: Iterable[EntityRow], model: type[EntityT]) -> list[EntityT]:
     """``rows`` as ``model`` records, skipping and recording each that fails validation."""
 
@@ -1254,16 +1259,59 @@ class NebulaStore:
             statement = statement.where(
                 EntityRow.payload["status"].as_string().in_(list(statuses))
             )
-        statement = statement.order_by(*_entity_order(newest_first))
-        if limit is not None:
-            statement = statement.limit(limit)
-        async with self.database.session() as session:
+
+        def records(rows: Sequence[EntityRow]) -> list[EntityT]:
             if readable_only:
-                return readable_entities((await session.scalars(statement)), model)
-            return [
-                model.model_validate(row.payload)
-                for row in (await session.scalars(statement))
-            ]
+                return readable_entities(rows, model)
+            return [model.model_validate(row.payload) for row in rows]
+
+        ordered = statement.order_by(*_entity_order(newest_first))
+        if limit is not None and limit <= HISTORY_PARTITION:
+            async with self.database.session() as session:
+                return records(list(await session.scalars(ordered.limit(limit))))
+        # A conversation can hold hundreds of thousands of records. Read and
+        # validate them a bounded page per transaction, in the same order, so
+        # neither this event loop nor the project's serialized transactions
+        # wait on the whole history at once.
+        loaded: list[EntityT] = []
+        cursor: tuple[datetime, str] | None = None
+        while True:
+            size = HISTORY_PARTITION
+            if limit is not None:
+                size = min(size, limit - len(loaded))
+            page = ordered
+            if cursor is not None:
+                created_at, entity_id = cursor
+                later = (
+                    (EntityRow.created_at < created_at, EntityRow.id < entity_id)
+                    if newest_first
+                    else (EntityRow.created_at > created_at, EntityRow.id > entity_id)
+                )
+                page = page.where(
+                    or_(
+                        later[0],
+                        and_(EntityRow.created_at == created_at, later[1]),
+                    )
+                )
+            async with self.database.session() as session:
+                rows = list(await session.scalars(page.limit(size)))
+            loaded.extend(records(rows))
+            if len(rows) < size or (limit is not None and len(loaded) >= limit):
+                return loaded
+            cursor = (rows[-1].created_at, rows[-1].id)
+            await asyncio.sleep(0)
+
+    async def max_chat_message_sequence(self, session_id: str) -> int | None:
+        """The highest sequence stored for a conversation, replaced messages too."""
+
+        async with self.database.session() as session:
+            value = await session.scalar(
+                select(func.max(EntityRow.payload["sequence"].as_integer())).where(
+                    EntityRow.kind == ChatMessage.entity_kind,
+                    EntityRow.chat_session_id == session_id,
+                )
+            )
+        return int(value) if value is not None else None
 
     async def list_harness_turn_tool_calls(
         self,

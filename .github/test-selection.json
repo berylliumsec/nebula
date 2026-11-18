@@ -1,24 +1,31 @@
 {
-  "change_digest": "4d0266165fc9c0cfd5dcc559857c1ef8e5ca94fb693196c1149076d429fca6d7",
-  "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "GET /chat/sessions/{id}/state carries last_progress_at for an open harness turn (its latest recorded harness event other than Core status notices), so an idle-but-open turn is visible without any idle timeout. Selected: approval handoff session-state tests (new regression), session state, chat polling cost and stream follow suites.",
-  "exclusions": "No UI, native or Playwright layer: the field is additive and the GUI does not show it yet; the UI follow-up needs a Figma mockup first.",
+  "change_digest": "8b0a2f980c19cf1920721425b09752a6dd050dac34585eb365dc967566340d33",
+  "reviewed_by": "Claude Code after scratch-Core reproduction on main (300k-message chat) and event-loop stall sampling",
+  "reason": "A conversation's history is read in bounded keyset pages, one transaction each; CPU-heavy pure steps over it (history merge, context sources, compaction preparation, grouping, merging, digests, size estimates, context status estimation) run off the event loop above 2000 items; compaction source validation reads the session's own messages instead of offset-scanning the project; appends take MAX(sequence); a large full transcript streams. Selected: the new long-history regressions on SQLite and PostgreSQL (paged order, limits and cursors, aggregate sequence, off-loop equivalence, source validation, streamed transcript equality, loop responsiveness) and the chat API, context, retrieval, context assembly, chat switch, catch-up, recent page, polling cost and agent message suites; runtime coordination provides the PostgreSQL runtime.",
+  "exclusions": "No UI, native, browser or Playwright layer: no response shape or control changed (the streamed transcript is the same JSON array). No settings or settings-assistant destination changed. The 300k-message worker behaviour was verified on scratch Cores by script.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 65,
+    "python": 332,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_session_state.py",
+    "tests/v3/test_long_chat_history.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_context_retrieval.py",
+    "tests/v3/test_chat_context_assembly.py",
+    "tests/v3/test_chat_switch_performance.py",
+    "tests/v3/test_chat_catchup.py",
+    "tests/v3/test_chat_session_recent_page.py",
     "tests/v3/test_chat_polling_cost.py",
-    "tests/v3/test_chat_stream_follow.py"
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_runtime_coordination.py"
   ],
   "frontend": [],
   "native": [],

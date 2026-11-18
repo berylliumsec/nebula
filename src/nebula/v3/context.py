@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .async_utils import call_async
+from .async_utils import call_async, off_loop
 
 from .async_utils import MaybeAsync
 
@@ -1370,6 +1370,11 @@ def _item_count(memory: ContextMemory) -> int:
     return sum(len(getattr(memory, name)) for name in _MEMORY_LISTS)
 
 
+def _memory_items(memory: ContextMemory) -> int:
+    """How many items a memory holds, the size of merging or fitting it."""
+    return sum(len(getattr(memory, name)) for name in _MEMORY_LISTS)
+
+
 def _merged_memory(
     memories: list[ContextMemory], token_budget: int
 ) -> tuple[ContextMemory, int]:
@@ -1519,7 +1524,7 @@ class ContextCompactor:
                 "context compaction requires canonical sources"
             )
         (await self._validate_canonical_sources(owner_type, owner_id, sources))
-        source_sha256 = source_digest(sources)
+        source_sha256 = await off_loop(len(sources), source_digest, sources)
         previous = await self.snapshots(owner_type, owner_id, engagement_id)
         for snapshot in reversed(previous):
             if (
@@ -1541,13 +1546,22 @@ class ContextCompactor:
                 f"{model}:{CONTEXT_PROMPT_VERSION}:{version}",
             )
         )
-        all_references: list[ContextSourceReference] = []
-        seen_references: set[ReferenceKey] = set()
-        for source in sources:
-            key = self._reference_key(source.reference)
-            if key not in seen_references:
-                all_references.append(source.reference)
-                seen_references.add(key)
+
+        def unique_references() -> tuple[
+            list[ContextSourceReference], set[ReferenceKey]
+        ]:
+            references: list[ContextSourceReference] = []
+            seen: set[ReferenceKey] = set()
+            for source in sources:
+                key = self._reference_key(source.reference)
+                if key not in seen:
+                    references.append(source.reference)
+                    seen.add(key)
+            return references, seen
+
+        all_references, seen_references = await off_loop(
+            len(sources), unique_references
+        )
         progress = _Progress()
         try:
             memory = await self._hierarchical_memory(
@@ -1655,21 +1669,29 @@ class ContextCompactor:
         """
 
         plan = self._compactor_plan(profile, provider, model, objective)
-        ids = _SourceIds.build(
-            reference
-            for source in sources
-            for reference in self._canonical_references(source)
-        )
+
+        def prepare() -> tuple[
+            _SourceIds, dict[ReferenceKey, str], list[list[ContextSource]]
+        ]:
+            ids = _SourceIds.build(
+                reference
+                for source in sources
+                for reference in self._canonical_references(source)
+            )
+            leaf_groups = self._group_sources(
+                self._split_sources(sources, plan.segment_budget, ids),
+                plan.segment_budget,
+                ids,
+            )
+            return ids, self._canonical_texts(sources), leaf_groups
+
+        # Hundreds of thousands of sources take seconds to index and group.
+        ids, texts, leaf_groups = await off_loop(len(sources), prepare)
         checks = _MemoryChecks(
-            texts=self._canonical_texts(sources),
+            texts=texts,
             objective=objective,
             known_id=self._id_checker(engagement_id),
             ids=ids,
-        )
-        leaf_groups = self._group_sources(
-            self._split_sources(sources, plan.segment_budget, ids),
-            plan.segment_budget,
-            ids,
         )
         progress.segments = len(leaf_groups)
         # Each memory with the canonical sources its group covers.
@@ -1744,13 +1766,18 @@ class ContextCompactor:
                 )
                 for index, (memory, _) in enumerate(memories)
             ]
-            groups = self._group_sources(pending, plan.segment_budget, ids)
+            groups = await off_loop(
+                len(pending), self._group_sources, pending, plan.segment_budget, ids
+            )
             if len(groups) == len(pending):
                 # No two memories fit one compactor request. Merge them
                 # mechanically within the allowance rather than fail a chat
                 # on the size of its own derived memory.
-                merged, trimmed = _merged_memory(
-                    [memory for memory, _ in memories], plan.summary_output_tokens
+                merged, trimmed = await off_loop(
+                    sum(_memory_items(memory) for memory, _ in memories),
+                    _merged_memory,
+                    [memory for memory, _ in memories],
+                    plan.summary_output_tokens,
                 )
                 progress.dropped += trimmed
                 return merged
@@ -1767,8 +1794,11 @@ class ContextCompactor:
                 if len(children) == 1:
                     rolled.append(children[0])
                     continue
-                merged, trimmed = _merged_memory(
-                    [child for child, _ in children], plan.summary_output_tokens
+                merged, trimmed = await off_loop(
+                    sum(_memory_items(child) for child, _ in children),
+                    _merged_memory,
+                    [child for child, _ in children],
+                    plan.summary_output_tokens,
                 )
                 if not trimmed:
                     # The memories fit the allowance together, so the union
@@ -2707,31 +2737,30 @@ class ContextCompactor:
     ) -> None:
         if owner_type == ContextOwnerType.CHAT_SESSION:
             session = await self.store.get(ChatSession, owner_id)
-            messages: dict[str, ChatMessage] = {}
-            offset = 0
-            while True:
-                page = await self.store.list_entities(
-                    ChatMessage,
-                    engagement_id=session.engagement_id,
-                    offset=offset,
-                    limit=1_000,
+            # The conversation's own messages, read in keyset pages by session.
+            # Offset pages over every message of the project cost a growing
+            # scan per page: minutes of serialized transactions at 300k.
+            sequences = {
+                message.id: message.sequence
+                for message in await self.store.list_session_entities(
+                    ChatMessage, session.id
                 )
-                messages.update(
-                    (message.id, message)
-                    for message in page
-                    if message.session_id == owner_id
-                )
-                if len(page) < 1_000:
-                    break
-                offset += len(page)
-            for source in sources:
-                if source.reference.source_kind != "chat_message":
-                    raise ValueError("chat memory sources must reference chat messages")
-                message = messages.get(source.reference.source_id)
-                if message is None or source.reference.sequence != message.sequence:
-                    raise ValueError(
-                        "chat memory source does not exist in this session"
-                    )
+            }
+
+            def check() -> None:
+                for source in sources:
+                    if source.reference.source_kind != "chat_message":
+                        raise ValueError(
+                            "chat memory sources must reference chat messages"
+                        )
+                    if source.reference.sequence != sequences.get(
+                        source.reference.source_id
+                    ):
+                        raise ValueError(
+                            "chat memory source does not exist in this session"
+                        )
+
+            await off_loop(len(sources), check)
             return
 
         event_sources: dict[str, RunEvent] = {}
