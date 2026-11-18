@@ -59,8 +59,14 @@ claims held by the dead owner are released, so the new worker's harness startup
 interrupts those turns and pauses their goals as after any restart; a resumed
 goal may repeat a step whose effect was never recorded. Durable requests the dead
 owner was running, and earlier uncertain ones, fail without retry and answer
-their clients. Other pinned resources and unconfirmed approvals continue to hold
-admission until their own outcomes are reconciled.
+their clients. Other pinned resources continue to hold admission until their
+own outcomes are reconciled. An approval decision whose harness adapter handoff
+was in flight is recorded as an unknown delivery and never sent again; it no
+longer holds recovery, but the project's idle retirement, handoff and shutdown
+wait until the operator records its outcome (`delivered` or `discarded`) with
+`POST /api/v1/approvals/{id}/adapter-delivery` or Butler's
+`nebula.work.resolve_delivery`. The approval revision fences that write, an
+audit event records who settled it, and nothing is replayed.
 
 Durable, source-fence-specific deployment operations prepare a replacement of the
 operator-selected execution target (or the source version when no target is

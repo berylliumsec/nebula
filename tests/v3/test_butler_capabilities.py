@@ -31,6 +31,7 @@ from nebula.v3.control_assistant_work import (
     _ALL_WORK_TOOLS,
 )
 from nebula.v3.domain import (
+    Approval,
     AssistantDefaults,
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
@@ -56,7 +57,7 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.runtime_platform import RuntimePlatform
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import NebulaStore, NotFoundError
 from nebula.v3.tool_failures import FAILURE_SCHEMA, tool_failure
 from nebula.v3.tools import CapabilityInputError
 
@@ -2058,6 +2059,174 @@ async def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
         )
 
     (await scenario())
+
+
+async def _unknown_delivery(store, project, chat, *, owner_deleted=False):
+    """A decision a dead worker's adapter handoff left with an unknown delivery."""
+    return await store.create(
+        Approval(
+            engagement_id=project.id,
+            run_id="deleted-turn" if owner_deleted else chat.id,
+            origin="chat",
+            chat_session_id="deleted-chat" if owner_deleted else chat.id,
+            risk_class="workspace_write",
+            exact_request={"tool_name": "write_file"},
+            policy_rationale="Workspace write requires a decision",
+            requested_by="harness",
+            status="approved",
+            decided_by="operator",
+            continuation={
+                "harness_turn_id": "vendor-turn",
+                "status": "delivered",
+                "adapter_handoff": "transport_write",
+                "adapter_status": "unknown",
+                "adapter_detail": "The project worker stopped before the adapter "
+                "handoff was acknowledged. No work was replayed.",
+            },
+        )
+    )
+
+
+async def test_butler_discovers_and_resolves_an_unknown_adapter_delivery(tmp_path):
+    """Regression: a delivery left unknown by a dead worker had no resolution."""
+    store, project, own_chat, foreign_chat, capabilities = await _capabilities(tmp_path)
+    approval = await _unknown_delivery(store, project, own_chat)
+    orphan = await _unknown_delivery(store, project, own_chat, owner_deleted=True)
+    foreign = await store.create(Engagement(name="Foreign unknown delivery owner"))
+    foreign_delivery = await _unknown_delivery(store, foreign, foreign_chat)
+
+    async def scenario():
+        found = await capabilities.search(
+            {"query": "resolve a decision whose delivery is unknown"}
+        )
+        assert "nebula.work.resolve_delivery" in {
+            item["operation"] for item in found["matches"]
+        }
+        described = await capabilities.describe(
+            {"operation": "nebula.work.resolve_delivery"}
+        )
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        assert described["input_schema"]["properties"]["resolution"]["enum"] == [
+            "delivered",
+            "discarded",
+        ]
+        attention = await capabilities.invoke(
+            {"operation": "nebula.work.attention", "arguments": {}}, change=False
+        )
+        flagged = {
+            item["action_id"]: item
+            for item in attention["items"]
+            if item["kind"] == "unconfirmed_delivery"
+        }
+        assert set(flagged) == {approval.id, orphan.id}
+        assert flagged[orphan.id]["url"] is None
+        detail = await capabilities.invoke(
+            {
+                "operation": "nebula.work.approval",
+                "arguments": {"action_id": orphan.id},
+            },
+            change=False,
+        )
+        assert detail["delivery"]["needs_operator_outcome"] is True
+        with pytest.raises(ValueError, match="approval changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.resolve_delivery",
+                    "arguments": {
+                        "action_id": approval.id,
+                        "expected_revision": approval.revision + 1,
+                        "resolution": "delivered",
+                    },
+                },
+                change=True,
+            )
+        with pytest.raises((ValueError, NotFoundError)):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.resolve_delivery",
+                    "arguments": {
+                        "action_id": foreign_delivery.id,
+                        "expected_revision": foreign_delivery.revision,
+                        "resolution": "delivered",
+                    },
+                },
+                change=True,
+            )
+        delivered = await capabilities.invoke(
+            {
+                "operation": "nebula.work.resolve_delivery",
+                "arguments": {
+                    "action_id": approval.id,
+                    "expected_revision": approval.revision,
+                    "resolution": "delivered",
+                    "reason": "The harness log shows the decision arrived",
+                },
+            },
+            change=True,
+        )
+        discarded = await capabilities.invoke(
+            {
+                "operation": "nebula.work.resolve_delivery",
+                "arguments": {
+                    "action_id": orphan.id,
+                    "expected_revision": detail["revision"],
+                    "resolution": "discarded",
+                },
+            },
+            change=True,
+        )
+        return (
+            delivered,
+            discarded,
+            await capabilities.invoke(
+                {"operation": "nebula.work.attention", "arguments": {}}, change=False
+            ),
+        )
+
+    delivered, discarded, attention = await scenario()
+    assert delivered["delivery"] == "sent" and delivered["resolved"] is True
+    assert discarded["delivery"] == "failed" and discarded["resolved"] is True
+    assert "nothing was sent again" in discarded["result"]
+    assert not [
+        item for item in attention["items"] if item["kind"] == "unconfirmed_delivery"
+    ]
+    assert (
+        await store.get(Approval, foreign_delivery.id)
+    ).continuation.adapter_status == "unknown"
+    events = await store.replay_operation_events(approval.id)
+    assert [(event.event_type, event.payload["resolution"]) for event in events] == [
+        ("approval.adapter_delivery_resolved", "delivered")
+    ]
+
+
+async def test_scheduled_butler_cannot_resolve_an_unknown_delivery(tmp_path):
+    store, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
+    approval = await _unknown_delivery(store, project, chat)
+
+    async def scenario():
+        assert "nebula.work.resolve_delivery" not in {
+            item["operation"]
+            for item in (await scheduled.search({"query": "resolve unknown delivery"}))[
+                "matches"
+            ]
+        }
+        with pytest.raises(CapabilityInputError):
+            await scheduled.invoke(
+                {
+                    "operation": "nebula.work.resolve_delivery",
+                    "arguments": {
+                        "action_id": approval.id,
+                        "expected_revision": approval.revision,
+                        "resolution": "discarded",
+                    },
+                },
+                change=True,
+            )
+
+    await scenario()
+    assert (
+        await store.get(Approval, approval.id)
+    ).continuation.adapter_status == "unknown"
 
 
 async def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path):

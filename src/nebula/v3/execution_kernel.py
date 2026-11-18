@@ -1259,6 +1259,14 @@ class ApprovalDecisionRequest(NebulaModel):
     edited_arguments: dict[str, Any] | None = None
 
 
+class AdapterDeliveryResolutionRequest(NebulaModel):
+    """The operator's finding for a delivery whose worker died mid-handoff."""
+
+    expected_revision: int = Field(ge=1)
+    resolution: Literal["delivered", "discarded"]
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class ProjectWorkspaceRelinkRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     expected_revision: int = Field(ge=1)
@@ -7735,6 +7743,27 @@ def create_execution_kernel(
             else:
                 await missions.resume_after_approval(updated, actor_id=operator_id)
         return updated
+
+    @app.post(
+        f"{API_PREFIX}/approvals/{{approval_id}}/adapter-delivery",
+        response_model=Approval,
+        tags=["approvals"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resolve_approval_adapter_delivery(
+        approval_id: str, request: AdapterDeliveryResolutionRequest
+    ) -> Approval:
+        """Settle an ``unknown`` adapter delivery; never sends the decision again."""
+        from .approval_delivery import resolve_unknown_delivery
+
+        return await resolve_unknown_delivery(
+            store,
+            approval_id,
+            expected_revision=request.expected_revision,
+            resolution=request.resolution,
+            reason=request.reason,
+            actor_id=await active_operator_id(),
+        )
 
     @app.get(
         f"{API_PREFIX}/overview",
