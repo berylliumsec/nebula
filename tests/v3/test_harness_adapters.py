@@ -45,6 +45,7 @@ from nebula.v3.harnesses import (
     HarnessPermissionDecision,
     HarnessTransportError,
     HarnessUnavailableError,
+    HarnessUnresponsiveError,
     PermissionTicket,
     _AcpRpc,
     _CodexRpc,
@@ -468,6 +469,236 @@ async def test_codex_steer_gives_up_when_the_app_server_never_acknowledges(
     with pytest.raises(HarnessTransportError, match="did not acknowledge the input"):
         await asyncio.wait_for(connection.steer("focus"), timeout=5)
     assert rpc.calls[-1][0] == "turn/steer"
+
+
+class QuietCodexRpc(FixtureCodexRpc):
+    """An app-server that starts a turn and then sends nothing on its own.
+
+    ``thread_status`` is what thread/read reports (None: never answers it;
+    "error": answers with a JSON-RPC error). ``finish_after`` completes the
+    turn after that many seconds; ``answer_turn_start`` False never answers
+    turn/start.
+    """
+
+    def __init__(
+        self,
+        thread_status: str | None,
+        *,
+        finish_after: float | None = None,
+        answer_turn_start: bool = True,
+    ) -> None:
+        super().__init__()
+        self.thread_status = thread_status
+        self.finish_after = finish_after
+        self.answer_turn_start = answer_turn_start
+        self.process = None
+        self._finisher: asyncio.Task[None] | None = None
+
+    async def _finish(self) -> None:
+        assert self.finish_after is not None
+        await asyncio.sleep(self.finish_after)
+        await self.events.put(
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-a",
+                    "turn": {
+                        "id": "turn-quiet",
+                        "status": "completed",
+                        "items": [
+                            {"type": "agentMessage", "id": "m1", "text": "slow done"}
+                        ],
+                        "error": None,
+                    },
+                },
+            }
+        )
+
+    async def request(self, method: str, params: dict[str, Any]) -> Any:
+        self.calls.append((method, params))
+        if method == "turn/start":
+            if not self.answer_turn_start:
+                await asyncio.Event().wait()
+            if self.finish_after is not None:
+                self._finisher = asyncio.create_task(self._finish())
+            return {"turn": {"id": "turn-quiet", "status": "inProgress", "items": []}}
+        if method == "thread/read":
+            if self.thread_status is None:
+                await asyncio.Event().wait()
+            if self.thread_status == "error":
+                raise HarnessProviderError(
+                    "Codex app-server", {"code": -32600, "message": "unknown"}
+                )
+            status: dict[str, Any] = {"type": self.thread_status}
+            if self.thread_status == "active":
+                status["activeFlags"] = []
+            return {"thread": {"id": params["threadId"], "status": status}}
+        return await super().request(method, params)
+
+
+def _quiet_connection(rpc: QuietCodexRpc) -> CodexAppServerConnection:
+    async def allow(_ticket):
+        return None
+
+    return CodexAppServerConnection(
+        rpc,  # type: ignore[arg-type]
+        external_session_id="thread-a",
+        permission_handler=allow,
+    )
+
+
+async def _quiet_turn(connection: CodexAppServerConnection) -> list[Any]:
+    return [
+        event async for event in connection.run_turn("work quietly", model="gpt-5.4")
+    ]
+
+
+@pytest.fixture
+def short_silence(monkeypatch):
+    monkeypatch.delenv("NEBULA_HARNESS_SILENCE_CHECK_SECONDS", raising=False)
+    monkeypatch.delenv("NEBULA_HARNESS_STATUS_CHECK_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(harness_module, "HARNESS_SILENCE_CHECK_SECONDS", 0.1)
+    monkeypatch.setattr(harness_module, "HARNESS_STATUS_CHECK_TIMEOUT_SECONDS", 0.1)
+
+
+async def test_codex_turn_ends_when_a_silent_app_server_stops_answering(
+    short_silence,
+):
+    # Alive but wedged: nothing after turn/started, and no answer to thread/read.
+    rpc = QuietCodexRpc(None)
+
+    with pytest.raises(HarnessUnresponsiveError, match="stopped responding") as caught:
+        await asyncio.wait_for(_quiet_turn(_quiet_connection(rpc)), timeout=5)
+    assert caught.value.reason_code == "timeout"
+    assert "did not answer a status check within 0.1 s" in str(caught.value)
+    assert [method for method, _ in rpc.calls].count("thread/read") == 1
+
+
+async def test_codex_turn_ends_when_its_app_server_never_answers_turn_start(
+    short_silence,
+):
+    rpc = QuietCodexRpc(None, answer_turn_start=False)
+
+    with pytest.raises(HarnessUnresponsiveError, match="stopped responding"):
+        await asyncio.wait_for(_quiet_turn(_quiet_connection(rpc)), timeout=5)
+
+
+async def test_codex_turn_ends_when_its_exited_process_left_the_stream_open(
+    short_silence,
+):
+    rpc = QuietCodexRpc("active")
+    rpc.process = SimpleNamespace(returncode=137)
+
+    with pytest.raises(HarnessUnresponsiveError, match="exited with code 137"):
+        await asyncio.wait_for(_quiet_turn(_quiet_connection(rpc)), timeout=5)
+    # A process known to be gone is not asked.
+    assert "thread/read" not in [method for method, _ in rpc.calls]
+
+
+async def test_codex_turn_ends_when_codex_reports_no_turn_on_repeated_checks(
+    short_silence,
+):
+    # The turn ended inside Codex but its turn/completed never arrived.
+    rpc = QuietCodexRpc("idle")
+
+    with pytest.raises(
+        HarnessUnresponsiveError, match="never reached Nebula"
+    ) as caught:
+        await asyncio.wait_for(_quiet_turn(_quiet_connection(rpc)), timeout=5)
+    assert caught.value.reason_code == "stale_state"
+    assert [method for method, _ in rpc.calls].count("thread/read") == 2
+
+
+@pytest.mark.parametrize("thread_status", ["active", "error"])
+async def test_codex_turn_keeps_running_while_a_silent_app_server_answers(
+    short_silence, thread_status
+):
+    # A long quiet command (thread active), or an app-server that answers the
+    # check with an error (older Codex), is alive: silence never ends the turn.
+    rpc = QuietCodexRpc(thread_status, finish_after=0.8)
+
+    events = await asyncio.wait_for(_quiet_turn(_quiet_connection(rpc)), timeout=5)
+
+    assert events[-1].type == "completed"
+    assert events[-1].message == "slow done"
+    assert [method for method, _ in rpc.calls].count("thread/read") >= 3
+
+
+async def test_codex_silence_check_can_be_turned_off(short_silence, monkeypatch):
+    monkeypatch.setenv("NEBULA_HARNESS_SILENCE_CHECK_SECONDS", "0")
+    rpc = QuietCodexRpc(None, finish_after=0.5)
+
+    events = await asyncio.wait_for(_quiet_turn(_quiet_connection(rpc)), timeout=5)
+
+    assert events[-1].type == "completed"
+    assert "thread/read" not in [method for method, _ in rpc.calls]
+
+
+def test_harness_silence_bounds_read_operator_overrides(monkeypatch):
+    monkeypatch.setenv("NEBULA_HARNESS_SILENCE_CHECK_SECONDS", "120")
+    monkeypatch.setenv("NEBULA_HARNESS_STATUS_CHECK_TIMEOUT_SECONDS", "nonsense")
+    assert harness_module.harness_silence_bounds() == (
+        120.0,
+        harness_module.HARNESS_STATUS_CHECK_TIMEOUT_SECONDS,
+    )
+    monkeypatch.delenv("NEBULA_HARNESS_SILENCE_CHECK_SECONDS")
+    monkeypatch.delenv("NEBULA_HARNESS_STATUS_CHECK_TIMEOUT_SECONDS")
+    assert harness_module.harness_silence_bounds() == (60.0, 30.0)
+
+
+async def test_grok_turn_ends_when_its_exited_process_left_the_stream_open(
+    short_silence,
+):
+    class ExitedGrokRpc(FixtureGrokRpc):
+        def __init__(self) -> None:
+            super().__init__()
+            self.process = SimpleNamespace(returncode=None)
+
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "session/prompt":
+                self.calls.append((method, params))
+                self.process.returncode = 1
+                await asyncio.Event().wait()
+            return await super().request(method, params)
+
+    async def no_permission(_request):
+        raise AssertionError("permission was not expected")
+
+    connection = GrokAcpConnection(
+        ExitedGrokRpc(),  # type: ignore[arg-type]
+        external_session_id="grok-session",
+        permission_handler=no_permission,
+    )
+
+    async def turn() -> None:
+        async for _event in connection.run_turn("hello", model="grok-build"):
+            pass
+
+    with pytest.raises(HarnessUnresponsiveError, match="exited with code 1"):
+        await asyncio.wait_for(turn(), timeout=5)
+
+
+async def test_grok_turn_keeps_waiting_while_its_process_is_alive(short_silence):
+    class SlowGrokRpc(FixtureGrokRpc):
+        def __init__(self) -> None:
+            super().__init__()
+            self.process = SimpleNamespace(returncode=None)
+
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "session/prompt":
+                await asyncio.sleep(0.5)
+            return await super().request(method, params)
+
+    async def no_permission(_request):
+        raise AssertionError("permission was not expected")
+
+    connection = GrokAcpConnection(
+        SlowGrokRpc(),  # type: ignore[arg-type]
+        external_session_id="grok-session",
+        permission_handler=no_permission,
+    )
+    events = [event async for event in connection.run_turn("hello", model="grok-build")]
+    assert events[-1].type == "completed"
 
 
 async def test_grok_probe_uses_structured_model_catalog_without_cli(monkeypatch):

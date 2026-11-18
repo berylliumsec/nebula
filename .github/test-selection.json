@@ -1,21 +1,26 @@
 {
-  "change_digest": "9ecf5928011026f9b18aa472c344357175e9747b065d96acbcca234d4ec800b9",
+  "change_digest": "9affb5a9d8f50d65ba3b0de89056d6548ef4281c6ba18cc86e1138f40de63b7d",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "The supervisor's forwarding proxy records api.runtime.response_interrupted and leaves the response incomplete when the API worker dies mid-stream, instead of raising into uvicorn's unhandled-exception traceback. Selected: the runtime HTTP proxy suite with a new mid-response regression.",
-  "exclusions": "No UI, native or Playwright layer: viewers still see a truncated response as before.",
+  "reason": "A Codex harness turn whose app-server stays alive but silent now gets a bounded thread/read status check after 60 s of silence; it ends with a recorded error only when the check goes unanswered, the process exited, or Codex reports no running turn twice, and keeps running while Codex reports the turn active. Grok is checked for process exit. Selected: the adapter suite with the new silent-turn regressions, plus the Codex transport/outcome, Grok ACP, harness goal and turn lifecycle suites that exercise the same run loops and failure path.",
+  "exclusions": "No UI, native or Playwright layer: the error reaches the existing chat turn error and goal blocked reason surfaces. test_harnesses.py has two failures already on main (gateway catalog refresh) and test_harness_stopped_turns.py flaked on clean main under PostgreSQL, so they are not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 35,
+    "python": 218,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_http.py"
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_codex_transport.py",
+    "tests/v3/test_codex_turn_outcomes.py",
+    "tests/v3/test_grok_acp_compliance.py",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_harness_turn_lifecycle.py"
   ],
   "frontend": [],
   "native": [],
