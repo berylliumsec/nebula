@@ -1,20 +1,22 @@
 {
-  "change_digest": "7dfaa11cb91d94b7ed131857eb605ac558bb0c6172a0550b37cae2fd5ae77142",
-  "reviewed_by": "Codex under explicit operator instruction to run no local or CI tests",
-  "reason": "Operator requested merge and deployment without running tests. The exact dead-owner guard and continuity behavior will be checked against live Core during the authorized deployment.",
-  "exclusions": "No Python, frontend, native, or Playwright tests are selected because the operator explicitly prohibited local and CI tests. This leaves automated behavior unverified; the deployer and Core readbacks remain the live acceptance evidence.",
+  "change_digest": "1750b0ba89eb1b4797eccf5d55130ebd9bf389cc36996e4838ebb28a5c8e33d7",
+  "reviewed_by": "Claude after confirming CI job and matrix names in .github/workflows/ci.yml",
+  "reason": "CI-backed simulation preparation now matches each required CI job as a family (the exact job name or GitHub matrix instances named '<job> (...)') and requires every instance to succeed, and validation accepts legacy acceptance records listing the six exact terminal-client matrix jobs. The deployer protocol file covers family success, failed, cancelled, and unfinished instances, a missing family, bare-prefix isolation, and legacy-record validation.",
+  "exclusions": "No Core, UI, native app, or browser behavior changes; only the simulation deployer's CI acceptance gate and its README change. Playwright matrix validation semantics are unchanged.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
+    "python": 27,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/test_deployer_protocol.py"
+  ],
   "frontend": [],
   "native": [],
   "playwright": [],
