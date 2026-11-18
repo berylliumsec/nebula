@@ -20,6 +20,7 @@ import math
 import os
 import random
 import re
+import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import (
@@ -1151,8 +1152,9 @@ def _native_request_timeout(config: ProviderConfig) -> float:
     Chat Completions (every routing step, mission specialist and utility call
     on OpenRouter, local runtimes and gateways), receive the whole generation
     as one response, so the read timeout bounds the entire answer, not the gap
-    between tokens. Streams and catalog calls keep the client default. Operators
-    tune it per provider
+    between tokens. Streams and catalog calls keep the client default for their
+    reads, but a stream that sends no data frame (only keepalives) for this
+    long ends as timed out. Operators tune it per provider
     (``options.request_timeout_seconds``) and per deployment; a config built
     with an explicit ``timeout_seconds`` keeps it when neither is set.
     """
@@ -1413,8 +1415,15 @@ def _interrupted_transport(exc: httpx.HTTPError) -> ProviderOverloadedError:
 _SSE_LINE_END = re.compile(r"\r\n|\r|\n")
 
 
-async def _sse_data_frames(response: httpx.Response) -> AsyncGenerator[str, None]:
+async def _sse_data_frames(
+    response: httpx.Response, *, idle_seconds: float | None = None
+) -> AsyncGenerator[str, None]:
     """Yield the ``data`` payload of each server-sent event.
+
+    ``idle_seconds`` bounds how long the stream may go without a data frame.
+    The read timeout only bounds silence, and SSE comment keepalives (such as
+    a gateway's ``: PROCESSING``) reset it; a stream that sends nothing else
+    would otherwise keep its turn running forever. It ends as a read timeout.
 
     SSE lines end only at LF, CRLF or CR. ``aiter_lines()`` follows
     ``str.splitlines()`` and also breaks at U+2028, U+2029 and U+0085, which a
@@ -1460,6 +1469,7 @@ async def _sse_data_frames(response: httpx.Response) -> AsyncGenerator[str, None
             event = line[6:].strip()
         return []
 
+    progressed = time.monotonic()
     async for chunk in response.aiter_text():
         buffer += chunk
         start = 0
@@ -1473,8 +1483,14 @@ async def _sse_data_frames(response: httpx.Response) -> AsyncGenerator[str, None
             payloads = take(buffer[start : match.start()])
             start = match.end()
             for payload in payloads:
+                progressed = time.monotonic()
                 yield payload
         buffer = buffer[start:]
+        if idle_seconds is not None and time.monotonic() - progressed > idle_seconds:
+            raise httpx.ReadTimeout(
+                f"the provider stream sent only keepalives for {idle_seconds:g} s",
+                request=response.request,
+            )
     tail = buffer.rstrip("\r")
     if tail:
         take(tail)
@@ -1686,7 +1702,11 @@ async def _stream_with_retry(
                     await response.aread()
                     error = _safe_error(response)
                 else:
-                    frames = _sse_data_frames(response)
+                    # A stream that makes no progress for as long as one
+                    # whole non-streamed generation may take is dead.
+                    frames = _sse_data_frames(
+                        response, idle_seconds=_native_request_timeout(config)
+                    )
                     leading, error = await _leading_frames(frames)
                     if error is None:
                         started = True
