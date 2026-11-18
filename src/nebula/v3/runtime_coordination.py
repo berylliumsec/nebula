@@ -241,6 +241,26 @@ def pending_storage_dispatches(project_id, dialect: str) -> Any:
 _CHAT_START_COMMANDS = frozenset(("chat.accept/v1", "chat.resume/v1"))
 HTTP_INVOKE_COMMAND = "http.invoke/v1"
 CHAT_START_ATTEMPTS = 3
+# Outcomes of an HTTP request that failed while its live worker ran it. The
+# keys match the dead-owner results in runtime_orphan_recovery, so a viewer
+# reads one shape whichever way the request was interrupted.
+FAILED_SAVED_REQUEST_RESULT = {
+    "http_status": 409,
+    "detail": "This request failed in the project worker after it saved changes. It was not run again; reload to see what it saved.",
+    "failed_in_worker": True,
+    "saved_changes": True,
+}
+FAILED_UNSAVED_REQUEST_RESULT = {
+    "http_status": 503,
+    "detail": "This request failed in the project worker before it saved anything, and it could not run again. Nothing of it was saved; send it again.",
+    "failed_in_worker": True,
+    "saved_changes": False,
+}
+FAILED_REQUEST_RESULT = {
+    "http_status": 500,
+    "detail": "This request failed in the project worker. It was not retried and may have partly applied; check what it changes before you send it again.",
+    "failed_in_worker": True,
+}
 
 
 async def unwritten_request(session, row: RuntimeCommandRow) -> bool | None:
@@ -1319,11 +1339,69 @@ class RuntimeCoordination:
             )
             return True
 
+    async def settle_failed_request(
+        self, lease: ProjectLease, command_id: str, *, tracked: bool
+    ) -> Literal["requeued", "saved", "unsaved", "failed"] | None:
+        """Settle this live owner's HTTP request whose run raised.
+
+        The caller has already stopped every write of that run from
+        committing (``CommandWrites.settling``), so the write record, read
+        under its row lock, is final. A tracked request that saved nothing
+        and published nothing runs again (bounded like a chat start); one
+        that saved changes, or can no longer run, fails with that outcome.
+        An untracked request fails without being retried: its effect may
+        have partly applied, which the operator accepts, and a failed command
+        never holds its lane the way an unresolved one would. Returns None,
+        changing nothing, when the command is no longer this owner's running
+        HTTP request or (for a tracked one) its record is not this run's.
+        """
+        async with self.fenced(lease) as session:
+            row = await session.get(RuntimeCommandRow, command_id, with_for_update=True)
+            if (
+                row is None
+                or row.name not in {HTTP_INVOKE_COMMAND, HTTP_FOLLOW_COMMAND}
+                or row.project_id != lease.project_id
+                or row.state != "running"
+                or (row.runtime_id, row.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+            ):
+                return None
+            outcome: Literal["saved", "unsaved", "failed"]
+            if tracked:
+                writes = await session.get(
+                    RuntimeCommandWriteRow, command_id, with_for_update=True
+                )
+                if writes is None or (writes.runtime_id, writes.fencing_token) != (
+                    lease.runtime_id,
+                    lease.fencing_token,
+                ):
+                    return None
+                if not writes.wrote and await requeue_unbound_chat_start(session, row):
+                    return "requeued"
+                outcome = "saved" if writes.wrote else "unsaved"
+            else:
+                outcome = "failed"
+            row.state = "failed"
+            row.result = {
+                **{
+                    "saved": FAILED_SAVED_REQUEST_RESULT,
+                    "unsaved": FAILED_UNSAVED_REQUEST_RESULT,
+                    "failed": FAILED_REQUEST_RESULT,
+                }[outcome],
+                "previous_state": "running",
+            }
+            await session.execute(
+                delete(RuntimeCommandWriteRow).where(
+                    RuntimeCommandWriteRow.command_id == command_id
+                )
+            )
+            return outcome
+
     async def requeue_chat_start(self, lease: ProjectLease, command_id: str) -> bool:
         """Queue this owner's interrupted chat start again if it saved nothing.
 
-        Only typed chat starts: a re-runnable HTTP request runs again only once
-        its owner is fenced, since a task it started may still be writing.
+        Only typed chat starts: a re-runnable HTTP request runs again from
+        ``settle_failed_request``, once no task of its run can still commit.
         """
         async with self.fenced(lease) as session:
             row = await session.get(RuntimeCommandRow, command_id, with_for_update=True)
