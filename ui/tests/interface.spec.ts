@@ -12392,6 +12392,7 @@ test("stabilization audit primary mutation dialogs through the shared dialog con
   await captureDialog("dialog-provider", page.getByRole("button", { name: "Add provider" }), "Add model provider");
 
   await openWorkspace(page, "/settings#automation-settings", "Settings");
+  await captureDialog("dialog-claude", page.getByRole("button", { name: "Add Claude" }), "Add Claude");
   await captureDialog("dialog-grok", page.getByRole("button", { name: "Add Grok" }), "Add Grok ACP");
   await captureDialog("dialog-codex", page.getByRole("button", { name: "Add Codex" }), "Add Codex");
   await captureDialog("dialog-mcp", page.getByRole("button", { name: "Add MCP server" }), "Add MCP server");
