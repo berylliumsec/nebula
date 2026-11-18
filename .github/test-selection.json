@@ -1,23 +1,20 @@
 {
   "change_digest": "7dfaa11cb91d94b7ed131857eb605ac558bb0c6172a0550b37cae2fd5ae77142",
-  "reviewed_by": "Codex after independent dead-worker recovery diagnosis",
-  "reason": "The simulation host restart guard now accepts one exact proven-dead worker only with an operator acceptance record and verifies any resulting Core recovery. The selected process-level host restart tests cover the gate, exact owner continuity, and refusal paths.",
-  "exclusions": "No Nebula UI, frontend, native app, or browser journey changes. The deployer runs only on the simulation host, so a disposable LAN Core cannot exercise its service and PostgreSQL activation path. The operator requested no local tests; selected Python tests run in CI only.",
+  "reviewed_by": "Codex under explicit operator instruction to run no local or CI tests",
+  "reason": "Operator requested merge and deployment without running tests. The exact dead-owner guard and continuity behavior will be checked against live Core during the authorized deployment.",
+  "exclusions": "No Python, frontend, native, or Playwright tests are selected because the operator explicitly prohibited local and CI tests. This leaves automated behavior unverified; the deployer and Core readbacks remain the live acceptance evidence.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 14,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/test_simulation_host_restart.py",
-    "tests/test_simulation_dead_owner_activation.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],
