@@ -1,21 +1,23 @@
 {
-  "change_digest": "fb2a321da2df24f5c89703983ef8920fad9b8f3332798662993174a312831c0d",
+  "change_digest": "ba64b832d9a85083c546440cd20164cbc3e35ecbfac80f1e9b64a0df238089f2",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "The MCP probe now bounds notifications/initialized and every list request with the profile's startup timeout, so a stdio server that stops answering after initialize no longer holds the probe (and its project's work lane) forever. Selected: the MCP probe suite with new regressions for tools/list, resources/list and prompts/list.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The project-level effect (other chats in the project keep being served) was measured on a fake scratch Core with a silent stdio MCP stub.",
+  "reason": "A streamed provider response that keeps sending SSE comment keepalives but no data frame for the provider's native request timeout now ends as a read timeout instead of keeping its turn running forever. Selected: provider adapter suites (new keepalive-only regression, existing stream framing, retry and timeout behaviour) and provider contracts.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. The end-to-end turn ending was measured on a fake scratch Core with a keepalive-only stub.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 23,
+    "python": 173,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_mcp_probe.py"
+    "tests/v3/test_providers.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_provider_leftovers.py"
   ],
   "frontend": [],
   "native": [],

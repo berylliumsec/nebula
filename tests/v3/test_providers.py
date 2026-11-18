@@ -5,6 +5,7 @@ from tests.v3.async_test_support import (
 import asyncio
 import re
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -3010,6 +3011,45 @@ async def test_transport_failures_become_provider_errors_with_a_reason():
         "without sending complete message body"
     )
     assert events[-1].retryable is False
+
+
+async def test_stream_of_only_keepalives_ends_after_the_request_timeout(monkeypatch):
+    # Each keepalive comment resets httpx's read timeout, so only progress
+    # in data frames counts. The clock jumps 50 s per received chunk.
+    clock = [1000.0]
+    monkeypatch.setattr(providers, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    pings: list[int] = []
+
+    class Keepalives(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            while len(pings) < 100:
+                pings.append(1)
+                clock[0] += 50
+                yield b": PROCESSING\n\n"
+
+    def keepalive(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=Keepalives(), headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("keepalive", request_timeout_seconds=120),
+        transport=httpx.MockTransport(keepalive),
+    )
+
+    events = await _collect_stream_async(provider)
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.ERROR,
+    ]
+    # Ended at the first chunk past 120 s without a data frame, never replayed.
+    assert len(pings) == 3
+    assert "the provider stream sent only keepalives for 120 s" in (
+        events[-1].error or ""
+    )
 
 
 def test_streaming_tool_calls_are_keyed_by_index_or_arrival_order():
