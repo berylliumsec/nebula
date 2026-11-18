@@ -1081,3 +1081,75 @@ async def test_proxy_forwards_credentials_only_into_a_private_socket_directory(
             await proxy.close()
             socket.parent.chmod(0o700)
     assert received == (["Bearer synthetic"] if directory == "private" else [])
+
+
+async def test_worker_ending_mid_response_cuts_the_viewer_response_short(
+    monkeypatch,
+):
+    # The API worker died mid-stream: the supervisor records it and leaves the
+    # response incomplete (the server then closes the connection), with no
+    # unhandled exception and without sending a final chunk that would make
+    # a truncated body look complete.
+    recorded = []
+    monkeypatch.setattr(
+        "nebula.v3.runtime_http.record_diagnostic",
+        lambda *args, **fields: recorded.append((args, fields)),
+    )
+    key = secrets.token_bytes(32)
+
+    class Torn(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"data: first\n\n"
+            raise httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body"
+            )
+
+    def handler(_request):
+        return httpx.Response(
+            200, stream=Torn(), headers={"content-type": "text/event-stream"}
+        )
+
+    async def select(_scope):
+        return HttpUpstream("unix:///fixture.sock", key)
+
+    proxy = RuntimeHttpProxy(
+        select, transport_factory=lambda _endpoint: httpx.MockTransport(handler)
+    )
+    sent = []
+    requested = []
+
+    async def receive():
+        if not requested:
+            requested.append(True)
+            return {"type": "http.request", "body": b"", "more_body": False}
+        # The viewer stays connected.
+        await asyncio.Event().wait()
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/api/v1/chat/sessions/x/events",
+        "raw_path": b"/api/v1/chat/sessions/x/events",
+        "query_string": b"",
+        "headers": [(b"host", b"public.example")],
+        "client": ("127.0.0.1", 1),
+        "server": ("public.example", 443),
+        "root_path": "",
+    }
+    try:
+        await asyncio.wait_for(proxy(scope, receive, send), 5)
+    finally:
+        await proxy.close()
+    assert sent[0]["type"] == "http.response.start"
+    bodies = [message for message in sent if message["type"] == "http.response.body"]
+    assert b"".join(message.get("body", b"") for message in bodies) == (
+        b"data: first\n\n"
+    )
+    assert all(message.get("more_body", False) for message in bodies)
+    assert [args[2] for args, _ in recorded] == ["api.runtime.response_interrupted"]

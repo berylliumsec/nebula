@@ -721,7 +721,26 @@ class RuntimeHttpProxy:
                     if name.lower() not in excluded
                     and not name.lower().startswith(_PREFIX)
                 ]
-                await stream(scope, receive, send)
+                try:
+                    await stream(scope, receive, send)
+                except httpx.HTTPError as error:
+                    # diagnostic-expected: an upstream that ends mid-body is recorded below and the response is left incomplete.
+                    # The worker ended mid-response (it stopped or restarted).
+                    # The body cannot be completed: returning without its
+                    # final chunk makes the server close the connection, so
+                    # the viewer sees it truncated (and resumes or retries by
+                    # turn), never as a complete response.
+                    record_diagnostic(
+                        "warning",
+                        "api",
+                        "api.runtime.response_interrupted",
+                        "A runtime worker ended while its response was being "
+                        "forwarded; the viewer's response was cut short.",
+                        stage="forward",
+                        retryable=True,
+                        exception_type=type(error).__name__,
+                    )
+                    return
             finally:
                 await finish_cleanup(response.aclose())
         finally:

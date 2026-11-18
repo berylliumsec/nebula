@@ -1,22 +1,21 @@
 {
-  "change_digest": "319dca01210fea2bb12d71ecfaaf49062937056a27fe9c429ccce5d8c37e097e",
+  "change_digest": "9ecf5928011026f9b18aa472c344357175e9747b065d96acbcca234d4ec800b9",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "A typed chat start (chat.accept/v1, chat.resume/v1) interrupted before it saved its turn (no runtime_chat_bindings row, no response frame) is queued again for the next owner, bounded to three runs, on the dead-owner reconcile, fenced-claim and worker-cleanup paths, instead of being failed as 'may have partly applied' and losing the operator's message; a start whose turn was saved is settled from that turn. Selected: the orphan-recovery suite (requeue, saved-turn settlement, attempt bound, published-response cases) and the API-worker regression covering worker cleanup and the fenced claim, in SQLite and PostgreSQL.",
-  "exclusions": "No UI, settings or native change. test_runtime_coordination, test_runtime_delivery and test_runtime_auto_recovery were run locally with results identical to clean main and are not selected. The loss was reproduced on a fresh fake Core on main (STUCK) and on this branch (PASS, three runs).",
+  "reason": "The supervisor's forwarding proxy records api.runtime.response_interrupted and leaves the response incomplete when the API worker dies mid-stream, instead of raising into uvicorn's unhandled-exception traceback. Selected: the runtime HTTP proxy suite with a new mid-response regression.",
+  "exclusions": "No UI, native or Playwright layer: viewers still see a truncated response as before.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 110,
+    "python": 35,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_api_worker.py::test_an_interrupted_chat_start_that_saved_nothing_runs_again"
+    "tests/v3/test_runtime_http.py"
   ],
   "frontend": [],
   "native": [],
