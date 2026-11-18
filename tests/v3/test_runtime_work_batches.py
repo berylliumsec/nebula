@@ -57,6 +57,7 @@ from nebula.v3.runtime_work_batches import (
     RuntimeWorkBatches,
     WORK_BATCH_BARRIER,
     WORK_BATCH_COMMAND,
+    WORK_BATCH_WAIT_SECONDS,
     WORK_BATCH_FEATURE,
     _import_id,
 )
@@ -483,6 +484,79 @@ async def test_uncertain_work_never_resets_or_replays_through_batch(batch):
             await session.get(RuntimeCommandRow, prior.command_id)
         ).state == "uncertain"
     assert await batch.coordination.claim_next(lease, lane="work") is None
+
+
+async def test_batch_stuck_on_uncertain_work_fails_with_its_exact_blocker(batch):
+    # One project's unreconciled command must not hold every other
+    # participant behind the batch barrier forever.
+    await runtime(batch, "worker")
+    lease = await batch.coordination.claim_project("one", "worker")
+    other = await batch.coordination.claim_project("two", "worker")
+    prior = await batch.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="unknown",
+        name="inert",
+        payload={},
+    )
+    await batch.coordination.claim_next(lease)
+    await batch.coordination.finish_command(
+        lease,
+        prior.command_id,
+        state="uncertain",
+        result={"detail": "Unknown fixture effect"},
+    )
+    receipt = await accepted(batch)
+    await batch.service.reconcile()
+    later = await batch.coordination.submit(
+        project_id="two",
+        actor_id="operator",
+        idempotency_key="later",
+        name="inert",
+        payload={},
+    )
+    await batch.service.reconcile()
+    assert (await page(batch, receipt))[0].state == "queued"
+    assert await batch.coordination.claim_next(other, lane="work") is None
+
+    # The owners stay live while the batch waits past its bound.
+    for _ in range(int(WORK_BATCH_WAIT_SECONDS // 20) + 1):
+        batch.clock[0] += 20_000
+        await batch.coordination.heartbeat("worker")
+    await batch.service.reconcile()
+
+    result, status, body = await page(batch, receipt)
+    assert (result.state, status) == ("failed", 409)
+    assert f"command {prior.command_id}" in body["detail"]
+    assert "uncertain" in body["detail"]
+    assert "needs explicit reconciliation" in body["detail"]
+    assert not (await batch.store.get(Engagement, "one")).work_enabled
+    assert not (await batch.store.get(Engagement, "two")).work_enabled
+    # The other project's lane moves on; the uncertain command is untouched.
+    assert (await batch.coordination.claim_next(other, lane="work")).receipt == later
+    async with batch.database.session() as session:
+        assert (
+            await session.get(RuntimeCommandRow, prior.command_id)
+        ).state == "uncertain"
+
+
+async def test_released_turn_follower_does_not_hold_a_batch(batch):
+    await runtime(batch, "worker")
+    lease = await batch.coordination.claim_project("one", "worker")
+    following = await batch.coordination.submit(
+        project_id="one",
+        actor_id="operator",
+        idempotency_key="harness-chat",
+        name="http.invoke/v1",
+        payload={},
+    )
+    await batch.coordination.claim_next(lease, lane="work")
+    assert await batch.coordination.release_follow(lease, following.command_id)
+    receipt = await accepted(batch, body={"project_ids": ["one"], "work_enabled": True})
+    for _ in range(2):
+        await batch.service.reconcile()
+    assert (await page(batch, receipt))[1] == 200
+    assert (await batch.store.get(Engagement, "one")).work_enabled
 
 
 async def test_old_owner_receives_no_barrier_then_progresses_on_compatible_lease(batch):
