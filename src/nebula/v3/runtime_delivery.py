@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from contextlib import nullcontext
 from dataclasses import dataclass
 import json
 import re
@@ -32,7 +33,7 @@ from .database import (
 )
 from .diagnostics import record_caught_exception
 from .domain import NebulaModel, PairedDeviceSession, utc_now
-from .execution_scope import execution_context
+from .execution_scope import execution_context, tracking_command_writes
 from .memory_actor import memory_actor
 from .runtime_coordination import (
     FOLLOWS_TURN_HEADER,
@@ -45,7 +46,7 @@ from .runtime_coordination import (
     RuntimeCoordination,
 )
 from .runtime_ipc import RuntimeIpcError
-from .runtime_routes import recovery_control
+from .runtime_routes import recovery_control, rerunnable_request
 from .runtime_vault import RuntimeVault
 from .runtime_chat_acceptance import (
     CHAT_ACCEPT_COMMAND,
@@ -1112,9 +1113,37 @@ class DurableHttpRunner:
             else:
                 raise RuntimeIpcError("unsupported runtime HTTP response extension")
 
+        tracked = False
+        if name == HTTP_INVOKE_COMMAND and rerunnable_request(
+            intent.method, intent.path, body
+        ):
+            # If this worker dies before the route saves anything, recovery
+            # runs the request again instead of leaving it unresolved.
+            try:
+                tracked = await self.delivery.coordination.track_command_writes(
+                    lease, command_id
+                )
+            except LeaseLost:
+                raise
+            except Exception as error:
+                # The request runs untracked, with the usual settlement.
+                record_caught_exception(
+                    "runtime",
+                    "runtime.command.write_tracking_failed",
+                    "A request runs without its write record; if its worker "
+                    "stops, it is not run again.",
+                    error,
+                    stage="delivery",
+                    metadata={"entity_id": command_id, "kind": "runtime-command"},
+                )
         attribution = memory_actor.set(actor)
         try:
-            with runtime_principal(actor):
+            with (
+                runtime_principal(actor),
+                tracking_command_writes(command_id, lease.project_id)
+                if tracked
+                else nullcontext(),
+            ):
                 await self.app(scope, receive, send)
         finally:
             memory_actor.reset(attribution)

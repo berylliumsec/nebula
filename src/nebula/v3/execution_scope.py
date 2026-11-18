@@ -71,6 +71,39 @@ _current_lease: ContextVar[ProjectLease | None] = ContextVar(
     "execution_lease", default=None
 )
 
+
+class CommandWrites:
+    """The re-runnable command whose route this task (and its children) runs.
+
+    While ``active``, every committed project write in the task's context also
+    marks the command's ``runtime_command_writes`` row in the same
+    transaction. The runner deactivates it when the route returns, so a task
+    that outlives its request never marks it.
+    """
+
+    __slots__ = ("command_id", "project_id", "active")
+
+    def __init__(self, command_id: str, project_id: str):
+        self.command_id, self.project_id, self.active = command_id, project_id, True
+
+
+_command_writes: ContextVar[CommandWrites | None] = ContextVar(
+    "execution_command_writes", default=None
+)
+
+
+@contextmanager
+def tracking_command_writes(command_id: str, project_id: str) -> Iterator[None]:
+    """Mark this command written by each project write committed in this context."""
+    tracker = CommandWrites(command_id, project_id)
+    token = _command_writes.set(tracker)
+    try:
+        yield
+    finally:
+        tracker.active = False
+        _command_writes.reset(token)
+
+
 # Shared before exclusive, in one statement whose order PostgreSQL guarantees.
 _BEGIN_LOCKS = (
     "WITH execution AS MATERIALIZED ("
@@ -408,6 +441,7 @@ class ExecutionSQLScope:
                 "runtime_instances",
                 "project_ownership",
                 "runtime_commands",
+                "runtime_command_writes",
                 "runtime_delivery",
                 "device_pairing_offers",
                 "runtime_capacity_policy",
@@ -780,6 +814,38 @@ class ExecutionSQLScope:
                     or row[2] <= now
                 ):
                     raise LeaseLost("execution project lease expired before commit")
+            tracker = _command_writes.get()
+            context = _current_lease.get()
+            if (
+                tracker is not None
+                and tracker.active
+                and context is not None
+                and context.project_id == tracker.project_id
+            ):
+                # Committed atomically with these writes: once set, the
+                # command is never run again after its worker dies.
+                cursor.execute(
+                    "UPDATE runtime_command_writes SET wrote = "
+                    + placeholder
+                    + " WHERE command_id = "
+                    + placeholder
+                    + " AND project_id = "
+                    + placeholder
+                    + " AND runtime_id = "
+                    + placeholder
+                    + " AND fencing_token = "
+                    + placeholder
+                    + " AND wrote = "
+                    + placeholder,
+                    (
+                        True,
+                        tracker.command_id,
+                        tracker.project_id,
+                        self.runtime_id,
+                        context.fencing_token,
+                        False,
+                    ),
+                )
         finally:
             cursor.close()
 

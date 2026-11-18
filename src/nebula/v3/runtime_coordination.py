@@ -22,7 +22,17 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, cast, func, insert, or_, select, text, update
+from sqlalchemy import (
+    BigInteger,
+    cast,
+    delete,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -36,6 +46,7 @@ from .database import (
     ProjectOwnershipRow,
     RunEventRow,
     RuntimeCommandRow,
+    RuntimeCommandWriteRow,
     RuntimeInstanceRow,
     ProjectHandoffRow,
     RuntimeProcessRow,
@@ -228,26 +239,51 @@ def pending_storage_dispatches(project_id, dialect: str) -> Any:
 # commit in one transaction (``bind_chat_command``), so a command without a
 # binding has written nothing of its conversation.
 _CHAT_START_COMMANDS = frozenset(("chat.accept/v1", "chat.resume/v1"))
+HTTP_INVOKE_COMMAND = "http.invoke/v1"
 CHAT_START_ATTEMPTS = 3
 
 
-async def requeue_unbound_chat_start(session, row: RuntimeCommandRow) -> bool:
-    """Run an interrupted chat start again when it provably saved nothing.
+async def unwritten_request(session, row: RuntimeCommandRow) -> bool | None:
+    """Whether a re-runnable HTTP command's last run saved nothing.
 
-    The binding commits atomically with the accepted turn and its messages,
-    and fencing makes a stale owner's binding transaction roll back once the
-    command is queued again, so an unbound start that also published no
-    response is safe to dispatch once more. It is never retried past
-    ``CHAT_START_ATTEMPTS`` runs. Returns whether the command was queued.
+    True: its owner recorded the command as re-runnable and no project write
+    of it committed. False: it saved something. None: its owner did not
+    track it (an older release, or a route that is not re-runnable), so
+    nothing is known.
+    """
+    # A request that released its lane (http.follow/v1) keeps its record.
+    if row.name not in {HTTP_INVOKE_COMMAND, HTTP_FOLLOW_COMMAND} or (
+        row.runtime_id is None
+    ):
+        return None
+    writes = await session.get(RuntimeCommandWriteRow, row.id)
+    if writes is None or (writes.runtime_id, writes.fencing_token) != (
+        row.runtime_id,
+        row.fencing_token,
+    ):
+        return None
+    return not writes.wrote
+
+
+async def requeue_unbound_chat_start(session, row: RuntimeCommandRow) -> bool:
+    """Run an interrupted chat start or request again when it saved nothing.
+
+    A typed chat start's binding commits atomically with the accepted turn
+    and its messages; a re-runnable ``http.invoke/v1`` request's write record
+    (``runtime_command_writes``) is marked in the same transaction as any
+    project write of its route. Fencing makes a stale owner's transaction
+    roll back once the command is queued again, so such a command that also
+    published no response is safe to dispatch once more. It is never retried
+    past ``CHAT_START_ATTEMPTS`` runs. Returns whether the command was queued.
     """
     from .database import RuntimeChatBindingRow, RuntimeDeliveryRow
 
-    if row.name not in _CHAT_START_COMMANDS or row.state not in {
-        "running",
-        "uncertain",
-    }:
+    if row.state not in {"running", "uncertain"}:
         return False
-    if await session.get(RuntimeChatBindingRow, row.id) is not None:
+    if row.name in _CHAT_START_COMMANDS:
+        if await session.get(RuntimeChatBindingRow, row.id) is not None:
+            return False
+    elif await unwritten_request(session, row) is not True:
         return False
     if await session.scalar(
         select(RuntimeDeliveryRow.id)
@@ -259,6 +295,12 @@ async def requeue_unbound_chat_start(session, row: RuntimeCommandRow) -> bool:
     runs = (runs if type(runs) is int and runs >= 0 else 0) + 1
     if runs >= CHAT_START_ATTEMPTS:
         return False
+    if row.name in {HTTP_INVOKE_COMMAND, HTTP_FOLLOW_COMMAND}:
+        await session.execute(
+            delete(RuntimeCommandWriteRow).where(
+                RuntimeCommandWriteRow.command_id == row.id
+            )
+        )
     row.state, row.runtime_id, row.fencing_token = "queued", None, None
     row.result = {"interrupted_runs": runs}
     return True
@@ -1205,6 +1247,13 @@ class RuntimeCoordination:
             )
             if changed.rowcount != 1:
                 raise CoordinationConflict("command is not running under this owner")
+            if state != "uncertain":
+                # Its outcome is final; the write record served only recovery.
+                await session.execute(
+                    delete(RuntimeCommandWriteRow).where(
+                        RuntimeCommandWriteRow.command_id == command_id
+                    )
+                )
             if apply is not None:
                 await apply(session)
             lane = await session.scalar(
@@ -1236,12 +1285,51 @@ class RuntimeCoordination:
                 raise CoordinationConflict("command is not running under this owner")
             requeue_interrupted_storage_report(row)
 
+    async def track_command_writes(self, lease: ProjectLease, command_id: str) -> bool:
+        """Record, before its route runs, that this request may run again.
+
+        Its execution transactions then mark the record written with their
+        first commit (``execution_scope.tracking_command_writes``). Returns
+        whether the record was saved for this owner's running command.
+        """
+        async with self.fenced(lease) as session:
+            row = await session.get(RuntimeCommandRow, command_id)
+            if (
+                row is None
+                or row.project_id != lease.project_id
+                or row.name != HTTP_INVOKE_COMMAND
+                or row.state != "running"
+                or (row.runtime_id, row.fencing_token)
+                != (lease.runtime_id, lease.fencing_token)
+            ):
+                return False
+            await session.execute(
+                delete(RuntimeCommandWriteRow).where(
+                    RuntimeCommandWriteRow.command_id == command_id
+                )
+            )
+            session.add(
+                RuntimeCommandWriteRow(
+                    command_id=command_id,
+                    project_id=lease.project_id,
+                    runtime_id=lease.runtime_id,
+                    fencing_token=lease.fencing_token,
+                    wrote=False,
+                )
+            )
+            return True
+
     async def requeue_chat_start(self, lease: ProjectLease, command_id: str) -> bool:
-        """Queue this owner's interrupted chat start again if it saved nothing."""
+        """Queue this owner's interrupted chat start again if it saved nothing.
+
+        Only typed chat starts: a re-runnable HTTP request runs again only once
+        its owner is fenced, since a task it started may still be writing.
+        """
         async with self.fenced(lease) as session:
             row = await session.get(RuntimeCommandRow, command_id, with_for_update=True)
             if (
                 row is None
+                or row.name not in _CHAT_START_COMMANDS
                 or row.project_id != lease.project_id
                 or row.state != "running"
                 or (row.runtime_id, row.fencing_token)

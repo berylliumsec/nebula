@@ -1260,3 +1260,107 @@ def test_api_role_import_does_not_import_the_execution_factory_or_chat_runtime()
         timeout=15,
     )
     assert result.returncode == 0, result.stderr
+
+
+async def test_a_non_streamed_request_runs_again_only_when_it_saved_nothing(boundary):
+    """A stream:false chat, goal action or unarchive whose worker died first
+    used to end "needs reconciliation" although nothing of it was saved.
+
+    Its owner records the request as re-runnable before the route runs; a
+    finished run drops that record, and a worker's own failure never runs it
+    again (a task it started may still write), while a lost owner's unsaved
+    run is queued for the next owner.
+    """
+    from nebula.v3.database import RuntimeCommandWriteRow
+
+    _, client = boundary.api()
+    seen = []
+
+    async def answered(scope, _receive, send):
+        async with boundary.host.database.session() as session:
+            seen.append(
+                await session.get(
+                    RuntimeCommandWriteRow, scope["state"]["runtime_command_id"]
+                )
+            )
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    async def stopped(_scope, _receive, _send):
+        raise RuntimeError("the execution worker stopped")
+
+    async def submit(key):
+        accepted = await client.post(
+            "/api/v1/chat/completions",
+            headers=_AUTH | {"Idempotency-Key": key},
+            json={"stream": False, "backend": "provider", "messages": []},
+        )
+        assert accepted.status_code == 202, accepted.text
+        return accepted.json()["receipt"]["command_id"]
+
+    finished = await submit("non-streamed-finished")
+    assert await DurableHttpRunner(
+        boundary.delivery, answered, operator_token=_TOKEN
+    ).run_one(boundary.lease, lane="work")
+    assert seen[0] is not None and seen[0].wrote is False
+    async with boundary.host.database.session() as session:
+        assert (await session.get(RuntimeCommandRow, finished)).state == "succeeded"
+        assert await session.get(RuntimeCommandWriteRow, finished) is None
+
+    raised = await submit("non-streamed-raised")
+    with pytest.raises(RuntimeError):
+        await DurableHttpRunner(
+            boundary.delivery, stopped, operator_token=_TOKEN
+        ).run_one(boundary.lease, lane="work")
+    async with boundary.host.database.session() as session:
+        assert (await session.get(RuntimeCommandRow, raised)).state == "uncertain"
+        row = await session.get(RuntimeCommandRow, raised)
+        row.state = "failed"  # let the lane move on
+        await session.commit()
+
+    lost = await submit("non-streamed-lost")
+    claimed = await boundary.coordination.claim_next(boundary.lease, lane="work")
+    assert claimed.receipt.command_id == lost
+    assert await boundary.coordination.track_command_writes(boundary.lease, lost)
+    async with boundary.host.database.session() as session:
+        row = await session.get(RuntimeCommandRow, lost)
+        record = await session.get(RuntimeCommandWriteRow, lost)
+        row.runtime_id, row.fencing_token = "lost-owner", 9
+        record.runtime_id, record.fencing_token = "lost-owner", 9
+        await session.commit()
+    assert await boundary.coordination.claim_next(boundary.lease, lane="work") is None
+    async with boundary.host.database.session() as session:
+        row = await session.get(RuntimeCommandRow, lost)
+        assert (row.state, row.runtime_id, row.result) == (
+            "queued",
+            None,
+            {"interrupted_runs": 1},
+        )
+        assert await session.get(RuntimeCommandWriteRow, lost) is None
+
+
+def test_only_routes_whose_effects_are_project_writes_are_rerunnable():
+    from nebula.v3.runtime_routes import rerunnable_request
+
+    def body(value):
+        return json.dumps(value).encode()
+
+    chat = "/api/v1/chat/completions"
+    assert rerunnable_request("POST", chat, body({"stream": False}))
+    assert rerunnable_request("POST", chat, body({"control_assistant": True}))
+    assert not rerunnable_request("POST", chat, body({"stream": True}))
+    assert not rerunnable_request("POST", chat, body({"backend": "harness"}))
+    goal = "/api/v1/chat/sessions/s/goal/actions"
+    for action in ("start", "pause", "resume", "cancel"):
+        assert rerunnable_request("POST", goal, body({"action": action}))
+    assert not rerunnable_request("POST", goal, body({"action": "complete"}))
+    session = "/api/v1/chat-sessions/s"
+    assert rerunnable_request("PATCH", session, body({"archived": False}))
+    assert not rerunnable_request("PATCH", session, body({"archived": False, "x": 1}))
+    assert not rerunnable_request("PATCH", session, body({"archived": True}))
+    assert not rerunnable_request("DELETE", session, None)
+    butler = "/api/v1/chat/control-assistant/session"
+    assert rerunnable_request("POST", butler, body({"backend": "provider"}))
+    assert not rerunnable_request("POST", butler, body({"backend": "harness"}))
+    assert not rerunnable_request("POST", "/api/v1/mcp/servers/x/tools/y", b"{}")
+    assert not rerunnable_request("POST", chat, b"not json")
