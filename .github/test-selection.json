@@ -1,26 +1,21 @@
 {
-  "change_digest": "06ba3dc2b0bcf08282c0d89b6eea6f24fef3074e736fdf2a21ce0f4021babf6f",
+  "change_digest": "96d7d567dc997c1b0c5c48abdbaf1ae3b712b1f0d2c9ff048e39b49c6697d9f5",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "The first attempt of a non-streamed model call now runs under the request allowance (plus a 5 s grace) as a total deadline, so a provider that trickles its answer can no longer hold a project's work-lane request (writing transform, scope import, non-streamed chat) forever. Selected: provider adapter suites with a new trickled-answer regression, provider contracts, inference timeout and native adapter request suites, and turn preflight latency.",
-  "exclusions": "No UI, native or Playwright layer: no interface change. The project-level effect was measured on a fake scratch Core with a trickling provider stub.",
+  "reason": "A knowledge URL capture now has a 120 s total deadline (redirects, body chunks and rendered page resources), and the route waits for its fetch thread at most that long plus 30 s, so a trickling server can no longer hold the project's work lane for years. Selected: the knowledge suite with a new trickled-body regression and the ingest-url route tests.",
+  "exclusions": "No UI, native or Playwright layer: no interface change. The project-level effect was measured on a fake scratch Core with a local trickling server (loopback allowed by a scratch-only shim).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 256,
+    "python": 26,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_providers.py",
-    "tests/v3/test_provider_contracts.py",
-    "tests/v3/test_provider_leftovers.py",
-    "tests/v3/test_inference_timeouts_probe_budget.py",
-    "tests/v3/test_native_adapter_requests.py",
-    "tests/v3/test_turn_preflight_latency.py"
+    "tests/v3/test_knowledge.py"
   ],
   "frontend": [],
   "native": [],

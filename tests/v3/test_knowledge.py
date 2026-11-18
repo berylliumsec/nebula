@@ -6,6 +6,7 @@ import base64
 import io
 import socket
 import zipfile
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -337,7 +338,7 @@ def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
 ):
     rendered: list[tuple[bytes, str]] = []
 
-    def render(document: bytes, *, base_url: str) -> bytes:
+    def render(document: bytes, *, base_url: str, deadline=None) -> bytes:
         rendered.append((document, base_url))
         return b"<html><body>Rendered guide</body></html>"
 
@@ -424,12 +425,80 @@ def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
     assert responses == []
 
 
+def test_url_fetch_ends_a_trickled_body_at_its_total_deadline(monkeypatch):
+    # Each chunk resets httpx's read timeout; only a total deadline ends a
+    # body trickled for hours. The fake clock moves 50 s per chunk.
+    clock = [1000.0]
+    chunks: list[int] = []
+
+    def trickle():
+        while True:
+            chunks.append(1)
+            clock[0] += 50
+            yield b"x"
+
+    class Peer:
+        @staticmethod
+        def get_extra_info(name: str):
+            return ("93.184.216.34", 443) if name == "server_addr" else None
+
+    class Client:
+        def __init__(self, **_options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def stream(self, method: str, url: str, *, headers, extensions):
+            response = httpx.Response(
+                200,
+                headers={"content-type": "text/plain"},
+                content=trickle(),
+                request=httpx.Request("GET", "https://example.com/slow.txt"),
+                extensions={"network_stream": Peer()},
+            )
+
+            class Stream:
+                def __enter__(self):
+                    return response
+
+                def __exit__(self, *args):
+                    return None
+
+            return Stream()
+
+    monkeypatch.setattr(
+        knowledge_module, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    monkeypatch.setattr(knowledge_module.httpx, "Client", Client)
+    monkeypatch.setattr(
+        knowledge_module.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 443),
+            )
+        ],
+    )
+
+    with pytest.raises(SourceFetchError, match="did not finish within 120 s"):
+        fetch_url_document("https://example.com/slow.txt")
+    assert len(chunks) == 3
+
+
 def test_playwright_snapshot_captures_dynamic_text_through_pinned_routes(
     monkeypatch,
 ):
     requested: list[str] = []
 
-    def fetch_resource(url: str, *, max_bytes: int):
+    def fetch_resource(url: str, *, max_bytes: int, deadline=None):
         requested.append(url)
         assert max_bytes == knowledge_module.MAX_RENDER_RESOURCE_BYTES
         return knowledge_module._FetchedUrlResource(
