@@ -162,8 +162,9 @@ before starting computation. Fixed inspection and fully verified cached-image
 reuse remain available. No provisioning failure falls back to unrestricted
 Docker, BuildKit or a host shell.
 
-Host shells and Host Notebook kernels need a protected local memory-runner/v1
-agent; PDF CPU work needs a contained CPU runner; raw SSH needs an authenticated remote agent that can
+Host commands use the protected local memory runner described below. Host
+Notebook kernels still need that runner integration; PDF CPU work needs a
+contained CPU runner; raw SSH needs an authenticated remote agent that can
 verify both kernel application and descendant cleanup; interactive terminals
 need a memory-managed PTY adapter. Unsupported paths are
 held or rejected with a durable explanation. They cannot fall back to a host
@@ -179,3 +180,50 @@ Validation uses small allocation workloads in an explicitly selected disposable
 OCI daemon and isolated authenticated Core fixtures. A fixture's daemon health
 does not certify production rootless isolation. Deployment and existing
 installations are outside this change's validation scope.
+
+## Protected local runner for Host commands
+
+On Linux, Host-mode commands run through `nebula-memory-runner@<user>`, a root
+system service shipped in the Nebula DEB
+(`/usr/lib/nebula/memory-runner/host_memory_runner.py`). Enable it once for the
+account that runs Core:
+
+```sh
+sudo systemctl enable --now nebula-memory-runner@$USER
+```
+
+Core finds it at `/run/nebula-memory-runner/<user>.sock` (override with
+`NEBULA_HOST_MEMORY_RUNNER_SOCKET`). Without a running runner, Host commands stay
+held with that instruction; Settings reports the `local` environment as
+unsupported. macOS has no equivalent kernel boundary, so Host commands remain
+held there.
+
+Each Host command session is one worker job. The runner creates a root-owned
+cgroup-v2 group for it under the unit's delegated subtree, writes `memory.max`,
+`memory.swap.max` and `memory.high`, and reports the kernel readback before any
+process exists. Every command then starts inside that group as Core's OS user:
+
+- The process is moved into the group before it runs anything but a fixed
+  root-owned stage script, so every descendant, including `setsid`/`nohup`
+  children, is charged to the job and removed with it.
+- The workload has no capabilities, an empty bounding set, cleared
+  supplementary groups and `no_new_privs`, so `sudo`, other setuid helpers and
+  the `docker` group cannot leave the group. Root owns the group directories,
+  so the workload cannot write `cgroup.procs` elsewhere.
+- A private mount namespace hides the runner socket, `/run/user/<uid>` (the
+  user's systemd and D-Bus sockets) and container daemon sockets. The runner
+  also refuses any client process that is inside a job group.
+- Usage, peak and the kernel `oom_kill` count are sampled from the group.
+  A positive `oom_kill` count ends the worker with `memory_limit_exceeded`; the
+  next command starts a new worker with the same saved budget.
+- Running-limit changes are written to the group and read back.
+- Cleanup writes `cgroup.kill`, waits for `populated 0` and removes the group
+  before Core releases capacity. If Core dies, the reconciler asks the same
+  runner (checked by its persistent instance authority) to remove the group,
+  whose name is derived from the job identity.
+
+Remaining boundary: Host commands still run as Core's OS user with its
+filesystem and network access. The runner prevents them from leaving the
+memory group through the kernel, setuid programs or local service sockets. It
+does not stop a command from asking a network service, for example `ssh
+localhost` with the user's own keys, to run work outside Nebula.

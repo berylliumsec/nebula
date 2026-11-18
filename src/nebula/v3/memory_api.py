@@ -53,7 +53,9 @@ class MemoryApi:
         apply_running: Callable[[str, MemoryRunningUpdate, str], Awaitable[MemoryJob]]
         | None = None,
         register_running_apply: bool = True,
+        host_runner: Any = None,
     ):
+        self.host_runner = host_runner
         self.store, self.service, self.runner_factory, self.apply_running = (
             store,
             service,
@@ -73,6 +75,7 @@ class MemoryApi:
         )
         async def read(response: Response):
             response.headers["Cache-Control"] = "private, no-store"
+            await self._refresh_host_runner()
             profiles = await self._profiles()
             result = await self.service.status(self._capabilities())
             return {**result.model_dump(mode="json"), "profiles": profiles}
@@ -85,6 +88,7 @@ class MemoryApi:
         )
         async def save(body: MemoryBudgetUpdate, request: Request, response: Response):
             response.headers["Cache-Control"] = "private, no-store"
+            await self._refresh_host_runner()
             profiles = await self._profiles()
             try:
                 result = await self.service.save(
@@ -213,6 +217,13 @@ class MemoryApi:
             )
             for profile in profiles
         ]
+
+    async def _refresh_host_runner(self) -> None:
+        """Report the protected local runner as the Host (local) environment."""
+        if self.host_runner is None:
+            return
+        capability = await self.host_runner.capabilities()
+        self.capabilities[capability.profile_id or "host"] = capability
 
     def _capabilities(self) -> list[MemoryRunnerCapabilities]:
         items = list(self.capabilities.values())
