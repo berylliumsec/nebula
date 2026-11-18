@@ -7,7 +7,7 @@ additionally archives candidate source and retains a real execution worker.
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
@@ -816,3 +816,35 @@ async def test_failed_target_that_did_not_clean_up_exits_without_relinquishing(
     async with value.database.session() as session:
         owner = await session.get(ProjectOwnershipRow, "one")
         assert owner.lease_expires_at_ms > 0
+
+
+async def test_overdue_source_stop_is_scoped_to_a_source_behind_the_target(recovery):
+    from nebula.v3.database import DeploymentHostRow
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    value = recovery
+    root = stepped_supervisor(value.coordinator, value.rpc)
+    stopped = []
+
+    async def stop_overdue_source(runtime_id):
+        stopped.append(runtime_id)
+        return 1
+
+    root.host.stop_overdue_source = stop_overdue_source
+    # The source already runs the deployment target: nothing to move.
+    async with value.database.session() as session:
+        (await session.get(DeploymentHostRow, "host")).target_version = "restore"
+    with pytest.raises(OperationRejected, match="behind the deployment target"):
+        await root.evict_execution(expected_owner=value.old)
+    # A stale grant is refused before anything is signalled.
+    async with value.database.session() as session:
+        (await session.get(DeploymentHostRow, "host")).target_version = "newer"
+    stale = replace(value.old, fencing_token=value.old.fencing_token + 5)
+    with pytest.raises(OperationRejected, match="ownership changed"):
+        await root.evict_execution(expected_owner=stale)
+    assert stopped == []
+
+    result = await root.evict_execution(expected_owner=value.old)
+    assert stopped == ["source"]
+    assert result["affected_project_ids"] == ["one"]
+    assert result["effects_replayed"] is False

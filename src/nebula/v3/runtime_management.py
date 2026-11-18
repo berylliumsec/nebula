@@ -77,6 +77,7 @@ _PARAMETERS: dict[str, type[NebulaModel]] = {
     "reconcile_project": ReconcileParameters,
     "rollback_code": VersionRevisionParameters,
     "retire": RuntimeParameters,
+    "evict_execution": ReconcileParameters,
     "shutdown": ShutdownParameters,
 }
 
@@ -96,6 +97,7 @@ class DeploymentOperationRequest(NebulaModel):
         "reconcile_project",
         "rollback_code",
         "retire",
+        "evict_execution",
         "shutdown",
     ]
     parameters: dict
@@ -282,6 +284,10 @@ class RuntimeManagement:
             identity = await root.host.retire(**values)
             await root.proxy.discard_endpoint(identity.endpoint)
             return identity.model_dump(mode="json")
+        elif action == "evict_execution":
+            return await root.evict_execution(
+                expected_owner=ProjectLease(**values["expected_owner"])
+            )
         elif action == "shutdown":
             if root._shutdown_requested is None:
                 raise HTTPException(

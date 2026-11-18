@@ -70,8 +70,22 @@ ingress available. Execution migration is serial: prepare one target, hand off
 one project, verify its new owner and fencing token from fresh status, retire the
 now-ownerless source, and confirm that retirement before preparing another
 target. The foreground supervisor may retire a verified target for a project
-with no open chat. Pinned projects remain on their source runtime; uncertain
-handoffs remain journaled and stop further target preparation until reconciled.
+with no open chat. A source that has not handed off within
+`HANDOFF_GRACE_SECONDS` (180 s), including a pinned project or a source shared by
+several projects, is stopped with the journaled `evict_execution` operation.
+Core refuses to stop the API worker, a worker already on the deployment target,
+or an owner whose grant changed since the deployer journaled it. Expired-owner
+recovery settles the stopped worker's leftovers without replay and restores its
+projects on the target version. The deployer accepts that recovery only when
+the project's `recovery` status names a verified recovery that started at or
+after the exact source grant it journaled, with no blockers and a ready target.
+It then retires the unused target it prepared. A recovery onto an older
+version is handed off again under a new journal generation. One run polls until
+no project is left waiting, or until a wait has made no progress for the grace
+period plus `HANDOFF_RECOVERY_WAIT_SECONDS`. An interrupted command record no
+longer pins a project, because no process in the old worker still runs it.
+Uncertain handoffs remain journaled and stop further target preparation until
+reconciled.
 The accepted runtime manifest hashes every executable/UI asset and uses the
 build's reviewed compatibility metadata, including its migration-tree digest.
 

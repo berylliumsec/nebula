@@ -287,3 +287,37 @@ async def test_butler_dispatch_in_flight_keeps_the_project_finishing(project, ag
         await project.coordinator.transfer("one")
     agent.app.state.butler_authority._dispatching.clear()
     assert await agent.tick() == "transferable"
+
+
+async def test_interrupted_command_does_not_pin_but_running_command_does(
+    project, agent
+):
+    # Core already gave up on an interrupted command: no process in this
+    # runtime runs it, and a late result reaches whichever runtime owns the
+    # project. Only a running command still needs its current runtime.
+    now = utc_now()
+
+    async def command(identity, status):
+        async with project.coordinator.database.session() as session:
+            await session.execute(
+                insert(EntityRow),
+                [
+                    {
+                        "id": identity,
+                        "kind": "command_executions",
+                        "engagement_id": "one",
+                        "revision": 1,
+                        "payload": {"status": status},
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                ],
+            )
+
+    await command("interrupted-command", "interrupted")
+    assert await agent.tick() == "transferable"
+    await command("running-command", "running")
+    assert await agent.tick() == "finishing"
+    blockers = (await row(project)).blockers
+    assert any("running-command" in text for text in blockers)
+    assert not any("interrupted-command" in text for text in blockers)

@@ -56,10 +56,21 @@ manifests compatible, and both execution versions support project handoff and
 any participant restoration that the project requires.
 
 A live harness or vendor session, mission, terminal, notebook, debug session,
-unconfirmed effect, or other non-restorable resource can pin its project to the
-old worker. Keep that worker and report the exact blocker. The deployer may
-return `waiting_for_handoffs` or `api_promoted_execution_staged`; these are
-partial promotions. Read Core's project phases, owners, resident versions, and
+unconfirmed effect, or other non-restorable resource can keep a project on its
+old worker during handoff. The operator's goal is that a deployment never stops
+on such a project. The deployer gives each source worker a grace period
+(`HANDOFF_GRACE_SECONDS`, 180 s) to reach a safe handoff boundary. After that it
+stops the source with the `evict_execution` operation, which is a planned crash.
+Core's expired-owner recovery then settles what the worker left: it releases
+claims, marks unfinished turns and commands interrupted, closes resident
+handles, records effects as possibly applied, and replays nothing. Core then
+restores the projects on the target version, and the deployer adopts that
+recovery from the `recovery` field in deployment status. Expect interrupted
+long commands, terminals, notebook kernels and vendor sessions, and goals that
+may repeat a step. Never record an effect as not having happened. The
+deployer may still return `waiting_for_handoffs` (for example, when recovery
+does not verify within `HANDOFF_RECOVERY_WAIT_SECONDS`) or
+`api_promoted_execution_staged`; these are partial promotions. Read Core's project phases, owners, resident versions, and
 blockers before claiming completion. A third execution version can remain
 staged until an older one retires. If the public listener is not held across
 the supervisor swap, report the client connection gap and verify stream

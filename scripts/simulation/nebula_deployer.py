@@ -86,6 +86,12 @@ TERMINAL_CLIENT_CI_JOBS = {
 DEPLOYMENT_HISTORY_LIMIT = 32
 SUPERVISOR_STOP_GRACE_SECONDS = 30
 SUPERVISOR_EXIT_SECONDS = 30
+# A project's old worker gets this long to reach a safe handoff boundary.
+# After it, the deployer stops that worker and adopts Core's crash-style
+# recovery of its projects, so a deployment never waits on a project.
+HANDOFF_GRACE_SECONDS = 180
+# How long a stopped worker's projects may take to recover on the target.
+HANDOFF_RECOVERY_WAIT_SECONDS = 300
 HOST_START_ATTEMPTS = 16
 HOST_RESTART_DELAY_SECONDS = 5
 HOST_QUIET_WAIT_SECONDS = 300
@@ -5824,6 +5830,8 @@ def staged_deployer(record: dict) -> StagedDeployer:
         activate_host=lambda version: activate_supervisor_host(record, version),
         migration_status=migration_status,
         reconcile_operation=reconcile_operation,
+        handoff_grace_seconds=HANDOFF_GRACE_SECONDS,
+        recovery_wait_seconds=HANDOFF_RECOVERY_WAIT_SECONDS,
     )
 
 

@@ -16,7 +16,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from nebula.v3.database import Database, RuntimeProcessRow
+from nebula.v3.database import Database, DeploymentHostRow, RuntimeProcessRow
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.deployments import DeploymentCoordinator
 from nebula.v3.domain import Engagement
@@ -693,3 +693,30 @@ async def test_exited_worker_is_reaped_and_reported_gone(managed, pidfd_mode):
             await managed.host.rediscover()
             await asyncio.sleep(0.05)
     assert identity.runtime_id not in managed.host.children
+
+
+async def test_overdue_source_is_stopped_and_the_api_worker_never_is(
+    managed, pidfd_mode
+):
+    await managed.stage("v1")
+    execution = await managed.host.spawn("v1", "execution")
+    api = await managed.host.spawn("v1", "api")
+    async with managed.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        assert host is not None
+        host.api_runtime_id = api.runtime_id
+    with pytest.raises(RuntimeIpcError):
+        await managed.host.stop_overdue_source(api.runtime_id)
+    assert same_process(api.pid, api.process_birth)
+    # A live, responsive worker with an unexpired lease is still stopped: the
+    # deployment already spent its grace period waiting for it.
+    assert await managed.host.stop_overdue_source(execution.runtime_id) >= 1
+    assert not same_process(execution.pid, execution.process_birth)
+    assert execution.runtime_id not in managed.host.children
+    with pytest.raises(RuntimeIpcError):
+        await managed.host.stop_overdue_source("unknown-runtime")
+    # Let the fixture tear down its API worker normally.
+    async with managed.database.session() as session:
+        host = await session.get(DeploymentHostRow, "host")
+        if host is not None:
+            host.api_runtime_id = None

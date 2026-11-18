@@ -51,7 +51,10 @@ _HANDLES = {
 }
 _LIVE_SQL = {
     "automation_sessions": {"starting", "ready", "running", "active"},
-    "command_executions": {"running", "interrupted"},
+    # An interrupted command has no process in this runtime: Core already
+    # gave up on it, and a late results callback reaches whichever runtime
+    # owns the project. It must not pin the project to this runtime forever.
+    "command_executions": {"running"},
     "harness_sessions": {"starting", "idle", "running", "waiting_approval"},
     "harness_turns": {"running"},
     "native_hook_executions": {"running"},
