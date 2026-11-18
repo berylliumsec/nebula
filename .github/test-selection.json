@@ -1,24 +1,21 @@
 {
-  "change_digest": "6beaef1ce86a9e2017052a98f8c357298d8b6c2a251e3582cb02c868014f3745",
+  "change_digest": "9ecf5928011026f9b18aa472c344357175e9747b065d96acbcca234d4ec800b9",
   "reviewed_by": "Claude Code after independent subagent root-cause validation and scratch-Core reproduction",
-  "reason": "The supervisor's host-service peer table now holds only live, ready workers (bounded by memory admission) instead of refusing a seventeenth peer, and a full table or busy request budget answers 503 as undispatched so a starting worker resends instead of dying. Selected: the new peer-capacity and resend regressions and the existing peer-failure test in the host services suite.",
-  "exclusions": "No UI, native or Playwright layer. test_runtime_host_services.py also holds two product-guidance tests that need the generated product knowledge index, so only the peer tests are selected. The project-level effect (an eighteenth live worker is served) was measured on a fake scratch Core.",
+  "reason": "The supervisor's forwarding proxy records api.runtime.response_interrupted and leaves the response incomplete when the API worker dies mid-stream, instead of raising into uvicorn's unhandled-exception traceback. Selected: the runtime HTTP proxy suite with a new mid-response regression.",
+  "exclusions": "No UI, native or Playwright layer: viewers still see a truncated response as before.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 8,
+    "python": 35,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_host_services.py::test_host_services_serve_more_live_workers_than_the_old_fixed_cap",
-    "tests/v3/test_runtime_host_services.py::test_busy_host_services_ask_a_starting_worker_to_resend",
-    "tests/v3/test_runtime_host_services.py::test_peer_failures_fail_at_once_and_only_replacement_is_resent",
-    "tests/v3/test_runtime_host_services.py::test_api_peers_and_expired_execution_peers_cannot_call_host_memory"
+    "tests/v3/test_runtime_http.py"
   ],
   "frontend": [],
   "native": [],
