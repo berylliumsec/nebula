@@ -719,3 +719,17 @@ def test_without_grace_a_stalled_handoff_reports_and_never_stops_its_source():
     deployer.post, _ = _stall_then_recover(host)
     assert deployer.promote("v2")["status"] == "waiting_for_handoffs"
     assert "evict_execution" not in [action for action, _ in host.calls]
+
+
+def test_promotion_reports_each_phase_duration():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    result = host.deployer(record).promote("v2")
+    assert result["status"] == "promoted"
+    steps = [step["step"] for step in result["timings"]["steps"]]
+    assert steps == [
+        "stage_migrate_host_and_api",
+        "target_execution",
+        "project_handoffs",
+    ]
+    assert all(step["seconds"] >= 0 for step in result["timings"]["steps"])
+    assert result["timings"]["total_seconds"] >= 0

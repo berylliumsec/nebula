@@ -19,6 +19,43 @@ the cutover boundary.
 The service token stays in the host's private environment file; these source
 files contain no token value.
 
+## Build ahead, and see where the time goes
+
+`python3 -m nebula_deployer prebuild` does what `prepare` does, so that a later
+`promote` or `cycle` finds the immutable release already built and only
+verifies it. It is meant for a timer, so waiting states are results rather than
+failures: it reports `waiting_for_ci` while main CI evidence is still running,
+missing or failed, `skipped` while a deployment journal is unfinished or another
+deployer run holds the lock, and `current` when main is already live. It never
+promotes, never runs local tests and leaves Core untouched. A `promote` or
+`cycle` that starts while a prebuild holds the deploy lock waits for it, up to
+`PREBUILD_LOCK_WAIT_SECONDS` (30 min); any other busy holder is still refused
+at once. A prebuild sets `pending`, so run it only on a host where promotion is
+a manual step. An example user timer:
+
+```ini
+# ~/.config/systemd/user/nebula-prebuild.service
+[Service]
+Type=oneshot
+WorkingDirectory=/home/simulation/.local/bin
+ExecStart=/usr/bin/python3 -m nebula_deployer prebuild
+
+# ~/.config/systemd/user/nebula-prebuild.timer
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+Every `prepare` reports each step's duration on stderr as it ends (`prepare:
+core_build took 109.0s`), including the step a failed run stopped in, and keeps
+them under `timings` in the release's `simulation-acceptance.json`. A
+supervisor `promote` returns `timings` for staging, migration, host and API
+promotion, execution targeting and project handoffs. Host activation logs how
+long chat turns took to go quiet and records `stop_and_switch_seconds` and
+`start_to_ready_seconds` in its journal.
+
 Backups are operator opt-in: `promote --backup` (or `cycle --backup`) takes a
 coherent rollback snapshot before a legacy release switch, or an online
 PostgreSQL dump (`rollback-backups/operator-pre-<commit>-<time>`) before a

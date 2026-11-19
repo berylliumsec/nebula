@@ -654,11 +654,30 @@ class StagedDeployer:
         ]
 
     def promote(self, version: str) -> dict:
+        """Promote ``version``; the result reports each phase's seconds."""
+        started = self.clock()
+        timings: list[dict] = []
+
+        def lap(name: str, since: float) -> float:
+            now = self.clock()
+            timings.append({"step": name, "seconds": round(now - since, 1)})
+            return now
+
+        def timed(result: dict) -> dict:
+            return {
+                **result,
+                "timings": {
+                    "steps": timings,
+                    "total_seconds": round(self.clock() - started, 1),
+                },
+            }
+
         journal = self._journal("promote", version)
         self._stage_and_promote_api(journal, version)
+        mark = lap("stage_migrate_host_and_api", started)
         staged = self._execution_staged(self._status(), version)
         if staged is not None:
-            return staged
+            return timed(staged)
         self._operation(
             journal,
             "target",
@@ -666,7 +685,10 @@ class StagedDeployer:
             {"version": version},
             effect=self._targeted(version),
         )
-        return self._settle_projects(journal, version)
+        mark = lap("target_execution", mark)
+        result = self._settle_projects(journal, version)
+        lap("project_handoffs", mark)
+        return timed(result)
 
     def rollback(self, version: str) -> dict:
         """Move host, API, target, and projects back to ``version``.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
@@ -102,6 +103,62 @@ HOST_QUIET_POLL_SECONDS = 5
 # Longer than an owner lease (30 s) plus Core's dead-owner recovery pass, so
 # an owner that recovers on its own is never reported.
 HOST_UNAVAILABLE_OWNER_SECONDS = 60
+# A promote or cycle that finds a prebuild holding the deploy lock waits this
+# long for it: the prebuild is producing the release that promote needs.
+PREBUILD_LOCK_WAIT_SECONDS = 1800
+LOCK_POLL_SECONDS = 2
+
+
+class StepTimings:
+    """Wall-clock seconds for each deployment step, reported as it ends.
+
+    ``begin`` ends the running step and starts the next one. Use ``run`` around
+    the whole operation: a step that raises is still recorded and reported, so
+    a failed run shows how far it got and how long each step took.
+    """
+
+    def __init__(self, label: str, clock=time.monotonic) -> None:
+        self.label = label
+        self.clock = clock
+        self.started = clock()
+        self.steps: list[dict[str, Any]] = []
+        self._current: tuple[str, float] | None = None
+
+    def begin(self, name: str) -> None:
+        self.end()
+        self._current = (name, self.clock())
+
+    def end(self, *, failed: bool = False) -> None:
+        if self._current is None:
+            return
+        name, started = self._current
+        self._current = None
+        seconds = round(self.clock() - started, 1)
+        entry: dict[str, Any] = {"step": name, "seconds": seconds}
+        if failed:
+            entry["failed"] = True
+        self.steps.append(entry)
+        print(
+            f"{self.label}: {name} {'failed after' if failed else 'took'} {seconds}s",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    @contextmanager
+    def run(self):
+        try:
+            yield self
+        except BaseException:
+            self.end(failed=True)
+            raise
+        self.end()
+
+    def record(self) -> dict[str, Any]:
+        self.end()
+        return {
+            "steps": list(self.steps),
+            "total_seconds": round(self.clock() - self.started, 1),
+        }
 
 
 class _LegacyAttempt:
@@ -1915,7 +1972,26 @@ def prepare(
     By default the candidate is accepted on the CI evidence for every commit
     since the live release (discovered automatically). ``local_tests`` re-runs
     the reviewed selection on this host instead; it is never a silent fallback.
+    Each step's duration is reported as it ends and kept in the receipt.
     """
+    with StepTimings("prepare").run() as timings:
+        return _prepare(
+            ci_run_ids=ci_run_ids,
+            pr_ci_run_ids=pr_ci_run_ids,
+            pr_playwright_run_ids=pr_playwright_run_ids,
+            local_tests=local_tests,
+            timings=timings,
+        )
+
+
+def _prepare(
+    *,
+    ci_run_ids: list[str] | None,
+    pr_ci_run_ids: list[str] | None,
+    pr_playwright_run_ids: list[str] | None,
+    local_tests: bool,
+    timings: StepTimings,
+) -> dict[str, Any]:
     if local_tests and (
         ci_run_ids is not None
         or pr_ci_run_ids is not None
@@ -1928,6 +2004,7 @@ def prepare(
         raise RuntimeError(
             "Supplemental PR CI runs require the main CI acceptance chain"
         )
+    timings.begin("fetch")
     git_source()
     previous = baseline()
     run("git", "-C", str(REPO), "fetch", "--no-tags", "origin", "main")
@@ -1954,6 +2031,7 @@ def prepare(
             "A different deployment operation is still unresolved; reconcile it before replacing the pending candidate"
         )
     if (RELEASES / sha).is_dir():
+        timings.begin("verify_prebuilt_release")
         release = verified_release(sha)
         receipt = json.loads((release / "simulation-acceptance.json").read_text())
         if receipt.get("previous") != previous:
@@ -1977,7 +2055,9 @@ def prepare(
         current_state["pending"] = sha
         atomic_json(STATE, current_state)
         return receipt
+    timings.begin("checkout")
     directory = candidate(sha)
+    timings.begin("ci_evidence")
     if ci_run_ids is None and not local_tests:
         ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
     ci_acceptance = (
@@ -2008,11 +2088,14 @@ def prepare(
             raise RuntimeError(
                 "deployer selection does not match the ordered CI receipt chain"
             )
+    timings.begin("python_dependencies")
     run(POETRY, "check", cwd=directory)
     run(POETRY, "install", "--with", "dev", "--no-interaction", cwd=directory)
+    timings.begin("ui_dependencies")
     run("npm", "--prefix", "ui", "ci", "--no-audit", "--no-fund", cwd=directory)
     collected = 0
     if ci_acceptance is None:
+        timings.begin("local_tests")
         for target in plan["python"]:
             listed = run(
                 POETRY,
@@ -2069,11 +2152,14 @@ def prepare(
     # to have run macOS-only cases. Keep that candidate pending for review.
     if plan["native"] and ci_acceptance is None:
         raise RuntimeError("selected native tests need an approved macOS runner")
+    timings.begin("ui_lint_and_audit")
     run("npm", "--prefix", "ui", "run", "lint", "--if-present", cwd=directory)
     run("npm", "--prefix", "ui", "run", "audit:diagnostics", cwd=directory)
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     build_env = {"NEBULA_BUILD_TIMESTAMP": timestamp}
+    timings.begin("ui_build")
     run("npm", "--prefix", "ui", "run", "build", cwd=directory, env=build_env)
+    timings.begin("core_build")
     run(
         POETRY,
         "run",
@@ -2083,6 +2169,7 @@ def prepare(
         cwd=directory,
         env=build_env,
     )
+    timings.begin("verify_build")
     run(
         POETRY,
         "run",
@@ -2118,6 +2205,7 @@ def prepare(
     }
     listed = 0
     if ci_acceptance is None:
+        timings.begin("browser_tests")
         for entry in entries:
             args = browser_args(entry)
             result = run(
@@ -2156,6 +2244,7 @@ def prepare(
             )
     else:
         listed = plan["expected_tests"]["playwright"]
+    timings.begin("release_copy")
     if commit_at(directory) != sha:
         raise RuntimeError("candidate source changed during preparation")
     run("git", "-C", str(directory), "diff", "--quiet")
@@ -2231,6 +2320,7 @@ def prepare(
     }
     if ci_acceptance is not None:
         receipt["ci_acceptance"] = ci_acceptance
+    receipt["timings"] = timings.record()
     atomic_json(staging / "simulation-acceptance.json", receipt)
     os.replace(staging, release)
     for path in release.rglob("*"):
@@ -4310,7 +4400,13 @@ def wait_quiet_restart_boundary(
         client = api()
         busy = _restart_boundary_activity(client)
         if not busy:
-            return {"quiet_after_seconds": round(time.monotonic() - started, 1)}
+            quiet_after = round(time.monotonic() - started, 1)
+            print(
+                f"activate-host: chat turns were quiet after {quiet_after}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            return {"quiet_after_seconds": quiet_after}
         stuck = _unavailable_turn_owners(client, busy)
         if accepted_dead_owner is not None:
             project_id = accepted_dead_owner["project_id"]
@@ -4482,6 +4578,7 @@ def _switch_supervisor_host(
     if release.parent != RELEASES or release.name != version or release.is_symlink():
         raise RuntimeError("Host activation target is not the exact immutable release")
     persist()
+    stop_started = time.monotonic()
     journal["service_stop"] = stop_supervisor_service(host_connection(allow_stale=True))
     require_stopped()
     if current_release_version() != version:
@@ -4490,6 +4587,7 @@ def _switch_supervisor_host(
     journal["current_release"] = str(release)
     persist()
     service("start")
+    start_issued = time.monotonic()
     journal["state"] = "service_started"
     persist()
     readback = wait_supervisor_host_ready(
@@ -4500,6 +4598,17 @@ def _switch_supervisor_host(
         degraded_baseline=prior_status.get("health") == "degraded",
         restart_exited=True,
         accepted_dead_owner=journal.get("accepted_dead_owner"),
+    )
+    journal["timings"] = {
+        "stop_and_switch_seconds": round(start_issued - stop_started, 1),
+        "start_to_ready_seconds": round(time.monotonic() - start_issued, 1),
+    }
+    print(
+        "activate-host: stop and switch took "
+        f"{journal['timings']['stop_and_switch_seconds']}s, start to ready "
+        f"{journal['timings']['start_to_ready_seconds']}s",
+        file=sys.stderr,
+        flush=True,
     )
     journal["state"] = "complete"
     journal["readback"] = readback
@@ -6088,6 +6197,95 @@ def bootstrap() -> dict[str, Any]:
     return {"status": "bootstrapped", "commit": INITIAL_COMMIT}
 
 
+def prebuild() -> dict[str, Any]:
+    """Build and accept the newest main release before anyone promotes it.
+
+    Meant for a timer: it does what ``prepare`` does, so a later ``promote``
+    or ``cycle`` finds the immutable release already built and only verifies
+    it. Waiting states are results, not failures: an unfinished deployment,
+    or main CI evidence that is still running, missing or failed, is reported
+    and retried on the next run. It never promotes, never runs local tests,
+    and leaves Core untouched.
+    """
+    record = state()
+    journal = record.get("runtime_deployment")
+    if isinstance(journal, dict) and journal.get("state") != "complete":
+        return {
+            "status": "skipped",
+            "reason": "deployment_in_progress",
+            "deployment_state": journal.get("state"),
+            "version": journal.get("version"),
+        }
+    if record.get("promoting") is not None:
+        return {"status": "skipped", "reason": "promotion_in_progress"}
+    try:
+        prepared = prepare()
+    except CiEvidenceUnavailable as error:
+        return {"status": "waiting_for_ci", "reason": str(error)}
+    if prepared.get("status") == "current":
+        return {"status": "current", "commit": prepared.get("commit")}
+    return {
+        "status": "prebuilt",
+        "commit": prepared.get("commit"),
+        "previous": prepared.get("previous"),
+        "timings": prepared.get("timings"),
+    }
+
+
+def _lock_holder(path: Path) -> str | None:
+    try:
+        holder = json.loads(path.read_text() or "null")
+    except (OSError, ValueError):
+        return None
+    action = holder.get("action") if isinstance(holder, dict) else None
+    return action if isinstance(action, str) else None
+
+
+def acquire_deploy_lock(
+    lock,
+    path: Path,
+    action: str,
+    *,
+    clock=time.monotonic,
+    sleep=time.sleep,
+) -> str | None:
+    """Take the exclusive deploy lock for ``action``.
+
+    Returns None once held. A prebuild returns the busy holder's action
+    instead of waiting. A promote or cycle waits, bounded, for a prebuild,
+    since that run is building the release it will promote; any other busy
+    holder is refused at once, as before.
+    """
+    deadline = None
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            holder = _lock_holder(path)
+            if action == "prebuild":
+                return holder or "unknown"
+            if action in {"promote", "cycle"} and holder == "prebuild":
+                if deadline is None:
+                    deadline = clock() + PREBUILD_LOCK_WAIT_SECONDS
+                    print(
+                        f"{action}: waiting for the running prebuild to finish",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                if clock() < deadline:
+                    sleep(LOCK_POLL_SECONDS)
+                    continue
+            raise RuntimeError(
+                f"Another deployer run ({holder or 'unknown action'}) holds the deploy lock"
+            )
+    lock.seek(0)
+    lock.truncate()
+    lock.write(json.dumps({"action": action, "pid": os.getpid()}))
+    lock.flush()
+    return None
+
+
 def cycle(*, backup: bool = False) -> dict[str, Any]:
     prepared = prepare()
     return {"prepared": prepared, "promotion": promote(backup=backup)}
@@ -6110,6 +6308,7 @@ def main() -> int:
             "adopt-supervisor",
             "bootstrap",
             "cycle",
+            "prebuild",
             "status",
         ),
     )
@@ -6251,10 +6450,13 @@ def main() -> int:
         raise RuntimeError(
             "--dry-run is supported only for manual supersession reconciliation"
         )
-    with (ROOT / ".deploy.lock").open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    lock_path = ROOT / ".deploy.lock"
+    with lock_path.open("a+") as lock:
+        busy = acquire_deploy_lock(lock, lock_path, args.action)
         result = (
-            {"status": "state", **state()}
+            {"status": "skipped", "reason": "deploy_lock_busy", "holder": busy}
+            if busy is not None
+            else {"status": "state", **state()}
             if args.action == "status"
             else prepare(
                 ci_run_ids=args.ci_run_id,
