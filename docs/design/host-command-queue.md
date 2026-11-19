@@ -36,7 +36,10 @@ completed, failed, timed out, or "cancelled by the operator".
 **Admission unit.** Each Host command, foreground or background, is one memory job
 (`resource_kind=host_command`, id `command-<execution id>`) with its own protected
 group. A Host session holds no reservation and is not closed for being idle; the
-idle release from #1216/#1217 is removed.
+idle release from #1216/#1217 is removed. The one exception is a project handoff:
+the source worker closes the project's idle Host sessions (no command in flight,
+running, or holding a detached group) so they do not pin the project, and the
+owner's next command opens a fresh session on the target worker.
 
 **Queue.** Queued jobs stay in `memory_jobs` (state `queued`), shared by every worker.
 One admission transaction (under the existing budget lock) admits a job only when:
