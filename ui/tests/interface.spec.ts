@@ -223,6 +223,31 @@ async function installTruthfulCore(page: Page) {
         activation_supported: true, activation_unavailable_reason: null, executor_scope: "report-pdfs",
         executor_state: "disabled", worker_count: 0, active_jobs: 0, queued_jobs: 0, maximum_worker_cpus: 4,
         detail: "Background PDF workers are disabled."};
+    } else if (path.endsWith("/host-pressure")) {
+      // Settings > Setup renders host admission thresholds. Without this
+      // branch the catch-all array crashes the whole Settings workspace.
+      const thresholds = {cpu: 0.8, memory: 0.8, load: 0.8, io: 0.8};
+      body = {host_id: "preview-host", host_name: "Preview host", revision: 1,
+        saved_thresholds: thresholds, effective_thresholds: thresholds,
+        readings: {cpu: 0.12, memory: 0.34, load: 0.1, io: 0}, waiting: false,
+        pressure_metric: null, reason: null, sample: {load_average_ratio: 0.1, host_io_pressure_ratio: 0},
+        concurrency: {provider_limit: 60, background_limit: 58, active: 0, active_background: 0}};
+    } else if (path.includes("/memory-budgets/host-commands")) {
+      body = {settings: {revision: 1, running_at_once: 8}, running_count: 0, running: [], queued: []};
+    } else if (path.endsWith("/memory-budgets/jobs")) {
+      body = {items: [], at_limit: false, display_limit: 50};
+    } else if (path.endsWith("/memory-budgets")) {
+      // Advanced > Usage renders memory budgets; a catch-all array has no
+      // capabilities list and crashes the Settings workspace.
+      const gib = 1024 ** 3;
+      body = {revision: 1,
+        policy: {default_job: {max_bytes: 2 * gib, high_bytes: null, swap_bytes: 0}, aggregate_bytes: 12 * gib,
+          reserve_bytes: 2 * gib, environment_defaults: {}, profile_overrides: {}},
+        administrator_limits: {capacity_bytes: 16 * gib, maximum_job_bytes: 8 * gib, maximum_aggregate_bytes: 14 * gib,
+          minimum_reserve_bytes: 2 * gib, maximum_swap_bytes: 2 * gib},
+        capabilities: [], profiles: [], reserved_bytes: 0, available_bytes: 12 * gib, effective_aggregate_bytes: 12 * gib,
+        held_jobs: 0, queued_jobs: 0, application_state: "unavailable",
+        detail: "Policy saved. No runner has verified enforcement."};
     } else if (path.endsWith("/diagnostics/settings")) {
       body = {
         schema: "nebula.diagnostics-settings/v1",

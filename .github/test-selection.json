@@ -1,28 +1,24 @@
 {
-  "change_digest": "f4233e690a2b9be27a8434bd76b76e36cefb244c8be93fbc0e48a1b7a980b392",
-  "reviewed_by": "Claude Code, delegated by the deployment-speed session for a focused handoff fix",
-  "reason": "Handoff inventory resource IDs are now scoped to the owning incarnation (project, runtime, fencing token, key), including the participant-contract fallback. A later owner no longer collides with an earlier owner's closed inventory rows, so it records its real blockers and checkpoints. Selected: the handoff agent suite (new cross-incarnation regression on SQLite and PostgreSQL), orphan recovery (closes dead owners' inventory rows), idle retirement dispatch and handoff participants (both drive ProjectHandoffAgent ticks). Also selects #1225's idle Host session handoff test, which shares runtime_project_handoff.py and the handoff agent test file.",
-  "exclusions": "No frontend, native or Playwright changes; no operator-visible UI. Deployer, coordinator and recovery code paths are unchanged apart from the IDs they read, which are filtered by owner, not by ID format.",
-  "python_versions": [
-    "3.12"
-  ],
+  "change_digest": "5f939dfecac22e0895eb22d599736d4a29fd698c9257a61c56614bdd2bc26442",
+  "reviewed_by": "Claude Code, repairing interface suites red on pristine main for PR #1223's gates",
+  "reason": "The interface.spec.ts mock Core lacked /host-pressure and /memory-budgets branches, so Settings crashed on the catch-all array; that broke the Quiet Lens theme picker, the Zero shell Appearance lens and the critical-workspace CPU budget checks. Also refreshes the 36 critical-workspace baselines from CI run 44559296882. Selected: the quiet-lens, phone-shell and critical-workspaces areas on every project they declare.",
+  "exclusions": "No product source, Python, native or frontend unit changes. Other Settings-reaching Playwright journeys benefit from the fixture but are not selected; the theme-picker palette test passed locally on desktop, compact, narrow and mobile-chromium. Quiet Lens on the narrow (390px, fine pointer) project still fails: hovering the top handle opens a bar that covers it. narrow is not in the quiet-lens area; reported as a follow-up.",
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 166,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 96
   },
-  "python": [
-    "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_handoff_participants.py",
-    "tests/v3/test_handoff_idle_automation_sessions.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:quiet-lens",
+    "area:phone-shell",
+    "area:critical-workspaces"
+  ],
   "checks": []
 }
