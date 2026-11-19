@@ -35,8 +35,11 @@ Three cases still need an operator decision:
 
 1. **Pinned projects.** These hold a live vendor (harness) connection, including
    an idle one. They also include projects with a terminal, a notebook, a debug
-   or automation session, a running mission or execution task, an unconfirmed
-   callback or approval delivery, or a charged compute job.
+   or Docker automation session, a busy Host automation session, a running
+   mission or execution task, an unconfirmed callback or approval delivery, or a
+   charged compute job. The source closes an idle Host automation session at the
+   handoff boundary instead: its finished results are durable, and the owner's
+   next command opens a fresh session on the target.
    - Their work is never interrupted; the project simply stays on the old
      version.
    - A pause is needed only when that old version must go. That happens when a
@@ -356,7 +359,8 @@ The review checked every kind of work against the design.
 | Callback | Pins until the result is materialized | None new |
 | Schedule | Occurrence ledger prevents a double fire | Fires late while held |
 | Provider subagent | Parent links let descendants admit during the drain | None new |
-| Terminal / notebook / debug / automation | Pinned on the old version | Pause only when that version must retire |
+| Terminal / notebook / debug / Docker or busy Host automation | Pinned on the old version | Pause only when that version must retire |
+| Idle Host automation session | Closed by the source at the boundary; recreated on next command | None new |
 
 **Schema migrations.**
 - "Additive" is a reviewed manifest flag; nothing verifies it. For two
@@ -461,7 +465,10 @@ are recorded in
 - **Pinned adapters:**
   - Detach idle harness sessions and resume the vendor session on the target.
   - Re-arm scheduled-only missions from SQL.
-  - Remaining kinds (live terminals, notebooks, debug and automation sessions,
+  - Close idle Host automation sessions (no command in flight, running or
+    holding a detached group) before the inventory.
+  - Remaining kinds (live terminals, notebooks, debug, Docker and busy Host
+    automation sessions,
     running missions, unconfirmed callbacks or approval deliveries) stay
     pinned by design.
 - **Host-services socket ownership.** Hold the host-services socket in the

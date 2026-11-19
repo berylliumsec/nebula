@@ -1052,6 +1052,9 @@ class _ManagedSession:
     processes: dict[str, _ManagedProcess] = field(default_factory=dict)
     used_approval_ids: set[str] = field(default_factory=set)
     scope_expiry_task: asyncio.Task[None] | None = None
+    # Commands between session lookup and process registration (Host queue
+    # waits included). A handoff never closes a session while this is above 0.
+    active_uses: int = 0
 
 
 SessionFactory = Callable[[SessionLaunch], Awaitable[RuntimeBackendSession]]
@@ -1737,20 +1740,25 @@ class AutomationRuntimeManager:
             )
         except MemoryAdmissionTimeout as error:
             raise AutomationRuntimeUnavailable(str(error)) from error
-        return await self._run_command_in_session(
-            managed,
-            engagement_id=engagement_id,
-            owner_kind=owner_kind,
-            owner_id=owner_id,
-            request=request,
-            approval=approval,
-            requested_by=requested_by,
-            tool_call_id=tool_call_id,
-            chat_session_id=chat_session_id,
-            chat_turn_id=chat_turn_id,
-            chat_origin=chat_origin,
-            expected_execution_mode=expected_execution_mode,
-        )
+        # Counted before any await so a handoff release cannot interleave.
+        managed.active_uses += 1
+        try:
+            return await self._run_command_in_session(
+                managed,
+                engagement_id=engagement_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                request=request,
+                approval=approval,
+                requested_by=requested_by,
+                tool_call_id=tool_call_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
+                chat_origin=chat_origin,
+                expected_execution_mode=expected_execution_mode,
+            )
+        finally:
+            managed.active_uses -= 1
 
     async def _run_command_in_session(
         self,
@@ -2363,6 +2371,71 @@ class AutomationRuntimeManager:
             self._processes.pop(process_id, None)
             self._discard_capture(process)
         return managed.entity
+
+    @staticmethod
+    def _host_session_idle(managed: _ManagedSession) -> bool:
+        """Whether closing this Host session can end nothing still running.
+
+        Idle means no command between lookup and registration, every tracked
+        process finalized and, for a protected session, no command group still
+        held (a detached descendant keeps its group and job until it exits).
+        Docker sessions never count: their container keeps state and
+        background processes outside the workspace that closing would lose.
+        """
+        backend = managed.backend
+        if not isinstance(backend, HostRuntimeSession) or managed.active_uses:
+            return False
+        if managed.entity.status != AutomationSessionStatus.READY:
+            return False
+        if any(
+            process.final_task is None or not process.final_task.done()
+            for process in managed.processes.values()
+        ):
+            return False
+        if isinstance(backend, ManagedHostRuntimeSession):
+            return not backend.jobs and not backend._settling
+        return all(
+            process.process.returncode is not None for process in backend.processes
+        )
+
+    async def release_idle_sessions_for_handoff(self, engagement_id: str) -> list[str]:
+        """Close this project's idle Host sessions at a handoff boundary.
+
+        A Host session holds no state beyond its live commands: finished
+        command results are durable, and the owner's next command opens a
+        fresh session on whichever runtime then owns the project. Busy, held
+        or Docker sessions stay open and keep pinning the project.
+        """
+
+        released: list[str] = []
+        for session_id, managed in list(self._sessions.items()):
+            if managed.entity.engagement_id != engagement_id:
+                continue
+            if not self._host_session_idle(managed):
+                continue
+            entity = managed.entity
+            async with self._owner_lock(
+                (entity.engagement_id, entity.owner_kind, entity.owner_id)
+            ):
+                # Re-checked under the owner lock, which session lookup takes.
+                if self._sessions.get(
+                    session_id
+                ) is not managed or not self._host_session_idle(managed):
+                    continue
+                try:
+                    await self.close_session(session_id)
+                except Exception as caught_error:
+                    # The session stays open and keeps pinning the project.
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.handoff_session_release_failed",
+                        "An idle Host session could not be closed for handoff.",
+                        caught_error,
+                        stage="project-handoff",
+                    )
+                    continue
+            released.append(session_id)
+        return released
 
     def _managed_host_for(
         self, process: _ManagedProcess
