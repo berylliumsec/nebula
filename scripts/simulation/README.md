@@ -19,7 +19,15 @@ the cutover boundary.
 The service token stays in the host's private environment file; these source
 files contain no token value.
 
-After a successful promotion, the deployer retains the newly verified
+Backups are operator opt-in: `promote --backup` (or `cycle --backup`) takes a
+coherent rollback snapshot before a legacy release switch, or an online
+PostgreSQL dump (`rollback-backups/operator-pre-<commit>-<time>`) before a
+supervisor-mode promotion. Without `--backup` no backup is taken. A failed
+legacy promotion without a snapshot then restores the previous release's code
+and keeps the current data, and an older snapshot is dropped from the deployer
+state so it can never be restored over newer data.
+
+After a successful promotion that took a snapshot, the deployer retains the newly verified
 `rollback_backup` and removes older completed directories directly under
 `/srv/apple-sim/nebula/rollback-backups`. It checks every target's name, type,
 and mount boundary before deletion, and verifies that the retained directory is
@@ -33,11 +41,16 @@ Do not delete that state during an unverified recovery just to meet the normal
 one-snapshot count. Record the exception and resolve it after recovery is
 verified.
 
-`nebula_deployer.py prepare` runs its reviewed local test selection by default.
-For a deliberate CI-backed preparation, pass `--ci-run-id <run-id>` once for a
-one-commit candidate. For a candidate containing multiple first-parent commits
-after the live release, repeat the option once per commit, oldest to newest,
-such as `prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
+`nebula_deployer.py prepare` accepts CI evidence by default: for every
+first-parent commit from the live release to `origin/main` it finds the newest
+successful `main` push run of `.github/workflows/ci.yml` and verifies it as
+below, without re-running tests on this host. A commit with no successful run
+(none yet, failed, or still running) or with Playwright entries (which push CI
+does not run) stops preparation with the commit and reason; the deployer never
+falls back to local tests on its own. `prepare --local-tests` re-runs the
+reviewed selection on this host instead. To name runs explicitly, pass
+`--ci-run-id <run-id>` once per commit, oldest to newest, such as
+`prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
 requires exactly one distinct successful `main` push run from the active
 `.github/workflows/ci.yml` for every commit in the complete
 live-baseline-to-head chain. Each run must match that exact commit and its first

@@ -1359,6 +1359,71 @@ def verify_ci_acceptance(
     return receipt
 
 
+class CiEvidenceUnavailable(RuntimeError):
+    """A candidate commit has no usable CI evidence; prepare stops, nothing runs locally."""
+
+
+def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str]:
+    """Find the successful main push CI run for each first-parent commit.
+
+    CI already ran each commit's reviewed selection before and after merge, so
+    the deployer accepts that evidence instead of re-running tests on the Core
+    host. A commit without a successful run, or one whose selected checks push
+    CI cannot prove, stops preparation with the exact reason.
+    """
+
+    run_ids: list[str] = []
+    for commit in first_parent_commits(directory, previous=previous, sha=sha):
+        committed = json.loads(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{commit}:.github/test-selection.json",
+                capture=True,
+            )
+        )
+        if committed.get("playwright"):
+            raise CiEvidenceUnavailable(
+                f"{commit[:12]} selects Playwright checks, which main push CI does not run; "
+                "pass its merged-PR runs with --ci-run-id/--ci-pr-run-id/--ci-playwright-run-id, "
+                "or prepare with --local-tests"
+            )
+        listing = github_json(
+            "actions/workflows/ci.yml/runs?"
+            f"head_sha={commit}&branch=main&event=push&per_page=50"
+        )
+        runs = [
+            item
+            for item in listing.get("workflow_runs", [])
+            if isinstance(item, dict)
+            and item.get("head_sha") == commit
+            and item.get("head_branch") == "main"
+            and item.get("event") == "push"
+        ]
+        succeeded = [
+            item
+            for item in runs
+            if item.get("status") == "completed" and item.get("conclusion") == "success"
+        ]
+        if not succeeded:
+            states = sorted(
+                {
+                    f"{item.get('status')}/{item.get('conclusion') or '-'}"
+                    for item in runs
+                }
+            )
+            raise CiEvidenceUnavailable(
+                f"{commit[:12]} has no successful main push CI run"
+                + (f" (runs: {', '.join(states)})" if states else " (no run yet)")
+                + "; wait for CI, re-run it, or prepare with --local-tests"
+            )
+        newest = max(succeeded, key=lambda item: int(item.get("id", 0)))
+        run_ids.append(str(newest["id"]))
+    return run_ids
+
+
 def verify_ci_acceptance_chain(
     run_ids: list[str],
     *,
@@ -1843,7 +1908,20 @@ def prepare(
     ci_run_ids: list[str] | None = None,
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
+    local_tests: bool = False,
 ) -> dict[str, Any]:
+    """Build and accept origin/main for this Core host.
+
+    By default the candidate is accepted on the CI evidence for every commit
+    since the live release (discovered automatically). ``local_tests`` re-runs
+    the reviewed selection on this host instead; it is never a silent fallback.
+    """
+    if local_tests and (
+        ci_run_ids is not None
+        or pr_ci_run_ids is not None
+        or pr_playwright_run_ids is not None
+    ):
+        raise RuntimeError("--local-tests cannot be combined with CI run IDs")
     if ci_run_ids is None and (
         pr_ci_run_ids is not None or pr_playwright_run_ids is not None
     ):
@@ -1900,6 +1978,8 @@ def prepare(
         atomic_json(STATE, current_state)
         return receipt
     directory = candidate(sha)
+    if ci_run_ids is None and not local_tests:
+        ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
     ci_acceptance = (
         verify_ci_acceptance_chain(
             ci_run_ids,
@@ -5434,7 +5514,48 @@ def wait_ready(commit: str) -> None:
     raise RuntimeError("Core did not serve its accepted build within 480 seconds")
 
 
-def legacy_promote() -> dict[str, Any]:
+def operator_database_backup(label: str) -> Path:
+    """An operator-requested online PostgreSQL dump before a rolling promotion.
+
+    Supervisor deployments keep live data in place and never restore it, so
+    this is a recovery copy only; it is taken only when explicitly requested.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", label):
+        raise ValueError("backup label must be a single safe path component")
+    postgres = configured_postgres(TOKEN_FILE)
+    if postgres is None:
+        raise RuntimeError("an online backup needs the configured PostgreSQL database")
+    backup = BACKUPS / label
+    if backup.exists() or backup.is_symlink():
+        raise RuntimeError("operator backup already exists")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    staging = BACKUPS / f".{label}.{os.getpid()}.partial"
+    staging.mkdir(mode=0o700)
+    try:
+        snapshot_postgres(staging, postgres)
+        os.replace(staging, backup)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return backup
+
+
+def _restore_previous_code(previous: str) -> None:
+    """Code-only legacy rollback: no snapshot was requested, data stays as is."""
+
+    old_release = RELEASES / previous
+    if not old_release.is_dir():
+        raise RuntimeError("previous immutable release is missing")
+    if unit_state(SERVICE) != "inactive":
+        service("stop")
+        require_stopped()
+    switch_to(old_release)
+    service("start")
+    wait_ready(previous)
+    edge("start")
+
+
+def legacy_promote(*, backup: bool = False) -> dict[str, Any]:
     record = state()
     new = record.get("pending")
     if not isinstance(new, str):
@@ -5498,17 +5619,22 @@ def legacy_promote() -> dict[str, Any]:
         wait_ready(previous)
         edge("start")
         raise
-    label = f"pre-{new}-{int(time.time())}"
-    try:
-        backup = snapshot(label)
-    except Exception:
-        service("start")
-        wait_ready(previous)
-        edge("start")
-        raise
-    record.update(
-        {"previous": previous, "rollback_backup": str(backup), "promoting": new}
-    )
+    snapshot_path: Path | None = None
+    if backup:
+        label = f"pre-{new}-{int(time.time())}"
+        try:
+            snapshot_path = snapshot(label)
+        except Exception:
+            service("start")
+            wait_ready(previous)
+            edge("start")
+            raise
+        record.update({"rollback_backup": str(snapshot_path)})
+    else:
+        # Without a requested snapshot, an older one must never be restored
+        # over newer data, so it is no longer this promotion's rollback target.
+        record.pop("rollback_backup", None)
+    record.update({"previous": previous, "promoting": new})
     atomic_json(STATE, record)
     try:
         switch_to(release)
@@ -5517,7 +5643,12 @@ def legacy_promote() -> dict[str, Any]:
         edge("start")
     except Exception:
         try:
-            rollback(_legacy_attempt=attempt)
+            if snapshot_path is not None:
+                rollback(_legacy_attempt=attempt)
+            else:
+                _restore_previous_code(previous)
+                record.update({"promoting": None})
+                atomic_json(STATE, record)
         except Exception as recovery:
             raise RuntimeError(
                 f"candidate failed; automatic rollback also failed: {recovery}"
@@ -5525,14 +5656,22 @@ def legacy_promote() -> dict[str, Any]:
         raise
     record.update({"active": new, "pending": None, "promoting": None})
     atomic_json(STATE, record)
-    retention = finish_rollback_retention(record, backup)
+    if snapshot_path is None:
+        return {
+            "status": "promoted",
+            "commit": new,
+            "previous": previous,
+            "rollback_backup": None,
+            "rollback_retention": {"status": "not_requested"},
+        }
+    retention = finish_rollback_retention(record, snapshot_path)
     return {
         "status": "promoted"
         if retention["status"] == "complete"
         else "promoted_cleanup_incomplete",
         "commit": new,
         "previous": previous,
-        "rollback_backup": str(backup),
+        "rollback_backup": str(snapshot_path),
         "rollback_retention": retention,
     }
 
@@ -5876,17 +6015,26 @@ def adopt_supervisor() -> dict:
     return {"status": "supervisor_adopted", "commit": status["api_version"]}
 
 
-def promote() -> dict[str, Any]:
+def promote(*, backup: bool = False) -> dict[str, Any]:
+    """Promote the pending candidate; take a backup only when the operator asks."""
     record = state()
     if record.get("deployment_mode") != "supervisor":
-        return legacy_promote()
+        return legacy_promote(backup=backup)
     pending = record.get("pending")
     if not isinstance(pending, str):
         return {
             "status": "no_pending_candidate",
             "deployment": api().get("deployment/status"),
         }
-    return staged_deployer(record).promote(pending)
+    operator_backup = None
+    if backup:
+        operator_backup = str(
+            operator_database_backup(f"operator-pre-{pending}-{int(time.time())}")
+        )
+    result = staged_deployer(record).promote(pending)
+    if operator_backup is not None:
+        result = {**result, "operator_backup": operator_backup}
+    return result
 
 
 def rollback(*, _legacy_attempt: _LegacyAttempt | None = None) -> dict[str, Any]:
@@ -5940,9 +6088,9 @@ def bootstrap() -> dict[str, Any]:
     return {"status": "bootstrapped", "commit": INITIAL_COMMIT}
 
 
-def cycle() -> dict[str, Any]:
+def cycle(*, backup: bool = False) -> dict[str, Any]:
     prepared = prepare()
-    return {"prepared": prepared, "promotion": promote()}
+    return {"prepared": prepared, "promotion": promote(backup=backup)}
 
 
 def main() -> int:
@@ -5990,6 +6138,23 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--local-tests",
+        action="store_true",
+        help=(
+            "re-run the reviewed test selection on this host instead of accepting "
+            "the commits' CI evidence (prepare only)"
+        ),
+    )
+    parser.add_argument(
+        "--backup",
+        action="store_true",
+        help=(
+            "operator request: take a backup before promoting (a coherent rollback "
+            "snapshot in legacy mode, an online PostgreSQL dump in supervisor mode); "
+            "without it no backup is taken"
+        ),
+    )
+    parser.add_argument(
         "--allow-degraded-workers",
         action="store_true",
         help=(
@@ -6026,6 +6191,10 @@ def main() -> int:
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
         raise RuntimeError("--ci-run-id is supported only with prepare")
+    if args.local_tests and args.action != "prepare":
+        raise RuntimeError("--local-tests is supported only with prepare")
+    if args.backup and args.action not in {"promote", "cycle"}:
+        raise RuntimeError("--backup is supported only with promote or cycle")
     if (
         args.ci_pr_run_id is not None or args.ci_playwright_run_id is not None
     ) and args.action != "prepare":
@@ -6091,6 +6260,7 @@ def main() -> int:
                 ci_run_ids=args.ci_run_id,
                 pr_ci_run_ids=args.ci_pr_run_id,
                 pr_playwright_run_ids=args.ci_playwright_run_id,
+                local_tests=args.local_tests,
             )
             if args.action == "prepare"
             else reconcile_runtime_deployment(args.deployment_id)
@@ -6114,6 +6284,10 @@ def main() -> int:
                 ),
             )
             if args.action == "activate-host"
+            else promote(backup=args.backup)
+            if args.action == "promote"
+            else cycle(backup=args.backup)
+            if args.action == "cycle"
             else globals()[args.action.replace("-", "_")]()
         )
     print(json.dumps(result, sort_keys=True))

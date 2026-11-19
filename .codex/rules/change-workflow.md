@@ -74,10 +74,14 @@ hooks.
 
 ## Core rollback snapshot retention
 
-The legacy simulation deployer in `scripts/simulation/nebula_deployer.py`
-creates a coherent rollback snapshot before it switches Core releases.
-Supervisor-mode rolling promotion and code rollback preserve live data and do
-not create a new coherent snapshot. After a healthy legacy promotion passes
+Deployment backups are operator opt-in. The simulation deployer in
+`scripts/simulation/nebula_deployer.py` takes one only with `--backup` on
+`promote` or `cycle`: a coherent rollback snapshot before a legacy release
+switch, or an online PostgreSQL dump before a supervisor-mode promotion. Never
+add `--backup` unless the operator asked for it. Without a snapshot, a failed
+legacy promotion restores the previous release's code and keeps current data.
+Supervisor-mode rolling promotion and code rollback preserve live data and never
+restore a snapshot. After a healthy legacy promotion that took a snapshot passes
 authenticated health and serves the accepted build, retain its exact snapshot
 and delete older completed snapshots under `rollback-backups`. Verify that
 exactly one completed snapshot remains and that the deployer state points to
