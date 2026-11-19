@@ -25,7 +25,6 @@ import shutil
 import signal
 import socket
 import tempfile
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -37,7 +36,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .artifacts import ArtifactStore
 from .diagnostics import create_diagnostic_task, record_caught_exception
+from .memory_budget import HOST_COMMAND_KIND, host_command_labels
 from .memory_policy import MemoryAdmissionTimeout
+from .memory_runtime import HostCommandCancelled
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -554,16 +555,49 @@ class ManagedHostRuntimeProcess(RuntimeBackendProcess):
 
 
 class ManagedHostRuntimeSession(HostRuntimeSession):
-    """Host execution as Core's OS user inside one protected memory group."""
+    """Host execution as Core's OS user; each command in its own protected group.
 
-    def __init__(self, workspace: Path, runner, memory_job) -> None:
+    A command is admitted through the Core-wide Host command queue and holds
+    its memory reservation only while it, or anything it started, runs
+    (docs/design/host-command-queue.md).
+    """
+
+    # How often a command that left detached processes is checked again.
+    DETACHED_CHECK_SECONDS = 2.0
+
+    def __init__(
+        self, workspace: Path, runner, memory_compute, project_id: str
+    ) -> None:
         super().__init__(workspace)
         self.runner = runner
-        self.memory_job = memory_job
+        self.memory_compute = memory_compute
+        self.project_id = project_id
+        self.jobs: dict[str, Any] = {}
+        self._settling: set[asyncio.Task[None]] = set()
 
     @property
     def ended(self) -> bool:
-        return self.memory_job.ended
+        return False
+
+    async def admit(
+        self,
+        process_id: str,
+        *,
+        execution_id: str,
+        labels: dict[str, Any],
+        on_queued=None,
+    ) -> Any:
+        job = await self.memory_compute.open_host_job(
+            self.runner,
+            job_id="command-" + execution_id,
+            project_id=self.project_id,
+            resource_kind=HOST_COMMAND_KIND,
+            resource_id=execution_id,
+            labels=labels,
+            on_queued=on_queued,
+        )
+        self.jobs[process_id] = job
+        return job
 
     async def run(
         self,
@@ -572,13 +606,14 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
         cwd: str,
         extra_env: dict[str, str] | None = None,
     ) -> RuntimeBackendProcess:
-        if self.memory_job.ended:
+        job = self.jobs.get(process_id)
+        if job is None or job.ended:
             raise AutomationRuntimeUnavailable(
-                "This host worker ended. Inspect its memory outcome; the next command starts a new worker."
+                "This Host command has no admitted protected group; run it again."
             )
         directory, environment = self._prepare(cwd, extra_env)
         process = await self.runner.spawn(
-            self.memory_job.job_id,
+            job.job_id,
             ["/bin/bash", "--noprofile", "--norc", "-c", command],
             str(directory),
             environment,
@@ -586,6 +621,61 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
         backend = ManagedHostRuntimeProcess(process)
         self.processes.append(backend)  # type: ignore[arg-type]
         return backend
+
+    async def cancel_requested(self, process_id: str) -> bool:
+        job = self.jobs.get(process_id)
+        if job is None:
+            return False
+        current = await self.memory_compute.service.get_job(job.job_id)
+        return bool((current.labels or {}).get("cancel_requested"))
+
+    def settle_after_exit(self, process_id: str) -> None:
+        """Release the command's reservation once its group is empty."""
+
+        job = self.jobs.get(process_id)
+        if job is None:
+            return
+        task = create_diagnostic_task(
+            self._settle(process_id, job),
+            feature="runtime",
+            event_code="runtime.host_command_settle",
+            failure_message="A Host command's memory could not be released yet.",
+        )
+        self._settling.add(task)
+        task.add_done_callback(self._settling.discard)
+
+    async def _settle(self, process_id: str, job) -> None:
+        marked = False
+        while not job.ended:
+            try:
+                report = await self.runner.observe(job.job_id)
+            except Exception as caught_error:
+                # An unreadable group keeps its charge: releasing it could
+                # leave an unseen process running without a reservation.
+                record_caught_exception(
+                    "runtime",
+                    "runtime.host_command_unobserved",
+                    "A Host command's group could not be read; its memory stays held.",
+                    caught_error,
+                    stage="host-command-settle",
+                )
+                report = {"populated": True}
+            if not (report and report.get("populated")):
+                break
+            if not marked:
+                # Detached processes (nohup, setsid, &) outlived the command.
+                await self.memory_compute.service.mark_host_command(
+                    job.job_id, detached=True
+                )
+                marked = True
+            await asyncio.sleep(self.DETACHED_CHECK_SECONDS)
+        self.jobs.pop(process_id, None)
+        current = await self.memory_compute.service.get_job(job.job_id)
+        await job.close(
+            "cancelled"
+            if (current.labels or {}).get("cancel_requested")
+            else "completed"
+        )
 
     async def close(self) -> None:
         if self._closed:
@@ -596,7 +686,17 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
                 if process.process.returncode is None:
                     await process.terminate()
         finally:
-            await self.memory_job.close()
+            for task in list(self._settling):
+                task.cancel()
+            await asyncio.gather(*self._settling, return_exceptions=True)
+            jobs, self.jobs = list(self.jobs.values()), {}
+            results = await asyncio.gather(
+                *(job.close() for job in jobs if not job.ended),
+                return_exceptions=True,
+            )
+            failure = next((r for r in results if isinstance(r, BaseException)), None)
+            if failure is not None:
+                raise failure
 
 
 class ContainerRuntimeSession(RuntimeBackendSession):
@@ -952,25 +1052,6 @@ class _ManagedSession:
     processes: dict[str, _ManagedProcess] = field(default_factory=dict)
     used_approval_ids: set[str] = field(default_factory=set)
     scope_expiry_task: asyncio.Task[None] | None = None
-    # Commands between session lookup and process registration (approval
-    # waits included); an idle Host worker is released only when this is 0.
-    active_uses: int = 0
-    last_used: float = field(default_factory=time.monotonic)
-
-    def idle_for(self, now: float) -> float | None:
-        """Seconds since last use, or None while any command is in flight."""
-        if self.active_uses or any(
-            process.final_task is None or not process.final_task.done()
-            for process in self.processes.values()
-        ):
-            return None
-        return now - self.last_used
-
-
-# A Host session reserves its full memory limit for as long as it is open, so
-# an idle one is released and the owner's next command starts a fresh worker.
-HOST_SESSION_IDLE_SECONDS = 120.0
-HOST_SESSION_IDLE_CHECK_SECONDS = 15.0
 
 
 SessionFactory = Callable[[SessionLaunch], Awaitable[RuntimeBackendSession]]
@@ -1069,7 +1150,6 @@ class AutomationRuntimeManager:
         self._session_lock = asyncio.Lock()
         # One lock per owner: a session waiting for memory never blocks others.
         self._owner_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
-        self._idle_host_task: asyncio.Task[None] | None = None
         self._inventory: list[dict[str, str]] = []
         self._prepared_runner_profile_id: str | None = None
         self._prepared_runner_profile_revision: int | None = None
@@ -1170,6 +1250,7 @@ class AutomationRuntimeManager:
             CommandExecution,
             {
                 "status": [
+                    CommandExecutionStatus.QUEUED.value,
                     CommandExecutionStatus.RUNNING.value,
                     CommandExecutionStatus.WAITING_APPROVAL.value,
                 ]
@@ -1306,9 +1387,6 @@ class AutomationRuntimeManager:
 
     async def shutdown(self) -> None:
         self.begin_stopping()
-        if self._idle_host_task is not None:
-            self._idle_host_task.cancel()
-            await asyncio.gather(self._idle_host_task, return_exceptions=True)
         await asyncio.gather(
             *(self.close_session(session_id) for session_id in list(self._sessions)),
             return_exceptions=True,
@@ -1659,25 +1737,20 @@ class AutomationRuntimeManager:
             )
         except MemoryAdmissionTimeout as error:
             raise AutomationRuntimeUnavailable(str(error)) from error
-        managed.active_uses += 1
-        try:
-            return await self._run_command_in_session(
-                managed,
-                engagement_id=engagement_id,
-                owner_kind=owner_kind,
-                owner_id=owner_id,
-                request=request,
-                approval=approval,
-                requested_by=requested_by,
-                tool_call_id=tool_call_id,
-                chat_session_id=chat_session_id,
-                chat_turn_id=chat_turn_id,
-                chat_origin=chat_origin,
-                expected_execution_mode=expected_execution_mode,
-            )
-        finally:
-            managed.active_uses -= 1
-            managed.last_used = time.monotonic()
+        return await self._run_command_in_session(
+            managed,
+            engagement_id=engagement_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            request=request,
+            approval=approval,
+            requested_by=requested_by,
+            tool_call_id=tool_call_id,
+            chat_session_id=chat_session_id,
+            chat_turn_id=chat_turn_id,
+            chat_origin=chat_origin,
+            expected_execution_mode=expected_execution_mode,
+        )
 
     async def _run_command_in_session(
         self,
@@ -1792,7 +1865,30 @@ class AutomationRuntimeManager:
                 ),
             },
         )
+        managed_host = isinstance(managed.backend, ManagedHostRuntimeSession)
+        if managed_host:
+            execution = execution.model_copy(
+                update={"status": CommandExecutionStatus.QUEUED}
+            )
         execution = await self.store.create(execution)
+        if managed_host:
+            execution = await self._admit_host_command(
+                managed,
+                execution,
+                process_id,
+                labels=host_command_labels(
+                    command=request.command,
+                    cwd=request.cwd,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    tool_call_id=tool_call_id,
+                    chat_session_id=chat_session_id,
+                    chat_turn_id=chat_turn_id,
+                    execution_id=execution.id,
+                    process_id=process_id,
+                    background=request.background,
+                ),
+            )
         extra_env = (
             {
                 "NEBULA_RESULTS_URL": results_url,
@@ -1884,6 +1980,56 @@ class AutomationRuntimeManager:
                 await asyncio.shield(process.backend.terminate())
             raise
         return await self._poll(managed, process, MAX_POLL_BYTES)
+
+    async def _admit_host_command(
+        self,
+        managed: _ManagedSession,
+        execution: CommandExecution,
+        process_id: str,
+        *,
+        labels: dict[str, Any],
+    ) -> CommandExecution:
+        """Wait for a Core-wide Host command slot, then mark the command running.
+
+        Queued time does not count against the command's timeout. A cancel or
+        a stopped turn ends the wait and records why it never started.
+        """
+        backend = managed.backend
+        assert isinstance(backend, ManagedHostRuntimeSession)
+        try:
+            await backend.admit(process_id, execution_id=execution.id, labels=labels)
+        except BaseException as error:
+            if isinstance(error, HostCommandCancelled):
+                status, detail = CommandExecutionStatus.CANCELLED, str(error)
+            elif isinstance(error, asyncio.CancelledError):
+                status = self._stop_status()
+                detail = (
+                    "Stopped while waiting for a Host command slot; it never started."
+                )
+            else:
+                status, detail = CommandExecutionStatus.FAILED, str(error)
+            current = await self.store.get(CommandExecution, execution.id)
+            await finish_cleanup(
+                self.store.update(
+                    CommandExecution,
+                    execution.id,
+                    {
+                        "status": status,
+                        "completed_at": utc_now(),
+                        "error": detail[:4_000],
+                    },
+                    expected_revision=current.revision,
+                )
+            )
+            if isinstance(error, (HostCommandCancelled, MemoryAdmissionTimeout)):
+                raise AutomationRuntimeUnavailable(detail) from error
+            raise
+        return await self.store.update(
+            CommandExecution,
+            execution.id,
+            {"status": CommandExecutionStatus.RUNNING, "started_at": utc_now()},
+            expected_revision=execution.revision,
+        )
 
     async def accept_results(
         self, process_id: str, api_key: str, request: ProcessResultsRequest
@@ -2218,94 +2364,21 @@ class AutomationRuntimeManager:
             self._discard_capture(process)
         return managed.entity
 
+    def _managed_host_for(
+        self, process: _ManagedProcess
+    ) -> ManagedHostRuntimeSession | None:
+        managed = self._sessions.get(process.execution.session_id)
+        if managed is not None and isinstance(
+            managed.backend, ManagedHostRuntimeSession
+        ):
+            return managed.backend
+        return None
+
     def _owner_lock(self, key: tuple[str, str, str]) -> asyncio.Lock:
         lock = self._owner_locks.get(key)
         if lock is None:
             lock = self._owner_locks[key] = asyncio.Lock()
         return lock
-
-    def _supervise_idle_host_sessions(self) -> None:
-        if self._idle_host_task is None or self._idle_host_task.done():
-            self._idle_host_task = create_diagnostic_task(
-                self._release_idle_host_sessions_forever(),
-                feature="runtime",
-                event_code="runtime.host_session_idle",
-                failure_message="Idle Host session release stopped unexpectedly.",
-            )
-
-    async def _release_idle_host_sessions_forever(self) -> None:
-        while not self._stopping:
-            await asyncio.sleep(HOST_SESSION_IDLE_CHECK_SECONDS)
-            try:
-                await self.release_idle_host_sessions()
-            except Exception as caught_error:
-                record_caught_exception(
-                    "runtime",
-                    "runtime.host_session_idle_failed",
-                    "An idle Host session could not be released yet; it is retried.",
-                    caught_error,
-                    stage="host-session-idle",
-                )
-
-    @staticmethod
-    async def _host_group_populated(managed: _ManagedSession) -> bool:
-        """Whether the session's protected group still has processes.
-
-        An unreadable group counts as populated: keeping a reservation a little
-        longer is safe, killing an unseen process is not.
-        """
-        backend = managed.backend
-        assert isinstance(backend, ManagedHostRuntimeSession)
-        try:
-            report = await backend.runner.observe(backend.memory_job.job_id)
-        except Exception as caught_error:
-            record_caught_exception(
-                "runtime",
-                "runtime.host_session_group_unobserved",
-                "An idle Host session's group could not be read; it stays open.",
-                caught_error,
-                stage="host-session-idle",
-            )
-            return True
-        return bool(report and report.get("populated"))
-
-    async def release_idle_host_sessions(
-        self, *, idle_seconds: float | None = None
-    ) -> list[str]:
-        """Close protected Host sessions with no command in flight.
-
-        Their memory reservation returns to the shared budget at once. A command
-        starting meanwhile holds the owner's lock, so it is never cut off.
-        """
-        limit = HOST_SESSION_IDLE_SECONDS if idle_seconds is None else idle_seconds
-        released: list[str] = []
-        for session_id, managed in list(self._sessions.items()):
-            if not isinstance(managed.backend, ManagedHostRuntimeSession):
-                continue
-            idle = managed.idle_for(time.monotonic())
-            if idle is None or idle < limit:
-                continue
-            entity = managed.entity
-            lock = self._owner_lock(
-                (entity.engagement_id, entity.owner_kind, entity.owner_id)
-            )
-            if lock.locked():
-                continue
-            async with lock:
-                idle = managed.idle_for(time.monotonic())
-                if (
-                    self._sessions.get(session_id) is not managed
-                    or idle is None
-                    or idle < limit
-                ):
-                    continue
-                if await self._host_group_populated(managed):
-                    # A detached process (nohup, setsid, &) outlived its
-                    # command; closing the session would kill it.
-                    continue
-                await self.close_session(session_id)
-                released.append(session_id)
-        return released
 
     async def _expire_session_at_scope_boundary(
         self, session_id: str, expires_at: datetime
@@ -2366,7 +2439,6 @@ class AutomationRuntimeManager:
                         existing.backend, ManagedHostRuntimeSession
                     ):
                         await require_host_command_access()
-                    existing.last_used = time.monotonic()
                     return existing
                 # Rebuild the execution boundary as well as its approval policy.
                 await self.close_session(existing_id)
@@ -2420,15 +2492,8 @@ class AutomationRuntimeManager:
                 if host_runner is None:
                     backend = HostRuntimeSession(workspace)
                 else:
-                    memory_job = await self.memory_compute.open_host_job(
-                        host_runner,
-                        job_id="session-" + entity.id,
-                        project_id=engagement_id,
-                        resource_kind="host_command_session",
-                        resource_id=entity.id,
-                    )
                     backend = ManagedHostRuntimeSession(
-                        workspace, host_runner, memory_job
+                        workspace, host_runner, self.memory_compute, engagement_id
                     )
                 try:
                     async with self.store.transaction(immediate=True) as transaction:
@@ -2451,8 +2516,6 @@ class AutomationRuntimeManager:
                 )
                 self._sessions[entity.id] = managed
                 self._owner_sessions[key] = entity.id
-                if isinstance(backend, ManagedHostRuntimeSession):
-                    self._supervise_idle_host_sessions()
                 if (
                     scope is not None
                     and scope.not_after is not None
@@ -2834,6 +2897,13 @@ class AutomationRuntimeManager:
             exit_code = await process.backend.wait()
             if process.drain_tasks is not None:
                 await self._settle_drains(process.drain_tasks)
+            host = self._managed_host_for(process)
+            if host is not None:
+                if process.forced_status is None and await host.cancel_requested(
+                    process.execution.process_id
+                ):
+                    process.forced_status = CommandExecutionStatus.CANCELLED
+                host.settle_after_exit(process.execution.process_id)
             status = process.forced_status or (
                 CommandExecutionStatus.COMPLETED
                 if exit_code == 0

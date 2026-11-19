@@ -29,7 +29,7 @@ from nebula.v3.host_memory_client import (
     host_group_id,
 )
 from nebula.v3.host_memory_runner import Runner, RunnerError, group_name
-from nebula.v3.memory_budget import MemoryBudgetService
+from nebula.v3.memory_budget import HostCommandSettingsUpdate, MemoryBudgetService
 from nebula.v3.memory_policy import (
     GIB,
     MIB,
@@ -357,8 +357,23 @@ real = pytest.mark.skipif(
 )
 
 
-async def _run(session, command: str) -> tuple[int, str]:
-    process = await session.run("p", command, ".")
+async def _admitted_run(session, process_id: str, command: str) -> tuple[int, str]:
+    await session.admit(process_id, execution_id=process_id, labels={})
+    result = await _run(session, command, process_id)
+    session.settle_after_exit(process_id)
+    return result
+
+
+async def _until_finished(controller, job_id: str, seconds: float = 10) -> None:
+    for _ in range(int(seconds * 10)):
+        if (await controller.service.get_job(job_id)).state == "finished":
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{job_id} still holds its reservation")
+
+
+async def _run(session, command: str, process_id: str = "p") -> tuple[int, str]:
+    process = await session.run(process_id, command, ".")
     # wait() releases pipes a detached descendant still holds, as Core does.
     code = await process.wait()
     output = await process.stdout.read()
@@ -395,15 +410,17 @@ async def test_real_host_session_contains_commands_and_releases_after_removal(
     )
     session = managed.backend
     assert isinstance(session, ManagedHostRuntimeSession)
-    job_id = session.memory_job.job_id
-    group = host_group_id(job_id)
 
-    code, output = await _run(session, "echo hi > made.txt; cat /proc/self/cgroup")
-    assert code == 0 and output.strip().endswith(group)
+    code, output = await _admitted_run(
+        session, "a", "echo hi > made.txt; cat /proc/self/cgroup"
+    )
+    assert code == 0 and output.strip().endswith(host_group_id("command-a"))
     assert (workspace / "made.txt").read_text() == "hi\n"
+    await _until_finished(controller, "command-a")
 
-    code, output = await _run(
+    code, output = await _admitted_run(
         session,
+        "b",
         "echo $$ > /sys/fs/cgroup/cgroup.procs || echo moved-denied; "
         "sudo -n true 2>/dev/null || echo sudo-denied; "
         "grep -E '^(NoNewPrivs|CapEff)' /proc/self/status",
@@ -411,13 +428,18 @@ async def test_real_host_session_contains_commands_and_releases_after_removal(
     assert "moved-denied" in output and "sudo-denied" in output
     assert "NoNewPrivs:\t1" in output and "CapEff:\t0000000000000000" in output
 
-    code, output = await _run(session, "(setsid sleep 300 &); echo detached")
+    # A detached process keeps its command's reservation after the command exits.
+    code, output = await _admitted_run(
+        session, "c", "(setsid sleep 300 &); echo detached"
+    )
     assert code == 0 and "detached" in output
-    job = await controller.service.get_job(job_id)
+    await asyncio.sleep(1)
+    job = await controller.service.get_job("command-c")
     assert job.state == "running" and job.reserved_bytes == 256 * MIB
+    assert job.labels["detached"] is True
 
     await manager.close_session(managed.entity.id)
-    job = await controller.service.get_job(job_id)
+    job = await controller.service.get_job("command-c")
     assert job.state == "finished" and job.outcome == "completed"
     assert job.reserved_bytes == 0 and job.evidence.group_empty
 
@@ -487,26 +509,12 @@ async def test_real_burst_of_parallel_commands_all_admit(budgets, tmp_path):
     assert job.state == "finished" and job.reserved_bytes == 0
 
 
-# -- Host session admission must not stall on idle reservations --------------
+# -- Core-wide Host command queue (docs/design/host-command-queue.md) --------
 
 
 @pytest.fixture
-async def full_budget(budgets, monkeypatch):
-    """One Host session fills the aggregate budget, as 18 idle sessions did live."""
+async def host_queue(budgets, monkeypatch):
     store, controller = budgets
-    status = await controller.service.status()
-    await controller.service.save(
-        MemoryBudgetUpdate(
-            expected_revision=status.revision,
-            policy=status.policy.model_copy(
-                update={
-                    "default_job": MemoryLimits(max_bytes=8 * GIB),
-                    "aggregate_bytes": 8 * GIB,
-                }
-            ),
-        ),
-        actor_id="fixture",
-    )
     await store.create(
         AutomationProjectPolicy(
             id=str(uuid5(NAMESPACE_URL, "nebula:automation-policy:project")),
@@ -518,6 +526,16 @@ async def full_budget(budgets, monkeypatch):
     runner = FakeHostRunner()
     monkeypatch.setattr(HostMemoryRunner, "from_environment", lambda: runner)
     return store, controller, runner
+
+
+async def _limit(controller, running_at_once: int):
+    current = await controller.service.host_command_settings()
+    return await controller.service.save_host_command_settings(
+        HostCommandSettingsUpdate(
+            expected_revision=current.revision, running_at_once=running_at_once
+        ),
+        actor_id="fixture",
+    )
 
 
 def _host_manager(store, controller, tmp_path):
@@ -535,123 +553,275 @@ def _host_manager(store, controller, tmp_path):
 
 
 async def _host_session(manager, owner):
-    return await manager._get_or_create_session(
-        engagement_id="project", owner_kind="chat", owner_id=owner
-    )
-
-
-async def test_waiting_host_admission_does_not_block_other_owners(
-    full_budget, tmp_path
-):
-    store, controller, _runner = full_budget
-    manager = _host_manager(store, controller, tmp_path)
-    first = await _host_session(manager, "chat-a")
-    waiting = asyncio.create_task(_host_session(manager, "chat-b"))
-    try:
-        for _ in range(50):
-            await asyncio.sleep(0.05)
-            jobs = await controller.service.list_jobs()
-            if any(job.state == "queued" for job in jobs):
-                break
-        assert any(job.state == "queued" for job in jobs)
-        # The owner that already has a session keeps working while chat-b waits.
-        again = await asyncio.wait_for(_host_session(manager, "chat-a"), timeout=2)
-        assert again is first
-    finally:
-        waiting.cancel()
-        await asyncio.gather(waiting, return_exceptions=True)
-    jobs = await controller.service.list_jobs()
-    assert not any(job.state == "queued" for job in jobs)
-    await manager.shutdown()
-
-
-async def test_host_admission_wait_is_bounded_and_settles_the_queued_job(
-    full_budget, tmp_path, monkeypatch
-):
-    from nebula.v3 import memory_runtime
-    from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
-
-    store, controller, _runner = full_budget
-    monkeypatch.setattr(memory_runtime, "QUEUED_ADMISSION_SECONDS", 0.3)
-    manager = _host_manager(store, controller, tmp_path)
-    await _host_session(manager, "chat-a")
-    with pytest.raises(AutomationRuntimeUnavailable, match="memory budget"):
-        await manager.session(
-            engagement_id="project", owner_kind="chat", owner_id="chat-b"
+    return (
+        await manager._get_or_create_session(
+            engagement_id="project", owner_kind="chat", owner_id=owner
         )
-    jobs = {
-        job.resource_kind + ":" + job.state
-        for job in await controller.service.list_jobs()
-    }
-    assert "host_command_session:queued" not in jobs
-    assert manager._session_lock.locked() is False
-    await manager.shutdown()
+    ).backend
 
 
-async def test_idle_host_session_releases_its_reservation(full_budget, tmp_path):
-    store, controller, runner = full_budget
-    manager = _host_manager(store, controller, tmp_path)
-    idle = await _host_session(manager, "chat-a")
-    job_id = idle.backend.memory_job.job_id
-    assert await manager.release_idle_host_sessions(idle_seconds=60) == []
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == [idle.entity.id]
-    job = await controller.service.get_job(job_id)
-    assert job.state == "finished" and job.reserved_bytes == 0
-    assert runner.removed == [job_id]
-    # The freed budget admits the next owner immediately.
-    other = await asyncio.wait_for(_host_session(manager, "chat-b"), timeout=2)
-    assert isinstance(other.backend, ManagedHostRuntimeSession)
-    # The idle owner gets a fresh worker on its next command.
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == [other.entity.id]
-    fresh = await asyncio.wait_for(_host_session(manager, "chat-a"), timeout=2)
-    assert fresh.entity.id != idle.entity.id
-    await manager.shutdown()
+async def _queued(controller, job_id):
+    for _ in range(50):
+        await asyncio.sleep(0.05)
+        try:
+            if (await controller.service.get_job(job_id)).state == "queued":
+                return
+        except Exception:
+            continue
+    raise AssertionError(f"{job_id} never queued")
 
 
-async def test_busy_host_session_is_not_released(full_budget, tmp_path):
-    store, controller, _runner = full_budget
-    manager = _host_manager(store, controller, tmp_path)
-    managed = await _host_session(manager, "chat-a")
-    managed.active_uses += 1
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
-    managed.active_uses -= 1
-
-    class Unfinished:
-        final_task = asyncio.get_running_loop().create_future()
-
-    managed.processes["p"] = Unfinished()
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
-    managed.processes.pop("p").final_task.cancel()
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == [
-        managed.entity.id
-    ]
-    await manager.shutdown()
-
-
-async def test_idle_host_session_with_a_detached_process_is_kept(full_budget, tmp_path):
-    store, controller, runner = full_budget
-    manager = _host_manager(store, controller, tmp_path)
-    managed = await _host_session(manager, "chat-a")
-    job_id = managed.backend.memory_job.job_id
-    # A command started `nohup server &` and exited; the server still runs.
-    runner.groups[job_id]["populated"] = True
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
-    assert (await controller.service.get_job(job_id)).state == "running"
-    runner.groups[job_id]["populated"] = False
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == [
-        managed.entity.id
-    ]
-    await manager.shutdown()
-
-
-async def test_unreadable_host_group_keeps_the_session(full_budget, tmp_path):
-    store, controller, runner = full_budget
+async def test_host_session_reserves_nothing_until_a_command_is_admitted(
+    host_queue, tmp_path
+):
+    store, controller, _runner = host_queue
     manager = _host_manager(store, controller, tmp_path)
     await _host_session(manager, "chat-a")
+    assert await controller.service.list_jobs() == []
+    await manager.shutdown()
+
+
+async def test_running_at_once_limit_queues_and_admits_as_slots_free(
+    host_queue, tmp_path
+):
+    store, controller, runner = host_queue
+    await _limit(controller, 1)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    first = await session.admit("a", execution_id="a", labels={"command": "make"})
+    positions = []
+
+    async def report(position):
+        positions.append((position.position, position.running, position.limit))
+
+    waiting = asyncio.create_task(
+        session.admit("b", execution_id="b", labels={}, on_queued=report)
+    )
+    await _queued(controller, "command-b")
+    view = await controller.service.host_command_view()
+    assert [item.job_id for item in view.running] == ["command-a"]
+    assert [(item.job_id, item.position) for item in view.queued] == [("command-b", 1)]
+    assert view.running[0].command == "make"
+    session.settle_after_exit("a")
+    second = await asyncio.wait_for(waiting, timeout=5)
+    assert first.ended and not second.ended
+    assert positions[0] == (1, 1, 1)
+    assert (await controller.service.get_job("command-a")).reserved_bytes == 0
+    await manager.shutdown()
+    assert runner.groups == {}
+
+
+async def test_fair_order_admits_the_project_with_fewer_running_first(budgets):
+    store, controller = budgets
+    await store.create(Engagement(id="other", name="Other synthetic project"))
+    await _limit(controller, 2)
+    runner = FakeHostRunner()
+    busy = await controller.open_host_job(
+        runner,
+        job_id="command-busy",
+        project_id="project",
+        resource_kind="host_command",
+        resource_id="busy",
+    )
+    capability = await runner.capabilities()
+    for job_id, project in (("command-older", "project"), ("command-newer", "other")):
+        await controller.service.create_job(
+            job_id,
+            project_id=project,
+            resource_kind="host_command",
+            resource_id=job_id,
+            capabilities=capability,
+        )
+        await asyncio.sleep(0.01)
+    view = await controller.service.host_command_view()
+    assert [item.job_id for item in view.queued] == ["command-newer", "command-older"]
+    # The older command from the busy project may not jump the line.
+    older = await controller.service.reserve("command-older", capability)
+    assert older.state == "queued" and "1 Host command(s) ahead" in older.detail
+    newer = await controller.service.reserve("command-newer", capability)
+    assert newer.state == "reserved"
+    await busy.close()
+
+
+async def test_stale_queued_rows_are_skipped_and_reaped(budgets):
+    from datetime import timedelta
+
+    from nebula.v3.database import MemoryJobRow
+    from nebula.v3.domain import utc_now
+
+    store, controller = budgets
+    capability = await FakeHostRunner().capabilities()
+    for job_id in ("command-dead", "command-live"):
+        await controller.service.create_job(
+            job_id,
+            project_id="project",
+            resource_kind="host_command",
+            resource_id=job_id,
+            capabilities=capability,
+        )
+    async with store.database.session() as session:
+        row = await session.get(MemoryJobRow, "command-dead")
+        row.updated_at = utc_now() - timedelta(minutes=5)
+    view = await controller.service.host_command_view()
+    assert [item.job_id for item in view.queued] == ["command-live"]
+    assert await controller.service.cancel_stale_queued() == ["command-dead"]
+    dead = await controller.service.get_job("command-dead")
+    assert dead.state == "finished" and dead.outcome == "cancelled"
+
+
+async def test_operator_cancel_of_a_queued_command_stops_its_wait(host_queue, tmp_path):
+    from nebula.v3.memory_runtime import HostCommandCancelled
+
+    store, controller, _runner = host_queue
+    await _limit(controller, 1)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
+    waiting = asyncio.create_task(session.admit("b", execution_id="b", labels={}))
+    await _queued(controller, "command-b")
+    cancelled = await controller.service.request_host_command_cancel(
+        "command-b", actor_id="operator"
+    )
+    assert cancelled.state == "finished" and cancelled.outcome == "cancelled"
+    with pytest.raises(HostCommandCancelled, match="never started"):
+        await asyncio.wait_for(waiting, timeout=5)
+    await manager.shutdown()
+
+
+async def test_cancel_api_stops_a_running_command_by_removing_its_group(
+    host_queue, tmp_path
+):
+    from nebula.v3.memory_api import MemoryApi
+
+    store, controller, runner = host_queue
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
+    api = object.__new__(MemoryApi)
+    api.service, api.host_runner = controller.service, runner
+    item = await api.cancel_host_command("command-a", "operator")
+    assert item.cancel_requested and runner.removed == ["command-a"]
+    assert await session.cancel_requested("a")
+    await manager.shutdown()
+
+
+async def test_detached_processes_keep_the_reservation_until_the_group_empties(
+    host_queue, tmp_path, monkeypatch
+):
+    store, controller, runner = host_queue
+    monkeypatch.setattr(ManagedHostRuntimeSession, "DETACHED_CHECK_SECONDS", 0.05)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
+    runner.groups["command-a"]["populated"] = True  # `nohup server &` outlived it
+    session.settle_after_exit("a")
+    await asyncio.sleep(0.2)
+    job = await controller.service.get_job("command-a")
+    assert job.state == "running" and job.labels["detached"] is True
+    runner.groups["command-a"]["populated"] = False
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        if (await controller.service.get_job("command-a")).state == "finished":
+            break
+    job = await controller.service.get_job("command-a")
+    assert job.state == "finished" and job.reserved_bytes == 0
+    await manager.shutdown()
+
+
+async def test_unreadable_group_keeps_the_reservation(
+    host_queue, tmp_path, monkeypatch
+):
+    store, controller, runner = host_queue
+    monkeypatch.setattr(ManagedHostRuntimeSession, "DETACHED_CHECK_SECONDS", 0.05)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
 
     async def unreadable(_job_id):
         raise HostRunnerError("failed", "runner restarting")
 
     runner.observe = unreadable
-    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
+    session.settle_after_exit("a")
+    await asyncio.sleep(0.2)
+    assert (await controller.service.get_job("command-a")).state == "running"
+    await manager.shutdown()
+
+
+async def test_host_command_settings_are_bounded_and_revision_checked(budgets):
+    from pydantic import ValidationError
+
+    from nebula.v3.memory_policy import MemoryBudgetConflict
+
+    _store, controller = budgets
+    assert (await controller.service.host_command_settings()).running_at_once == 8
+    saved = await _limit(controller, 3)
+    assert saved.running_at_once == 3 and saved.revision == 2
+    with pytest.raises(MemoryBudgetConflict):
+        await controller.service.save_host_command_settings(
+            HostCommandSettingsUpdate(expected_revision=1, running_at_once=4),
+            actor_id="fixture",
+        )
+    with pytest.raises(ValidationError):
+        HostCommandSettingsUpdate(expected_revision=2, running_at_once=65)
+
+
+async def test_stop_succeeds_when_the_worker_removed_the_group_first(
+    host_queue, tmp_path
+):
+    from nebula.v3.memory_api import MemoryApi
+
+    store, controller, runner = host_queue
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
+    real_remove = runner.remove
+
+    async def racing_remove(job_id):
+        await real_remove(job_id)  # the worker's cleanup won the race
+        raise HostRunnerError("failed", "FileNotFoundError: cgroup.events")
+
+    runner.remove = racing_remove
+    api = object.__new__(MemoryApi)
+    api.service, api.host_runner = controller.service, runner
+    item = await api.cancel_host_command("command-a", "operator")
+    assert item.cancel_requested
+    await manager.shutdown()
+
+
+async def test_operator_stop_settles_as_cancelled_not_worker_lost(host_queue, tmp_path):
+    store, controller, runner = host_queue
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
+    await controller.service.request_host_command_cancel("command-a", actor_id="op")
+    await runner.remove("command-a")
+    for _ in range(50):
+        await asyncio.sleep(0.1)
+        job = await controller.service.get_job("command-a")
+        if job.state == "finished":
+            break
+    assert job.state == "finished" and job.outcome == "cancelled"
+    assert job.reserved_bytes == 0
+    await manager.shutdown()
+
+
+async def test_stopped_detached_command_settles_as_cancelled(
+    host_queue, tmp_path, monkeypatch
+):
+    store, controller, runner = host_queue
+    monkeypatch.setattr(ManagedHostRuntimeSession, "DETACHED_CHECK_SECONDS", 0.05)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    await session.admit("a", execution_id="a", labels={})
+    runner.groups["command-a"]["populated"] = True
+    session.settle_after_exit("a")
+    await asyncio.sleep(0.2)
+    await controller.service.request_host_command_cancel("command-a", actor_id="op")
+    runner.groups["command-a"]["populated"] = False  # the stop emptied the group
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        job = await controller.service.get_job("command-a")
+        if job.state == "finished":
+            break
+    assert job.outcome == "cancelled" and job.reserved_bytes == 0
     await manager.shutdown()

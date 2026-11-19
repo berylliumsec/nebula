@@ -186,6 +186,32 @@ describe("activity ledger presentation model", () => {
     expect(model.entries[1].status).toBe("failed");
   });
 
+  it("keeps a Host command cancelled while queued legible", () => {
+    const model = activityLedgerFromNative("Work summary", "complete", [{
+      assistantId: "assistant-1",
+      toolCallId: "cmd-1",
+      capability: "run_command",
+      displayName: "Command runtime",
+      status: "failed",
+      summary: "Cancelled by the operator while queued; it never started.",
+      evidenceIds: [],
+      artifacts: [],
+    }]);
+    expect(model.entries[0]).toMatchObject({
+      status: "cancelled",
+      statusLabel: "Cancelled before start",
+      brief: "Cancelled by the operator while queued; it never started.",
+      pinned: true,
+    });
+  });
+
+  it("maps a queued command execution to the queued ledger state", () => {
+    const model = activityLedgerFromNative("Work summary", "streaming", [{
+      assistantId: "assistant-1", toolCallId: "cmd-2", capability: "run_command", status: "queued", evidenceIds: [], artifacts: [],
+    }]);
+    expect(model.entries[0]).toMatchObject({ status: "queued", statusLabel: "Queued" });
+  });
+
   it("names a brokered MCP call by its server and tool, not its routing digest", () => {
     const model = activityLedgerFromNative("Work summary", "complete", [{
       assistantId: "assistant-1",

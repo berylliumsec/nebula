@@ -286,7 +286,9 @@ class RuntimeSupervisor:
             ]
 
         @api.api_route("/api/v1/memory-budgets", methods=["GET", "PUT"])
-        @api.api_route("/api/v1/memory-budgets/{path:path}", methods=["GET", "POST"])
+        @api.api_route(
+            "/api/v1/memory-budgets/{path:path}", methods=["GET", "POST", "PUT"]
+        )
         async def memory_control(request: Request):
             if request.url.path.endswith("/apply"):
                 return _Forward(self.proxy)

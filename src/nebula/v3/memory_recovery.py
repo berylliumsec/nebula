@@ -109,6 +109,17 @@ class MemoryReconciler:
             await asyncio.sleep(5)
 
     async def once(self) -> list[str]:
+        try:
+            # A queued Host command whose worker died never heartbeats again.
+            await self.service.cancel_stale_queued()
+        except Exception as error:
+            record_caught_exception(
+                "runtime",
+                "memory.reconciliation.stale_queue",
+                "Stale queued Host commands could not be removed yet; retried next pass.",
+                error,
+                stage="reconciliation",
+            )
         jobs = await self.service.reconciliation_jobs(after=self.cursor)
         self.cursor = jobs[-1].id if len(jobs) == 64 else ""
         released = []

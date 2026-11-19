@@ -1,12 +1,12 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "dfcaf1777d6ea32eba19fb1a0ae1a13bebe717afa6d8bc24a06980fdcc136ce9",
+  "migration_tree_sha256": "205476e04837bdc025fa01b2cc16001d95e0c3461f5821fa378e31a8173e6228",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,
     "schema_max": 5,
     "additive_migrations": true,
-    "migration_head": "0053_runtime_command_writes",
+    "migration_head": "0054_memory_job_labels",
     "api_protocol_min": 1,
     "api_protocol_max": 1,
     "execution_protocol_min": 1,

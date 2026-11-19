@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from typing import Any
 from uuid import uuid4
 
+from pydantic import Field
 from sqlalchemy import case, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -52,6 +53,103 @@ from .memory_policy import (
 
 POLICY_SCOPE = "host"
 _HELD = ("reserved", "starting", "running", "updating", "uncertain")
+
+# Host commands share one Core-wide queue (docs/design/host-command-queue.md).
+HOST_COMMAND_KIND = "host_command"
+HOST_COMMAND_SCOPE = "host-commands"
+HOST_COMMAND_DEFAULT_LIMIT = 8
+HOST_COMMAND_MAX_LIMIT = 64
+# A waiting worker refreshes its queued row this often; a row older than the
+# stale age belongs to a worker that died and is never admitted.
+QUEUE_HEARTBEAT_SECONDS = 5.0
+QUEUE_STALE_SECONDS = 30.0
+_LABEL_TEXT_LIMIT = 300
+
+
+class HostCommandSettings(NebulaModel):
+    revision: int = Field(ge=1)
+    running_at_once: int = Field(ge=1, le=HOST_COMMAND_MAX_LIMIT)
+
+
+class HostCommandSettingsUpdate(NebulaModel):
+    expected_revision: int = Field(strict=True, ge=1)
+    running_at_once: int = Field(strict=True, ge=1, le=HOST_COMMAND_MAX_LIMIT)
+
+
+class HostCommandQueuePosition(NebulaModel):
+    """Where a queued Host command stands in the fair admission order."""
+
+    position: int = Field(ge=0)
+    ahead: int = Field(ge=0)
+    running: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    state: str
+
+
+class HostCommandItem(NebulaModel):
+    job_id: str
+    execution_id: str
+    project_id: str | None
+    state: str
+    detached: bool = False
+    cancel_requested: bool = False
+    position: int | None = None
+    command: str | None = None
+    cwd: str | None = None
+    owner_kind: str | None = None
+    tool_call_id: str | None = None
+    chat_session_id: str | None = None
+    background: bool = False
+    reserved_bytes: int
+    limit_bytes: int
+    queued_at: datetime
+    started_at: datetime | None = None
+    updated_at: datetime
+
+    @classmethod
+    def from_job(cls, job: "MemoryJob", position: int | None = None):
+        labels = job.labels or {}
+        return cls(
+            job_id=job.id,
+            execution_id=job.resource_id,
+            project_id=job.project_id,
+            state=job.state,
+            detached=bool(labels.get("detached")),
+            cancel_requested=bool(labels.get("cancel_requested")),
+            position=position,
+            command=labels.get("command"),
+            cwd=labels.get("cwd"),
+            owner_kind=labels.get("owner_kind"),
+            tool_call_id=labels.get("tool_call_id"),
+            chat_session_id=labels.get("chat_session_id"),
+            background=bool(labels.get("background")),
+            reserved_bytes=job.reserved_bytes,
+            limit_bytes=job.snapshot.limits.max_bytes,
+            queued_at=job.created_at,
+            started_at=labels.get("admitted_at"),
+            updated_at=job.updated_at,
+        )
+
+
+class HostCommandView(NebulaModel):
+    settings: HostCommandSettings
+    running_count: int
+    running: list[HostCommandItem]
+    queued: list[HostCommandItem]
+
+
+def host_command_labels(**values: Any) -> dict[str, Any]:
+    """Bounded, JSON-safe labels; command text is truncated for display."""
+
+    labels: dict[str, Any] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value[:_LABEL_TEXT_LIMIT]
+        labels[key] = value
+    return labels
+
 
 # Resident runtimes (the API worker and one worker per active project) share
 # the Core reserve with essential services. A policy the operator never saved
@@ -98,6 +196,7 @@ class MemoryJob(NebulaModel):
     detail: str | None
     created_at: datetime
     updated_at: datetime
+    labels: dict[str, Any] | None = None
 
 
 class MemoryBudgetStatus(NebulaModel):
@@ -520,6 +619,7 @@ class MemoryBudgetService:
         capabilities: MemoryRunnerCapabilities,
         requested: MemoryLimits | None = None,
         runner_overhead_bytes: int = 0,
+        labels: dict[str, Any] | None = None,
     ) -> MemoryJob:
         if not job_id or len(job_id) > 200 or not resource_id or len(resource_id) > 200:
             raise MemoryBudgetError("bounded job and resource identities are required")
@@ -586,6 +686,7 @@ class MemoryBudgetService:
                 detail=detail,
                 created_at=now,
                 updated_at=now,
+                labels=labels,
             )
             session.add(job)
             await session.flush()
@@ -640,7 +741,12 @@ class MemoryBudgetService:
                 capacity = min(
                     capacity, capabilities.capacity_bytes - policy.reserve_bytes
                 )
-            if (
+            waiting_turn = None
+            if job.resource_kind == HOST_COMMAND_KIND:
+                waiting_turn = await self._host_command_turn(session, job)
+            if waiting_turn is not None:
+                job.state, job.detail = "queued", waiting_turn
+            elif (
                 reserve_gap
                 or used + snapshot.reservation_bytes > capacity
                 or snapshot.limits.max_bytes > administrator.maximum_job_bytes
@@ -661,10 +767,275 @@ class MemoryBudgetService:
                 # A committed charge must identify the controller before its
                 # next await. RESERVED is also the durable no-launch boundary.
                 job.launch_owner = owner.model_dump(mode="json") if owner else None
+                if job.resource_kind == HOST_COMMAND_KIND:
+                    job.labels = {
+                        **(job.labels or {}),
+                        "admitted_at": utc_now().isoformat(),
+                    }
             job.revision += 1
             job.updated_at = utc_now()
             await session.flush()
             return _job(job)
+
+    # -- Host command queue (docs/design/host-command-queue.md) -------------
+
+    @staticmethod
+    async def _host_command_limit(session) -> HostCommandSettings:
+        row = await session.get(MemoryBudgetPolicyRow, HOST_COMMAND_SCOPE)
+        if row is None:
+            return HostCommandSettings(
+                revision=1, running_at_once=HOST_COMMAND_DEFAULT_LIMIT
+            )
+        return HostCommandSettings(
+            revision=row.revision,
+            running_at_once=int(row.policy["running_at_once"]),
+        )
+
+    async def host_command_settings(self) -> HostCommandSettings:
+        async with self.database.session() as session:
+            return await self._host_command_limit(session)
+
+    async def save_host_command_settings(
+        self, update: HostCommandSettingsUpdate, *, actor_id: str
+    ) -> HostCommandSettings:
+        async with self._write() as session:
+            # The budget row serializes this change with every admission.
+            await self._policy(session)
+            current = await self._host_command_limit(session)
+            if update.expected_revision != current.revision:
+                raise MemoryBudgetConflict(
+                    "Host command settings changed; reload before saving"
+                )
+            row = await session.get(MemoryBudgetPolicyRow, HOST_COMMAND_SCOPE)
+            policy = {"running_at_once": update.running_at_once}
+            if row is None:
+                row = MemoryBudgetPolicyRow(
+                    scope_key=HOST_COMMAND_SCOPE,
+                    revision=2,
+                    policy=policy,
+                    updated_at=utc_now(),
+                )
+                session.add(row)
+            else:
+                row.revision += 1
+                row.policy = policy
+                row.updated_at = utc_now()
+            self._audit(
+                session,
+                actor_id,
+                HOST_COMMAND_SCOPE,
+                "host_commands.save",
+                current.model_dump(mode="json"),
+                update.model_dump(mode="json"),
+                {"revision": row.revision},
+            )
+            await session.flush()
+            return HostCommandSettings(
+                revision=row.revision, running_at_once=update.running_at_once
+            )
+
+    @staticmethod
+    async def _host_command_order(session) -> tuple[list[MemoryJobRow], int]:
+        """Fresh queued Host commands in fair admission order, and running count.
+
+        The next command comes from the project with the fewest running (and
+        already ordered) Host commands; within a project, the oldest first.
+        """
+        running_rows = await session.execute(
+            select(MemoryJobRow.project_id, func.count())
+            .where(
+                MemoryJobRow.resource_kind == HOST_COMMAND_KIND,
+                MemoryJobRow.state.in_(_HELD),
+            )
+            .group_by(MemoryJobRow.project_id)
+        )
+        load = {project: int(count) for project, count in running_rows}
+        running = sum(load.values())
+        fresh_after = utc_now() - timedelta(seconds=QUEUE_STALE_SECONDS)
+        queued = list(
+            await session.scalars(
+                select(MemoryJobRow)
+                .where(
+                    MemoryJobRow.resource_kind == HOST_COMMAND_KIND,
+                    MemoryJobRow.state == "queued",
+                    MemoryJobRow.updated_at >= fresh_after,
+                )
+                .order_by(MemoryJobRow.created_at, MemoryJobRow.id)
+                .limit(500)
+            )
+        )
+        ordered: list[MemoryJobRow] = []
+        while queued:
+            pick = min(
+                queued,
+                key=lambda row: (load.get(row.project_id, 0), row.created_at, row.id),
+            )
+            queued.remove(pick)
+            ordered.append(pick)
+            load[pick.project_id] = load.get(pick.project_id, 0) + 1
+        return ordered, running
+
+    async def _host_command_turn(self, session, job: MemoryJobRow) -> str | None:
+        """None when this queued Host command may be admitted now."""
+
+        settings = await self._host_command_limit(session)
+        ordered, running = await self._host_command_order(session)
+        if running >= settings.running_at_once:
+            return (
+                f"Waiting for a Host command slot: {running} of "
+                f"{settings.running_at_once} running."
+            )
+        ids = [row.id for row in ordered]
+        ahead = ids.index(job.id) if job.id in ids else len(ids)
+        if ahead:
+            return f"Waiting in line: {ahead} Host command(s) ahead."
+        return None
+
+    async def host_command_position(self, job_id: str) -> HostCommandQueuePosition:
+        """Read-only: where a Host command stands, without touching its row."""
+
+        async with self.database.session() as session:
+            row = await self._get(session, job_id)
+            settings = await self._host_command_limit(session)
+            ordered, running = await self._host_command_order(session)
+            ids = [item.id for item in ordered]
+            ahead = ids.index(job_id) if job_id in ids else len(ids)
+            return HostCommandQueuePosition(
+                position=ahead + 1 if row.state == "queued" else 0,
+                ahead=ahead if row.state == "queued" else 0,
+                running=running,
+                limit=settings.running_at_once,
+                state=row.state,
+            )
+
+    async def touch_queued(self, job_id: str) -> None:
+        """Heartbeat: a live worker still waits for this queued job."""
+
+        async with self.database.session() as session:
+            await session.execute(
+                update(MemoryJobRow)
+                .where(MemoryJobRow.id == job_id, MemoryJobRow.state == "queued")
+                .values(updated_at=utc_now())
+            )
+
+    async def cancel_stale_queued(self, *, actor_id: str = "system") -> list[str]:
+        """Cancel queued Host commands whose waiting worker stopped heartbeating."""
+
+        stale_before = utc_now() - timedelta(seconds=QUEUE_STALE_SECONDS)
+        async with self.database.session() as session:
+            stale = list(
+                await session.scalars(
+                    select(MemoryJobRow.id).where(
+                        MemoryJobRow.resource_kind == HOST_COMMAND_KIND,
+                        MemoryJobRow.state == "queued",
+                        MemoryJobRow.updated_at < stale_before,
+                    )
+                )
+            )
+        cancelled = []
+        for job_id in stale:
+            job = await self.get_job(job_id)
+            updated = job.updated_at
+            if updated.tzinfo is None:  # SQLite returns naive UTC
+                updated = updated.replace(tzinfo=stale_before.tzinfo)
+            if job.state != "queued" or updated >= stale_before:
+                continue
+            try:
+                await self.cancel_not_started(job_id, job.revision, actor_id=actor_id)
+            except MemoryBudgetConflict:
+                # diagnostic-expected: the worker admitted or cancelled it first.
+                continue
+            cancelled.append(job_id)
+        return cancelled
+
+    async def request_host_command_cancel(
+        self, job_id: str, *, actor_id: str
+    ) -> MemoryJob:
+        """Record an operator cancel; a queued command is cancelled at once.
+
+        A running command keeps its charge here; the caller removes its group,
+        and the owning worker reports the command as cancelled.
+        """
+
+        async with self._write() as session:
+            await self._policy(session)
+            job = await self._get(session, job_id)
+            if job.resource_kind != HOST_COMMAND_KIND:
+                raise MemoryBudgetError("only Host commands can be cancelled here")
+            if job.state == "finished":
+                return _job(job)
+            previous = _job(job).model_dump(mode="json")
+            job.labels = {**(job.labels or {}), "cancel_requested": True}
+            if job.state in {"queued", "blocked"} and not job.reserved_bytes:
+                job.state, job.outcome, job.detail = (
+                    "finished",
+                    "cancelled",
+                    "Cancelled by the operator before it started.",
+                )
+            job.revision += 1
+            job.updated_at = utc_now()
+            self._audit(
+                session,
+                actor_id,
+                job.id,
+                "host_command.cancel",
+                previous,
+                None,
+                {"state": job.state},
+            )
+            await session.flush()
+            return _job(job)
+
+    async def mark_host_command(self, job_id: str, **labels: Any) -> None:
+        """Merge worker-observed labels (for example ``detached``)."""
+
+        async with self._write() as session:
+            await self._policy(session)
+            job = await self._get(session, job_id)
+            job.labels = {**(job.labels or {}), **labels}
+            await session.flush()
+
+    async def host_command_view(self) -> "HostCommandView":
+        """Settings, running and queued Host commands in one consistent read."""
+
+        async with self.database.session() as session:
+            settings = await self._host_command_limit(session)
+            ordered, running_count = await self._host_command_order(session)
+            running = list(
+                await session.scalars(
+                    select(MemoryJobRow)
+                    .where(
+                        MemoryJobRow.resource_kind == HOST_COMMAND_KIND,
+                        MemoryJobRow.state.in_(_HELD),
+                    )
+                    .order_by(MemoryJobRow.created_at, MemoryJobRow.id)
+                    .limit(500)
+                )
+            )
+            return HostCommandView(
+                settings=settings,
+                running_count=running_count,
+                running=[HostCommandItem.from_job(_job(row)) for row in running],
+                queued=[
+                    HostCommandItem.from_job(_job(row), position=index + 1)
+                    for index, row in enumerate(ordered)
+                ],
+            )
+
+    async def host_commands(self) -> list[MemoryJob]:
+        """Every queued and running Host command, oldest first."""
+
+        async with self.database.session() as session:
+            rows = await session.scalars(
+                select(MemoryJobRow)
+                .where(
+                    MemoryJobRow.resource_kind == HOST_COMMAND_KIND,
+                    MemoryJobRow.state.in_(("queued", *_HELD)),
+                )
+                .order_by(MemoryJobRow.created_at, MemoryJobRow.id)
+                .limit(500)
+            )
+            return [_job(row) for row in rows]
 
     @staticmethod
     async def _get(session, job_id, expected_revision=None):
