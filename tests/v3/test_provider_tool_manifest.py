@@ -17,6 +17,7 @@ from nebula.v3.execution_scope import execution_context
 from nebula.v3.runtime_coordination import LeaseLost
 from nebula.v3.providers import ModelMessage, ModelRequest, ModelToolResult
 from nebula.v3.provider_tool_manifest import (
+    HINTS_START,
     SECTION_START,
     ToolManifest,
     absent_candidates,
@@ -28,6 +29,7 @@ from nebula.v3.provider_tool_manifest import (
     spec_digest,
     stage_manifest,
     legacy_present_names,
+    with_tool_hints,
 )
 from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.tool_catalog import fingerprint
@@ -95,10 +97,20 @@ def test_complete_digest_tracks_constraints_the_search_fingerprint_omits(constra
 def test_suggestion_does_not_establish_presence_and_native_schema_is_not_prose():
     spec = _spec(MCP_TOOL, "Search.")
     manifest = _manifest(spec)
-    request = apply_tools_context(
-        ModelRequest(messages=[]), manifest, receipt={"suggested": [MCP_TOOL]}
+    request = with_tool_hints(
+        apply_tools_context(
+            ModelRequest(messages=[ModelMessage(role="user", content="Find it.")]),
+            manifest,
+        ),
+        {"suggested": [MCP_TOOL]},
+        manifest,
     )
     assert manifest.present_digests == {}
+    # The turn's hints ride on the operator's message, never the instructions
+    # every turn's cached prefix begins with.
+    assert HINTS_START not in request.instructions
+    assert request.messages[-1].content.startswith("Find it." + HINTS_START)
+    assert MCP_TOOL in request.messages[-1].content
     assert absent_candidates({MCP_TOOL: spec}, manifest) == {MCP_TOOL: spec}
     assert '"input_schema"' not in request.instructions
     native = reconcile(
