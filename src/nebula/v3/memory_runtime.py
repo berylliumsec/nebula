@@ -20,6 +20,7 @@ from .memory_guard import observe_memory_group
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .memory_policy import (
     GIB,
+    MemoryAdmissionTimeout,
     MemoryBudgetConflict,
     MemoryEnforcementUnavailable,
     MemoryRunnerCapabilities,
@@ -32,6 +33,19 @@ from .memory_policy import (
     select_memory_policy,
     ExecutionEnvironment,
 )
+
+
+# A queued job never waits forever: the caller gets a clear failure and the
+# queued reservation is cancelled, instead of a request that hangs for hours.
+QUEUED_ADMISSION_SECONDS = 180.0
+
+
+def _admission_expired(deadline: float, job_id: str) -> None:
+    if asyncio.get_running_loop().time() >= deadline:
+        raise MemoryAdmissionTimeout(
+            f"Waited {QUEUED_ADMISSION_SECONDS:g} s for the memory budget, but other "
+            f"running work holds all of it; {job_id} was not started. Try again shortly."
+        )
 
 
 @dataclass(frozen=True)
@@ -436,11 +450,13 @@ class MemoryComputeController:
                 runner_fingerprint=runner_fingerprint(runner),
                 process_origin=process_origin(),
             )
+            deadline = asyncio.get_running_loop().time() + QUEUED_ADMISSION_SECONDS
             while job.state in {"queued", "blocked"}:
                 job = await self.service.reserve(
                     job_id, capability, owner=reservation_owner
                 )
                 if job.state == "queued":
+                    _admission_expired(deadline, job_id)
                     await asyncio.sleep(0.2)
             if job.state != "reserved":
                 raise MemoryBudgetConflict(
@@ -614,9 +630,11 @@ class MemoryComputeController:
         claimed = False
         started = False
         try:
+            deadline = asyncio.get_running_loop().time() + QUEUED_ADMISSION_SECONDS
             while job.state in {"queued", "blocked"}:
                 job = await self.service.reserve(job_id, capability, owner=owner)
                 if job.state == "queued":
+                    _admission_expired(deadline, job_id)
                     await asyncio.sleep(0.2)
             if job.state != "reserved":
                 raise MemoryBudgetConflict(

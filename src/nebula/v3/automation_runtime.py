@@ -25,6 +25,7 @@ import shutil
 import signal
 import socket
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -36,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .artifacts import ArtifactStore
 from .diagnostics import create_diagnostic_task, record_caught_exception
+from .memory_policy import MemoryAdmissionTimeout
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -950,6 +952,25 @@ class _ManagedSession:
     processes: dict[str, _ManagedProcess] = field(default_factory=dict)
     used_approval_ids: set[str] = field(default_factory=set)
     scope_expiry_task: asyncio.Task[None] | None = None
+    # Commands between session lookup and process registration (approval
+    # waits included); an idle Host worker is released only when this is 0.
+    active_uses: int = 0
+    last_used: float = field(default_factory=time.monotonic)
+
+    def idle_for(self, now: float) -> float | None:
+        """Seconds since last use, or None while any command is in flight."""
+        if self.active_uses or any(
+            process.final_task is None or not process.final_task.done()
+            for process in self.processes.values()
+        ):
+            return None
+        return now - self.last_used
+
+
+# A Host session reserves its full memory limit for as long as it is open, so
+# an idle one is released and the owner's next command starts a fresh worker.
+HOST_SESSION_IDLE_SECONDS = 120.0
+HOST_SESSION_IDLE_CHECK_SECONDS = 15.0
 
 
 SessionFactory = Callable[[SessionLaunch], Awaitable[RuntimeBackendSession]]
@@ -1044,7 +1065,11 @@ class AutomationRuntimeManager:
         self._sessions: dict[str, _ManagedSession] = {}
         self._owner_sessions: dict[tuple[str, str, str], str] = {}
         self._processes: dict[str, _ManagedProcess] = {}
+        # Serializes container session starts, which share runner preparation.
         self._session_lock = asyncio.Lock()
+        # One lock per owner: a session waiting for memory never blocks others.
+        self._owner_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._idle_host_task: asyncio.Task[None] | None = None
         self._inventory: list[dict[str, str]] = []
         self._prepared_runner_profile_id: str | None = None
         self._prepared_runner_profile_revision: int | None = None
@@ -1281,6 +1306,9 @@ class AutomationRuntimeManager:
 
     async def shutdown(self) -> None:
         self.begin_stopping()
+        if self._idle_host_task is not None:
+            self._idle_host_task.cancel()
+            await asyncio.gather(self._idle_host_task, return_exceptions=True)
         await asyncio.gather(
             *(self.close_session(session_id) for session_id in list(self._sessions)),
             return_exceptions=True,
@@ -1599,9 +1627,12 @@ class AutomationRuntimeManager:
         owner_kind: Literal["chat", "mission", "harness", "api", "notebook"],
         owner_id: str,
     ) -> AutomationSession:
-        managed = await self._get_or_create_session(
-            engagement_id=engagement_id, owner_kind=owner_kind, owner_id=owner_id
-        )
+        try:
+            managed = await self._get_or_create_session(
+                engagement_id=engagement_id, owner_kind=owner_kind, owner_id=owner_id
+            )
+        except MemoryAdmissionTimeout as error:
+            raise AutomationRuntimeUnavailable(str(error)) from error
         return managed.entity
 
     async def run_command(
@@ -1619,12 +1650,51 @@ class AutomationRuntimeManager:
         chat_origin: bool = False,
         expected_execution_mode: Literal["docker", "host"] | None = None,
     ) -> CommandResult:
-        managed = await self._get_or_create_session(
-            engagement_id=engagement_id,
-            owner_kind=owner_kind,
-            owner_id=owner_id,
-            chat_origin=chat_origin and chat_session_id is not None,
-        )
+        try:
+            managed = await self._get_or_create_session(
+                engagement_id=engagement_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                chat_origin=chat_origin and chat_session_id is not None,
+            )
+        except MemoryAdmissionTimeout as error:
+            raise AutomationRuntimeUnavailable(str(error)) from error
+        managed.active_uses += 1
+        try:
+            return await self._run_command_in_session(
+                managed,
+                engagement_id=engagement_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                request=request,
+                approval=approval,
+                requested_by=requested_by,
+                tool_call_id=tool_call_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
+                chat_origin=chat_origin,
+                expected_execution_mode=expected_execution_mode,
+            )
+        finally:
+            managed.active_uses -= 1
+            managed.last_used = time.monotonic()
+
+    async def _run_command_in_session(
+        self,
+        managed: _ManagedSession,
+        *,
+        engagement_id: str,
+        owner_kind: Literal["chat", "mission", "harness", "api", "notebook"],
+        owner_id: str,
+        request: RunCommandRequest,
+        approval: Approval | None,
+        requested_by: str,
+        tool_call_id: str | None,
+        chat_session_id: str | None,
+        chat_turn_id: str | None,
+        chat_origin: bool,
+        expected_execution_mode: Literal["docker", "host"] | None,
+    ) -> CommandResult:
         if (
             expected_execution_mode
             and managed.policy.execution_mode != expected_execution_mode
@@ -2148,6 +2218,69 @@ class AutomationRuntimeManager:
             self._discard_capture(process)
         return managed.entity
 
+    def _owner_lock(self, key: tuple[str, str, str]) -> asyncio.Lock:
+        lock = self._owner_locks.get(key)
+        if lock is None:
+            lock = self._owner_locks[key] = asyncio.Lock()
+        return lock
+
+    def _supervise_idle_host_sessions(self) -> None:
+        if self._idle_host_task is None or self._idle_host_task.done():
+            self._idle_host_task = create_diagnostic_task(
+                self._release_idle_host_sessions_forever(),
+                feature="runtime",
+                event_code="runtime.host_session_idle",
+                failure_message="Idle Host session release stopped unexpectedly.",
+            )
+
+    async def _release_idle_host_sessions_forever(self) -> None:
+        while not self._stopping:
+            await asyncio.sleep(HOST_SESSION_IDLE_CHECK_SECONDS)
+            try:
+                await self.release_idle_host_sessions()
+            except Exception as caught_error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.host_session_idle_failed",
+                    "An idle Host session could not be released yet; it is retried.",
+                    caught_error,
+                    stage="host-session-idle",
+                )
+
+    async def release_idle_host_sessions(
+        self, *, idle_seconds: float | None = None
+    ) -> list[str]:
+        """Close protected Host sessions with no command in flight.
+
+        Their memory reservation returns to the shared budget at once. A command
+        starting meanwhile holds the owner's lock, so it is never cut off.
+        """
+        limit = HOST_SESSION_IDLE_SECONDS if idle_seconds is None else idle_seconds
+        released: list[str] = []
+        for session_id, managed in list(self._sessions.items()):
+            if not isinstance(managed.backend, ManagedHostRuntimeSession):
+                continue
+            idle = managed.idle_for(time.monotonic())
+            if idle is None or idle < limit:
+                continue
+            entity = managed.entity
+            lock = self._owner_lock(
+                (entity.engagement_id, entity.owner_kind, entity.owner_id)
+            )
+            if lock.locked():
+                continue
+            async with lock:
+                idle = managed.idle_for(time.monotonic())
+                if (
+                    self._sessions.get(session_id) is not managed
+                    or idle is None
+                    or idle < limit
+                ):
+                    continue
+                await self.close_session(session_id)
+                released.append(session_id)
+        return released
+
     async def _expire_session_at_scope_boundary(
         self, session_id: str, expires_at: datetime
     ) -> None:
@@ -2192,7 +2325,7 @@ class AutomationRuntimeManager:
             )
 
         key = (engagement_id, owner_kind, owner_id)
-        async with self._session_lock:
+        async with self._owner_lock(key):
             existing_id = self._owner_sessions.get(key)
             if existing_id is not None and existing_id in self._sessions:
                 existing = self._sessions[existing_id]
@@ -2207,6 +2340,7 @@ class AutomationRuntimeManager:
                         existing.backend, ManagedHostRuntimeSession
                     ):
                         await require_host_command_access()
+                    existing.last_used = time.monotonic()
                     return existing
                 # Rebuild the execution boundary as well as its approval policy.
                 await self.close_session(existing_id)
@@ -2291,6 +2425,8 @@ class AutomationRuntimeManager:
                 )
                 self._sessions[entity.id] = managed
                 self._owner_sessions[key] = entity.id
+                if isinstance(backend, ManagedHostRuntimeSession):
+                    self._supervise_idle_host_sessions()
                 if (
                     scope is not None
                     and scope.not_after is not None
@@ -2305,156 +2441,161 @@ class AutomationRuntimeManager:
                         failure_message="Scope-expiry supervision stopped unexpectedly.",
                     )
                 return managed
-            profile = await self._select_runner(policy)
-            if not self.runtime_image or not self.runtime_digest:
-                raise AutomationRuntimeUnavailable(
-                    "prepare the existing Kali headless runtime before starting an agent session"
-                )
-            if (
-                self._prepared_runner_profile_id is not None
-                and profile.id != self._prepared_runner_profile_id
-            ):
-                raise AutomationRuntimeUnavailable(
-                    "the selected runner does not own the prepared Kali runtime"
-                )
-            workspace = (
-                (await resolve_workspace(self.workspace_resolver, engagement_id))
-                .expanduser()
-                .resolve(strict=True)
-            )
-            if not workspace.is_dir():
-                raise AutomationRuntimeUnavailable("project workspace is unavailable")
-            scope = (
-                (await self.store.get(ScopePolicy, engagement.scope_policy_id))
-                if engagement.scope_policy_id is not None
-                else None
-            )
-            scope = await effective_scope(self.store, engagement_id, scope)
-            rules, domains = self._network_boundary(policy, scope)
-            vpn: VpnProfile | None = None
-            vpn_config = None
-            if policy.vpn_profile_id is not None:
-                if self.credential_store is None:
+            async with self._session_lock:
+                profile = await self._select_runner(policy)
+                if not self.runtime_image or not self.runtime_digest:
                     raise AutomationRuntimeUnavailable(
-                        "VPN secret storage is unavailable"
+                        "prepare the existing Kali headless runtime before starting an agent session"
                     )
-                vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
-                from .runtime_credential_access import resolve_credential_async
+                if (
+                    self._prepared_runner_profile_id is not None
+                    and profile.id != self._prepared_runner_profile_id
+                ):
+                    raise AutomationRuntimeUnavailable(
+                        "the selected runner does not own the prepared Kali runtime"
+                    )
+                workspace = (
+                    (await resolve_workspace(self.workspace_resolver, engagement_id))
+                    .expanduser()
+                    .resolve(strict=True)
+                )
+                if not workspace.is_dir():
+                    raise AutomationRuntimeUnavailable(
+                        "project workspace is unavailable"
+                    )
+                scope = (
+                    (await self.store.get(ScopePolicy, engagement.scope_policy_id))
+                    if engagement.scope_policy_id is not None
+                    else None
+                )
+                scope = await effective_scope(self.store, engagement_id, scope)
+                rules, domains = self._network_boundary(policy, scope)
+                vpn: VpnProfile | None = None
+                vpn_config = None
+                if policy.vpn_profile_id is not None:
+                    if self.credential_store is None:
+                        raise AutomationRuntimeUnavailable(
+                            "VPN secret storage is unavailable"
+                        )
+                    vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
+                    from .runtime_credential_access import resolve_credential_async
 
-                vpn_config = (
-                    await resolve_credential_async(
-                        self.credential_store,
-                        vpn.secret_ref,
-                        purpose="vpn",
-                        profile_id=vpn.id,
-                    )
-                ).get_secret_value()
-            has_network_boundary = bool(rules or domains)
-            session = AutomationSession(
-                engagement_id=engagement_id,
-                owner_kind=owner_kind,
-                owner_id=owner_id,
-                runtime_image=self.runtime_image,
-                runtime_digest=self.runtime_digest,
-                runner_profile_id=profile.id,
-                runner_profile_revision=profile.revision,
-                policy_id=policy.id,
-                policy_revision=policy.revision,
-                scope_policy_id=scope.id if scope is not None else None,
-                scope_policy_revision=scope.revision if scope is not None else None,
-                vpn_profile_id=vpn.id if vpn is not None else None,
-                vpn_profile_revision=vpn.revision if vpn is not None else None,
-                # Even an automatic project never receives egress until a
-                # command explicitly asks for project_scope.
-                network_granted=False,
-            )
-            async with self.store.transaction(immediate=True) as transaction:
-                (
-                    await transaction.assert_project_workspace(
-                        engagement_id, engagement.workspace_path
-                    )
+                    vpn_config = (
+                        await resolve_credential_async(
+                            self.credential_store,
+                            vpn.secret_ref,
+                            purpose="vpn",
+                            profile_id=vpn.id,
+                        )
+                    ).get_secret_value()
+                has_network_boundary = bool(rules or domains)
+                session = AutomationSession(
+                    engagement_id=engagement_id,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    runtime_image=self.runtime_image,
+                    runtime_digest=self.runtime_digest,
+                    runner_profile_id=profile.id,
+                    runner_profile_revision=profile.revision,
+                    policy_id=policy.id,
+                    policy_revision=policy.revision,
+                    scope_policy_id=scope.id if scope is not None else None,
+                    scope_policy_revision=scope.revision if scope is not None else None,
+                    vpn_profile_id=vpn.id if vpn is not None else None,
+                    vpn_profile_revision=vpn.revision if vpn is not None else None,
+                    # Even an automatic project never receives egress until a
+                    # command explicitly asks for project_scope.
+                    network_granted=False,
                 )
-                (await transaction.add(session))
-            resolver_file: Path | None = None
-            if domains:
-                resolver_directory = self.capture_root / session.id
-                resolver_directory.mkdir(mode=0o700)
-                resolver_file = resolver_directory / "resolv.conf"
-                resolver_file.write_text(
-                    "nameserver 127.0.0.53\noptions attempts:1 timeout:2\n",
-                    encoding="ascii",
+                async with self.store.transaction(immediate=True) as transaction:
+                    (
+                        await transaction.assert_project_workspace(
+                            engagement_id, engagement.workspace_path
+                        )
+                    )
+                    (await transaction.add(session))
+                resolver_file: Path | None = None
+                if domains:
+                    resolver_directory = self.capture_root / session.id
+                    resolver_directory.mkdir(mode=0o700)
+                    resolver_file = resolver_directory / "resolv.conf"
+                    resolver_file.write_text(
+                        "nameserver 127.0.0.53\noptions attempts:1 timeout:2\n",
+                        encoding="ascii",
+                    )
+                    # The file contains only the loopback resolver address and must
+                    # be readable by the non-root process inside the container.
+                    resolver_file.chmod(0o644)
+                try:
+                    backend = await self.session_factory(
+                        SessionLaunch(
+                            session_id=session.id,
+                            project_id=engagement_id,
+                            runner=self._runner(profile, workspace=workspace),
+                            image=self.runtime_image,
+                            workspace=workspace,
+                            limits=SandboxLimits(
+                                timeout_seconds=max(1, policy.max_timeout_ms // 1_000)
+                            ),
+                            egress_rules=tuple(rules),
+                            egress_domains=tuple(domains),
+                            egress_ports=tuple(scope.allowed_ports)
+                            if scope is not None and domains
+                            else (),
+                            resolv_conf=resolver_file,
+                            network_granted=session.network_granted,
+                            vpn_config=vpn_config,
+                            notebook_data_directory=(
+                                (await self.notebook_data_directory(engagement_id))
+                                if owner_kind == "notebook"
+                                else None
+                            ),
+                        )
+                    )
+                except Exception as exc:
+                    (
+                        await self.store.update(
+                            AutomationSession,
+                            session.id,
+                            {
+                                "status": AutomationSessionStatus.FAILED,
+                                "completed_at": utc_now(),
+                                "failure_detail": str(exc)[:4_000],
+                            },
+                            expected_revision=session.revision,
+                        )
+                    )
+                    raise
+                session = await self.store.update(
+                    AutomationSession,
+                    session.id,
+                    {"status": AutomationSessionStatus.READY},
+                    expected_revision=session.revision,
                 )
-                # The file contains only the loopback resolver address and must
-                # be readable by the non-root process inside the container.
-                resolver_file.chmod(0o644)
-            try:
-                backend = await self.session_factory(
-                    SessionLaunch(
-                        session_id=session.id,
-                        project_id=engagement_id,
-                        runner=self._runner(profile, workspace=workspace),
-                        image=self.runtime_image,
-                        workspace=workspace,
-                        limits=SandboxLimits(
-                            timeout_seconds=max(1, policy.max_timeout_ms // 1_000)
+                managed = _ManagedSession(
+                    entity=session,
+                    policy=policy,
+                    scope=scope,
+                    backend=backend,
+                    workspace=workspace,
+                )
+                self._sessions[session.id] = managed
+                self._owner_sessions[key] = session.id
+                if (
+                    scope is not None
+                    and scope.not_after is not None
+                    and not scope.bypass_permissions
+                    and has_network_boundary
+                ):
+                    managed.scope_expiry_task = create_diagnostic_task(
+                        self._expire_session_at_scope_boundary(
+                            session.id, scope.not_after
                         ),
-                        egress_rules=tuple(rules),
-                        egress_domains=tuple(domains),
-                        egress_ports=tuple(scope.allowed_ports)
-                        if scope is not None and domains
-                        else (),
-                        resolv_conf=resolver_file,
-                        network_granted=session.network_granted,
-                        vpn_config=vpn_config,
-                        notebook_data_directory=(
-                            (await self.notebook_data_directory(engagement_id))
-                            if owner_kind == "notebook"
-                            else None
-                        ),
+                        feature="runtime",
+                        event_code="runtime.scope_expiry",
+                        failure_message="Scope-expiry supervision stopped unexpectedly.",
                     )
-                )
-            except Exception as exc:
-                (
-                    await self.store.update(
-                        AutomationSession,
-                        session.id,
-                        {
-                            "status": AutomationSessionStatus.FAILED,
-                            "completed_at": utc_now(),
-                            "failure_detail": str(exc)[:4_000],
-                        },
-                        expected_revision=session.revision,
-                    )
-                )
-                raise
-            session = await self.store.update(
-                AutomationSession,
-                session.id,
-                {"status": AutomationSessionStatus.READY},
-                expected_revision=session.revision,
-            )
-            managed = _ManagedSession(
-                entity=session,
-                policy=policy,
-                scope=scope,
-                backend=backend,
-                workspace=workspace,
-            )
-            self._sessions[session.id] = managed
-            self._owner_sessions[key] = session.id
-            if (
-                scope is not None
-                and scope.not_after is not None
-                and not scope.bypass_permissions
-                and has_network_boundary
-            ):
-                managed.scope_expiry_task = create_diagnostic_task(
-                    self._expire_session_at_scope_boundary(session.id, scope.not_after),
-                    feature="runtime",
-                    event_code="runtime.scope_expiry",
-                    failure_message="Scope-expiry supervision stopped unexpectedly.",
-                )
-            return managed
+                return managed
 
     async def _select_runner(
         self, policy: AutomationProjectPolicy
