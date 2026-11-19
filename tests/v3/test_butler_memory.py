@@ -832,11 +832,16 @@ async def test_provider_butler_turn_reads_scoped_memory_without_foreign_source(
             ],
         )
     )
+    # Recall is per message, so it rides on the operator's message and the
+    # instructions every turn's cached prefix begins with stay unchanged.
     instructions = prepared.model_request.instructions
-    assert "I prefer concise progress summaries" in instructions
-    assert "Check source evidence" in instructions
-    assert "Project A scope review" not in instructions
-    assert "report-a" not in instructions
+    assert "Butler recollections" not in instructions
+    recalled = str(prepared.model_request.messages[-1].content)
+    assert recalled.startswith("What source evidence should I check?")
+    assert "I prefer concise progress summaries" in recalled
+    assert "Check source evidence" in recalled
+    assert "Project A scope review" not in recalled + instructions
+    assert "report-a" not in recalled + instructions
 
 
 async def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
@@ -908,7 +913,8 @@ async def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_
     assert second.status_code == 200, second.text
     assert any(
         "What changed today?" in str(request.messages)
-        and "times in Eastern Time, not UTC" in request.instructions
+        and "times in Eastern Time, not UTC" in str(request.messages[-1].content)
+        and "times in Eastern Time, not UTC" not in request.instructions
         for request in provider.requests
     )
     another_project = await store.create(Engagement(id="project-b", name="Project B"))

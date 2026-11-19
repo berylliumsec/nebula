@@ -338,6 +338,7 @@ from .provider_tool_manifest import (
     ToolManifest,
     absent_candidates,
     apply_tools_context,
+    with_tool_hints,
     catalog_load_receipt,
     initialize_tools_instruction_base,
     legacy_present_names,
@@ -2289,6 +2290,81 @@ _GOAL_TIME_TEN_MINUTE_REMINDER = (
     "Wind down over the next few turns, clean up in-progress work, "
     "and prepare a concise handoff before Core pauses the goal."
 )
+
+
+_GOAL_PROGRESS_HEADING = (
+    "CORE GOAL PROGRESS FOR THIS TURN (status from Nebula Core, not written by "
+    "the operator)"
+)
+
+
+def _goal_instructions(goal: ChatGoal) -> str:
+    """The goal's standing context for the instructions.
+
+    Only what stays fixed while the goal runs: its step count and remaining
+    budgets change every turn and ride on the turn's message instead
+    (``_goal_progress_block``), so a goal's turns share one cached prefix.
+    """
+
+    return (
+        "\n\nCore-owned goal context:\n"
+        + json.dumps(
+            {
+                "objective": goal.objective,
+                "completion_criteria": goal.completion_criteria,
+                "plan": goal.plan,
+            },
+            ensure_ascii=False,
+        )
+        + "\nCore reports the goal's current step and remaining budgets with "
+        "the latest message."
+    )
+
+
+def _goal_progress_block(goal: ChatGoal) -> str:
+    """The goal's per-turn progress, attached to the turn's message."""
+
+    return (
+        _GOAL_PROGRESS_HEADING
+        + "\n"
+        + json.dumps(
+            {
+                "current_step": goal.current_step,
+                "remaining_steps": (
+                    goal.step_budget - goal.current_step
+                    if goal.step_budget is not None
+                    else None
+                ),
+                "remaining_tokens": (
+                    goal.token_budget - goal.usage.total_tokens
+                    if goal.token_budget is not None
+                    else None
+                ),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def _with_turn_state(
+    reference: str, *, butler_recall: str = "", goal_progress: str = ""
+) -> str:
+    """``reference`` joined by the turn's recalled memory and goal progress.
+
+    Both change from turn to turn. ``_with_reference_material`` puts the
+    result on the operator's message, after which only that message's end
+    changes and the provider's prompt cache holds for the conversation before
+    it.
+    """
+
+    blocks = [reference] if reference else []
+    if butler_recall:
+        if not blocks:
+            blocks.append(_REFERENCE_MATERIAL_HEADING)
+        blocks.append(butler_recall)
+    if goal_progress:
+        blocks.append(goal_progress)
+    return "\n\n".join(blocks)
 
 
 def _goal_time_instruction(goal: ChatGoal, now: datetime) -> str:
@@ -6440,6 +6516,10 @@ class ChatService:
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
         )
+        # Per-turn state that joins the turn's reference material on the
+        # operator's message, so the instructions stay byte-stable across turns.
+        butler_recall = ""
+        goal_progress = ""
         if request.control_assistant or (
             session and session.metadata.get("control_assistant") is True
         ):
@@ -6474,9 +6554,15 @@ class ChatService:
                 instructions += " " + BUTLER_TERMINAL_SURFACE_INSTRUCTION
             if self.butler_memory is not None and engagement_id is not None:
                 instructions += "\n\n" + BUTLER_MEMORY_INSTRUCTION
-                instructions += await self.butler_memory.turn_context(
-                    engagement_id, request.messages[-1].content
-                )
+                # Recalled for the latest message, so it rides on that message
+                # (``_with_reference_material``): in the instructions it changed
+                # the request's first bytes every turn and the provider's prompt
+                # cache missed for the whole conversation.
+                butler_recall = (
+                    await self.butler_memory.turn_context(
+                        engagement_id, request.messages[-1].content
+                    )
+                ).strip()
         else:
             instructions += (
                 "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
@@ -6484,6 +6570,7 @@ class ChatService:
             )
         if request._butler_recovery_instructions:
             instructions = request._butler_recovery_instructions
+            butler_recall = ""
         if request._butler_recovery_case_id:
             work_enabled = False
             work_roster_enabled = False
@@ -6495,25 +6582,8 @@ class ChatService:
         if subagent_child:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
-            instructions += "\n\nCore-owned goal context:\n" + json.dumps(
-                {
-                    "objective": goal.objective,
-                    "completion_criteria": goal.completion_criteria,
-                    "plan": goal.plan,
-                    "current_step": goal.current_step,
-                    "remaining_steps": (
-                        goal.step_budget - goal.current_step
-                        if goal.step_budget is not None
-                        else None
-                    ),
-                    "remaining_tokens": (
-                        goal.token_budget - goal.usage.total_tokens
-                        if goal.token_budget is not None
-                        else None
-                    ),
-                },
-                ensure_ascii=False,
-            )
+            instructions += _goal_instructions(goal)
+            goal_progress = _goal_progress_block(goal)
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
             None if side_chat else (await self._project_instructions(engagement_id))
@@ -7148,6 +7218,9 @@ class ChatService:
                 reference = "\n\n".join(
                     [reference or _REFERENCE_MATERIAL_HEADING, linked_memory_block]
                 )
+            reference = _with_turn_state(
+                reference, butler_recall=butler_recall, goal_progress=goal_progress
+            )
             if request.planning_enabled:
                 instructions += (
                     "\n\nPlanning preference: Make a concise plan before substantial "
@@ -7436,8 +7509,10 @@ class ChatService:
                 introduce=(tool_catalog or {}).get("preloaded", []),
                 forget_deferred_schemas=request.mcp_context_mode == "on_demand",
             )
-            model_request = apply_tools_context(
-                model_request, tool_manifest, receipt=tool_catalog
+            model_request = with_tool_hints(
+                apply_tools_context(model_request, tool_manifest),
+                tool_catalog,
+                tool_manifest,
             )
             self._ensure_request_capacity(profile, model_request, calibration)
             session_id = (
@@ -12179,9 +12254,7 @@ class ChatService:
             owner = prepared.session
             if owner is None:
                 raise ChatError("provider tool context is missing its durable session")
-            base = apply_tools_context(
-                prepared.model_request, candidate, receipt=receipt
-            )
+            base = apply_tools_context(prepared.model_request, candidate)
             async with self.store.transaction(immediate=True) as transaction:
                 latest = await self.store.get(ChatTurn, current_turn.id)
                 if (
@@ -12224,7 +12297,7 @@ class ChatService:
                 current_turn.request_snapshot.get("max_active_subagents"),
                 manifest=candidate,
             )
-        result = apply_tools_context(request, manifest, receipt=receipt)
+        result = apply_tools_context(request, manifest)
         result = result.model_copy(
             update={
                 "tools": [tool for tool in result.tools if tool.name in specs],
@@ -14724,11 +14797,7 @@ class ChatService:
                     },
                     expected_revision=turn.revision,
                 )
-        model_request = apply_tools_context(
-            model_request,
-            tool_manifest,
-            receipt=catalog_snapshot(turn.request_snapshot),
-        )
+        model_request = apply_tools_context(model_request, tool_manifest)
         return PreparedChat(
             provider=provider,
             provider_profile=profile,
