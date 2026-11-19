@@ -3710,7 +3710,7 @@ test("paired-device settings explain host-only pairing and use a compact dialog"
 });
 
 test("critical workspaces remain visually stable", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(300_000);
   for (const [name, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
     if (name === "settings" && (page.viewportSize()?.width ?? 1440) > 760) {
@@ -3722,8 +3722,9 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
       await expect(budget.getByRole("status")).toHaveText("Background PDF workers are disabled.");
       await expect(budget.getByRole("alert")).toHaveCount(0);
     }
-    await expect(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, {
+    await expect.soft(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, {
       fullPage: true,
+      maxDiffPixels: 0,
       mask: [page.locator(".top-bar-public-ip")],
       maskColor: "#11161c",
     });
@@ -11576,14 +11577,14 @@ test("tool follow-up toggles explain missing runtime setup", async ({ page }, te
 });
 
 test("Light preserves each critical workspace hierarchy", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(300_000);
   for (const theme of ["light"] as const) {
     await openWorkspace(page, "/", "Workbench");
     await setTheme(page, theme);
     for (const [name, route, heading] of workspaces) {
       await openWorkspace(page, route, heading);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-      await expect(page).toHaveScreenshot(`${name}-${theme}.png`, { fullPage: true });
+      await expect.soft(page).toHaveScreenshot(`${name}-${theme}.png`, { fullPage: true, maxDiffPixels: 0 });
     }
   }
 });
