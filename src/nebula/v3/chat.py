@@ -2087,10 +2087,55 @@ def _next_final_answer_recovery_state(
     return state
 
 
+# Schema keywords that carry no guidance the model needs: pydantic's derived
+# titles, defaults Core applies itself, and duplicate-item rules Core enforces.
+_MODEL_SCHEMA_NOISE = frozenset({"title", "default", "uniqueItems"})
+# Text limits this large are never what keeps a call valid; smaller ones still
+# tell the model how much a field takes.
+_MODEL_SCHEMA_MAX_LENGTH_SHOWN = 1_000
+_SCHEMA_NAME_MAPPINGS = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties"}
+)
+_SCHEMA_DATA_KEYWORDS = frozenset({"enum", "const", "examples", "required"})
+
+
+def _model_facing_schema(schema: Any) -> Any:
+    """``schema`` without keywords that cost tokens and guide nothing.
+
+    Only what the model reads is trimmed: Core validates every call against
+    the tool's full schema. Property names and data values (``enum``,
+    ``const``) are kept as written, so a property named ``title`` survives.
+    """
+
+    if isinstance(schema, list):
+        return [_model_facing_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    trimmed: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _MODEL_SCHEMA_NOISE:
+            continue
+        if (
+            key == "maxLength"
+            and isinstance(value, int)
+            and value >= _MODEL_SCHEMA_MAX_LENGTH_SHOWN
+        ):
+            continue
+        if key in _SCHEMA_NAME_MAPPINGS and isinstance(value, dict):
+            trimmed[key] = {
+                name: _model_facing_schema(item) for name, item in value.items()
+            }
+        elif key in _SCHEMA_DATA_KEYWORDS:
+            trimmed[key] = deepcopy(value)
+        else:
+            trimmed[key] = _model_facing_schema(value)
+    return trimmed
+
+
 def _routing_input_schema(spec: Any) -> dict[str, Any]:
     """Constrain Core-owned routing arguments instead of asking the model to guess."""
 
-    schema = deepcopy(spec.input_schema)
+    schema = _model_facing_schema(spec.input_schema)
     properties = schema.get("properties")
     if "cwd" in spec.path_arguments and isinstance(properties, dict):
         properties["cwd"] = {
