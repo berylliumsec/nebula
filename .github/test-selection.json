@@ -1,25 +1,25 @@
 {
-  "change_digest": "fa6a62cd70d6a34888f03f0c0c55d41cbc43cc96c3be0e4f968ab2ef7a06c6e9",
-  "reviewed_by": "Claude Code (deploy-speed task from the operator's coordinating session)",
-  "reason": "A project handoff now closes the project's idle Host automation sessions before its inventory, so they no longer pin the project until eviction. Selected: new runtime tests for the idle predicate (unmanaged and protected Host, running, queued, detached and Docker cases), the handoff agent suite with a new tick test, the Host command queue suite whose session lifecycle changed, the idle-retirement handoff dispatch suite, and runtime coordination (which also provisions PostgreSQL so the handoff-agent tests run on both backends).",
-  "exclusions": "No frontend, native or Playwright changes; no operator-visible interface changes. Kernel-runner tests in test_host_memory_runner.py skip without a root runner socket, as on main. Docs changes are design notes only.",
+  "change_digest": "9ee7e840f90b231588c461766803a4144d9afa82a27873b490681124c63984cb",
+  "reviewed_by": "Claude Code, delegated by the deployment-speed session for a focused handoff fix",
+  "reason": "Handoff inventory resource IDs are now scoped to the owning incarnation (project, runtime, fencing token, key), including the participant-contract fallback. A later owner no longer collides with an earlier owner's closed inventory rows, so it records its real blockers and checkpoints. Selected: the handoff agent suite (new cross-incarnation regression on SQLite and PostgreSQL), orphan recovery (closes dead owners' inventory rows), idle retirement dispatch and handoff participants (both drive ProjectHandoffAgent ticks). Also selects #1225's idle Host session handoff test, which shares runtime_project_handoff.py and the handoff agent test file.",
+  "exclusions": "No frontend, native or Playwright changes; no operator-visible UI. Deployer, coordinator and recovery code paths are unchanged apart from the IDs they read, which are filtered by owner, not by ID format.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 156,
+    "python": 166,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_handoff_idle_automation_sessions.py",
     "tests/v3/test_project_handoff_agent.py",
-    "tests/v3/test_host_memory_runner.py",
     "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_runtime_coordination.py"
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_handoff_participants.py",
+    "tests/v3/test_handoff_idle_automation_sessions.py"
   ],
   "frontend": [],
   "native": [],
