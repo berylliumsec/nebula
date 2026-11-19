@@ -114,7 +114,7 @@
     {"name": "butler-capacity-history", "patterns": ["src/nebula/v3/butler_recovery.py", "src/nebula/v3/domain.py", "ui/src/components/ButlerScheduledTranscript.tsx", "ui/src/api/butlerOverview.ts"], "areas": ["butler-capacity-history"]},
     {"name": "butler-effort", "patterns": ["src/nebula/v3/butler_recovery.py", "src/nebula/v3/harnesses.py", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/AppShell.tsx", "ui/src/settingsCatalog.ts"], "areas": ["butler-effort"]},
     {"name": "nebula-voice", "patterns": ["src/nebula/v3/live_voice.py", "ui/src/components/NebulaVoice.tsx", "ui/src/components/NebulaVoice.module.css", "ui/src/components/voiceTranscript.ts", "docs/design/nebula-voice.md"], "areas": ["nebula-voice"]},
-    {"name": "quiet-lens", "patterns": ["ui/src/quiet-lens.css"], "areas": ["quiet-lens"]},
+    {"name": "quiet-lens", "patterns": ["ui/src/quiet-lens.css", "ui/src/components/TopBar.tsx"], "areas": ["quiet-lens"]},
     {"name": "studio-dark-vision", "patterns": ["ui/src/studio-dark.css", "ui/src/pages/OverviewPage*", "ui/src/state/ThemeContext*", "ui/src/pages/SettingsPage*"], "areas": ["studio-dark-vision"]},
     {"name": "notes-screen-fit", "patterns": ["ui/src/components-workbench.css", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-screen-fit"]},
     {"name": "notes-typing", "patterns": ["ui/src/components/NotesPanel.tsx"], "areas": ["notes-typing"]},
@@ -2779,6 +2779,7 @@
     "quiet-lens": [
       {"area":"quiet-lens","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Quiet Lens is the first-run default theme|theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},
       {"area":"quiet-lens","project":"compact","test_match":"tests/interface.spec.ts","grep":"Quiet Lens is the first-run default theme|theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},
+      {"area":"quiet-lens","project":"narrow","test_match":"tests/interface.spec.ts","grep":"theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},
       {"area":"quiet-lens","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},
       {"area":"quiet-lens","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},
       {"area":"quiet-lens","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"theme picker Quiet Lens reveals real navigation and keeps multiline chat visible","runtime":"mock","shard":"1/1"},

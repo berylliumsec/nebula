@@ -1,24 +1,26 @@
 {
-  "change_digest": "5f939dfecac22e0895eb22d599736d4a29fd698c9257a61c56614bdd2bc26442",
-  "reviewed_by": "Claude Code, repairing interface suites red on pristine main for PR #1223's gates",
-  "reason": "The interface.spec.ts mock Core lacked /host-pressure and /memory-budgets branches, so Settings crashed on the catch-all array; that broke the Quiet Lens theme picker, the Zero shell Appearance lens and the critical-workspace CPU budget checks. Also refreshes the 36 critical-workspace baselines from CI run 44559296882. Selected: the quiet-lens, phone-shell and critical-workspaces areas on every project they declare.",
-  "exclusions": "No product source, Python, native or frontend unit changes. Other Settings-reaching Playwright journeys benefit from the fixture but are not selected; the theme-picker palette test passed locally on desktop, compact, narrow and mobile-chromium. Quiet Lens on the narrow (390px, fine pointer) project still fails: hovering the top handle opens a bar that covers it. narrow is not in the quiet-lens area; reported as a follow-up.",
-  "python_versions": ["3.12"],
+  "change_digest": "b1dffe19c8835e1c06269c827ddc40df7046cee7f4e693d3207ceaf9e4516bbd",
+  "reviewed_by": "Claude Code, fixing the narrow-window Quiet Lens top menu found while repairing #1224",
+  "reason": "TopBar's Quiet Lens handle revealed on hover and on pointer focus at any width, and its blur handler closed the menu when the phone-width layout hid the focused handle. At 390px with a mouse the menu could not be opened. Hover now uses the side handle's wide-layout query, focus reveals only for :focus-visible, and a self-hide blur is ignored. Selected: TopBar unit tests (new cases fail on main) and the quiet-lens area, which now includes narrow.",
+  "exclusions": "host-startup-default also maps TopBar.tsx but only checks first-run startup on a real Core; the TopBar layout and startup copy are unchanged. phone-shell, critical-workspaces and the Zero shell journey passed locally on desktop, compact, narrow and all six mobile projects, and a disposable LAN Core run covered narrow mouse, narrow keyboard, desktop hover, and Pixel and iPhone tap.",
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 21,
     "native": 0,
-    "playwright": 96
+    "playwright": 11
   },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/TopBar.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "area:quiet-lens",
-    "area:phone-shell",
-    "area:critical-workspaces"
+    "area:quiet-lens"
   ],
   "checks": []
 }
