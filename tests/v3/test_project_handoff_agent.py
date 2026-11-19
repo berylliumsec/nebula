@@ -321,3 +321,55 @@ async def test_interrupted_command_does_not_pin_but_running_command_does(
     blockers = (await row(project)).blockers
     assert any("running-command" in text for text in blockers)
     assert not any("interrupted-command" in text for text in blockers)
+
+
+async def test_idle_host_session_is_released_before_the_handoff_inventory(
+    project, agent
+):
+    # An idle Host session pinned the project with an in-memory handle and a
+    # `ready` row until the eviction grace expired. The source now asks the
+    # automation runtime to close idle sessions before taking its inventory.
+    now = utc_now()
+    async with project.coordinator.database.session() as session:
+        await session.execute(
+            insert(EntityRow),
+            [
+                {
+                    "id": "idle-host-session",
+                    "kind": "automation_sessions",
+                    "engagement_id": "one",
+                    "revision": 1,
+                    "payload": {"status": "ready"},
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ],
+        )
+    runtime = agent.app.state.automation_runtime
+    runtime._sessions["idle-host-session"] = object()
+    runtime._processes["finished-command"] = object()
+    calls = []
+
+    async def release(project_id):
+        calls.append(project_id)
+        if not runtime.keep_open:
+            runtime._sessions.clear()
+            runtime._processes.clear()
+            async with project.coordinator.database.session() as session:
+                stored = await session.get(EntityRow, "idle-host-session")
+                stored.payload = {"status": "closed"}
+                stored.revision += 1
+        return []
+
+    runtime.release_idle_sessions_for_handoff = release
+    # A session the runtime keeps open (busy, held or Docker) still pins.
+    runtime.keep_open = True
+    assert await agent.tick() == "finishing"
+    blockers = (await row(project)).blockers
+    assert any("idle-host-session remains ready" in text for text in blockers)
+    assert any("automation_runtime" in text for text in blockers)
+    runtime.keep_open = False
+    assert await agent.tick() == "transferable"
+    assert calls == ["one", "one"]
+    lease = await project.coordinator.transfer("one")
+    assert lease.fencing_token == project.lease.fencing_token + 1

@@ -29,6 +29,8 @@ _PREFIX = "handoff-inventory:"
 
 # These handles have no implemented restoration adapter. Their presence is a
 # concrete blocker, including idle vendor connections and background descendants.
+# The one exception is an idle Host automation session, which the source closes
+# at the boundary (release_idle_sessions_for_handoff) before this inventory.
 _HANDLES = {
     "automation_runtime": ("_sessions", "_processes"),
     "notebooks": ("workers", "_drains"),
@@ -350,6 +352,15 @@ class ProjectHandoffAgent:
             await self.chat.park_queued_for_handoff()
         else:
             await self.chat.restore_locally_parked_turns()
+        # An idle Host session holds nothing a later owner needs: close it so
+        # it neither pins the project nor waits out the eviction grace.
+        release = getattr(
+            getattr(self.app.state, "automation_runtime", None),
+            "release_idle_sessions_for_handoff",
+            None,
+        )
+        if release is not None:
+            await release(self.lease.project_id)
         found = self.handles()
         callback_blockers = getattr(self.chat, "handoff_callback_blockers", None)
         if callback_blockers is not None:

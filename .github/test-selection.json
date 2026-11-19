@@ -1,24 +1,25 @@
 {
-  "change_digest": "e8ba8a4c88b1d0782437250de6d41330c1097ed1329847c0c4468119c4bb4e7c",
-  "reviewed_by": "Claude Code under operator request to make deployments faster (step timings + prebuild)",
-  "reason": "Simulation deployer only: prepare records per-step durations in its receipt and stderr, supervisor promote and host activation report phase timings, a new timer-safe prebuild action builds the release ahead of promotion, and promote/cycle wait (bounded) for a running prebuild instead of failing on the lock. Selected: new prebuild/timing/lock tests, the staged deployer suite (promote result shape), the CI-default prepare suite and deploy resume.",
-  "exclusions": "No Core, frontend, native or Playwright changes. tests/test_simulation_host_activation.py and tests/test_simulation_host_restart.py are not selected: they pass except 3 tests that fail identically on origin/main 09e449e (onefile child identity, two supervisor stop-timeout cases); the host switch change only adds timing fields. The LAN Core journey does not apply: this is host deploy tooling outside Nebula.",
+  "change_digest": "fa6a62cd70d6a34888f03f0c0c55d41cbc43cc96c3be0e4f968ab2ef7a06c6e9",
+  "reviewed_by": "Claude Code (deploy-speed task from the operator's coordinating session)",
+  "reason": "A project handoff now closes the project's idle Host automation sessions before its inventory, so they no longer pin the project until eviction. Selected: new runtime tests for the idle predicate (unmanaged and protected Host, running, queued, detached and Docker cases), the handoff agent suite with a new tick test, the Host command queue suite whose session lifecycle changed, the idle-retirement handoff dispatch suite, and runtime coordination (which also provisions PostgreSQL so the handoff-agent tests run on both backends).",
+  "exclusions": "No frontend, native or Playwright changes; no operator-visible interface changes. Kernel-runner tests in test_host_memory_runner.py skip without a root runner socket, as on main. Docs changes are design notes only.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 108,
+    "python": 156,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_deployer_prebuild.py",
-    "tests/test_staged_deployer.py",
-    "tests/test_simulation_deployer_ci_default.py",
-    "tests/test_simulation_deploy_resume.py"
+    "tests/v3/test_handoff_idle_automation_sessions.py",
+    "tests/v3/test_project_handoff_agent.py",
+    "tests/v3/test_host_memory_runner.py",
+    "tests/v3/test_idle_retirement_dispatch.py",
+    "tests/v3/test_runtime_coordination.py"
   ],
   "frontend": [],
   "native": [],
