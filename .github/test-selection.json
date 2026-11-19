@@ -1,5 +1,5 @@
 {
-  "change_digest": "9ee7e840f90b231588c461766803a4144d9afa82a27873b490681124c63984cb",
+  "change_digest": "f4233e690a2b9be27a8434bd76b76e36cefb244c8be93fbc0e48a1b7a980b392",
   "reviewed_by": "Claude Code, delegated by the deployment-speed session for a focused handoff fix",
   "reason": "Handoff inventory resource IDs are now scoped to the owning incarnation (project, runtime, fencing token, key), including the participant-contract fallback. A later owner no longer collides with an earlier owner's closed inventory rows, so it records its real blockers and checkpoints. Selected: the handoff agent suite (new cross-incarnation regression on SQLite and PostgreSQL), orphan recovery (closes dead owners' inventory rows), idle retirement dispatch and handoff participants (both drive ProjectHandoffAgent ticks). Also selects #1225's idle Host session handoff test, which shares runtime_project_handoff.py and the handoff agent test file.",
   "exclusions": "No frontend, native or Playwright changes; no operator-visible UI. Deployer, coordinator and recovery code paths are unchanged apart from the IDs they read, which are filtered by owner, not by ID format.",

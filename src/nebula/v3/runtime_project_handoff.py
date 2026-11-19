@@ -41,6 +41,7 @@ def _inventory_id(lease, key):
     )
     return _PREFIX + hashlib.sha256(material.encode()).hexdigest()
 
+
 # These handles have no implemented restoration adapter. Their presence is a
 # concrete blocker, including idle vendor connections and background descendants.
 # The one exception is an idle Host automation session, which the source closes
