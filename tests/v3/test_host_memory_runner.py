@@ -626,3 +626,32 @@ async def test_busy_host_session_is_not_released(full_budget, tmp_path):
         managed.entity.id
     ]
     await manager.shutdown()
+
+
+async def test_idle_host_session_with_a_detached_process_is_kept(full_budget, tmp_path):
+    store, controller, runner = full_budget
+    manager = _host_manager(store, controller, tmp_path)
+    managed = await _host_session(manager, "chat-a")
+    job_id = managed.backend.memory_job.job_id
+    # A command started `nohup server &` and exited; the server still runs.
+    runner.groups[job_id]["populated"] = True
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
+    assert (await controller.service.get_job(job_id)).state == "running"
+    runner.groups[job_id]["populated"] = False
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == [
+        managed.entity.id
+    ]
+    await manager.shutdown()
+
+
+async def test_unreadable_host_group_keeps_the_session(full_budget, tmp_path):
+    store, controller, runner = full_budget
+    manager = _host_manager(store, controller, tmp_path)
+    await _host_session(manager, "chat-a")
+
+    async def unreadable(_job_id):
+        raise HostRunnerError("failed", "runner restarting")
+
+    runner.observe = unreadable
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
+    await manager.shutdown()

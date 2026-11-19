@@ -2247,6 +2247,28 @@ class AutomationRuntimeManager:
                     stage="host-session-idle",
                 )
 
+    @staticmethod
+    async def _host_group_populated(managed: _ManagedSession) -> bool:
+        """Whether the session's protected group still has processes.
+
+        An unreadable group counts as populated: keeping a reservation a little
+        longer is safe, killing an unseen process is not.
+        """
+        backend = managed.backend
+        assert isinstance(backend, ManagedHostRuntimeSession)
+        try:
+            report = await backend.runner.observe(backend.memory_job.job_id)
+        except Exception as caught_error:
+            record_caught_exception(
+                "runtime",
+                "runtime.host_session_group_unobserved",
+                "An idle Host session's group could not be read; it stays open.",
+                caught_error,
+                stage="host-session-idle",
+            )
+            return True
+        return bool(report and report.get("populated"))
+
     async def release_idle_host_sessions(
         self, *, idle_seconds: float | None = None
     ) -> list[str]:
@@ -2276,6 +2298,10 @@ class AutomationRuntimeManager:
                     or idle is None
                     or idle < limit
                 ):
+                    continue
+                if await self._host_group_populated(managed):
+                    # A detached process (nohup, setsid, &) outlived its
+                    # command; closing the session would kill it.
                     continue
                 await self.close_session(session_id)
                 released.append(session_id)
