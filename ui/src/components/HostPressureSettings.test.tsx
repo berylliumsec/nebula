@@ -39,7 +39,8 @@ describe("host pressure", () => {
     fireEvent.click(screen.getByRole("button", {name: "Save pressure thresholds"}));
     await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
     expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({thresholds: {load: 1}});
-    expect(await screen.findByText(/Saved: Off · Effective: Off/)).toBeVisible();
+    // Effective matches Saved here, so the help line does not repeat it.
+    expect(await screen.findByText(/Saved: Off$/)).toBeVisible();
   });
   it("validates thresholds and preserves the draft when saving fails", async () => {
     const {api, request} = client(); render(<HostPressureSettings api={api} />);
