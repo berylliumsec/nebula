@@ -1,26 +1,25 @@
 {
-  "change_digest": "2dbfc960bb4672cb7393d2f06ebbe2537b6bf59bc9d160dee02fb3f623ab9de3",
-  "reviewed_by": "Claude Code under operator request for a narrow selection so the provider-chat prompt-cache change merges quickly",
-  "reason": "Goal progress, Butler memory recall and tool relevance hints move from provider-chat instructions onto the operator's message so instructions stay byte-stable across turns. Selected: the tool-manifest/instruction-ownership suites (hints no longer in the owned section; with_tool_hints), goal suites (instructions identical across goal turns, progress on the message) and Butler memory suites (recall on the message, scoped).",
-  "exclusions": "Harness chats are untouched (separate runtime-context path). No frontend, native or Playwright changes. Broader chat/compaction suites are not selected per operator request for a narrow run; test_recent_window, test_tool_history_memory, test_tiny_windows, test_midturn_compaction and test_replay_estimates passed locally.",
+  "change_digest": "89722820e9217d12884ded903d555008e784f163bfd1faca410a35d935afeb26",
+  "reviewed_by": "Claude Code under operator request for a narrow selection so the schema trim merges quickly",
+  "reason": "Routing tool declarations drop schema noise keywords (title, default, uniqueItems, maxLength >= 1000) from what the model reads; Core still validates against full schemas. Selected: new unit tests for the trim, provider tool context/manifest suites (declared definitions and capacity), synthesis declarations, and provider adapters that serialize the schemas.",
+  "exclusions": "No frontend, native or Playwright changes. Harness paths untouched. test_chat_context_assembly, test_all_tool_failure_guidance, test_tool_failures, test_conversation_search and test_butler_capabilities also passed locally but are not selected, per operator request for a narrow run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 143,
+    "python": 156,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_provider_instruction_boundaries.py",
-    "tests/v3/test_provider_tool_manifest.py",
+    "tests/v3/test_model_facing_schema.py",
     "tests/v3/test_provider_tools_context.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_butler_memory.py"
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_provider_tool_manifest.py",
+    "tests/v3/test_providers.py"
   ],
   "frontend": [],
   "native": [],

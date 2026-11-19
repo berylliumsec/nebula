@@ -637,9 +637,15 @@ async def test_retained_definitions_exceeding_capacity_fail_clearly_without_trun
         {"capabilities": source.capabilities.model_copy(update={"tools": [tool]})},
         expected_revision=source.revision,
     )
+    # The fixed-definitions check or the message check fails first depending
+    # on how small the trimmed function schemas are; either way the turn fails
+    # as a capacity error before any provider request, with nothing truncated.
     with pytest.raises(
         chat_module.ChatConfigurationError,
-        match="retained tool definitions.*context capacity",
+        match=(
+            "retained tool definitions.*context capacity"
+            "|current message and required instructions exceed"
+        ),
     ):
         await service.prepare_async(_next(request, first.session.id))
     assert len(_chat_requests(provider)) == count
