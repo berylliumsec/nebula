@@ -1,41 +1,37 @@
 {
-  "change_digest": "e1282047a1436808f8a0a296a9bf6fc7e0e705e11116319d759a86e4d84ce040",
-  "reviewed_by": "Claude Code, building the approved Butler mode mockup (Figma page 162:2) on 2026-11-20",
-  "reason": "Butler mode adds a full-screen /butler view: a Core-owned status board of every non-archived project's chats (new API-worker read GET /api/v1/butler/board: waiting, working, recently failed and counted idle chats, with attention summaries, goals, idle paging and ETags) beside parallel Butler threads (ButlerSessionReservation gains thread/title: each thread is its own Butler session marked butler_thread with an operator-owned title, excluded from the panel's current-Butler lookup; GET /api/v1/butler/threads lists them across projects with state). The UI page groups cards by attention or project, expands a card to its goal and pending approval (Approve, Deny, Stop, Open chat, Ask Butler about this), starts threads in the chosen or card's project and streams several at once; the Butler panel header opens it. Selected: the global project-read suite (board and threads on SQLite here, PostgreSQL in the local run), Butler session reservation, the settings catalog destination, product-help discovery and digest, the knowledge-index digest sync, the impact-catalog checks for the new area, the new board/thread unit tests, the Butler panel component suite, and the new real-Core LAN journey in all eight assistant-real profiles.",
-  "exclusions": "Pre-existing reds on main are not selected: tests/v3/test_butler_workflow_registry.py (2 unreviewed holdProjectView/releaseProjectView signatures, unchanged by this PR; npm run build's registry guard still checks every new call), tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters (ios-shell-real-core.spec.ts is uncatalogued on main; butler-mode.spec.ts is catalogued here), and tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. The knowledge LAN bootstrap case needs a host LAN fixture and is covered by the digest-sync case. PostgreSQL variants of the board/threads tests skip without NEBULA_TEST_POSTGRES_URL in CI; they passed locally against PostgreSQL 16. No native code changed.",
+  "change_digest": "18e6ae8b3c98402fc83e3fe919d4445f9702ca6574a6b956eabdacc0e6c7a76b",
+  "reviewed_by": "Claude Code for the operator-approved Quiet Lens polish (13 Figma cards)",
+  "reason": "Quiet Lens (default theme) polish: CSS in quiet-lens.css plus small markup changes in SessionsPage (duplicate runtime id dropped from chat headers, labelled jump pills), WorkPage (initials tile, Idle/non-zero status counts, data-empty summary counts, Agent tools switch with unchanged accessible names), ProjectPage (active tab scrolled into view) and HostPressureSettings (Effective omitted when equal to Saved). Selected: unit tests for Work, host pressure and the new label/initials helpers; Playwright for chat scroll jumps (desktop, compact, Chromium and WebKit phones), the activity ledger turn footer, phone Workbench navigation and route ownership, and the real-Core LAN Work import journey that exercises project rows and the Agent tools toggle.",
+  "exclusions": "critical-workspaces is excluded: its baselines were already stale on main (storage-identity notice, Storage nav, Current progress, Results tab) and its Zero panoramic-shell test fails on main in CI (run 44554839053) and locally; those screens use Zero/Light, not Quiet Lens. quiet-lens and phone-shell areas are excluded because each bundles a test red on main (theme picker cannot find 'Advanced settings'; Zero panoramic shell cannot find the Appearance 'Light' button); the Quiet Lens first-run test and the other nine phone-shell tests passed locally on this branch. work-import WebKit projects are excluded because device pairing fails on pristine main locally. No Python, native or settings-catalog changes.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 30,
-    "frontend": 83,
+    "python": 0,
+    "frontend": 29,
     "native": 0,
-    "playwright": 8
+    "playwright": 13
   },
-  "python": [
-    "tests/v3/test_runtime_global_project_reads.py",
-    "tests/v3/test_butler_sessions.py",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
-    "tests/v3/test_runtime_host_knowledge_bootstrap.py::test_default_supervisor_opens_one_index_after_lock_and_reopens_same_digest",
-    "tests/test_playwright_impact.py::test_representative_area_mapping",
-    "tests/test_playwright_impact.py::test_full_manifest_covers_every_permanent_playwright_project",
-    "tests/test_playwright_impact.py::test_project_and_exact_entry_selection_are_catalog_bounded",
-    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans",
-    "tests/test_playwright_impact.py::test_assistant_real_core_uses_bounded_shards"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/pages/butlerThreads.test.ts",
-    "ui/src/assistantDestinations.test.ts",
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+    "ui/src/pages/WorkPage.test.tsx",
+    "ui/src/components/HostPressureSettings.test.tsx",
+    "ui/src/pages/runtimeLabel.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:butler-mode"
+    "chat-scroll-navigation/desktop",
+    "chat-scroll-navigation/compact",
+    "chat-scroll-navigation/mobile-chromium-small",
+    "chat-scroll-navigation/mobile-webkit",
+    "activity-ledger/desktop",
+    "ios-mobile-web-regression/mobile-webkit",
+    "phone-route-ownership/mobile-chromium-small",
+    "phone-route-ownership/mobile-webkit-small",
+    "work-import/assistant-real-desktop",
+    "work-import/assistant-real-chromium-390"
   ],
   "checks": []
 }
