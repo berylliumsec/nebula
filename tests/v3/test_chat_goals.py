@@ -1332,14 +1332,24 @@ async def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_
     provider = FakeProvider("provider", local=False)
     chat = ChatService(store, provider_factory=lambda _: provider)
 
+    instructions_seen: set[str] = set()
     for index in range(4):
         prepared = await chat.prepare(_goal_request(running.id, f"Step {index}"))
         assert "Core-owned goal context" in prepared.model_request.instructions
+        # Progress changes every turn, so it rides on the turn's message and
+        # the instructions stay byte-identical: one cached prefix per goal.
+        assert "current_step" not in prepared.model_request.instructions
+        progress = str(prepared.model_request.messages[-1].content)
+        assert chat_module._GOAL_PROGRESS_HEADING in progress
+        assert f'"current_step": {index}' in progress
+        assert f'"remaining_steps": {4 - index}' in progress
+        instructions_seen.add(prepared.model_request.instructions)
         (await chat.complete(prepared))
         goal = await goals.get("session")
         assert goal.status == ChatGoalStatus.RUNNING
         assert goal.current_step == index + 1
 
+    assert len(instructions_seen) == 1
     assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 4
     assert (await goals.get("session")).linked_turn_ids == [
         turn.id

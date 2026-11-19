@@ -40,7 +40,6 @@ from nebula.v3.provider_tool_manifest import (
     initialize_tools_instruction_base,
     map_tools_instruction_base,
     reconcile,
-    render_hints,
     render_tools,
     reset_tools_instruction_base,
     tools_instruction_base,
@@ -86,10 +85,10 @@ RAW_INSTRUCTIONS = [
 def test_unowned_literal_text_survives_initial_repeat_and_tool_update(body):
     first = _manifest(loaded=True)
     request = ModelRequest(messages=[], instructions=body)
-    once = apply_tools_context(request, first, receipt={"suggested": ["other"]})
+    once = apply_tools_context(request, first)
     assert once.instructions.startswith(body)
     assert tools_instruction_base(once) == body
-    assert apply_tools_context(once, first, receipt={"suggested": ["other"]}) == once
+    assert apply_tools_context(once, first) == once
     spec = _spec(MCP_TOOL, "Updated complete schema description.")
     changed = reconcile(first, {spec.name: spec}, native=[], deferred=[spec.name])
     updated = apply_tools_context(once, changed)
@@ -108,22 +107,19 @@ def test_unowned_literal_text_survives_initial_repeat_and_tool_update(body):
 )
 def test_quoted_exact_managed_section_is_not_owned_after_request_copies(prefix, suffix):
     manifest = _manifest(loaded=True)
-    receipt = {"suggested": ["other"], "source_hints": ["tracker"]}
-    section = render_tools(manifest) + render_hints(receipt, manifest)
+    section = render_tools(manifest)
     base = (
         "Operator quotes this valid section verbatim:" + section + "\nKEEP AFTER QUOTE"
     )
-    once = apply_tools_context(
-        ModelRequest(messages=[], instructions=base), manifest, receipt=receipt
-    )
+    once = apply_tools_context(ModelRequest(messages=[], instructions=base), manifest)
     copied = once.model_copy(
         update={"instructions": prefix + once.instructions + suffix}
     )
     restored = ModelRequest.model_validate_json(copied.model_dump_json())
-    updated = apply_tools_context(restored, manifest, receipt=receipt)
+    updated = apply_tools_context(restored, manifest)
     assert tools_instruction_base(updated) == prefix + base + suffix
     assert updated.instructions == prefix + base + suffix + section
-    assert apply_tools_context(updated, manifest, receipt=receipt) == updated
+    assert apply_tools_context(updated, manifest) == updated
 
 
 def test_named_base_transforms_preserve_owned_section_and_exact_operator_quote():
