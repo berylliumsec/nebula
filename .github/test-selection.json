@@ -1,5 +1,5 @@
 {
-  "change_digest": "6317b87433eff2858a5dad84a72eeb313f2d190efef18592eb9f7cd73691f671",
+  "change_digest": "89722820e9217d12884ded903d555008e784f163bfd1faca410a35d935afeb26",
   "reviewed_by": "Claude Code under operator request for a narrow selection so the schema trim merges quickly",
   "reason": "Routing tool declarations drop schema noise keywords (title, default, uniqueItems, maxLength >= 1000) from what the model reads; Core still validates against full schemas. Selected: new unit tests for the trim, provider tool context/manifest suites (declared definitions and capacity), synthesis declarations, and provider adapters that serialize the schemas.",
   "exclusions": "No frontend, native or Playwright changes. Harness paths untouched. test_chat_context_assembly, test_all_tool_failure_guidance, test_tool_failures, test_conversation_search and test_butler_capabilities also passed locally but are not selected, per operator request for a narrow run.",
