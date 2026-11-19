@@ -110,6 +110,8 @@ by an approval, limit, or uncertain effect paused and report it for operator
 resolution. Never put Core authentication secrets in the deployment record or
 PR.
 
+Take a deployment backup only when the operator explicitly asks for one
+(`promote --backup` or `cycle --backup`); never take one on your own initiative.
 After a healthy legacy promotion that created a coherent rollback snapshot,
 keep only the current snapshot under `rollback-backups`. Verify the retained
 path matches the deployer state, record the removed snapshots, and report any

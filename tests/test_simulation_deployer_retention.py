@@ -257,7 +257,7 @@ def test_promotion_prunes_only_after_new_core_is_healthy(
         lambda: pytest.fail("cleanup failure must not roll back healthy Core"),
     )
 
-    result = deployer.promote()
+    result = deployer.promote(backup=True)
 
     assert result["status"] == (
         "promoted" if cleanup_ok else "promoted_cleanup_incomplete"
@@ -303,6 +303,6 @@ def test_failed_promotion_never_prunes_rollback_state(
     )
 
     with pytest.raises(RuntimeError, match="new Core unhealthy"):
-        deployer.promote()
+        deployer.promote(backup=True)
 
     assert events == ["rollback"]
