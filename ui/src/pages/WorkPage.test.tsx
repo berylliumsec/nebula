@@ -180,8 +180,11 @@ describe("Work operator journey", () => {
   it("starts with agent tools on and keeps saved Work when they are disabled", async () => {
     const user = userEvent.setup();
     openItem();
-    await user.click(await screen.findByRole("button", { name: "Disable agent tools" }));
-    expect(await screen.findByRole("button", { name: "Enable agent tools" })).toBeVisible();
+    const agentTools = await screen.findByRole("button", { name: "Disable agent tools" });
+    expect(agentTools).toHaveTextContent("Agent tools");
+    expect(agentTools).toHaveAttribute("data-state", "on");
+    await user.click(agentTools);
+    expect(await screen.findByRole("button", { name: "Enable agent tools" })).toHaveAttribute("data-state", "off");
     expect(screen.getByRole("heading", { name: "Build the search page" })).toBeVisible();
   });
 
@@ -458,6 +461,15 @@ describe("Work operator journey", () => {
     expect(screen.getByRole("link", { name: /Sample project 100/ })).toBeVisible();
   });
 
+  it("marks a project with no active work as idle", async () => {
+    saved.items = [];
+    saved.agents = [];
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const row = await screen.findByRole("link", { name: /Documentation portal/ });
+    expect(row).toHaveTextContent("Idle");
+    expect(row).toHaveTextContent("Agent tools on · No check-ins yet");
+  });
+
   it("groups subprojects under their parent and finds them by name", async () => {
     const user = userEvent.setup();
     workspace.engagements = [workspace.engagement, { id: "child-1", name: "Review plan", status: "active", workEnabled: true, parentEngagementId: "project-1" }];
@@ -466,7 +478,9 @@ describe("Work operator journey", () => {
     render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("1 subprojects · Agent tools on")).toBeVisible();
     const parent = screen.getByRole("link", { name: /Documentation portal/ });
-    expect(parent).toHaveTextContent("1 working · 0 waiting · 1 in progress · 1 blocked · 0 review");
+    // Only non-zero counts are listed; an inactive project reads as idle.
+    expect(parent).toHaveTextContent("1 working, 1 in progress, 1 blocked");
+    expect(parent).not.toHaveTextContent(/waiting|review/);
     expect(screen.getByRole("link", { name: /Latest check-in: Review the plan/ })).toHaveAttribute("href", "/projects/child-1/work/child-item");
     const projects = screen.getByRole("region", { name: "Projects" });
     expect(within(projects).queryByRole("link", { name: /^Review plan/ })).not.toBeInTheDocument();

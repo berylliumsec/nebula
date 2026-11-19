@@ -120,9 +120,9 @@
 :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] .top-bar-title strong { color: var(--text-strong); }
 :root[data-theme="quiet-lens"] .top-bar-trailing-actions > .button.primary,
 :root[data-theme="quiet-lens"] .top-bar-page-actions .button.primary {
-  min-height: 44px;
-  padding-inline: 22px;
-  border-radius: 50% / 65%;
+  min-height: 40px;
+  padding-inline: 18px;
+  border-radius: 999px;
 }
 
 :root[data-theme="quiet-lens"] .quiet-lens-handle {
@@ -169,8 +169,8 @@
 :root[data-theme="quiet-lens"] [data-lens-open="true"] > .quiet-lens-handle:focus-visible { opacity: .85; pointer-events: auto; }
 
 /* Quiet surfaces use the same tapered contour while keeping readable content. */
-:root[data-theme="quiet-lens"] .button.primary { border: 1px solid var(--blue); border-radius: 50% / 68%; }
-:root[data-theme="quiet-lens"] .button.secondary { border-radius: 50% / 68%; }
+:root[data-theme="quiet-lens"] .button.primary { border: 1px solid var(--blue); border-radius: 999px; }
+:root[data-theme="quiet-lens"] .button.secondary { border-radius: 999px; }
 :root[data-theme="quiet-lens"] .panel { background: color-mix(in srgb, var(--surface) 78%, var(--canvas)); }
 :root[data-theme="quiet-lens"] .page-header h1 { letter-spacing: -.045em; }
 :root[data-theme="quiet-lens"] .chat-composer {
@@ -181,7 +181,7 @@
 }
 :root[data-theme="quiet-lens"] .chat-composer:focus-within { border-color: var(--focus); }
 :root[data-theme="quiet-lens"] .chat-composer textarea { color: var(--text-strong); background: transparent; }
-:root[data-theme="quiet-lens"] .chat-composer .chat-composer-submit { min-width: 60px; border-radius: 50% / 68%; }
+:root[data-theme="quiet-lens"] .chat-composer .chat-composer-submit { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 50%; }
 :root[data-theme="quiet-lens"] .chat-composer footer .chat-composer-icon { border-radius: 50%; }
 
 /* The composer rests as a narrow ellipse. Pointer movement reveals the matching
@@ -303,25 +303,25 @@
 }
 
 @media (max-width: 760px) {
-  :root[data-theme="quiet-lens"] { --side-width: 0px; --top-height: 64px; }
+  :root[data-theme="quiet-lens"] { --side-width: 0px; --top-height: 52px; }
   :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell,
   :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.with-activity {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 64px minmax(0, 1fr) auto;
+    grid-template-rows: 52px minmax(0, 1fr) auto;
   }
-  :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.workbench-route { --top-height: 64px; --shell-top-row: 64px; }
+  :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.workbench-route { --top-height: 52px; --shell-top-row: 52px; }
   :root[data-theme="quiet-lens"] .app-shell.quiet-lens-shell.workbench-route > .top-bar { display: flex; }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar {
     grid-column: 1;
-    min-height: 64px;
+    min-height: 52px;
     padding: env(safe-area-inset-top, 0px) 12px 0;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar[data-lens-open="true"] {
-    min-height: 64px;
+    min-height: 52px;
     border-radius: 0 0 24px 24px;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-top-handle {
-    top: calc(9px + env(safe-area-inset-top, 0px));
+    top: calc(4px + env(safe-area-inset-top, 0px));
     width: min(62vw, 275px);
   }
   :root[data-theme="quiet-lens"] .top-bar[data-lens-open="true"] > .quiet-lens-top-handle { display: none; }
@@ -335,7 +335,7 @@
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .side-nav {
     position: fixed;
     z-index: 80;
-    inset: 82px auto calc(58px + env(safe-area-inset-bottom, 0px)) 0;
+    inset: 70px auto calc(58px + env(safe-area-inset-bottom, 0px)) 0;
     display: flex;
     width: 56px;
     min-width: 56px;
@@ -351,14 +351,14 @@
   }
   :root[data-theme="quiet-lens"] .quiet-lens-side-handle {
     /* Share the top row with the menu lens; the Workbench header owns the row below. */
-    top: calc(-74px + env(safe-area-inset-top, 0px));
+    top: calc(-66px + env(safe-area-inset-top, 0px));
     left: 4px;
     height: 44px;
     opacity: .72;
     pointer-events: auto;
   }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .sidebar-scrim { display: none; }
-  :root[data-theme="quiet-lens"] .quiet-lens-shell:has(> .side-nav[data-lens-open="true"]) > .sidebar-scrim { display: block; z-index: 75; inset: 64px 0 0; }
+  :root[data-theme="quiet-lens"] .quiet-lens-shell:has(> .side-nav[data-lens-open="true"]) > .sidebar-scrim { display: block; z-index: 75; inset: 52px 0 0; }
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .top-bar { z-index: 76; }
   /* The fixed mobile debugger starts above this row; keep its close control tappable. */
   :root[data-theme="quiet-lens"] .quiet-lens-shell > .main-content:has(.editor-debugger) {
@@ -367,18 +367,33 @@
   }
   :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .brand-lockup { display: flex; }
   :root[data-theme="quiet-lens"] .side-nav[data-lens-open="true"] .nav-list { display: flex; }
+  /* A flat tab bar: the active tab carries a soft indicator behind its icon. */
   :root[data-theme="quiet-lens"] .mobile-companion-nav {
-    border-top-color: transparent;
-    background: var(--canvas);
+    border-top: 1px solid var(--border-soft);
+    background: var(--surface-muted);
   }
   :root[data-theme="quiet-lens"] .mobile-companion-nav button {
+    position: relative;
     min-width: 44px;
-    min-height: 50px;
-    border: 1px solid var(--border-soft);
-    border-radius: 50% / 58%;
-    background: var(--surface);
+    min-height: 52px;
+    border: 0;
+    border-radius: 0;
+    color: var(--muted);
+    background: transparent;
   }
-  :root[data-theme="quiet-lens"] .mobile-companion-nav button[aria-current="page"] { border-color: var(--blue); }
+  :root[data-theme="quiet-lens"] .mobile-companion-nav button > * { position: relative; z-index: 1; }
+  :root[data-theme="quiet-lens"] .mobile-companion-nav button[aria-current="page"] { color: var(--text-strong); }
+  :root[data-theme="quiet-lens"] .mobile-companion-nav button[aria-current="page"]::before {
+    position: absolute;
+    top: 5px;
+    left: 50%;
+    width: 52px;
+    height: 26px;
+    border-radius: 999px;
+    background: var(--blue-muted);
+    content: "";
+    transform: translateX(-50%);
+  }
   :root[data-theme="quiet-lens"] .sessions-page .chat-composer { border-radius: 24px; }
   :root[data-theme="quiet-lens"] .mobile-conversation-title {
     grid-template-columns: minmax(0, 1fr);
@@ -420,4 +435,188 @@
   :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar::before,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar > .toolbar-content > *,
   :root[data-theme="quiet-lens"] .quiet-lens-shell .sessions-page.full-screen > .session-toolbar > .toolbar-actions { transition: none; }
+}
+
+/* Polish pass (November 2026). Quieter metadata, one control contour, and
+   tighter phone chrome. Each rule keeps the existing controls and names. */
+
+/* Assistant turns: the model name once, times in the reading face, and the
+   evidence and usage disclosures on one quiet line under the work summary. */
+:root[data-theme="quiet-lens"] .chat-message.assistant header strong { color: var(--text-strong); font-weight: var(--weight-medium); }
+:root[data-theme="quiet-lens"] .chat-message header .chat-message-time,
+:root[data-theme="quiet-lens"] .chat-message-usage > summary,
+:root[data-theme="quiet-lens"] .chat-message.assistant header strong + span { font-family: var(--font-ui); font-size: 11px; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body { display: flex; flex-flow: row wrap; align-items: center; column-gap: 2px; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > * { flex: 1 1 100%; min-width: 0; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > :is(.chat-message-usage, .chat-evidence, .citation-chip) { flex: 0 0 auto; width: auto; margin-block: 2px 0; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > .chat-message-usage { order: 1; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > :is(.chat-evidence, .citation-chip) { order: 2; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > .chat-message-actions { order: 3; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > :is(.chat-message-usage, .chat-evidence)[open] { flex-basis: 100%; }
+:root[data-theme="quiet-lens"] :is(.chat-evidence, .chat-message-usage) > summary {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  list-style: none;
+}
+:root[data-theme="quiet-lens"] :is(.chat-evidence, .chat-message-usage) > summary::-webkit-details-marker { display: none; }
+:root[data-theme="quiet-lens"] :is(.chat-evidence, .chat-message-usage) > summary::after {
+  width: 5px;
+  height: 5px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  content: "";
+  transform: rotate(45deg);
+}
+:root[data-theme="quiet-lens"] :is(.chat-evidence, .chat-message-usage)[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+:root[data-theme="quiet-lens"] :is(.chat-evidence, .chat-message-usage) > summary:hover { color: var(--text); background: var(--surface-hover); }
+:root[data-theme="quiet-lens"] :is(.chat-evidence, .chat-message-usage) > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+:root[data-theme="quiet-lens"] .chat-message .activity-ledger-compact.status-complete .activity-ledger-footer { min-height: 32px; padding-left: 0; border-top: 0; }
+:root[data-theme="quiet-lens"] .chat-message .activity-ledger-compact.status-complete { margin-block: 4px 0; border: 0; background: transparent; }
+:root[data-theme="quiet-lens"] .chat-message.assistant > .chat-message-body > .chat-message-usage { margin-left: -9px; }
+
+/* Transcript edges: a soft fade replaces the hairline under the title, and the
+   jump controls become labelled pills centred on the reading column. */
+:root[data-theme="quiet-lens"] .sessions-page .conversation-toolbar { border-bottom-color: transparent; }
+:root[data-theme="quiet-lens"] .sessions-page .session-layout { border-bottom-color: transparent; }
+:root[data-theme="quiet-lens"] .sessions-page .chat-thread::before {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 28px;
+  background: linear-gradient(var(--canvas), rgb(9 13 17 / 0%));
+  content: "";
+  pointer-events: none;
+}
+:root[data-theme="quiet-lens"] .chat-scroll-jump {
+  grid-auto-flow: column;
+  gap: 6px;
+  width: max-content;
+  height: 34px;
+  padding: 0 13px 0 10px;
+  border-color: var(--border-soft);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 28%);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+}
+:root[data-theme="quiet-lens"] .chat-scroll-jump-label { display: inline; }
+:root[data-theme="quiet-lens"] .chat-scroll-to-top { top: 8px; margin: 0 auto -34px; }
+@media (pointer: coarse) {
+  :root[data-theme="quiet-lens"] .chat-scroll-jump { height: 44px; padding-inline: 14px 16px; }
+  :root[data-theme="quiet-lens"] .chat-scroll-to-top { margin-bottom: -44px; }
+}
+
+/* Composer: the model chip names the assistant once; the send control is a circle. */
+:root[data-theme="quiet-lens"] .chat-composer .chat-runtime-summary { border-radius: 999px; }
+@media (pointer: coarse) {
+  :root[data-theme="quiet-lens"] .chat-composer .chat-composer-submit { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+}
+
+/* Fields: one 40 px field style with an inset value and a soft border. */
+:root[data-theme="quiet-lens"] :is(.panel, .settings-page, .work-page) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="search"]), select) {
+  min-height: 40px;
+  padding-inline: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  color: var(--text-strong);
+  background: var(--surface);
+}
+:root[data-theme="quiet-lens"] :is(.panel, .settings-page, .work-page) :is(input, select):is(:hover) { border-color: var(--border); }
+:root[data-theme="quiet-lens"] :is(.panel, .settings-page, .work-page) :is(input, select):focus-visible { border-color: var(--focus); outline: 0; box-shadow: 0 0 0 3px rgb(196 221 224 / 18%); }
+:root[data-theme="quiet-lens"] .host-cpu-form label > span { font-size: 12px; font-weight: var(--weight-medium); }
+:root[data-theme="quiet-lens"] .host-cpu-form small { color: var(--muted); font-size: 11px; }
+
+/* Settings sections: one active indicator. */
+:root[data-theme="quiet-lens"] .settings-tabs a { border-radius: 10px; }
+:root[data-theme="quiet-lens"] .settings-tabs a.active { color: var(--text-strong); background: var(--surface-raised); box-shadow: none; }
+:root[data-theme="quiet-lens"] .settings-tabs a.active::after { content: none; }
+
+/* Work header: Agent tools reads as a switch with its current state. */
+:root[data-theme="quiet-lens"] .work-live-state.live::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  vertical-align: 1px;
+}
+:root[data-theme="quiet-lens"] .work-live-state { color: var(--muted); }
+:root[data-theme="quiet-lens"] .work-live-state.live::before { color: var(--green); }
+
+/* Project rows: initials fill the leading column, counts appear only when non-zero. */
+:root[data-theme="quiet-lens"] .work-project-row > .work-project-spacer { flex-basis: 0; width: 0; }
+:root[data-theme="quiet-lens"] .work-project-list a.work-project-primary { padding-block: 14px; padding-left: 16px; }
+:root[data-theme="quiet-lens"] .work-project-list a > .work-project-initials {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--blue-bright);
+  background: var(--blue-muted);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: .02em;
+}
+:root[data-theme="quiet-lens"] .work-project-list .work-project-main strong { font-weight: var(--weight-medium); }
+:root[data-theme="quiet-lens"] .work-project-list a > .work-project-status { margin-right: 4px; }
+:root[data-theme="quiet-lens"] .work-project-status.idle { padding: 2px 9px; border: 1px solid var(--border-soft); border-radius: 999px; }
+:root[data-theme="quiet-lens"] .work-project-count { padding: 2px 9px; border-radius: 999px; color: var(--text); background: var(--surface-raised); }
+:root[data-theme="quiet-lens"] .work-project-count.blocked { color: var(--orange); }
+
+/* Status counts: zeros recede so active work stands out. */
+:root[data-theme="quiet-lens"] .work-summary > button[data-empty="true"] strong { color: var(--muted); font-weight: var(--weight-medium); }
+
+/* Empty board columns hug their contents. */
+:root[data-theme="quiet-lens"] .work-column { min-height: 0; }
+:root[data-theme="quiet-lens"] .work-column-empty { padding: 6px 4px 8px; text-align: left; }
+
+@media (max-width: 430px) {
+  :root[data-theme="quiet-lens"] .work-summary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  :root[data-theme="quiet-lens"] .work-summary > button {
+    min-height: 62px;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 2px;
+    border: 0;
+    text-align: center;
+  }
+  :root[data-theme="quiet-lens"] .work-summary > button,
+  :root[data-theme="quiet-lens"] .work-summary > button:nth-child(n) { grid-column: auto; border: 0; }
+  :root[data-theme="quiet-lens"] .work-summary strong { font-size: 18px; }
+  :root[data-theme="quiet-lens"] .work-summary span { font-size: 10px; line-height: 1.2; }
+}
+
+@media (max-width: 760px) {
+  /* Status stays beside the project name instead of stretching under it. */
+  :root[data-theme="quiet-lens"] .work-project-list a.work-project-primary { flex-wrap: nowrap; }
+  :root[data-theme="quiet-lens"] .work-project-list a.work-project-primary > .work-project-status { order: 0; width: auto; max-width: 42%; justify-content: flex-end; }
+  /* Project sections scroll sideways in one row instead of wrapping. */
+  :root[data-theme="quiet-lens"] .project-tabs.project-sections {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 2px;
+    border-radius: 0;
+    background: transparent;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent);
+  }
+  :root[data-theme="quiet-lens"] .project-tabs.project-sections::-webkit-scrollbar { display: none; }
+  :root[data-theme="quiet-lens"] .project-tabs.project-sections button { flex: 0 0 auto; border-radius: 999px; }
 }
