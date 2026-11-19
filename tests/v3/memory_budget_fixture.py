@@ -169,6 +169,20 @@ async def serve_fixture(root: Path, cleanup: AsyncExitStack):
             ),
             actor_id="fixture",
         )
+        # Each browser profile starts from an empty Host command queue.
+        from sqlalchemy import delete
+
+        from nebula.v3.database import MemoryBudgetPolicyRow, MemoryJobRow
+
+        async with store.database.session() as session:
+            await session.execute(
+                delete(MemoryJobRow).where(MemoryJobRow.resource_kind == "host_command")
+            )
+            await session.execute(
+                delete(MemoryBudgetPolicyRow).where(
+                    MemoryBudgetPolicyRow.scope_key == "host-commands"
+                )
+            )
         return {"index_sha256": index_sha, "core_pid": os.getpid()}
 
     @app.post("/__memory_fixture/allocation")
@@ -201,6 +215,38 @@ async def serve_fixture(root: Path, cleanup: AsyncExitStack):
             "exit_code": result.exit_code,
             "outcome": result.memory_outcome,
         }
+
+    @app.post("/__memory_fixture/host-commands")
+    async def host_commands(request: Request):
+        """Seed one admitted and one queued Host command (no process runs)."""
+        auth(request)
+        from nebula.v3.memory_policy import MemoryRunnerCapabilities
+
+        capability = MemoryRunnerCapabilities(
+            environment="local",
+            profile_id="host-memory-runner",
+            kernel_enforced=True,
+            protected_process_tree=True,
+            explicit_swap=True,
+            pressure_threshold=True,
+            live_update=True,
+            capacity_bytes=16 * GIB,
+            detail="Synthetic Host runner for the queue view.",
+        )
+        ids = []
+        for command in ("sleep 600; echo synthetic-running", "make -j8 all"):
+            identity = "command-" + uuid4().hex
+            await service.create_job(
+                identity,
+                project_id="memory-project",
+                resource_kind="host_command",
+                resource_id=identity,
+                capabilities=capability,
+                labels={"command": command, "owner_kind": "api"},
+            )
+            ids.append(identity)
+        await service.reserve(ids[0], capability)
+        return {"running": ids[0], "queued": ids[1]}
 
     @app.get("/__memory_fixture/help-index")
     async def help_index(request: Request):

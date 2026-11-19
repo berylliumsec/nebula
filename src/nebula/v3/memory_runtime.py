@@ -10,11 +10,17 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 from uuid import uuid4
 
 from .async_utils import finish_cleanup
-from .memory_budget import MemoryBudgetService
+from .memory_budget import (
+    HOST_COMMAND_KIND,
+    QUEUE_HEARTBEAT_SECONDS,
+    HostCommandQueuePosition,
+    MemoryBudgetService,
+)
 from .memory_guard import MemoryLaunchGuard, install_memory_guard
 from .memory_guard import observe_memory_group
 from .diagnostics import create_diagnostic_task, record_caught_exception
@@ -22,6 +28,7 @@ from .memory_policy import (
     GIB,
     MemoryAdmissionTimeout,
     MemoryBudgetConflict,
+    MemoryBudgetError,
     MemoryEnforcementUnavailable,
     MemoryRunnerCapabilities,
     MemoryRunningUpdate,
@@ -33,6 +40,15 @@ from .memory_policy import (
     select_memory_policy,
     ExecutionEnvironment,
 )
+
+
+# A queued Host command waits in the fair queue for up to 30 minutes; the
+# operator can cancel it sooner (docs/design/host-command-queue.md).
+HOST_COMMAND_QUEUE_SECONDS = 30 * 60.0
+
+
+class HostCommandCancelled(MemoryBudgetError):
+    """The operator cancelled a queued Host command before it started."""
 
 
 # A queued job never waits forever: the caller gets a clear failure and the
@@ -112,8 +128,14 @@ class HostMemoryJob:
             report = await self.runner.observe(self.job_id)
             if report is None:
                 # The runner restarted or the group vanished; nothing can run in
-                # it any more. Verify removal and settle the job.
-                self._settle_in_background("worker_lost")
+                # it any more. Verify removal and settle the job. An operator
+                # stop removes the group on purpose, so it settles as cancelled.
+                current = await self.controller.service.get_job(self.job_id)
+                self._settle_in_background(
+                    "cancelled"
+                    if (current.labels or {}).get("cancel_requested")
+                    else "worker_lost"
+                )
                 return
             if type(report.get("peak_bytes")) is int:
                 self._peak = report["peak_bytes"]
@@ -600,8 +622,16 @@ class MemoryComputeController:
         project_id: str | None,
         resource_kind: str,
         resource_id: str,
+        labels: dict[str, Any] | None = None,
+        on_queued: Callable[[HostCommandQueuePosition], Awaitable[None]] | None = None,
     ) -> HostMemoryJob:
-        """Admit a persistent Host worker job through the protected runner."""
+        """Admit a protected Host job through the runner.
+
+        A Host command (``resource_kind="host_command"``) waits in the shared
+        fair queue: it checks its place with a read, writes only to claim the
+        head or to heartbeat, reports its position through ``on_queued``, and
+        stops waiting when the operator cancels it.
+        """
         from .host_memory_client import host_evidence, host_group_id
         from .memory_recovery import runner_fingerprint, runner_identity
         from .process_identity import process_birth, process_origin
@@ -613,6 +643,7 @@ class MemoryComputeController:
             resource_kind=resource_kind,
             resource_id=resource_id,
             capabilities=capability,
+            labels=labels,
         )
         if job.state == "blocked":
             raise MemoryEnforcementUnavailable(job.detail or capability.detail)
@@ -630,12 +661,17 @@ class MemoryComputeController:
         claimed = False
         started = False
         try:
-            deadline = asyncio.get_running_loop().time() + QUEUED_ADMISSION_SECONDS
-            while job.state in {"queued", "blocked"}:
-                job = await self.service.reserve(job_id, capability, owner=owner)
-                if job.state == "queued":
-                    _admission_expired(deadline, job_id)
-                    await asyncio.sleep(0.2)
+            if resource_kind == HOST_COMMAND_KIND:
+                job = await self._wait_in_host_command_queue(
+                    job, capability, owner, on_queued
+                )
+            else:
+                deadline = asyncio.get_running_loop().time() + QUEUED_ADMISSION_SECONDS
+                while job.state in {"queued", "blocked"}:
+                    job = await self.service.reserve(job_id, capability, owner=owner)
+                    if job.state == "queued":
+                        _admission_expired(deadline, job_id)
+                        await asyncio.sleep(0.2)
             if job.state != "reserved":
                 raise MemoryBudgetConflict(
                     "job already has an execution owner or a terminal result; explicit retries need a new job identity"
@@ -688,6 +724,44 @@ class MemoryComputeController:
 
             await finish_cleanup(cleanup())
             raise
+
+    async def _wait_in_host_command_queue(self, job, capability, owner, on_queued):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + HOST_COMMAND_QUEUE_SECONDS
+        touched = loop.time()
+        reported = None
+        while True:
+            if job.state == "blocked":
+                job = await self.service.reserve(job.id, capability, owner=owner)
+            position = await self.service.host_command_position(job.id)
+            if position.state == "finished":
+                raise HostCommandCancelled(
+                    "Cancelled by the operator while queued; it never started."
+                )
+            if position.state != "queued":
+                return await self.service.get_job(job.id)
+            if position.ahead == 0 and position.running < position.limit:
+                job = await self.service.reserve(job.id, capability, owner=owner)
+                touched = loop.time()
+                if job.state != "queued":
+                    return job
+            elif loop.time() - touched >= QUEUE_HEARTBEAT_SECONDS:
+                await self.service.touch_queued(job.id)
+                touched = loop.time()
+            if on_queued is not None and (
+                reported is None
+                or (reported.ahead, reported.running, reported.limit)
+                != (position.ahead, position.running, position.limit)
+            ):
+                reported = position
+                await on_queued(position)
+            if loop.time() >= deadline:
+                raise MemoryAdmissionTimeout(
+                    f"Waited {HOST_COMMAND_QUEUE_SECONDS / 60:g} minutes in the Host "
+                    "command queue without a free slot; it was not started. "
+                    "Try again, or raise Host commands running at once."
+                )
+            await asyncio.sleep(0.5)
 
     async def reject_unsupported(
         self,

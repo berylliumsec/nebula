@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .domain import RiskClass
+from .memory_budget import HostCommandSettingsUpdate
 from .memory_policy import MemoryBudgetUpdate, MemoryRunningUpdate
 from .settings_assistant_api import SettingsAssistantApi
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
@@ -84,6 +85,20 @@ def memory_budget_tools(
             "POST", "/jobs/" + job_id + "/apply", body.model_dump(mode="json")
         )
 
+    async def host_commands(_arguments):
+        return await call("GET", "/host-commands")
+
+    async def set_host_command_limit(arguments):
+        body = HostCommandSettingsUpdate.model_validate(arguments)
+        return await call(
+            "PUT", "/host-commands/settings", body.model_dump(mode="json")
+        )
+
+    async def cancel_host_command(arguments):
+        return await call(
+            "POST", "/host-commands/" + identity(arguments) + "/cancel", {}
+        )
+
     apply_schema = MemoryRunningUpdate.model_json_schema()
     apply_schema["properties"]["job_id"] = _JOB
     apply_schema["required"] = [*apply_schema["required"], "job_id"]
@@ -120,6 +135,32 @@ def memory_budget_tools(
             },
             verify,
             True,
+        ),
+        (
+            "nebula.settings.host_commands",
+            "Read the Core-wide Host command queue: the running-at-once limit and its revision, running commands (detached ones still hold memory after their command exited) and queued commands in admission order with positions. Projects with fewer running commands go first.",
+            _EMPTY,
+            host_commands,
+            True,
+        ),
+        (
+            "nebula.settings.set_host_command_limit",
+            "Set how many Host commands may run at once across all projects (1-64). Read host_commands first and pass its settings revision as expected_revision. Running commands keep running; the limit applies to admissions.",
+            HostCommandSettingsUpdate.model_json_schema(),
+            set_host_command_limit,
+            False,
+        ),
+        (
+            "nebula.settings.cancel_host_command",
+            "Cancel a queued Host command before it starts, or stop a running or detached one and everything it started. Use a job_id returned by host_commands, and only when the operator asked for that exact command. The agent that ran it receives a cancelled result.",
+            {
+                "type": "object",
+                "properties": {"job_id": _JOB},
+                "required": ["job_id"],
+                "additionalProperties": False,
+            },
+            cancel_host_command,
+            False,
         ),
         (
             "nebula.settings.apply_memory_limit",

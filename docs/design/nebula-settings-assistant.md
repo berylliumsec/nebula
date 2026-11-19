@@ -65,6 +65,23 @@ acknowledgement; a memory failure never authorizes automatic retry, a larger
 budget or goal resume. See [Compute memory budgets](../MEMORY_BUDGETS.md) for
 precedence, units, scope and runner dependencies.
 
+Host commands are a host-wide Settings section under Memory budgets (catalog
+entry `settings.host-commands`, target `host-command-settings`). Commands from
+every project share one Core queue, and each running command holds its memory
+limit until it and anything it started exit. The operator sets "Running at once"
+(1–64); commands beyond it wait in line, and projects with fewer running commands
+go first. The section lists running, detached and queued commands with project,
+chat, elapsed or waited time and memory; each row cancels a queued command or
+stops a running or detached one. A run_command tool card shows the same Core
+state: "Waiting for Host capacity · 3rd in line" with a cancel control, running
+time and memory with a stop control, or an exited command whose detached process
+still holds capacity. Saving the limit is revision-checked and is reported saved
+only after Core's read-back matches; a stale revision is a conflict. A command
+cancelled while queued never started, and its result says so. The settings
+assistant finds this section through the catalog; typed Butler read, limit and
+cancel actions for the queue do not exist yet. See
+[Host command queue](host-command-queue.md).
+
 Local search has one persistent `web_search_service` entry in the aggregate job
 budget, with no per-query or additional runtime-reserve charge. Butler reports
 its frozen effective policy and observed kernel evidence, including failed or

@@ -23,6 +23,25 @@
       "status": "supported"
     },
     {
+      "id": "settings.host_commands",
+      "entry_point": "Settings > Automation > Memory budgets > Host commands, a Host command card in chat, or an explicit Butler request about the Host command queue",
+      "ui_calls": [
+        "ui/src/api/memoryBudgets.ts::request::GET `memory-budgets/host-commands${options.toolCallId ? `?tool_call_id=${encodeURIComponent(options.toolCallId)}` : \"\"}`",
+        "ui/src/api/memoryBudgets.ts::request::\"PUT\" \"memory-budgets/host-commands/settings\"",
+        "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/host-commands/${encodeURIComponent(jobId)}/cancel`"
+      ],
+      "core_owner": "Host-wide memory_jobs queue (fair order, heartbeat, stale reaping) and the revisioned host-commands settings row, with protected runner groups per command",
+      "butler": {
+        "discover": "nebula.settings.catalog; nebula.settings.host_commands",
+        "read": "nebula.settings.host_commands",
+        "change": "nebula.settings.set_host_command_limit; nebula.settings.cancel_host_command"
+      },
+      "authority": "Normal authenticated Core settings authorization. The limit save is revision-checked and audited. Cancel and stop act on one exact job the operator named; a running stop kills the command's protected group. No automatic retry.",
+      "observed_result_test": "tests/v3/test_memory_api.py::test_butler_reads_sets_and_cancels_host_commands",
+      "result": "UI and Butler share the same queue view, limit and cancel routes. A queued cancel never starts the command; a stop settles its reservation as cancelled after the group is removed.",
+      "status": "supported"
+    },
+    {
       "id": "butler.memory_manage",
       "entry_point": "Butler Memory panel: read, search, edit or delete a visible saved memory; Butler can remember, search, update or forget one through typed tools",
       "ui_calls": [
@@ -3694,6 +3713,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/host-commands/${encodeURIComponent(jobId)}/cancel`",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/jobs/${encodeURIComponent(job.id)}/apply`",
       "count": 1
     },
@@ -3706,11 +3729,19 @@
       "count": 1
     },
     {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"PUT\" \"memory-budgets/host-commands/settings\"",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets\"",
       "count": 1
     },
     {
       "key": "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets/jobs\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::GET `memory-budgets/host-commands${options.toolCallId ? `?tool_call_id=${encodeURIComponent(options.toolCallId)}` : \"\"}`",
       "count": 1
     },
     {

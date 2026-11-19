@@ -561,6 +561,7 @@ class AutomationSessionStatus(StringEnum):
 
 class CommandExecutionStatus(StringEnum):
     WAITING_APPROVAL = "waiting_approval"
+    QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"

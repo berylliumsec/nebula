@@ -1,0 +1,16 @@
+.root {display: grid; gap: 2px; min-width: 0; margin: 0 12px 9px; padding: 4px 4px 4px 9px; border-radius: var(--radius-control); font-size: 12px;}
+.line {display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0;}
+.marker {display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor;}
+.text {min-width: 0; color: var(--text); overflow-wrap: anywhere;}
+.hint, .error {grid-column: 1 / -1; padding-left: 17px; color: var(--muted); overflow-wrap: anywhere;}
+.error {color: var(--red);}
+.action {display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; color: inherit;}
+.queued {color: var(--blue); background: color-mix(in srgb, var(--blue-muted) 52%, transparent);}
+.queued .marker {border: 1px solid var(--blue); background: transparent;}
+.running {color: var(--blue); background: color-mix(in srgb, var(--blue-muted) 52%, transparent);}
+.running .action {color: var(--red);}
+.detached {color: var(--orange); background: color-mix(in srgb, var(--orange) 9%, var(--surface-muted));}
+.detached .action {color: var(--red);}
+@media (max-width: 720px), (pointer: coarse) {
+  .action {min-width: 44px; min-height: 44px;}
+}

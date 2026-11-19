@@ -297,6 +297,9 @@ class MemoryJobRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    # Operator-facing context for queued and running Host commands (command,
+    # chat, tool call) and their cancel request. Older Core ignores it.
+    labels: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class MemoryBudgetAuditRow(Base):

@@ -85,6 +85,22 @@ describe("ActivityLedger", () => {
     expect(preview).toHaveTextContent("details");
   });
 
+  it("shows live tool status only while work is active", () => {
+    const { rerender } = render(<ActivityLedger compact model={model()} liveStatus={<p>Waiting for Host capacity · 2nd in line</p>} />);
+    expect(screen.getByText("Waiting for Host capacity · 2nd in line")).toBeVisible();
+    rerender(<ActivityLedger compact model={model({ status: "complete" })} liveStatus={<p>Waiting for Host capacity · 2nd in line</p>} />);
+    expect(screen.queryByText("Waiting for Host capacity · 2nd in line")).not.toBeInTheDocument();
+  });
+
+  it("keeps a command cancelled before it started visible in the compact receipt", () => {
+    render(<ActivityLedger compact model={model({
+      status: "complete",
+      entries: [{ ...model().entries[0], status: "cancelled", statusLabel: "Cancelled before start", label: "Run command", brief: "Cancelled by the operator while queued; it never started.", pinned: true }],
+    })} />);
+    expect(screen.getByText("Cancelled by the operator while queued; it never started.")).toBeVisible();
+    expect(screen.getByText("Cancelled before start")).toBeVisible();
+  });
+
   it("shows current work and phases while keeping audit detail collapsed", async () => {
     const user = userEvent.setup();
     render(<ActivityLedger model={model()} />);

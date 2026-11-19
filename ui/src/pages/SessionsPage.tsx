@@ -173,6 +173,7 @@ import { AssistantMarkdown, type FencedRunCandidate } from "../components/Assist
 import { ToolSuggestionChip } from "../components/ToolSuggestionChip";
 import { McpServerChoices } from "../components/McpServerChoices";
 import { ActivityLedger } from "../components/ActivityLedger";
+import { HostCommandStatus, mayBeHostCommand } from "../components/HostCommandStatus";
 import {
   activityLedgerFromHarness,
   activityLedgerFromNative,
@@ -824,10 +825,17 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       break;
     }
   }
+  // Host commands can wait in Core's shared queue; show their place and a cancel control.
+  const hostCommandCards = shared.api && (message.state === "streaming" || message.state === "waiting_approval")
+    ? messageToolCards.filter(mayBeHostCommand)
+    : [];
   const activityNode = message.role === "assistant" && activityLedger ? <ActivityLedger
         key="activity-ledger"
         compact
         latestUpdate={latestHarnessCommentary}
+        liveStatus={shared.api && hostCommandCards.length > 0
+          ? hostCommandCards.map((card) => <HostCommandStatus key={card.toolCallId} api={shared.api!} toolCallId={card.toolCallId} />)
+          : undefined}
         progress={progressContent ? {
           headline: message.state === "streaming" ? waitingLabel ?? activityLedger.currentAction ?? "Working on your request" : undefined,
           latest: message.state === "streaming" ? latestProgressPreview(progressContent) : undefined,

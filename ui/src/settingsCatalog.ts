@@ -25,6 +25,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["memory", "ram", "gib", "worker", "budget", "out of memory", "oom", "limits", "swap", "reserve", "compute", "pressure", "butler", "search service", "searxng", "waiting for memory", "core reserve", "project workers", "projects at once", "default reserve"],
   },
   {
+    id: "settings.host-commands",
+    label: "Host commands",
+    description: "See every running and queued Host command across projects, set how many run at once, and cancel a queued command or stop a running or detached one",
+    category: "Automation",
+    scope: "Workspace",
+    target: "host-command-settings",
+    keywords: ["host commands", "running at once", "host commands running at once", "command queue", "host queue", "waiting for host capacity", "in line", "queued command", "cancel command", "stop command", "detached process", "run_command", "concurrent commands", "parallel commands", "fair queue"],
+  },
+  {
     id: "settings.butler-instructions",
     label: "Nebula-wide Butler instructions",
     description: "Open Nebula-wide BUTLER.md directly in the Markdown code editor, or upload a replacement",
