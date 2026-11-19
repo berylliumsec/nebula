@@ -373,3 +373,49 @@ async def test_idle_host_session_is_released_before_the_handoff_inventory(
     assert calls == ["one", "one"]
     lease = await project.coordinator.transfer("one")
     assert lease.fencing_token == project.lease.fencing_token + 1
+
+
+async def test_later_incarnation_records_blockers_over_earlier_inventory(
+    project, agent
+):
+    # The first owner records (and later closes) a resident handle and a
+    # participant-contract blocker. The same keys on a later owner of the
+    # project must report their blockers instead of colliding with the
+    # earlier owner's inventory rows.
+    terminals = agent.app.state.container_terminal_service._sessions
+    terminals["inert-terminal"] = object()
+    assert await agent.tick() == "finishing"
+    terminals.clear()
+    debug = agent.app.state.debug_service
+    del debug._sessions
+    assert await agent.tick() == "finishing"
+    debug._sessions = {}
+    assert await agent.tick() == "transferable"
+    lease = await project.coordinator.transfer("one")
+    digest = await restored_checkpoint(project.coordinator, lease)
+    await project.coordinator.verified(lease, restored_checkpoint_digest=digest)
+
+    await project.coordinator.request_handoff("one", project.source)
+    later = ProjectHandoffAgent(
+        SimpleNamespace(coordinator=project.coordinator), lease, agent.app
+    )
+    terminals["inert-terminal"] = object()
+    assert await later.tick() == "finishing"
+    handoff = await row(project)
+    assert any("container_terminal_service" in text for text in handoff.blockers)
+    del debug._sessions
+    assert await later.tick() == "finishing"
+    assert any(
+        "debug_service._sessions" in text for text in (await row(project)).blockers
+    )
+    debug._sessions = {}
+    terminals.clear()
+    assert await later.tick() == "transferable"
+    assert (await row(project)).blockers == []
+    async with project.coordinator.database.session() as session:
+        resources = list(await session.scalars(select(RuntimeResourceRow)))
+    assert {resource.state for resource in resources} == {"closed"}
+    assert {resource.fencing_token for resource in resources} == {
+        project.lease.fencing_token,
+        lease.fencing_token,
+    }

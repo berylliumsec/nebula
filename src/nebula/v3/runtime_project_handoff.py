@@ -27,6 +27,21 @@ CHECKPOINT_FORMAT = "nebula.project-checkpoint/v1"
 CHECKPOINT_BATCH_ROWS = 10_000
 _PREFIX = "handoff-inventory:"
 
+
+def _inventory_id(lease, key):
+    """Name one inventory entry of one project owner.
+
+    Resource IDs are global primary keys, and an earlier owner's rows stay in
+    the table after it closes them (or after recovery closes them for it).
+    Scoping the ID to this incarnation lets a later owner record the same
+    blocker instead of colliding with, or adopting, that history.
+    """
+    material = "\0".join(
+        (lease.project_id, lease.runtime_id, str(lease.fencing_token), key)
+    )
+    return _PREFIX + hashlib.sha256(material.encode()).hexdigest()
+
+
 # These handles have no implemented restoration adapter. Their presence is a
 # concrete blocker, including idle vendor connections and background descendants.
 # The one exception is an idle Host automation session, which the source closes
@@ -321,10 +336,7 @@ class ProjectHandoffAgent:
             await self.coordinator.resource(
                 self.lease,
                 ResourceSnapshot(
-                    id=_PREFIX
-                    + hashlib.sha256(
-                        (self.lease.project_id + "\0contract").encode()
-                    ).hexdigest(),
+                    id=_inventory_id(self.lease, "contract"),
                     project_id=self.lease.project_id,
                     runtime_id=self.lease.runtime_id,
                     fencing_token=self.lease.fencing_token,
@@ -482,13 +494,7 @@ class ProjectHandoffAgent:
             now = await self.coordinator.coordination._clock_ms(session)
             current = {}
             for key, detail in found.items():
-                identity = (
-                    _PREFIX
-                    + hashlib.sha256(
-                        (self.lease.project_id + "\0" + key).encode()
-                    ).hexdigest()
-                )
-                current[identity] = detail
+                current[_inventory_id(self.lease, key)] = detail
             for row in await session.scalars(
                 select(RuntimeResourceRow).where(
                     RuntimeResourceRow.project_id == self.lease.project_id,
