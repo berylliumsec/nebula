@@ -1,28 +1,24 @@
 {
-  "change_digest": "89722820e9217d12884ded903d555008e784f163bfd1faca410a35d935afeb26",
-  "reviewed_by": "Claude Code under operator request for a narrow selection so the schema trim merges quickly",
-  "reason": "Routing tool declarations drop schema noise keywords (title, default, uniqueItems, maxLength >= 1000) from what the model reads; Core still validates against full schemas. Selected: new unit tests for the trim, provider tool context/manifest suites (declared definitions and capacity), synthesis declarations, and provider adapters that serialize the schemas.",
-  "exclusions": "No frontend, native or Playwright changes. Harness paths untouched. test_chat_context_assembly, test_all_tool_failure_guidance, test_tool_failures, test_conversation_search and test_butler_capabilities also passed locally but are not selected, per operator request for a narrow run.",
-  "python_versions": [
-    "3.12"
-  ],
+  "change_digest": "5f939dfecac22e0895eb22d599736d4a29fd698c9257a61c56614bdd2bc26442",
+  "reviewed_by": "Claude Code, repairing interface suites red on pristine main for PR #1223's gates",
+  "reason": "The interface.spec.ts mock Core lacked /host-pressure and /memory-budgets branches, so Settings crashed on the catch-all array; that broke the Quiet Lens theme picker, the Zero shell Appearance lens and the critical-workspace CPU budget checks. Also refreshes the 36 critical-workspace baselines from CI run 44559296882. Selected: the quiet-lens, phone-shell and critical-workspaces areas on every project they declare.",
+  "exclusions": "No product source, Python, native or frontend unit changes. Other Settings-reaching Playwright journeys benefit from the fixture but are not selected; the theme-picker palette test passed locally on desktop, compact, narrow and mobile-chromium. Quiet Lens on the narrow (390px, fine pointer) project still fails: hovering the top handle opens a bar that covers it. narrow is not in the quiet-lens area; reported as a follow-up.",
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 156,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 96
   },
-  "python": [
-    "tests/v3/test_model_facing_schema.py",
-    "tests/v3/test_provider_tools_context.py",
-    "tests/v3/test_synthesis_tool_declarations.py",
-    "tests/v3/test_provider_tool_manifest.py",
-    "tests/v3/test_providers.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:quiet-lens",
+    "area:phone-shell",
+    "area:critical-workspaces"
+  ],
   "checks": []
 }
