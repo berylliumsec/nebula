@@ -1,25 +1,24 @@
 {
-  "change_digest": "89722820e9217d12884ded903d555008e784f163bfd1faca410a35d935afeb26",
-  "reviewed_by": "Claude Code under operator request for a narrow selection so the schema trim merges quickly",
-  "reason": "Routing tool declarations drop schema noise keywords (title, default, uniqueItems, maxLength >= 1000) from what the model reads; Core still validates against full schemas. Selected: new unit tests for the trim, provider tool context/manifest suites (declared definitions and capacity), synthesis declarations, and provider adapters that serialize the schemas.",
-  "exclusions": "No frontend, native or Playwright changes. Harness paths untouched. test_chat_context_assembly, test_all_tool_failure_guidance, test_tool_failures, test_conversation_search and test_butler_capabilities also passed locally but are not selected, per operator request for a narrow run.",
+  "change_digest": "e8ba8a4c88b1d0782437250de6d41330c1097ed1329847c0c4468119c4bb4e7c",
+  "reviewed_by": "Claude Code under operator request to make deployments faster (step timings + prebuild)",
+  "reason": "Simulation deployer only: prepare records per-step durations in its receipt and stderr, supervisor promote and host activation report phase timings, a new timer-safe prebuild action builds the release ahead of promotion, and promote/cycle wait (bounded) for a running prebuild instead of failing on the lock. Selected: new prebuild/timing/lock tests, the staged deployer suite (promote result shape), the CI-default prepare suite and deploy resume.",
+  "exclusions": "No Core, frontend, native or Playwright changes. tests/test_simulation_host_activation.py and tests/test_simulation_host_restart.py are not selected: they pass except 3 tests that fail identically on origin/main 09e449e (onefile child identity, two supervisor stop-timeout cases); the host switch change only adds timing fields. The LAN Core journey does not apply: this is host deploy tooling outside Nebula.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 156,
+    "python": 108,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_model_facing_schema.py",
-    "tests/v3/test_provider_tools_context.py",
-    "tests/v3/test_synthesis_tool_declarations.py",
-    "tests/v3/test_provider_tool_manifest.py",
-    "tests/v3/test_providers.py"
+    "tests/test_simulation_deployer_prebuild.py",
+    "tests/test_staged_deployer.py",
+    "tests/test_simulation_deployer_ci_default.py",
+    "tests/test_simulation_deploy_resume.py"
   ],
   "frontend": [],
   "native": [],
