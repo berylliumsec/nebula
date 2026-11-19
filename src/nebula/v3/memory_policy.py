@@ -37,6 +37,10 @@ class MemoryEnforcementUnavailable(MemoryBudgetError):
     pass
 
 
+class MemoryAdmissionTimeout(MemoryBudgetError):
+    """A queued job waited its whole admission window; it was not started."""
+
+
 class MemoryLaunchOwner(NebulaModel):
     process_id: int = Field(strict=True, ge=1)
     process_birth: str = Field(min_length=1, max_length=200)

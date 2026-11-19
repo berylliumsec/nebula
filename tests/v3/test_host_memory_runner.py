@@ -485,3 +485,144 @@ async def test_real_burst_of_parallel_commands_all_admit(budgets, tmp_path):
         await handle.close()
     job = await controller.service.get_job("session-burst")
     assert job.state == "finished" and job.reserved_bytes == 0
+
+
+# -- Host session admission must not stall on idle reservations --------------
+
+
+@pytest.fixture
+async def full_budget(budgets, monkeypatch):
+    """One Host session fills the aggregate budget, as 18 idle sessions did live."""
+    store, controller = budgets
+    status = await controller.service.status()
+    await controller.service.save(
+        MemoryBudgetUpdate(
+            expected_revision=status.revision,
+            policy=status.policy.model_copy(
+                update={
+                    "default_job": MemoryLimits(max_bytes=8 * GIB),
+                    "aggregate_bytes": 8 * GIB,
+                }
+            ),
+        ),
+        actor_id="fixture",
+    )
+    await store.create(
+        AutomationProjectPolicy(
+            id=str(uuid5(NAMESPACE_URL, "nebula:automation-policy:project")),
+            engagement_id="project",
+            execution_mode="host",
+            host_access_acknowledged=True,
+        )
+    )
+    runner = FakeHostRunner()
+    monkeypatch.setattr(HostMemoryRunner, "from_environment", lambda: runner)
+    return store, controller, runner
+
+
+def _host_manager(store, controller, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    manager = AutomationRuntimeManager(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path,
+        workspace_resolver=lambda _: workspace,
+        runtime_image="registry.invalid/nebula-automation@sha256:" + "a" * 64,
+    )
+    manager.memory_compute = controller
+    return manager
+
+
+async def _host_session(manager, owner):
+    return await manager._get_or_create_session(
+        engagement_id="project", owner_kind="chat", owner_id=owner
+    )
+
+
+async def test_waiting_host_admission_does_not_block_other_owners(
+    full_budget, tmp_path
+):
+    store, controller, _runner = full_budget
+    manager = _host_manager(store, controller, tmp_path)
+    first = await _host_session(manager, "chat-a")
+    waiting = asyncio.create_task(_host_session(manager, "chat-b"))
+    try:
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            jobs = await controller.service.list_jobs()
+            if any(job.state == "queued" for job in jobs):
+                break
+        assert any(job.state == "queued" for job in jobs)
+        # The owner that already has a session keeps working while chat-b waits.
+        again = await asyncio.wait_for(_host_session(manager, "chat-a"), timeout=2)
+        assert again is first
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+    jobs = await controller.service.list_jobs()
+    assert not any(job.state == "queued" for job in jobs)
+    await manager.shutdown()
+
+
+async def test_host_admission_wait_is_bounded_and_settles_the_queued_job(
+    full_budget, tmp_path, monkeypatch
+):
+    from nebula.v3 import memory_runtime
+    from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
+
+    store, controller, _runner = full_budget
+    monkeypatch.setattr(memory_runtime, "QUEUED_ADMISSION_SECONDS", 0.3)
+    manager = _host_manager(store, controller, tmp_path)
+    await _host_session(manager, "chat-a")
+    with pytest.raises(AutomationRuntimeUnavailable, match="memory budget"):
+        await manager.session(
+            engagement_id="project", owner_kind="chat", owner_id="chat-b"
+        )
+    jobs = {
+        job.resource_kind + ":" + job.state
+        for job in await controller.service.list_jobs()
+    }
+    assert "host_command_session:queued" not in jobs
+    assert manager._session_lock.locked() is False
+    await manager.shutdown()
+
+
+async def test_idle_host_session_releases_its_reservation(full_budget, tmp_path):
+    store, controller, runner = full_budget
+    manager = _host_manager(store, controller, tmp_path)
+    idle = await _host_session(manager, "chat-a")
+    job_id = idle.backend.memory_job.job_id
+    assert await manager.release_idle_host_sessions(idle_seconds=60) == []
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == [idle.entity.id]
+    job = await controller.service.get_job(job_id)
+    assert job.state == "finished" and job.reserved_bytes == 0
+    assert runner.removed == [job_id]
+    # The freed budget admits the next owner immediately.
+    other = await asyncio.wait_for(_host_session(manager, "chat-b"), timeout=2)
+    assert isinstance(other.backend, ManagedHostRuntimeSession)
+    # The idle owner gets a fresh worker on its next command.
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == [other.entity.id]
+    fresh = await asyncio.wait_for(_host_session(manager, "chat-a"), timeout=2)
+    assert fresh.entity.id != idle.entity.id
+    await manager.shutdown()
+
+
+async def test_busy_host_session_is_not_released(full_budget, tmp_path):
+    store, controller, _runner = full_budget
+    manager = _host_manager(store, controller, tmp_path)
+    managed = await _host_session(manager, "chat-a")
+    managed.active_uses += 1
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
+    managed.active_uses -= 1
+
+    class Unfinished:
+        final_task = asyncio.get_running_loop().create_future()
+
+    managed.processes["p"] = Unfinished()
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == []
+    managed.processes.pop("p").final_task.cancel()
+    assert await manager.release_idle_host_sessions(idle_seconds=0) == [
+        managed.entity.id
+    ]
+    await manager.shutdown()
