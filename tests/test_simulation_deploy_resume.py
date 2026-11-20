@@ -21,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from urllib.error import HTTPError
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts/simulation"
@@ -397,17 +398,15 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
                     "state": "succeeded",
                     "result": {"version": NEW, "state": "current"},
                 }
+            if original["state"] == "uncertain":
+                # Core retains an uncertain receipt it cannot prove.
+                raise HTTPError(
+                    path, 409, "Operation effect is not fully reconciled", {}, None
+                )
             return original
         return core.post(path, parameters)
 
     monkeypatch.setattr(deployer, "deployment_post", deployment_post)
-    monkeypatch.setattr(
-        deployer,
-        "reconcile_operation",
-        lambda operation_id: deployment_post(
-            "deployment/operations/" + operation_id + "/reconcile", {}
-        ),
-    )
     monkeypatch.setattr(
         deployer,
         "migration_status",
@@ -1623,3 +1622,17 @@ def test_successor_reads_original_retirement_receipt_before_holding(
     assert len(host.actions("retire")) == len(
         [item for item in before if item[1] == "retire"]
     ) + (1 if retirement_proven else 0)
+
+
+def test_uncertain_target_is_settled_when_core_refuses_to_reconcile_it(host: Host):
+    """Core answers 409 for a target change it cannot prove; the deployer
+    keeps the uncertain receipt and settles the step from deployment status."""
+    host.faults["target_execution"] = ["uncertain_after_effect"]
+    with pytest.raises(RuntimeError, match="uncertain"):
+        deployer.promote()
+    assert host.status()["target_execution_version"] == NEW
+    promote_until_converged(host)
+    assert len(host.actions("target_execution")) == 1
+    step = deployer.state()["runtime_deployment"]["steps"]["target"]
+    assert step["receipt"]["state"] == "uncertain"
+    assert step["settled"]["evidence"]["target_execution_version"] == NEW

@@ -1,23 +1,22 @@
 {
-  "change_digest": "28bac799224bce26393afdcd7f39bb70d611fbb936f93a9ef94d241250137746",
-  "reviewed_by": "Claude Code, unblocking supervisor-mode promotions that waited for a busy project to go idle",
-  "reason": "promote refused to stop the foreground supervisor until every project's chat activity was idle, a rule that exists only for execution workers without #1023 (which fail a turn reading the host while no host runs). A project whose subagents keep reporting never goes idle, so promotion of 111e6da was refused after the bounded wait. The deployer now skips the wait when the API version, every resident execution version and every project owner version are exact commits descending from 445c506 (#1023); any unknown, non-commit or older version keeps the existing bounded wait and refusal. Selected: the host restart and activation-boundary tests (two new activation cases and a real-git ancestry case), the dead-owner acceptance path that bypasses the skip, and the deploy-resume suite that drives activation.",
-  "exclusions": "No Core, UI or API change; deployer script and its README only. tests/test_simulation_host_activation.py and tests/test_deployer_protocol.py passed locally except one onefile-child identity case that also fails on unmodified main in this environment; test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop and test_host_switch_frees_an_orphan_left_by_a_stop_timeout likewise fail locally on unmodified main (process-signalling environment) and are left to CI.",
+  "change_digest": "b7d39788834ffae5e44bd0e9491d78c50f5cb02e3c8f437a948f7a1ca2bec399",
+  "reviewed_by": "Claude Code, finishing the live 111e6da promotion stopped by an unreconcilable target receipt",
+  "reason": "Live promotion of 111e6da stopped at target_execution: Core applied the target (deployment status shows target_execution_version 111e6da) but the receipt is uncertain, and Core's reconcile endpoint answers 409 for actions without a durable outcome record. reconcile_operation re-raised every HTTP error except 404/405, so the deployer aborted with 'HTTP Error 409: Conflict' instead of settling the step from deployment status as StagedDeployer._operation is designed to. A 409 now returns Core's unchanged receipt, so the uncertain step is settled from status evidence or kept held; nothing is replayed. The resume-suite fixture replaced reconcile_operation and returned uncertain receipts directly, which hid the bug; it now models Core's 409 and uses the real wrapper (11 uncertain-path tests fail on main against it). Selected: the deploy-resume suite (new target case) and the staged-deployer suite.",
+  "exclusions": "Deployer script and its test fixture only; no Core, UI or API change. Core's reconcile still cannot prove target_execution; teaching Core a durable outcome for it is a separate change. tests/test_simulation_host_restart.py and test_simulation_dead_owner_activation.py pass locally except two host-switch signalling cases that fail on unmodified main here and pass in CI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 83,
+    "python": 89,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_host_restart.py",
-    "tests/test_simulation_dead_owner_activation.py",
-    "tests/test_simulation_deploy_resume.py"
+    "tests/test_simulation_deploy_resume.py",
+    "tests/test_staged_deployer.py"
   ],
   "frontend": [],
   "native": [],

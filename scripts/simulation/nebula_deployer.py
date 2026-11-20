@@ -6145,6 +6145,20 @@ def reconcile_operation(operation_id: str) -> dict[str, Any]:
             "deployment/operations/" + operation_id + "/reconcile", {}
         )
     except HTTPError as error:
+        if error.code == 409:
+            # Core refuses to settle an operation it cannot prove either way
+            # (a target change has no durable outcome record, for example).
+            # Its unchanged receipt lets the caller settle the step from
+            # deployment status, or keep holding it; nothing is replayed.
+            receipt = api().get("deployment/operations/" + operation_id)
+            if (
+                not isinstance(receipt, dict)
+                or receipt.get("operation_id") != operation_id
+            ):
+                raise RuntimeError(
+                    "Deployment operation readback identifies another request"
+                ) from error
+            return receipt
         if error.code not in {404, 405}:
             raise
         raise RuntimeError(
