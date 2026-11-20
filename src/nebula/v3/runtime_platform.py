@@ -401,6 +401,9 @@ class RuntimePlatform:
         self.mcp_service: McpProbeService | None = None
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
+        # Set only on Butler's home worker: sends Butler's changes to other
+        # projects as butler.action/v1 commands (runtime_butler_actions.py).
+        self.butler_actions: Any = None
         self.butler_memory: Any = None
         self.workspace_service: WorkspaceService | None = None
         self.container_terminal_service: ContainerTerminalService | None = None
@@ -526,6 +529,7 @@ class RuntimePlatform:
                     self.artifact_store,
                     butler_focus_project if observer else engagement_id,
                     observer=observer,
+                    butler_actions=self.butler_actions,
                     settings_api=self.settings_assistant_api,
                     work=self.control_assistant_work,
                     memory=self.butler_memory,

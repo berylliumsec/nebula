@@ -1,29 +1,22 @@
 {
-  "change_digest": "f26ccf605840912b9e11c3e1012c646b714b1399082c4059eabb13a5b2de4dab",
-  "reviewed_by": "Claude Code, PR 2a of the Butler home worker design at the operator's request",
-  "reason": "Follows #1241 (merged). Behind NEBULA_BUTLER_HOME_WORKER (off), a Butler reservation for __nebula_butler__ makes the API create Butler's home project once and route the reservation there; the request carries focus.project and Butler keeps one home session per focus project. On the home worker the provider Butler gateway reads the focus project under observer_reads() and refuses changes; each home turn checks the focus project's local_only boundary; home sessions are provider-only; the new-project name scan skips reserved projects. Selected: the new home-session suite and PR 1's scope suite (creation race, name scan, reservation per focus, gateway observer reads, change and local-only refusal), Butler sessions and subagents (reservation changed), the API worker and global API (new pre-routing hook), execution-worker write locks (reservation under a worker scope), and the MCP context and provider tools-context suites (chat_components signature changed).",
-  "exclusions": "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings and tests/v3/test_settings_assistant_tools.py::test_provider_tools_are_bounded_to_catalog_and_project fail identically on unmodified origin/main 8fb8023 (after #1240), so those two files are not selected; their other cases passed locally with this change. No UI or operator-visible change: the flag is off and nothing in the UI reserves a home session yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; the selected suites passed locally on SQLite and the staging postgres:16 (nebula_pytest).",
+  "change_digest": "a688a58b5f0213d4e70537d93ea3370c2c96e64a2fa5def91c9c5f4a7836f640",
+  "reviewed_by": "Claude Code, PR 2b of the Butler home worker design at the operator's request",
+  "reason": "Follows #1241 and #1242 (merged). Re-run of only the tests that failed in CI run 44788459239 (job 136469625509) on this change: the two product-guidance tests in tests/v3/test_runtime_host_services.py, on SQLite and PostgreSQL. They failed with FileNotFoundError because CI built the generated product knowledge index only for UI-journey selections; ci.yml now builds and verifies it whenever test_runtime_host_services.py is selected. The other 478 selected tests (Butler home action, session and scope suites; runtime delivery, coordination, orphan recovery, execution worker; host services and host search; worker features, bundle, mixed release; Butler sessions; provider tools-context) passed in that same run on identical product code; this commit adds only the CI step and this receipt. Selection narrowed to the failed tests at the operator's request.",
+  "exclusions": "Every other test in the earlier selection passed in run 44788459239 on the same product code, so it is not re-run, per the operator's request to run only the failed tests. test_butler_capabilities.py and test_settings_assistant_tools.py each contain a case red on origin/main 8fb8023 (#1240). No UI change; LAN validation does not apply. The four selected tests passed locally after build_product_knowledge.py and --verify, on SQLite and the staging postgres:16.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 159,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_api_worker.py",
-    "tests/v3/test_butler_home_scope.py",
-    "tests/v3/test_butler_home_sessions.py",
-    "tests/v3/test_butler_sessions.py",
-    "tests/v3/test_butler_subagents.py",
-    "tests/v3/test_execution_worker_write_locks.py",
-    "tests/v3/test_mcp_context_mode.py",
-    "tests/v3/test_provider_tools_context.py",
-    "tests/v3/test_runtime_global_api.py"
+    "tests/v3/test_runtime_host_services.py::test_guidance_mirror_failure_is_reported_while_packaged_help_remains_available",
+    "tests/v3/test_runtime_host_services.py::test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart"
   ],
   "frontend": [],
   "native": [],

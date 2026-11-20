@@ -43,6 +43,11 @@ from .runtime_integration_credentials import (
     INTEGRATION_CREDENTIAL,
     register_integration_credentials,
 )
+from .runtime_butler_actions import (
+    BUTLER_ACTION_RESULT,
+    BUTLER_SUBMIT_ACTION,
+    register_butler_actions,
+)
 from .runtime_host_search import register_host_search
 from .authentication import secret_matches
 from .shared_butler_memory import SharedButlerMemory
@@ -86,6 +91,9 @@ class HostServiceClient(RuntimeRpcClient):
             BRIDGE_OPERATION,
             SESSION_CREDENTIAL,
             INTEGRATION_CREDENTIAL,
+            # A resend finds the same command by its idempotency key.
+            BUTLER_SUBMIT_ACTION,
+            BUTLER_ACTION_RESULT,
         }
     )
 
@@ -277,6 +285,7 @@ class HostSharedServices:
                             "host_pressure": True,
                             "integration_credentials": True,
                             "web_search": True,
+                            "butler_actions": True,
                             "host_settings": self.host_settings.assistant_bridge.routes(),
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
@@ -306,6 +315,9 @@ class HostSharedServices:
                         self.host_settings.credentials,
                     )
                     self.host_settings.assistant_bridge.register(rpc, runtime_id)
+                    # Butler's home worker sends its changes to other projects
+                    # here; the RPCs refuse any other worker's grant.
+                    register_butler_actions(rpc, runtime_id, self.coordination)
                     register_host_search(
                         rpc,
                         runtime_id,
