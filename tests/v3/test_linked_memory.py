@@ -940,7 +940,12 @@ def test_near_duplicate_cards_from_one_chunk_are_dropped():
 async def test_only_an_operators_turn_holds_curation_back(tmp_path):
     """Goal and subagent turns can run for days; they must not stall curation."""
 
-    from nebula.v3.linked_memory_curator import _ProjectState
+    from nebula.v3.chat import _ActiveProviderTurn
+    from nebula.v3.linked_memory_curator import _ProjectState, _turn_lane
+
+    # Chat records each active turn's lane when it creates the turn.
+    assert _turn_lane(_ActiveProviderTurn(capacity_lane="background")) == "background"
+    assert _turn_lane(_ActiveProviderTurn()) == "direct"
 
     store = await _project(tmp_path)
     curator = _curator(store, CurationProvider(), tmp_path, quiet_seconds=60)
@@ -948,8 +953,10 @@ async def test_only_an_operators_turn_holds_curation_back(tmp_path):
     goal_turn = SimpleNamespace(
         done=False, admission=SimpleNamespace(lane="background"), events=[]
     )
+    # A queued turn has no admission yet, and with a stream journal its
+    # events are not kept in memory: the turn itself names its lane.
     queued_goal_turn = SimpleNamespace(
-        done=False, admission=None, events=[("queued", {"capacity_lane": "background"})]
+        done=False, admission=None, events=[], capacity_lane="background"
     )
     curator.chat = SimpleNamespace(
         _active_provider_turns={"goal": goal_turn, "queued": queued_goal_turn}

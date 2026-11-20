@@ -169,10 +169,13 @@ def _session_kind(session: ChatSession) -> str:
 def _turn_lane(runtime: Any) -> str:
     """The capacity lane of an active provider turn; unknown counts as direct."""
 
-    lane = getattr(getattr(runtime, "admission", None), "lane", None)
-    if isinstance(lane, str) and lane:
-        return lane
-    # Before admission, the turn's first event names its lane.
+    for lane in (
+        getattr(runtime, "capacity_lane", None),
+        getattr(getattr(runtime, "admission", None), "lane", None),
+    ):
+        if isinstance(lane, str) and lane:
+            return lane
+    # Without a stream journal, the turn's first event names its lane.
     events = getattr(runtime, "events", None) or []
     first = events[0] if events else None
     if (
