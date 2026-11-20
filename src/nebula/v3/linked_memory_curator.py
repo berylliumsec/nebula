@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .chat_turn_outcomes import is_turn_outcome
 from .context import resolve_context_limits
 from .diagnostics import (
     create_diagnostic_task,
@@ -32,6 +33,7 @@ from .diagnostics import (
     record_diagnostic,
 )
 from .domain import (
+    CORE_GOAL_INSTRUCTIONS,
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
@@ -43,11 +45,15 @@ from .domain import (
     ProviderProfile,
 )
 from .linked_memory import GoalRun, LinkedMemoryStore
-from .linked_memory_helper import CurationHelper, HelperUnavailable
+from .linked_memory_helper import CurationHelper, HelperUnavailable, evades_refusal
 from .linked_memory_rules import (
+    CURATOR_VERSION,
+    DEFAULT_COMMON_WORDS,
     ENTRY_SUMMARY_CHARS,
     ENTRY_TIME_CAP_SECONDS,
+    common_entry_words,
     entry_words,
+    normalize_text,
     project_stream_id,
     select_entry_cards,
 )
@@ -120,6 +126,7 @@ class _ProjectState:
     paused_reason: str | None = None
     cooldown_until: float = 0.0
     chunk_failures: int = 0
+    rechecked: bool = False
 
 
 class HostCurationLock:
@@ -157,6 +164,65 @@ def _session_kind(session: ChatSession) -> str:
     if metadata.get("delegated_from_goal_id"):
         return "goal_child"
     return "main"
+
+
+def _turn_lane(runtime: Any) -> str:
+    """The capacity lane of an active provider turn; unknown counts as direct."""
+
+    for lane in (
+        getattr(runtime, "capacity_lane", None),
+        getattr(getattr(runtime, "admission", None), "lane", None),
+    ):
+        if isinstance(lane, str) and lane:
+            return lane
+    # Without a stream journal, the turn's first event names its lane.
+    events = getattr(runtime, "events", None) or []
+    first = events[0] if events else None
+    if (
+        isinstance(first, tuple)
+        and len(first) == 2
+        and first[0] == "queued"
+        and isinstance(first[1], dict)
+        and isinstance(first[1].get("capacity_lane"), str)
+    ):
+        return first[1]["capacity_lane"]
+    return "direct"
+
+
+def _step_denied(step: dict[str, Any]) -> bool:
+    """A hook, approval or access rule refused this call before it ran."""
+
+    if step.get("status") == "denied":
+        return True
+    result = step.get("provider_result")
+    return isinstance(result, dict) and result.get("category") == "permission_denied"
+
+
+def _user_role(
+    session: ChatSession, message: ChatMessage, turns: dict[str, ChatTurn]
+) -> str:
+    """Who wrote a user-role message: the operator, Core, or another agent.
+
+    Core sends its fixed goal texts as the user message of goal turns, a
+    goal's later turns carry a Core or Butler instruction, and a subagent's
+    chat holds the delegating agent's task. Only what remains is the
+    operator's own words.
+    """
+
+    if " ".join((message.content or "").split()) in CORE_GOAL_INSTRUCTIONS:
+        return "core"
+    if _session_kind(session) == "subagent":
+        return "instruction"
+    turn = turns.get(str((message.metadata or {}).get("chat_turn_id") or ""))
+    if turn is not None:
+        snapshot = turn.request_snapshot or {}
+        if (
+            turn.goal_id
+            or snapshot.get("butler_recovery_case_id")
+            or snapshot.get("subagent_child")
+        ):
+            return "instruction"
+    return "operator"
 
 
 def _step_text(step: dict[str, Any]) -> str:
@@ -265,9 +331,15 @@ class LinkedMemoryCurator:
         await self.helper.stop()
 
     def mark_live(self) -> None:
-        """A chat record changed in this process: restart the quiet period."""
+        """A chat record changed in this process.
 
-        self._last_live = time.monotonic()
+        While an operator's turn runs, its writes restart the quiet period;
+        background turns' writes do not (see ``_live_now``). A finished turn
+        stays listed for a minute, so it no longer counts.
+        """
+
+        if self._live_now():
+            self._last_live = time.monotonic()
 
     def notify(self, project_id: str) -> None:
         loop = self._loop
@@ -333,7 +405,7 @@ class LinkedMemoryCurator:
         cards = await self.memory.candidate_cards(
             project_id, self.config.candidate_cards
         )
-        entries = []
+        entries: list[dict[str, Any]] = []
         for card in cards:
             text = " ".join(
                 part
@@ -351,7 +423,16 @@ class LinkedMemoryCurator:
                     "words": entry_words(text),
                 }
             )
-        self._cards[project_id] = {"entries": entries, "loaded_at": time.monotonic()}
+        # Words most of the project's cards share cannot tell them apart; they
+        # are dropped once here so the turn-start check stays cheap.
+        common = common_entry_words(entries, project_id)
+        for entry in entries:
+            entry["words"] = entry["words"] - common
+        self._cards[project_id] = {
+            "entries": entries,
+            "common": common,
+            "loaded_at": time.monotonic(),
+        }
 
     def after_turn(
         self, project_id: str, session_id: str, user_text: str, answer_text: str
@@ -462,7 +543,11 @@ class LinkedMemoryCurator:
             else None
         )
         picks, completed = select_entry_cards(
-            text, entries, scores, deadline=started + ENTRY_TIME_CAP_SECONDS
+            text,
+            entries,
+            scores,
+            common=(cache or {}).get("common") or DEFAULT_COMMON_WORDS,
+            deadline=started + ENTRY_TIME_CAP_SECONDS,
         )
         if not completed or time.perf_counter() - started > ENTRY_TIME_CAP_SECONDS:
             self.entry_stats["time_cap"] += 1
@@ -529,6 +614,9 @@ class LinkedMemoryCurator:
                 state.paused_reason = None
                 self._cards.pop(project_id, None)
                 return
+            if not state.rechecked:
+                state.rechecked = True
+                await self._recheck_cards(project_id)
             if project_id not in self._cards:
                 await self._refresh_cards(project_id)
             await self._consume_events(project_id)
@@ -544,6 +632,43 @@ class LinkedMemoryCurator:
                     break
             if stopped:
                 return
+
+    async def _recheck_cards(self, project_id: str) -> None:
+        """Quarantine saved cards that today's verification would not keep.
+
+        Cards curated before a rule existed stay active otherwise: one quoting
+        only Core's fixed goal prompt, or one that pairs a refusal with a way
+        around it. They stay readable for review and are never injected.
+        """
+
+        core_texts = [normalize_text(text) for text in CORE_GOAL_INSTRUCTIONS]
+        withdraw = []
+        for card, excerpts in await self.memory.active_card_evidence(project_id):
+            quotes = [normalize_text(excerpt) for excerpt in excerpts if excerpt]
+            core_only = bool(quotes) and all(
+                any(quote in text for text in core_texts) for quote in quotes
+            )
+            if core_only or evades_refusal(
+                {
+                    "title": card.title,
+                    "summary": card.summary,
+                    "applies_when": card.applies_when,
+                }
+            ):
+                withdraw.append(card.id)
+        if not withdraw:
+            return
+        changed = await self.memory.quarantine_cards(project_id, withdraw)
+        self._cards.pop(project_id, None)
+        record_diagnostic(
+            "info",
+            "knowledge",
+            "linked_memory.cards_rechecked",
+            "Linked memory quarantined saved cards that current verification rejects.",
+            project_id=project_id,
+            outcome="success",
+            metadata={"quarantined": changed},
+        )
 
     async def _consume_events(self, project_id: str) -> None:
         cursor = await self.memory.cursor(project_id)
@@ -619,11 +744,22 @@ class LinkedMemoryCurator:
     # Gates -------------------------------------------------------------------------
 
     def _live_now(self) -> bool:
+        """Whether an operator's (direct-lane) turn is running in this process.
+
+        Goal, subagent, Butler and queued turns run in the background lane
+        and can keep a busy project occupied for days. They share capacity
+        with curation through the provider scheduler and the host pressure
+        gate; only an operator waiting on a reply holds curation back here.
+        """
+
         chat = self.chat
         if chat is None:
             return False
         turns = getattr(chat, "_active_provider_turns", {}) or {}
-        return any(not turn.done for turn in turns.values())
+        return any(
+            not turn.done and _turn_lane(turn) == "direct"
+            for turn in list(turns.values())
+        )
 
     async def _pressure(self) -> float | None:
         gate = self.host_load or getattr(self.scheduler, "host_load", None)
@@ -701,12 +837,17 @@ class LinkedMemoryCurator:
                 run = await self._set_state(run, "paused", reason=reason)
             if await self.memory.effective_stage(project_id) == "off":
                 return run, False
+            signaled = False
             with contextlib.suppress(TimeoutError):
                 # diagnostic-expected: the poll interval elapsed; the gates are checked again.
                 await asyncio.wait_for(
                     state.signal.wait(), timeout=self.config.poll_seconds
                 )
+                signaled = True
             state.signal.clear()
+            if signaled:
+                # A goal that completes while this run waits gets its run now.
+                await self._consume_events(project_id)
         return run, False
 
     async def _set_state(self, run: GoalRun, value: str, **fields: Any) -> GoalRun:
@@ -831,6 +972,7 @@ class LinkedMemoryCurator:
         by_message = {
             turn.final_message_id: turn for turn in turns if turn.final_message_id
         }
+        by_id = {turn.id: turn for turn in turns}
         ledger = getattr(self.chat, "turn_ledger", None)
         entries: list[dict[str, Any]] = []
         for message in sorted(messages, key=lambda item: item.sequence):
@@ -861,6 +1003,7 @@ class LinkedMemoryCurator:
                             "sequence": message.sequence,
                             "role": "tool",
                             "tool_name": str(name)[:120],
+                            "denied": _step_denied(step),
                             "text": text[:4_000],
                             "ref": {
                                 "session_id": session.id,
@@ -876,7 +1019,12 @@ class LinkedMemoryCurator:
             entries.append(
                 {
                     "sequence": message.sequence,
-                    "role": "operator" if message.role == ChatRole.USER else "agent",
+                    "role": _user_role(session, message, by_id)
+                    if message.role == ChatRole.USER
+                    # Core's note for a failed or stopped turn, not the agent's words.
+                    else "core"
+                    if is_turn_outcome(message)
+                    else "agent",
                     "tool_name": None,
                     "text": text[:8_000],
                     "ref": {
@@ -1161,7 +1309,7 @@ class LinkedMemoryCurator:
             metadata={
                 "engagement_id": project_id,
                 "operation": "linked_memory_curation",
-                "prompt_version": "lm-1",
+                "prompt_version": CURATOR_VERSION,
             },
         )
         provider.require(request)

@@ -412,6 +412,61 @@ class LinkedMemoryStore:
             )
             return [StoredCard.from_row(row) for row in rows]
 
+    async def active_card_evidence(
+        self, project_id: str
+    ) -> list[tuple[StoredCard, list[str]]]:
+        """Every active card with the excerpts its sources quote."""
+
+        async with self.database.session() as session:
+            cards = list(
+                await session.scalars(
+                    select(LinkedMemoryCardRow).where(
+                        LinkedMemoryCardRow.engagement_id == project_id,
+                        LinkedMemoryCardRow.state == "active",
+                    )
+                )
+            )
+            sources = await session.execute(
+                select(
+                    LinkedMemoryCardSourceRow.card_id,
+                    LinkedMemoryCardSourceRow.excerpt,
+                ).where(LinkedMemoryCardSourceRow.engagement_id == project_id)
+            )
+            excerpts: dict[str, list[str]] = {}
+            for card_id, excerpt in sources.all():
+                excerpts.setdefault(card_id, []).append(excerpt or "")
+        return [(StoredCard.from_row(row), excerpts.get(row.id, [])) for row in cards]
+
+    async def quarantine_cards(self, project_id: str, card_ids: list[str]) -> int:
+        """Withdraw active cards from injection and linking; they stay readable."""
+
+        changed = 0
+        now = _now()
+        async with self.database.session() as session:
+            for card_id in card_ids:
+                row = await session.get(LinkedMemoryCardRow, card_id)
+                if (
+                    row is None
+                    or row.engagement_id != project_id
+                    or row.state != "active"
+                ):
+                    continue
+                await session.execute(
+                    update(LinkedMemoryCardRow)
+                    .where(
+                        LinkedMemoryCardRow.id == card_id,
+                        LinkedMemoryCardRow.engagement_id == project_id,
+                        LinkedMemoryCardRow.revision == row.revision,
+                    )
+                    .values(
+                        state="quarantined",
+                        updated_at=now,
+                        revision=row.revision + 1,
+                    )
+                )
+                changed += 1
+        return changed
+
     async def commit_chunk(
         self,
         run: GoalRun,
