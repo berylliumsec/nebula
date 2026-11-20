@@ -1,24 +1,31 @@
 {
-  "change_digest": "c3b46b30a2520c8842e3f665867a27e9e733f19596f66da0b8cc57d1cb451670",
-  "reviewed_by": "Claude Code, fixing the live deployer stall seen during the Butler home worker promotion",
-  "reason": "The live dd8e6ae promotion sat blocked for a long time after every project had moved: a faulthandler stack showed StagedDeployer._move_projects re-reading deployment status once per project, and deployment status lists every project (~1,021 on live), so each pass did ~1,000 full status reads. A pass that only skips already-moved projects now reuses one status read; an iteration that acts on Core (prepare, handoff, retire) clears it so the next project reads fresh state. The same change was hot-patched onto the installed deployer, which then completed the journal. Selected: tests/test_staged_deployer.py, including a new regression test that counts status reads with 200 already-moved projects (210 reads before the fix, 11 after).",
-  "exclusions": "Only the staged deployer's project loop changed; nebula_deployer.py and Core are untouched, so no other suite exercises this path.",
+  "change_digest": "6af0c2b72575f8d9ad798a54a6eb8922413bcba7b27afbb716610c2b5e0158d1",
+  "reviewed_by": "Claude Code, making Butler mode's Projects picker and board searchable",
+  "reason": "Operator asked for Butler mode's Projects picker (~1,000 projects in a native select) and the board's Group: Project view to be searchable. The rail select becomes ButlerProjectPicker, a combobox following the chat model picker pattern (type to filter, Active before Quiet with counts, arrows/Enter/Esc, first 80 rows). The board search moves from the top bar to beside Group and filters loaded cards instantly by title, project and model before Core's debounced search. Selected: the Butler thread/search helper tests, the new picker component tests, the popup test for the shared page module, and the four butler-mode real-Core Playwright projects, whose journey now searches the board and picks a project by typing.",
+  "exclusions": "Only Butler mode's page, its new picker and the settings-assistant doc changed; Core, the API client and other pages are untouched. The Group menu keeps its two options, so no other suite covers this.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 26,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 12,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
-  "python": [
-    "tests/test_staged_deployer.py"
+  "python": [],
+  "frontend": [
+    "ui/src/pages/ButlerChatPopup.test.tsx",
+    "ui/src/pages/ButlerProjectPicker.test.tsx",
+    "ui/src/pages/butlerThreads.test.ts"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
   "checks": []
 }

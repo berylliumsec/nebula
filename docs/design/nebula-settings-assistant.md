@@ -1232,9 +1232,14 @@ the sections are **Board**, **Threads**, **Oversight** and **More** (Code &
 files, Memory, Settings, Open full Nebula). **Start Butler Voice** is in the top
 bar.
 
-The rail's **Projects** list holds each project's one ongoing Butler
+The rail's **Projects** picker holds each project's one ongoing Butler
 conversation (the same conversation the small panel shows), with its request
-cards for uploads, credentials, Library adds and linked folders. Parallel
+cards for uploads, credentials, Library adds and linked folders. The picker is
+searchable: typing filters projects by every word of their name, projects
+whose chats need the operator or are working stay under **Active** with their
+counts above **Quiet**, ↑/↓ move, Enter opens the project's thread and Esc
+closes the list. It renders the first 80 matches and says to keep typing for
+more. Parallel
 **Threads** follow below. Text added to Butler from the selection menu while in
 Butler mode joins the composer's **selected context** and is sent with the next
 message; remove an item with its ×.
@@ -1247,8 +1252,10 @@ last day. Idle chats are only counted; **Idle** pages through them on request.
 Butler's own conversations, side chats and archived chats are never listed.
 **Group** switches between **Attention** and **Project**, and can show subagent
 chats as their own cards (by default a working subagent folds into its parent;
-one that needs the operator always shows). Search matches chat titles, models
-and project names. The grouping choice is remembered on this device only.
+one that needs the operator always shows). The board's search sits beside
+**Group**: it filters loaded cards as the operator types, says how many chats in
+how many projects match, then Core's search (chat titles, models and project
+names) fills in chats the board had not loaded. Esc or × clears it. The grouping choice is remembered on this device only.
 
 Each card shows the chat's status, project, model, how long its current
 response has run, one line of what it is doing or waiting for, and "Started by
