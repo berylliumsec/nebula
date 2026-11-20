@@ -322,7 +322,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await expect(page.getByRole("heading", {name: "Butler", exact: true})).toBeVisible();
       // Every top-bar control stays inside the viewport, down to 320 px.
       const width = page.viewportSize()!.width;
-      for (const control of [page.getByRole("searchbox", {name: "Search chats and projects"}), page.getByRole("button", {name: "Exit Butler mode"})]) {
+      for (const control of [page.getByRole("button", {name: "Exit Butler mode"})]) {
         const box = await control.boundingBox();
         expect(box && box.x >= 0 && box.x + box.width <= width + 1, `${await control.getAttribute("aria-label")} fits ${width}px`).toBe(true);
       }
@@ -334,6 +334,18 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await expect(card).toBeVisible({timeout: 60_000});
       await expect(card).toContainText("Bounty fixture");
       await expect(card).toContainText("Working");
+      // The board's search sits beside Group and filters as the operator types.
+      const boardSearch = board.getByRole("searchbox", {name: "Search projects and chats"});
+      const searchBox = await boardSearch.boundingBox();
+      expect(searchBox && searchBox.x >= 0 && searchBox.x + searchBox.width <= width + 1, `board search fits ${width}px`).toBe(true);
+      await boardSearch.fill("bounty fix");
+      await expect(card).toBeVisible();
+      await expect(board.getByRole("status")).toContainText("in 1 project match");
+      await boardSearch.fill("no such chat anywhere");
+      await expect(card).toHaveCount(0);
+      await expect(board.getByText("No running, waiting or failed chats match “no such chat anywhere”.")).toBeVisible();
+      await board.getByRole("button", {name: "Clear search"}).click();
+      await expect(card).toBeVisible();
 
       await showThreads(page);
       await expect(page.getByRole("combobox", {name: "Project for the new thread"})).toHaveValue(research);
@@ -418,8 +430,12 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await showThreads(page);
       if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
-      // One picker, not a row per project: Core may hold a thousand projects.
-      await page.getByRole("combobox", {name: "Project thread"}).selectOption(research);
+      // One searchable picker, not a row per project: Core may hold a thousand projects.
+      await rail.getByRole("button", {name: /^Project thread:/}).click();
+      await rail.getByRole("combobox", {name: "Search projects"}).fill("research");
+      await expect(rail.getByRole("option", {name: /Research fixture/})).toBeVisible();
+      await expect(rail.getByRole("option", {name: /Bounty fixture/})).toHaveCount(0);
+      await rail.getByRole("combobox", {name: "Search projects"}).press("Enter");
       await expect(page.getByRole("region", {name: "Butler in Research fixture"}).getByRole("textbox", {name: "Ask Butler a question"})).toBeVisible({timeout: 60_000});
       if (await page.getByRole("button", {name: "Back to threads"}).isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
 
@@ -440,7 +456,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }

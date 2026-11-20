@@ -125,3 +125,50 @@ export function projectPickerGroups<T extends { id: string; status?: string }>(
   }
   return { active, quiet };
 }
+
+/** Lower-cased words of a search; every word must match. */
+function searchTerms(query: string): string[] {
+  return query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matchesTerms(text: string, terms: readonly string[]): boolean {
+  const haystack = text.toLocaleLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+export interface ProjectPickerOption<T> {
+  project: T;
+  group: "active" | "quiet";
+  /** "2 need you" or "14 working" for an active project. */
+  label?: string;
+}
+
+/**
+ * The project picker's rows for a search: Active before Quiet, each keeping
+ * its order, matched on every word of the project's name. Only the first
+ * `limit` rows render; `total` says how many matched.
+ */
+export function filterProjectPicker<T extends { name: string }>(
+  groups: { active: readonly { project: T; label: string }[]; quiet: readonly T[] },
+  query: string,
+  limit = 80,
+): { options: ProjectPickerOption<T>[]; total: number } {
+  const terms = searchTerms(query);
+  const all: ProjectPickerOption<T>[] = [
+    ...groups.active.map(({ project, label }) => ({ project, group: "active" as const, label })),
+    ...groups.quiet.map((project) => ({ project, group: "quiet" as const })),
+  ];
+  const matches = terms.length ? all.filter((option) => matchesTerms(option.project.name, terms)) : all;
+  return { options: matches.slice(0, limit), total: matches.length };
+}
+
+/**
+ * The board's chats that match the search box as the operator types: every
+ * word must appear in the chat title, its project's name or its model. Core's
+ * search then fills in chats the board had not loaded.
+ */
+export function filterBoardItems<T extends Pick<ButlerBoardItem, "title" | "project" | "model">>(items: readonly T[], query: string): T[] {
+  const terms = searchTerms(query);
+  if (!terms.length) return [...items];
+  return items.filter((item) => matchesTerms(`${item.title} ${item.project.name} ${item.model ?? ""}`, terms));
+}

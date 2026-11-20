@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatAssistantConfig, HarnessProfile, ProviderHealth } from "../api/types";
-import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, projectPickerGroups } from "./butlerThreads";
+import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, filterProjectPicker, projectPickerGroups } from "./butlerThreads";
 
 const config: ChatAssistantConfig = {
   backend: "provider",
@@ -84,5 +84,43 @@ describe("project thread picker", () => {
       ["needs", "1 need you"],
     ]);
     expect(groups.quiet.map((project) => project.id)).toEqual(["quiet"]);
+  });
+});
+
+describe("Butler mode search", () => {
+  const groups = {
+    active: [{ project: { id: "bb", name: "Apple Bug Bounty" }, label: "14 working" }, { project: { id: "sim", name: "Sim Lab" }, label: "2 need you" }],
+    quiet: [{ id: "tv", name: "Apple TV fuzzing" }, { id: "notes", name: "Notes" }],
+  };
+
+  it("filters the project picker on every word of the name, Active before Quiet", () => {
+    expect(filterProjectPicker(groups, "").options.map((option) => [option.project.id, option.group, option.label])).toEqual([
+      ["bb", "active", "14 working"], ["sim", "active", "2 need you"], ["tv", "quiet", undefined], ["notes", "quiet", undefined],
+    ]);
+    expect(filterProjectPicker(groups, "  APPLE ").options.map((option) => option.project.id)).toEqual(["bb", "tv"]);
+    expect(filterProjectPicker(groups, "apple fuzz").options.map((option) => option.project.id)).toEqual(["tv"]);
+    expect(filterProjectPicker(groups, "missing")).toEqual({ options: [], total: 0 });
+  });
+
+  it("renders only the first rows of a long project list and counts the rest", () => {
+    const many = { active: [], quiet: Array.from({ length: 1000 }, (_, index) => ({ id: `p${index}`, name: `Project ${index}` })) };
+    const result = filterProjectPicker(many, "project");
+    expect(result.options).toHaveLength(80);
+    expect(result.total).toBe(1000);
+    expect(filterProjectPicker(many, "project 999").options.map((option) => option.project.id)).toEqual(["p999"]);
+  });
+
+  it("filters board cards by chat title, project name or model", () => {
+    const items = [
+      { title: "Run exact-build simulation", project: { id: "bb", name: "Apple Bug Bounty" }, model: "deepseek/deepseek-v4.1-flash" },
+      { title: "Complete the Recon review", project: { id: "bb", name: "Apple Bug Bounty" }, model: "gpt-5" },
+      { title: "Triage crashes", project: { id: "sim", name: "Sim Lab" } },
+    ];
+    expect(filterBoardItems(items, "")).toEqual(items);
+    expect(filterBoardItems(items, "bug bounty").map((item) => item.title)).toEqual(["Run exact-build simulation", "Complete the Recon review"]);
+    expect(filterBoardItems(items, "recon bounty").map((item) => item.title)).toEqual(["Complete the Recon review"]);
+    expect(filterBoardItems(items, "DEEPSEEK").map((item) => item.title)).toEqual(["Run exact-build simulation"]);
+    expect(filterBoardItems(items, "sim lab crash").map((item) => item.title)).toEqual(["Triage crashes"]);
+    expect(filterBoardItems(items, "nothing")).toEqual([]);
   });
 });

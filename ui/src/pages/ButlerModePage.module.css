@@ -29,36 +29,6 @@
   white-space: nowrap;
 }
 
-.search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 1 380px;
-  min-width: 0;
-  margin: 0 auto;
-  min-height: var(--control-height);
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--canvas);
-  color: var(--muted);
-}
-
-.search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-}
-
-.search:focus-within {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
 .pulse {
   display: flex;
   gap: 14px;
@@ -393,24 +363,6 @@
   font-size: var(--type-secondary);
 }
 
-/* The rail's project thread picker: one control instead of a row per project. */
-.projectThreadPick {
-  display: block;
-  padding: 0 4px;
-}
-
-.projectThreadPick select {
-  width: 100%;
-  min-height: var(--control-height);
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--type-control);
-}
-
 .board {
   min-width: 0;
   min-height: 0;
@@ -429,6 +381,57 @@
 }
 
 .organize { position: relative; }
+
+/* The board's search sits beside Group, next to the cards it filters. */
+.boardSearch {
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 420px;
+  min-height: 36px;
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--canvas);
+  color: var(--muted);
+}
+
+.boardSearch input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-secondary);
+}
+
+.boardSearch input::-webkit-search-cancel-button { display: none; }
+.boardSearch:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+.clearSearch {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.clearSearch:hover { color: var(--text); background: var(--surface-hover); }
+
+.searchCount {
+  margin: -8px 0 0;
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
 
 .select {
   display: inline-flex;
@@ -707,7 +710,6 @@
 
 .mode[data-compact="true"] .topBar { gap: 8px; padding-left: 16px; }
 .mode[data-compact="true"] .pulse { display: none; }
-.mode[data-compact="true"] .search { flex: 1 1 0; margin: 0; }
 .mode[data-compact="true"] .topBar h1 { flex: none; }
 .mode[data-compact="true"] .board { flex: 1; padding: 8px 16px 16px; }
 .mode[data-compact="true"] .rail { flex: none; max-height: 45%; border-right: 0; border-bottom: 1px solid var(--border-soft); }

@@ -12,7 +12,8 @@ import { logCaughtDiagnostic } from "../diagnostics";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, projectPickerGroups } from "./butlerThreads";
+import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, projectPickerGroups } from "./butlerThreads";
+import { ButlerProjectPicker } from "./ButlerProjectPicker";
 import styles from "./ButlerModePage.module.css";
 // Already in the main bundle with the Butler panel.
 import { MicrophoneIcon } from "../components/NebulaVoice";
@@ -287,10 +288,16 @@ export function ButlerModePage() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const groups = useMemo(() => groupButlerBoard(board?.items ?? [], grouping, showSubagents), [board, grouping, showSubagents]);
+  // The search filters loaded cards as the operator types; Core's search (debounced) then fills in the rest.
+  const searchedItems = useMemo(() => filterBoardItems(board?.items ?? [], search), [board, search]);
+  const searchedIdle = useMemo(() => filterBoardItems(idle.items, search), [idle.items, search]);
+  const groups = useMemo(() => groupButlerBoard(searchedItems, grouping, showSubagents), [searchedItems, grouping, showSubagents]);
+  const searching = search.trim().length > 0;
+  const matchedChats = groups.reduce((sum, group) => sum + group.items.length, 0);
+  const matchedProjects = new Set(groups.flatMap((group) => group.items.map((item) => item.project.id))).size;
   const openThreadSummary = threads.find((item) => item.sessionId === openThreadId);
   const runningThreads = threads.filter((item) => item.state === "working").length;
-  const visibleProjects = engagements.filter((item) => item.status !== "archived");
+  const visibleProjects = useMemo(() => engagements.filter((item) => item.status !== "archived"), [engagements]);
 
   const toggleGroup = (key: string) => setCollapsed((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
 
@@ -517,11 +524,17 @@ export function ButlerModePage() {
           </label>
         </div>}
       </div>
+      <label className={styles.boardSearch}>
+        <Search size={15} aria-hidden="true" />
+        <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && search) { event.preventDefault(); setSearch(""); } }} placeholder="Search projects and chats" aria-label="Search projects and chats" />
+        {searching && <button type="button" className={styles.clearSearch} aria-label="Clear search" title="Clear search" onClick={() => setSearch("")}><X size={14} aria-hidden="true" /></button>}
+      </label>
       {board?.truncated && <span className={styles.muted}>Showing the first {board.items.length} active chats; search to narrow.</span>}
     </div>
+    {board && searching && groups.length > 0 && <p className={styles.searchCount} role="status">{matchedChats} {matchedChats === 1 ? "chat" : "chats"} in {matchedProjects} {matchedProjects === 1 ? "project" : "projects"} match{search !== query ? " · searching Core…" : ""}</p>}
     {boardError && <div className={styles.error} role="alert">{boardError} The board retries on its own.</div>}
     {!board && !boardError && <p className={styles.muted}>Reading every project's chats…</p>}
-    {board && groups.length === 0 && <p className={styles.empty}>{query ? `No running, waiting or failed chats match “${query}”.` : "Nothing is running and nothing needs you."}</p>}
+    {board && groups.length === 0 && <p className={styles.empty}>{searching ? `No running, waiting or failed chats match “${search.trim()}”.` : "Nothing is running and nothing needs you."}</p>}
     {groups.map((group) => {
       const open = !collapsed.has(group.key);
       return <div key={group.key} className={styles.group}>
@@ -545,7 +558,7 @@ export function ButlerModePage() {
       </button>
       {idle.open && <>
         {idle.error && <div className={styles.error} role="alert">{idle.error} <button type="button" className={styles.link} onClick={() => void loadIdle(idle.items.length)}>Retry</button></div>}
-        <div className={styles.cards}>{idle.items.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={false} onToggle={() => openBrief(item.sessionId)} onDecide={() => undefined} onStop={() => undefined} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject />)}</div>
+        <div className={styles.cards}>{searchedIdle.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={false} onToggle={() => openBrief(item.sessionId)} onDecide={() => undefined} onStop={() => undefined} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject />)}</div>
         {idle.loading && <p className={styles.muted}>Loading idle chats…</p>}
         {idle.nextOffset !== undefined && !idle.loading && <button type="button" className={styles.link} onClick={() => void loadIdle(idle.nextOffset!)}>Show more idle chats</button>}
       </>}
@@ -554,18 +567,11 @@ export function ButlerModePage() {
 
   // Projects with chats that need the operator or are working come first; the
   // rest stay one keystroke away in the picker instead of a thousand rows.
-  const { active: activeProjects, quiet: quietProjects } = projectPickerGroups(visibleProjects, board?.items ?? []);
+  const projectGroups = useMemo(() => projectPickerGroups(visibleProjects, board?.items ?? []), [visibleProjects, board]);
 
   const threadsRail = <nav className={styles.rail} aria-label="Butler threads">
     <div className={styles.railHead}><h2>Projects</h2><span className={styles.muted}>one ongoing thread each</span></div>
-    <label className={styles.projectThreadPick}>
-      <span className="sr-only">Project thread</span>
-      <select value={projectThreadId ?? ""} onChange={(event) => { if (event.target.value) openProjectThread(event.target.value); }}>
-        <option value="" disabled>Choose a project…</option>
-        {activeProjects.length > 0 && <optgroup label="Active">{activeProjects.map(({ project, label }) => <option key={project.id} value={project.id}>{project.name} · {label}</option>)}</optgroup>}
-        {quietProjects.length > 0 && <optgroup label="Quiet">{quietProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</optgroup>}
-      </select>
-    </label>
+    <ButlerProjectPicker groups={projectGroups} value={projectThreadId} onSelect={openProjectThread} />
     <div className={styles.railHead}>
       <h2>Threads</h2>
       {runningThreads > 0 && <span className={styles.muted}>{runningThreads} running</span>}
@@ -629,7 +635,7 @@ export function ButlerModePage() {
   </section>;
 
   // ↑ and ↓ step through the board's chats while a brief is open.
-  const boardOrder = useMemo(() => [...groups.flatMap((group) => group.items), ...(idle.open ? idle.items : [])].map((item) => item.sessionId), [groups, idle]);
+  const boardOrder = useMemo(() => [...groups.flatMap((group) => group.items), ...(idle.open ? searchedIdle : [])].map((item) => item.sessionId), [groups, idle.open, searchedIdle]);
   useEffect(() => {
     if (!briefId) return;
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -717,11 +723,7 @@ export function ButlerModePage() {
     <header className={styles.topBar}>
       <h1>Butler</h1>
       {!compact && sectionTabs}
-      {section === "board" && <label className={styles.search}>
-        <Search size={15} aria-hidden="true" />
-        <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats and projects" aria-label="Search chats and projects" />
-      </label>}
-      {section !== "board" && <span className={styles.spacer} />}
+      <span className={styles.spacer} />
       {counts && !compact && <div className={styles.pulse} aria-label="Chat status across projects">
         <span><i className={styles.dot} data-state="waiting" aria-hidden="true" />{counts.waiting} need you</span>
         <span><i className={styles.dot} data-state="working" aria-hidden="true" />{counts.working} working</span>
