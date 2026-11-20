@@ -21,6 +21,8 @@ import socket
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 from pathlib import Path
 from threading import Lock
@@ -226,6 +228,33 @@ class ParallelismPolicy(str, Enum):
 
 
 # Core's own bounded reads of recorded output, project files, the
+# The workspace a Butler session in Butler's own project reads: its focus
+# project's. Set only around workspace.find/search/read by the focus broker;
+# the call's ledger, receipt and evidence stay in Butler's project.
+FOCUS_WORKSPACE_READS = frozenset(
+    {"workspace.find", "workspace.search", "workspace.read"}
+)
+_focus_workspace: ContextVar[Path | None] = ContextVar(
+    "butler_focus_workspace", default=None
+)
+
+
+@contextmanager
+def focus_workspace_reads(workspace: Path) -> Iterator[None]:
+    token = _focus_workspace.set(workspace)
+    try:
+        yield
+    finally:
+        _focus_workspace.reset(token)
+
+
+def retrieval_workspace(invocation: "ToolInvocation") -> Path:
+    """The workspace a workspace.* read serves: the focus project's, if set."""
+
+    focus = _focus_workspace.get()
+    return focus if focus is not None else invocation.workspace
+
+
 # conversation's archived messages and the project's indexed knowledge. They change nothing, so an attempt
 # interrupted by a Core restart can run again.
 RETRIEVAL_TOOL_NAMES = frozenset(
@@ -1583,15 +1612,15 @@ def register_artifact_retrieval_tools(
         )
 
     async def workspace_search(invocation: ToolInvocation) -> dict[str, Any]:
-        service = WorkspaceOutputService(invocation.workspace)
+        service = WorkspaceOutputService(retrieval_workspace(invocation))
         return await asyncio.to_thread(service.search, **invocation.arguments)
 
     async def workspace_find(invocation: ToolInvocation) -> dict[str, Any]:
-        service = WorkspaceOutputService(invocation.workspace)
+        service = WorkspaceOutputService(retrieval_workspace(invocation))
         return await asyncio.to_thread(service.find, **invocation.arguments)
 
     async def workspace_read(invocation: ToolInvocation) -> dict[str, Any]:
-        service = WorkspaceOutputService(invocation.workspace)
+        service = WorkspaceOutputService(retrieval_workspace(invocation))
         return await asyncio.to_thread(service.read, **invocation.arguments)
 
     definitions: list[

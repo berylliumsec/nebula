@@ -59,6 +59,7 @@ from .runtime_prepared_catalog import (
 )
 from .tool_results import ToolOutputService
 from .tools import (
+    FOCUS_WORKSPACE_READS,
     InvalidToolArguments,
     StoreToolEvidenceRecorder,
     StoreToolLedger,
@@ -67,6 +68,7 @@ from .tools import (
     ToolInvocation,
     ToolRegistry,
     ToolSpec,
+    focus_workspace_reads,
     register_artifact_retrieval_tools,
 )
 from .web_search import (
@@ -122,6 +124,49 @@ class ToolExecutionBroker(Protocol):
         *,
         approval: Approval | None = None,
     ) -> ToolExecutionResult: ...
+
+
+class _ButlerFocusBroker:
+    """Serve a Butler home session's workspace reads from its focus project.
+
+    Only workspace.find/search/read change: they read the focus project's
+    workspace. The call's ledger, receipt and evidence, and every other tool,
+    stay in Butler's own project, whose writes alone this worker may make.
+    """
+
+    def __init__(
+        self, broker: ToolExecutionBroker, project_name: str, workspace: Path | None
+    ) -> None:
+        self.broker = broker
+        self.project_name = project_name
+        self.workspace = workspace
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: Approval | None = None,
+    ) -> ToolExecutionResult:
+        if invocation.tool_name not in FOCUS_WORKSPACE_READS:
+            return await self.broker.execute(invocation, scope, approval=approval)
+        if self.workspace is None:
+            raise RuntimePlatformError(
+                f"{self.project_name} has no workspace files yet."
+            )
+        with focus_workspace_reads(self.workspace):
+            return await self.broker.execute(invocation, scope, approval=approval)
+
+
+def with_butler_focus(
+    components: "RuntimeToolComponents", project_name: str, workspace: Path | None
+) -> "RuntimeToolComponents":
+    from dataclasses import replace
+
+    return replace(
+        components,
+        broker=_ButlerFocusBroker(components.broker, project_name, workspace),
+    )
 
 
 class _ControlAssistantScopeBroker:
@@ -595,6 +640,33 @@ class RuntimePlatform:
             workspace=(await self.workspace_for(engagement_id)),
             specs={spec.name: spec for spec in registry.specs()},
         )
+
+    async def focus_components(
+        self, components: RuntimeToolComponents, project_id: str
+    ) -> RuntimeToolComponents:
+        """Point a Butler home session's workspace reads at its focus project.
+
+        Unlike ``workspace_for``, this never creates or re-permissions the
+        focus project's folder: Butler only reads what is already there.
+        """
+
+        from .execution_scope import observer_reads
+
+        with observer_reads():
+            project = await self.store.get(Engagement, project_id)
+        workspace: Path | None = None
+        if project.workspace_path:
+            candidate = Path(project.workspace_path).expanduser()
+            if candidate.is_dir():
+                workspace = candidate.resolve()
+        else:
+            candidate = (
+                self.workspace_root
+                / hashlib.sha256(project_id.encode("utf-8")).hexdigest()
+            )
+            if candidate.is_dir():
+                workspace = candidate
+        return with_butler_focus(components, project.name, workspace)
 
     async def workspace_for(self, engagement_id: str) -> Path:
         engagement = await self.store.get(Engagement, engagement_id)

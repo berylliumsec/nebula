@@ -2271,6 +2271,18 @@ class SubagentService:
                 "subagent_parent_turn_id": parent_turn.id,
                 "planning_enabled": parent_request["planning_enabled"],
                 **({"control_assistant": True} if butler_child else {}),
+                # A Butler child in Butler's own project works on its parent's
+                # focus project; without it the child would act on Butler's.
+                **(
+                    {
+                        "butler_focus_project": parent_session.metadata[
+                            "butler_focus_project"
+                        ]
+                    }
+                    if butler_child
+                    and parent_session.metadata.get("butler_focus_project")
+                    else {}
+                ),
                 **({"delegated_plan_context": plan_context} if plan_context else {}),
             },
         )
