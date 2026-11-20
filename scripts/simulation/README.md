@@ -153,6 +153,15 @@ running chat turns cross the restart and the deployer does not wait for
 projects to go idle. If any version is unknown or older, it still waits up to
 `HOST_QUIET_WAIT_SECONDS` for chat work to settle and refuses otherwise.
 
+When a version predates #1023 and the Core supports project holds (#1232),
+`promote` holds each busy project instead of waiting for it to settle, waits
+until no held project has chat work (up to the hold grace plus
+`PROJECT_HOLD_WAIT_SECONDS`), restarts the supervisor and then releases those
+holds, also when activation fails. `hold --reason <why> [--project <id>]...`
+and `release-holds` place and release holds for a stop or wind-down; every
+placed hold is saved in `project-holds.json` until Core confirms its release,
+and a host restart releases only the holds it placed.
+
 Foreground host activation is separately guarded from API and execution worker
 promotion. `activate-host` targets only the exact accepted pending candidate
 after its durable stage and migration receipts are verified. It records a

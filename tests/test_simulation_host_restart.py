@@ -223,6 +223,12 @@ class Unit:
             bootloader.stdout.close()
 
 
+@pytest.fixture(autouse=True)
+def _core_without_project_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These fake Cores predate project holds (#1232): the bounded wait runs."""
+    monkeypatch.setattr(deployer, "place_project_hold", lambda *_a, **_k: None)
+
+
 @pytest.fixture
 def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     releases = tmp_path / "releases"
@@ -734,3 +740,175 @@ def test_host_reconnect_support_follows_commit_ancestry(
     assert deployer._includes_host_reconnect(reconnect)
     assert not deployer._includes_host_reconnect(before)
     assert not deployer._includes_host_reconnect("d" * 40)
+
+
+class HoldingCore(QuietCore):
+    """A Core with project holds: a held project's turn stops after a few reads."""
+
+    def __init__(self) -> None:
+        super().__init__(busy_reads=10_000)
+        self.holds: dict[str, dict] = {}
+        self.released: list[str] = []
+        self.held_reads = 0
+
+    def get(self, path: str, **parameters):
+        if path == "chat/session-activity" and self.holds:
+            self.held_reads += 1
+            if self.held_reads > 2:
+                # Core stopped the held project's turn after its grace.
+                return [{"session_id": "chat-1", "state": "idle"}]
+        return super().get(path, **parameters)
+
+
+def _holding(monkeypatch: pytest.MonkeyPatch, core: HoldingCore) -> None:
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(deployer, "PROJECT_HOLD_POLL_SECONDS", 0.01, raising=False)
+
+    def write(path: str, payload: dict, *, idempotency_key: str):
+        parts = path.split("/")
+        if path.endswith("/release"):
+            core.released.append(parts[3])
+            return {"hold": {"id": parts[3], "status": "released", "restored_goals": []}}
+        hold_id = f"hold-{parts[1]}"
+        core.holds[parts[1]] = {**payload, "key": idempotency_key}
+        return {"hold": {"id": hold_id, "status": "holding"}}
+
+    monkeypatch.setattr(deployer, "core_write", write)
+    monkeypatch.setattr(
+        deployer,
+        "place_project_hold",
+        _real_place_project_hold,
+    )
+
+
+_real_place_project_hold = deployer.place_project_hold
+
+
+def test_restart_boundary_holds_busy_projects_and_activation_releases_them(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Older workers still need a quiet boundary; Core's hold makes one
+    instead of waiting for the project to settle on its own."""
+    core = HoldingCore()
+    _holding(monkeypatch, core)
+    record = promotion_record()
+
+    result = deployer.activate_supervisor_host(record, NEW)
+
+    assert result["status"] == "host_activated"
+    boundary = record["host_activation"]["restart_boundary"]
+    assert boundary["holds"] == {"project-1": "hold-project-1"}
+    placed = core.holds["project-1"]
+    assert placed["deployment_id"] == f"host-restart-{NEW}"
+    assert placed["key"] == f"project-hold:host-restart-{NEW}:project-1"
+    # Released once the new host is up, and no longer saved.
+    assert core.released == ["hold-project-1"]
+    assert result["restart_holds"]["released"]["project-1"]["status"] == "released"
+    assert deployer._saved_holds() == {}
+
+
+def test_restart_holds_are_released_when_activation_fails(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = HoldingCore()
+    _holding(monkeypatch, core)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("switch failed")
+
+    monkeypatch.setattr(deployer, "_switch_supervisor_host", fail)
+
+    with pytest.raises(RuntimeError, match="switch failed"):
+        deployer.activate_supervisor_host(promotion_record(), NEW)
+
+    assert core.released == ["hold-project-1"]
+    assert deployer._saved_holds() == {}
+
+
+def test_restart_release_keeps_an_operators_stop_holds(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = HoldingCore()
+    _holding(monkeypatch, core)
+    deployer._save_holds(
+        {
+            "project-9": {
+                "hold_id": "hold-operator",
+                "deployment_id": "operator-stop-20261120T000000Z",
+            }
+        }
+    )
+
+    deployer.activate_supervisor_host(promotion_record(), NEW)
+
+    assert "hold-operator" not in core.released
+    assert set(deployer._saved_holds()) == {"project-9"}
+
+
+def test_unrouted_hold_falls_back_to_the_bounded_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    from urllib.error import HTTPError
+
+    def missing(*_args, **_kwargs):
+        raise HTTPError("u", 404, "Not Found", {}, io.BytesIO(b'{"detail":"Not Found"}'))
+
+    monkeypatch.setattr(deployer, "core_write", missing)
+    assert (
+        _real_place_project_hold(
+            "project-1", deployment_id="d", reason="r", grace_seconds=0
+        )
+        is None
+    )
+
+    def unknown(*_args, **_kwargs):
+        raise HTTPError(
+            "u", 404, "Not Found", {},
+            io.BytesIO(b'{"detail":"engagements entity not found: project-1"}'),
+        )
+
+    monkeypatch.setattr(deployer, "core_write", unknown)
+    with pytest.raises(HTTPError):
+        _real_place_project_hold(
+            "project-1", deployment_id="d", reason="r", grace_seconds=0
+        )
+
+
+def test_operator_hold_covers_live_projects_and_skips_host_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A whole-Core stop holds every project with a worker, not idle ones."""
+    monkeypatch.setattr(deployer, "STATE", tmp_path / "deployer-state.json")
+
+    class StopCore(HoldingCore):
+        def all_entities(self, path: str, **_parameters) -> list[dict]:
+            return [{"id": "project-1"}, {"id": "project-idle"}]
+
+        def get(self, path: str, **parameters):
+            if path == "deployment/status":
+                return {
+                    "projects": [
+                        {"project_id": "project-1", "runtime_id": "worker-1"},
+                        {"project_id": "project-idle", "runtime_id": None},
+                        {"project_id": "__nebula_host_work__", "runtime_id": "host"},
+                    ]
+                }
+            if path == "chat/session-activity":
+                return []
+            return super().get(path, **parameters)
+
+    core = StopCore()
+    _holding(monkeypatch, core)
+
+    result = deployer.hold_command(None, "Whole-Core stop", 60)
+
+    assert result["status"] == "held"
+    assert result["holds"] == {"project-1": "hold-project-1"}
+    assert core.holds["project-1"]["grace_seconds"] == 60
+    assert core.holds["project-1"]["deployment_id"].startswith("operator-stop-")
+    assert set(deployer._saved_holds()) == {"project-1"}
+
+    released = deployer.release_project_holds(reason="Core is back")
+    assert released["released"]["project-1"]["status"] == "released"
+    assert deployer._saved_holds() == {}
