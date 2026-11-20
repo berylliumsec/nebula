@@ -3119,3 +3119,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .host-cpu-actions .button { min-height: 44px; min-width: 44px; }
 .host-cpu-form .host-cpu-enable { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; }
 .host-cpu-form .host-cpu-enable input { width: 44px; height: 44px; flex: 0 0 44px; margin: 0; }
+/* A file or folder a chat changed (Butler mode's Code & files). */
+.code-editor-files .code-editor-agent-mark { flex: none; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--muted); }
+.code-editor-files .code-editor-agent-mark[data-state="waiting"] { background: var(--orange); }
+.code-editor-files .code-editor-agent-mark[data-state="working"] { background: var(--blue); }
+.code-editor-files .code-editor-agent-mark[data-state="failed"] { background: var(--red); }
