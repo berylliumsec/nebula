@@ -3,7 +3,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, ExternalLink, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { boardElapsed, cancelProposedGoalChat, goalChatProposalFromReceipt, startProposedGoalChat, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerThread } from "../api/butlerBoard";
-import type { ChatMessage, ChatStreamEvent } from "../api/types";
+import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
+import { ActivityLedger } from "../components/ActivityLedger";
+import { activityLedgerFromNative } from "../components/activityLedgerModel";
+import { activityFromEvent, activityFromPendingTurn, activityFromSavedResults, ledgerStatus, type ThreadActivity } from "./butlerThreadActivity";
 import { startVisiblePoll } from "../api/visiblePoll";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -117,7 +120,9 @@ export function ButlerModePage() {
 
   const [threads, setThreads] = useState<ButlerThread[]>([]);
   const [threadsError, setThreadsError] = useState("");
-  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [messages, setMessages] = useState<Record<string, PersistedChatMessage[]>>({});
+  // Each thread's live steps: the same Activity card a normal chat shows.
+  const [activity, setActivity] = useState<Record<string, ThreadActivity>>({});
   const [threadError, setThreadError] = useState<Record<string, string>>({});
   const [live, setLive] = useState<Record<string, LiveTurn>>({});
   // Goal chats Butler proposed or started in a thread on this device; the board keeps them durably.
@@ -215,6 +220,36 @@ export function ButlerModePage() {
   }, [api]);
 
   useEffect(() => { if (openThreadId) void loadMessages(openThreadId); }, [openThreadId, loadMessages]);
+
+  // A thread working without this device's stream (a reload, another device,
+  // or a turn Core resumed after a restart): read its steps from Core.
+  const openThreadWorking = threads.some((item) => item.sessionId === openThreadId && item.state !== "idle");
+  useEffect(() => {
+    if (!api || !openThreadId || !openThreadWorking) return;
+    const sessionId = openThreadId;
+    const controller = new AbortController();
+    startVisiblePoll({
+      intervalMs: 3000,
+      maxIntervalMs: 15_000,
+      signal: controller.signal,
+      read: async (signal) => {
+        if (streams.current.has(sessionId)) return "idle";
+        try {
+          const turn = await api.getPendingChatTurn(sessionId, signal);
+          setActivity((current) => {
+            if (!turn) { if (!current[sessionId]) return current; const next = { ...current }; delete next[sessionId]; return next; }
+            return { ...current, [sessionId]: activityFromPendingTurn(turn) };
+          });
+          return turn ? "active" : "stop";
+        } catch (caught) {
+          if (signal.aborted) return "stop";
+          void logCaughtDiagnostic("interface.butler_mode.thread_activity_failed", "Butler mode could not read a thread's steps.", caught, "butler_mode");
+          return "idle";
+        }
+      },
+    });
+    return () => controller.abort();
+  }, [api, openThreadId, openThreadWorking]);
 
   // A thread Core finished (on this device or another) shows its saved answer.
   useEffect(() => {
@@ -458,6 +493,7 @@ export function ButlerModePage() {
     threadsPoll.current?.poke();
     try {
       await api.streamChat(butlerThreadRequest(projectId, sessionId, runtime, harnesses, content), (event: ChatStreamEvent) => {
+        setActivity((current) => { const next = activityFromEvent(current[sessionId], event); return next === current[sessionId] || !next ? current : { ...current, [sessionId]: next }; });
         if (event.type === "delta" || event.type === "message_delta") {
           setLive((current) => current[sessionId] ? { ...current, [sessionId]: { ...current[sessionId], text: current[sessionId].text + event.delta } } : current);
         }
@@ -479,6 +515,8 @@ export function ButlerModePage() {
     } finally {
       streams.current.delete(sessionId);
       await loadMessages(sessionId);
+      // The saved answer carries the finished steps.
+      setActivity((current) => { if (!current[sessionId]) return current; const next = { ...current }; delete next[sessionId]; return next; });
       setLive((current) => { if (current[sessionId]?.error) return current; const next = { ...current }; delete next[sessionId]; return next; });
       threadsEtag.current = undefined;
       threadsPoll.current?.poke();
@@ -614,6 +652,7 @@ export function ButlerModePage() {
   </nav>;
 
   const openLive = openThreadId ? live[openThreadId] : undefined;
+  const openActivity = openThreadId ? activity[openThreadId] : undefined;
   const threadMessages = openThreadId ? messages[openThreadId] ?? [] : [];
   const conversation = <section className={styles.conversation} aria-label={openThreadSummary ? `Thread: ${openThreadSummary.title}` : "New Butler thread"}>
     <div className={styles.threadBar}>
@@ -641,15 +680,20 @@ export function ButlerModePage() {
     <div className={styles.messages} role="log" aria-label="Butler thread messages" aria-live="polite">
       {!openThreadId && <p className={styles.empty}>Ask Butler about anything across your projects — what needs you, what's stuck, what to pause. Butler keeps working on each thread while you start the next.</p>}
       {openThreadId && threadError[openThreadId] && <div className={styles.error} role="alert">{threadError[openThreadId]} <button type="button" className={styles.link} onClick={() => void loadMessages(openThreadId)}>Retry</button></div>}
-      {threadMessages.map((message, index) => <div key={message.id ?? index} className={message.role === "user" ? styles.question : styles.answer}>
-        {message.role === "user" ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
-      </div>)}
+      {threadMessages.map((message, index) => {
+        const steps = message.role === "assistant" ? activityFromSavedResults(message.id, message.toolResults) : [];
+        return <div key={message.id ?? index} className={message.role === "user" ? styles.question : styles.answer}>
+          {steps.length > 0 && <ActivityLedger model={activityLedgerFromNative("Butler's steps", "complete", steps)} />}
+          {message.role === "user" ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
+        </div>;
+      })}
       {openLive && !threadMessages.some((message) => message.role === "user" && message.content.endsWith(openLive.prompt)) && <div className={styles.question}>{openLive.prompt}</div>}
-      {openLive && (openLive.text ? <div className={styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{openLive.text}</ReactMarkdown></div> : !openLive.error && <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Butler is working on this…</p>)}
+      {openThreadId && openActivity && <ActivityLedger model={activityLedgerFromNative("Butler's steps", ledgerStatus(openActivity), openActivity.cards)} liveStatus={openActivity.detail} />}
+      {openLive && (openLive.text ? <div className={styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{openLive.text}</ReactMarkdown></div> : !openLive.error && !openActivity && <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Butler is working on this…</p>)}
       {openThreadId && threadProposals[openThreadId]?.map((proposal) => <ProposalCard key={proposal.sessionId} proposal={proposal} note={actionNote[proposal.sessionId]} actions={proposal.kind === "goal_chat_proposal" ? proposalActions(proposal.sessionId, proposal.title) : null} onOpenBrief={() => openBrief(proposal.sessionId)} />)}
       {openLive?.browserAction && <p className={styles.note}>Butler asked this device to finish a step in the browser (for example a picker or setting). Open the Butler panel to complete it there.</p>}
       {openLive?.error && <div className={styles.error} role="alert">{openLive.error}</div>}
-      {openThreadSummary && !openLive && openThreadSummary.state !== "idle" && <p className={styles.working}><i className={styles.dot} data-state={openThreadSummary.state} aria-hidden="true" /> {openThreadSummary.state === "waiting" ? "Butler's answer is waiting for you. Open its conversation to approve or answer." : "Butler is working on this thread…"}</p>}
+      {openThreadSummary && !openLive && !openActivity && openThreadSummary.state !== "idle" && <p className={styles.working}><i className={styles.dot} data-state={openThreadSummary.state} aria-hidden="true" /> {openThreadSummary.state === "waiting" ? "Butler's answer is waiting for you. Open its conversation to approve or answer." : "Butler is working on this thread…"}</p>}
     </div>
     <form className={styles.composer} onSubmit={(event) => void send(event)}>
       {butlerDrafts.length > 0 && <div className={styles.contextPack} role="group" aria-label="Selected context for Butler">

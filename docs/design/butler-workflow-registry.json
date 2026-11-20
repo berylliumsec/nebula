@@ -1818,7 +1818,8 @@
         "ui/src/pages/SessionsPage.tsx::resumeChatTurn",
         "ui/src/pages/ButlerModePage.tsx::getControlAssistantSession",
         "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
-        "ui/src/pages/ButlerModePage.tsx::streamChat"
+        "ui/src/pages/ButlerModePage.tsx::streamChat",
+        "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn"
       ],
       "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
       "butler": {
@@ -5450,6 +5451,10 @@
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn",
       "count": 1
     },
     {

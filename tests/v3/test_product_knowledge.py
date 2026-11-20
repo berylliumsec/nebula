@@ -1218,6 +1218,16 @@ def test_product_help_explains_archiving_and_deleting_butler_threads(monkeypatch
     assert "delete this thread and its messages" in text
 
 
+def test_product_help_explains_butler_thread_activity(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can I see what Butler is doing in a thread while it works?"
+    )
+    assert any(item["heading"] == "Butler mode" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "activity" in text and "queue position" in text
+
+
 def test_product_help_explains_butler_proposed_goal_chats(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

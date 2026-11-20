@@ -1,7 +1,7 @@
 {
-  "change_digest": "ee576795f994118deda87ad0df23587543e3b68ea71dc2e7180aa10a0684e830",
-  "reviewed_by": "Claude Code, adding Archive and Delete to Butler mode threads at the operator's request (mockup approved on Figma page 'Butler thread actions')",
-  "reason": "Butler mode had no way to archive or delete a thread. Core already supports both (PATCH chat-sessions/{id} archived, DELETE chat-sessions/{id}) and /butler/threads already hides archived threads, so this is UI only: the open thread's header gets Archive (immediate; the thread stays in the project's archived chats) and Delete (inline confirmation, then removal). Both are disabled while Butler is still answering the thread. The Butler workflow registry links the new ButlerModePage calls to the existing reviewed chat.archive and chat.delete actions, and the settings assistant guide documents the actions with a focused product-help regression. Selected: the real-Core Butler mode journey at desktop, compact and 390 px Chromium/WebKit (now archives the answered thread and checks Core keeps it archived, then cancels and confirms Delete and checks Core returns 404), plus the product-knowledge digest, Butler mode and new archive/delete help tests. The first CI run failed 3 of 4 journey projects at the Butler mode entry check (/butler instead of /butler?project=<research>), the same failure seen on #1250: the top-bar launcher built its path from the workspace's selected project, which is unset while a project page is still loading. The launcher now falls back to the project in the URL; a new NebulaControlAssistant test fails without that fix and passes with it. Also: the chat brief's goal card let long unbroken text (paths, hashes) run past its edge and collapsed the completion criteria's line breaks; its paragraphs now wrap anywhere and the criteria keep their line breaks (CSS and one class name).",
+  "change_digest": "bd4c7bfba863e79f3541e89b17b46f4e0dfdd974fab569f90e7ff891ebdc36a3",
+  "reviewed_by": "Claude Code, adding Archive/Delete and the chat Activity card to Butler mode threads at the operator's request (Figma pages 'Butler thread actions' and 'Butler thread activity' approved)",
+  "reason": "Butler mode had no way to archive or delete a thread. Core already supports both (PATCH chat-sessions/{id} archived, DELETE chat-sessions/{id}) and /butler/threads already hides archived threads, so this is UI only: the open thread's header gets Archive (immediate; the thread stays in the project's archived chats) and Delete (inline confirmation, then removal). Both are disabled while Butler is still answering the thread. The Butler workflow registry links the new ButlerModePage calls to the existing reviewed chat.archive and chat.delete actions, and the settings assistant guide documents the actions with a focused product-help regression. Selected: the real-Core Butler mode journey at desktop, compact and 390 px Chromium/WebKit (now archives the answered thread and checks Core keeps it archived, then cancels and confirms Delete and checks Core returns 404), plus the product-knowledge digest, Butler mode and new archive/delete help tests. The first CI run failed 3 of 4 journey projects at the Butler mode entry check (/butler instead of /butler?project=<research>), the same failure seen on #1250: the top-bar launcher built its path from the workspace's selected project, which is unset while a project page is still loading. The launcher now falls back to the project in the URL; a new NebulaControlAssistant test fails without that fix and passes with it. Also: the chat brief's goal card let long unbroken text (paths, hashes) run past its edge and collapsed the completion criteria's line breaks; its paragraphs now wrap anywhere and the criteria keep their line breaks (CSS and one class name). Also: Butler threads now show the same Activity card as a normal chat (approved mockup): live tool steps from the stream, Queued with Core's reason and queue position, and after a reload or on another device the pending turn's steps from Core (GET chat/sessions/{id}/pending-turn, linked to the reviewed ui.butler_conversation_protocol entry). Finished answers keep a collapsed card of their saved tool results. The live operator report was a resumed Butler turn that only showed 'Butler is working\u2026' while it actually waited in the recovery queue.",
   "exclusions": "No Core change. tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli and tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fail identically on pristine origin/main (the registry already has 2 unreviewed signatures there; this change adds none), so the rest of those files are not selected. No ButlerModePage component test exists; the real-Core journey covers the new controls. The real-Core Playwright journey was not run locally; CI runs it. Not a setting, so ui/src/settingsCatalog.ts is unchanged. ButlerChatBrief has no component test and its wrapping is CSS only; the Butler mode journey's horizontal-overflow check covers the page, but no selected test renders a goal with an unbroken path.",
   "python_versions": [
     "3.12"
@@ -9,18 +9,20 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 3,
-    "frontend": 73,
+    "python": 4,
+    "frontend": 76,
     "native": 0,
     "playwright": 4
   },
   "python": [
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads"
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
   ],
   "frontend": [
-    "ui/src/components/NebulaControlAssistant.test.tsx"
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/pages/butlerThreadActivity.test.ts"
   ],
   "native": [],
   "playwright": [

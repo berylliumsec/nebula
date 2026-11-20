@@ -355,6 +355,8 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       // Two threads: the first is still being answered when the second finishes.
       await startThread(page, PROMPTS.held);
       await expect.poll(stub.prompts, {timeout: 60_000}).toContain(PROMPTS.held);
+      // The working thread shows the same Activity card as a normal chat.
+      await expect(page.getByRole("region", {name: "Butler's steps"})).toBeVisible();
       await startThread(page, PROMPTS.quick);
       const conversation = page.getByRole("log", {name: "Butler thread messages"});
       await expect(conversation.getByText(ANSWERS.quick)).toBeVisible({timeout: 90_000});
@@ -446,6 +448,12 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await expect(page.getByRole("region", {name: "Butler in Research fixture"}).getByRole("textbox", {name: "Ask Butler a question"})).toBeVisible({timeout: 60_000});
       if (await page.getByRole("button", {name: "Back to threads"}).isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
 
+      // After a reload the held thread's card comes from Core, not this tab's stream.
+      await showThreads(page);
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
+      await rail.getByRole("button", {name: /THREAD-A/}).click();
+      await expect(page.getByRole("region", {name: "Butler's steps"})).toBeVisible({timeout: 30_000});
+      await expect(page.getByText("Butler is working on this thread…")).toHaveCount(0);
       // The held thread finishes on its own and shows Butler's answer.
       releaseThread();
       await showThreads(page);
@@ -486,7 +494,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the working thread showed the chat Activity card, live and again from Core after a reload; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }
