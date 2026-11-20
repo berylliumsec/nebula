@@ -70,6 +70,8 @@ def test_catalog_covers_settings_destinations_without_secrets():
     )
     assert butler_mode["path"] == "/butler"
     assert "status board" in butler_mode["aliases"]
+    assert "proposed goal chat" in butler_mode["aliases"]
+    assert "nebula.work.propose_goal_chat" in butler_mode["guide"]
     assert (
         next(item for item in result["destinations"] if item["id"] == "notebook")[
             "path"

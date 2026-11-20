@@ -1207,3 +1207,13 @@ def test_product_help_finds_butler_mode_board_and_parallel_threads(monkeypatch):
     ).lower()
     assert "/butler" in text
     assert "reply in this thread" in text
+
+
+def test_product_help_explains_butler_proposed_goal_chats(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler propose goal chat spin up work operator presses Start delegate"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.work.propose_goal_chat" in text
+    assert "nothing runs until the operator" in " ".join(text.split())
