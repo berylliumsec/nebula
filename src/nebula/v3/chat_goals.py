@@ -21,6 +21,7 @@ from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
     DEFAULT_GOAL_RESUME_INSTRUCTION,
+    GOAL_START_INSTRUCTION,
     ChatBackend,
     Approval,
     ApprovalStatus,
@@ -1430,9 +1431,7 @@ def goals_router(
         updated = await service.write(session_id, body)
         if goal_dispatcher is not None and body.action in {"start", "resume"}:
             instruction = (
-                "Begin work on the active conversation goal now. Review the goal "
-                "objective and completion criteria provided by Core, then make "
-                "concrete progress without waiting for another operator message."
+                GOAL_START_INSTRUCTION
                 if body.action == "start"
                 else updated.resume_instruction
             )

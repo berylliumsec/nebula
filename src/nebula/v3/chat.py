@@ -139,6 +139,7 @@ from .butler_memory import BUTLER_MEMORY_INSTRUCTION
 from .domain import BrowserSession
 
 from .domain import (
+    GOAL_CONTINUE_INSTRUCTION,
     AgentRun,
     Approval,
     ApprovalStatus,
@@ -1149,6 +1150,9 @@ class _ActiveProviderTurn:
     done: bool = False
     error: BaseException | None = None
     admission: ProviderAdmission | None = None
+    # Who is waiting on the turn: "direct" for an operator, "background" for
+    # goal, subagent, Butler and queued work. Readable before admission.
+    capacity_lane: str = "direct"
     journal_closed: bool = False
     journal_prior_history: bool = False
     journal_start_sequence: int = 0
@@ -2266,13 +2270,7 @@ _REFUSED_BUDGET_CLASS = "refused"
 # without a change, so a late start report from its runtime still wins.
 _STALE_APPROVED_CALL_AGE = timedelta(minutes=10)
 # What Core asks when a running goal continues without an operator message.
-_GOAL_CONTINUE_INSTRUCTION = (
-    "Review the active conversation goal and its completion criteria. Is the "
-    "goal complete? If it is complete, call the offered goal_complete tool with a final summary "
-    "and concrete evidence, then give the operator a concise handoff. If it is "
-    "not complete, continue making concrete progress toward the goal now. Do "
-    "not stop merely to report status."
-)
+_GOAL_CONTINUE_INSTRUCTION = GOAL_CONTINUE_INSTRUCTION
 
 
 _GOAL_TIME_FIVE_MINUTE_REMINDER = (
@@ -4537,7 +4535,7 @@ class ChatService:
         (await self.provider_scheduler.enqueue(turn))
         if existing is not None and existing.cleanup_task is not None:
             existing.cleanup_task.cancel()
-        runtime = _ActiveProviderTurn()
+        runtime = _ActiveProviderTurn(capacity_lane=turn.capacity_lane)
         if self.stream_journal is not None:
             runtime.journal_prior_history = await self.stream_journal.has_history(
                 turn.id
