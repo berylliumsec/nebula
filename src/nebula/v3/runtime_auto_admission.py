@@ -29,6 +29,8 @@ from .database import (
     RuntimeResourceRow,
 )
 from .deployment_protocol import (
+    BUTLER_HOME_FEATURE,
+    BUTLER_HOME_PROJECT,
     GLOBAL_EXECUTION_PROJECT,
     IDLE_RETIREMENT_FEATURE,
     ReleaseManifest,
@@ -180,6 +182,10 @@ class RuntimeAutoAdmission:
         # Whether each staged release can quiesce under a project retirement
         # hold. A staged release's manifest never changes.
         self._idle_retirement: dict[str, bool] = {}
+        # Whether each staged release can host the Butler home project, and
+        # the last release noted as unable to, so the hold is said once.
+        self._butler_home: dict[str, bool] = {}
+        self._butler_home_noted: str | None = None
         # The idle worker last noted as skipped, and why, so each skip is
         # recorded once instead of on every half-second pass.
         self._idle_skips: dict[str, str] = {}
@@ -524,6 +530,9 @@ class RuntimeAutoAdmission:
                         ProjectOwnershipRow.lease_expires_at_ms > now_ms,
                         ProjectOwnershipRow.retirement_requested.is_(False),
                         ProjectOwnershipRow.project_id != GLOBAL_EXECUTION_PROJECT,
+                        # Butler's own worker is not traded for memory: it is
+                        # what the operator uses to see the other projects.
+                        ProjectOwnershipRow.project_id != BUTLER_HOME_PROJECT,
                         ProjectOwnershipRow.project_id.not_in(
                             [*capacity_waiters, *(p for p, _r in idle_owners)]
                         ),
@@ -670,6 +679,14 @@ class RuntimeAutoAdmission:
                                 )
                             )
                         if reserved:
+                            continue
+                        if (
+                            project.id == BUTLER_HOME_PROJECT
+                            and not await self._hosts_butler_home(version)
+                        ):
+                            # An older release would run Butler's home under
+                            # project-local Butler code; it waits for a release
+                            # that declares butler.home/v1.
                             continue
                         worker = await supervisor.prepare_execution(version)
                         runtime_id = worker.runtime_id
@@ -958,6 +975,39 @@ class RuntimeAutoAdmission:
                 failure,
                 stage="admission",
             )
+
+    async def _hosts_butler_home(self, version: str) -> bool:
+        """Whether ``version`` declares ``butler.home/v1``; says once when not."""
+
+        supported = self._butler_home.get(version)
+        if supported is None:
+            async with self.supervisor.coordinator.database.session() as session:
+                release = await session.get(RuntimeReleaseRow, version)
+            supported = release is not None and (
+                BUTLER_HOME_FEATURE
+                in ReleaseManifest.model_validate(release.manifest).features
+            )
+            if release is not None:
+                # A missing release may still be staged; ask again next pass.
+                self._butler_home[version] = supported
+        if not supported and self._butler_home_noted != version:
+            self._butler_home_noted = version
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.butler_home.release_lacks_feature",
+                "Butler's own worker waits: the execution release cannot host it.",
+                project_id=BUTLER_HOME_PROJECT,
+                stage="admission",
+                outcome="skipped",
+                operator_detail=(
+                    "Butler keeps working inside each project until a release "
+                    "with butler.home/v1 is the execution target."
+                ),
+                metadata={"version": version, "feature": BUTLER_HOME_FEATURE},
+                force=True,
+            )
+        return supported
 
     async def _retires_idle(self, session, project_id: str, runtime_id: str) -> bool:
         process = await session.get(RuntimeProcessRow, runtime_id)

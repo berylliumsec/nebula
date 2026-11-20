@@ -1,40 +1,32 @@
 {
-  "change_digest": "b769aa7608692920a3efb5cfa1f735b304b27dce227b1d65a8ff726bcc97f79c",
-  "reviewed_by": "Claude Code, expanding Butler mode into Butler's one place at the operator's request",
-  "reason": "The Butler launcher now opens Butler mode, which gains Board, Code & files, Oversight, Memory and Settings sections, project threads (the Butler panel lent through ButlerPanelBridge), a Butler model picker, chat briefs from a new Core brief read, a transcript pop-up, Butler goal-chat proposals (new nebula.work.propose_goal_chat, board proposal items) and file attribution reads. Selected: the new Core suites for the brief, file attribution, active plan step and proposals; the global project reads, oversight (progress report plan_index) and generic CRUD exposure suites the change touches; the Butler panel, Butler board, brief/proposal/attribution mapping and Butler thread frontend suites; and the real-Core Butler mode journey at desktop, compact and 390 px in Chromium and WebKit, all of which passed locally.",
-  "exclusions": "tests/v3/test_product_knowledge.py (test_product_search_finds_headless_core_and_paired_butler_cli) and tests/v3/test_settings_assistant_tools.py (test_provider_tools_are_bounded_to_catalog_and_project) each have one test that fails identically on origin/main; their other tests passed locally with this change. tests/v3/test_butler_workflow_registry.py fails on origin/main for two unlinked useProjectViewLease calls; the registry check otherwise passes. ui/src/components/CompactSettingsList.test.tsx fails on its Host commands glyph, which this change does not touch. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL.",
+  "change_digest": "a99538b74c6891655d8568f3eb0ff9f493dac17f304e75338888a6e99799ab6f",
+  "reviewed_by": "Claude Code, PR 1 of the Butler home worker design at the operator's request",
+  "reason": "Live Core showed Butler questions taking 4-50 minutes because every transaction of a project's worker runs one at a time and Apple Bug Bounty held 45-84 concurrent turns. This PR adds the foundation for running Butler on its own worker: a reserved __nebula_butler__ project hidden from store listings, counts, overview, search and CRUD edits; observer_reads(), which lets only the home project's worker read other projects' committed rows while row locks and writes stay fenced to its own project; and a butler.home/v1 release feature that gates admission, plus a capacity-retirement exemption. Selected: the new scope suite (observer reads, write and lock fencing, refusal on other workers, hidden listings, search and CRUD guards, admission gate), the existing execution-scope suite (SELECT branch changed), mixed-release idle retirement and admission retry/capacity (auto-admission changed), runtime worker features and bundle tests (release feature list changed), and the deployer protocol and simulation bundle tests (manifest features).",
+  "exclusions": "tests/v3/test_execution_locks.py::test_handoff_waits_for_an_in_flight_source_write[postgresql] fails identically on unmodified origin/main a50eecc (3/3 runs locally), so test_execution_locks.py is not selected; its other cases passed with this change. No UI, settings or operator-visible behaviour changes: nothing creates the home project yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; all selected suites passed locally against the staging postgres:16 container (nebula_pytest database).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 85,
-    "frontend": 86,
+    "python": 271,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_goal_chat_proposals.py",
-    "tests/v3/test_butler_oversight.py",
-    "tests/v3/test_chat_brief.py",
-    "tests/v3/test_file_attribution.py",
-    "tests/v3/test_generic_crud_exposure.py",
-    "tests/v3/test_goal_active_plan_step.py",
-    "tests/v3/test_runtime_global_project_reads.py"
+    "tests/test_deployer_protocol.py",
+    "tests/test_simulation_runtime_bundle.py",
+    "tests/v3/test_admission_retry.py",
+    "tests/v3/test_butler_home_scope.py",
+    "tests/v3/test_execution_scope.py",
+    "tests/v3/test_mixed_release_idle_retirement.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_runtime_capacity.py",
+    "tests/v3/test_runtime_worker_features.py"
   ],
-  "frontend": [
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/api/butlerModeExpansion.test.ts",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/pages/butlerThreads.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
-  ],
+  "playwright": [],
   "checks": []
 }

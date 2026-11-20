@@ -13,8 +13,17 @@ from .domain import NebulaModel
 IPC_PROTOCOL: Final = "nebula.runtime/v1"
 MAX_EXECUTION_VERSIONS = 2
 GLOBAL_EXECUTION_PROJECT = "__nebula_host_work__"
+# Butler's own project: its chats run on their own worker instead of queueing
+# behind the project they oversee. See docs/design/butler-home-worker.md.
+BUTLER_HOME_PROJECT: Final = "__nebula_butler__"
+# Project ids Core reserves for itself. They never appear in project lists,
+# search or operator pickers, and cannot be archived or deleted.
+RESERVED_PROJECT_IDS: Final = frozenset({GLOBAL_EXECUTION_PROJECT, BUTLER_HOME_PROJECT})
 SHARED_MEMORY_BOOTSTRAP_KEY = "shared_butler_memory_v1"
 IDLE_RETIREMENT_FEATURE: Final = "project.idle-retirement/v1"
+# An execution release that can host the Butler home project: it supports
+# observer reads (execution_scope.observer_reads) for that project's worker.
+BUTLER_HOME_FEATURE: Final = "butler.home/v1"
 SHA256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 RuntimeVersion = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$")]
 
