@@ -3830,6 +3830,57 @@ class ButlerAuthorityPolicy(Entity):
         return self
 
 
+class ProjectHoldGoal(NebulaModel):
+    goal_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+
+
+class ProjectHoldTurn(NebulaModel):
+    turn_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    outcome: str = Field(min_length=1, max_length=500)
+
+
+class ProjectHoldRestore(NebulaModel):
+    goal_id: str = Field(min_length=1, max_length=200)
+    outcome: str = Field(min_length=1, max_length=500)
+
+
+class ProjectHold(Entity):
+    """Core's durable stop of all chat work in one project.
+
+    While a hold is ``holding`` or ``held`` no chat turn starts in the project
+    from any source, and the goals it paused cannot be resumed by anyone but
+    its release. ``holding`` lets running turns finish for ``grace_seconds``;
+    after that Core stops what is left and the hold becomes ``held`` once no
+    turn is active. Release resumes exactly the goals it paused.
+    """
+
+    entity_kind: ClassVar[str] = "project_holds"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    status: Literal["holding", "held", "released"] = "holding"
+    reason: str = Field(min_length=1, max_length=500)
+    deployment_id: str | None = Field(default=None, max_length=200)
+    grace_seconds: int = Field(default=180, ge=0, le=3600)
+    # When Core starts stopping turns that are still running.
+    grace_until: datetime | None = None
+    held_at: datetime | None = None
+    released_at: datetime | None = None
+    release_reason: str | None = Field(default=None, max_length=500)
+    paused_goals: list[ProjectHoldGoal] = Field(default_factory=list, max_length=1000)
+    interrupted_turns: list[ProjectHoldTurn] = Field(
+        default_factory=list, max_length=5000
+    )
+    stopped_subagents: list[str] = Field(default_factory=list, max_length=5000)
+    restored_goals: list[ProjectHoldRestore] = Field(
+        default_factory=list, max_length=1000
+    )
+
+    @property
+    def active(self) -> bool:
+        return self.status != "released"
+
+
 class ButlerAction(Entity):
     """Durable action intent and outcome; only Core's dispatcher may write it."""
 
@@ -5286,6 +5337,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerIncident,
     ButlerDecision,
     ButlerAuthorityPolicy,
+    ProjectHold,
     ButlerAction,
     ButlerIssueDestination,
     ButlerIssueScan,

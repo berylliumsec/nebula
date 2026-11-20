@@ -19,6 +19,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import Field, field_validator, model_validator
 
+from .project_hold_gate import is_held
 from .database import EntityRow
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
@@ -1381,6 +1382,10 @@ class ButlerOversightService:
             signal.clear()
             try:
                 owned = await self.replay_project(engagement_id)
+                # A held project's work is stopped on purpose: Butler neither
+                # reviews nor acts on it, so nothing it does is lost or failed.
+                if owned and await is_held(self.store, engagement_id):
+                    owned = False
                 if owned:
                     await self.fire_due_deadlines(engagement_id)
                     from .butler_review import review_pending
