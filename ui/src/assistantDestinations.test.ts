@@ -21,11 +21,14 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("open transform report note")?.id).toBe("reports");
     expect(destinationToOpen("open Knowledge")?.id).toBe("sources");
     expect(destinationToOpen("show storage devices")?.id).toBe("storage");
+    expect(destinationToOpen("open Butler mode")?.path).toBe("/butler");
+    expect(destinationToOpen("show the status board")?.id).toBe("butler-mode");
+    expect(destinationToOpen("show Butler threads")?.id).toBe("butler-mode");
     expect(destinationToOpen("How do projects work?")).toBeUndefined();
   });
 
   it("resolves every listed route with the selected project and preserves encoded IDs", () => {
-    expect(assistantDestinations).toHaveLength(22);
+    expect(assistantDestinations).toHaveLength(23);
     expect(destinationToOpen("open Butler scheduled activity")?.path).toBe("/settings#butler-oversight");
     expect(new Set(assistantDestinations.map((entry) => entry.id)).size).toBe(assistantDestinations.length);
     for (const destination of assistantDestinations) {

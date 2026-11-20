@@ -1,35 +1,41 @@
 {
-  "change_digest": "0bd428807ba4bb48492c5b8ff40528fbe0f1f7043d24d8de32345344bf03d202",
-  "reviewed_by": "Claude Code, building the approved held-project banner (Figma page Project hold, 172:2)",
-  "reason": "Core project holds (#1232) had no interface. A shared ProjectHoldWatch on ApiClient polls the open project's hold (30 s, 5 s while held, refreshed at once when Core refuses work with project_held, stopped on a Core without the route). ProjectHoldNotice shows 'Pausing work in this project' with the grace countdown, then 'Work in this project is paused' with a bordered Release control (icon-only at phone width) behind a confirmation. The composer keeps the draft, disables Send and says when sending works again; the goal panel shows 'paused by update' and hides Resume for goals the hold paused. The assistant contract gains a 'Projects paused for a Core update' section. Selected: new unit suites and the goal panel, runtime notice and chat page suites; the bundled-guidance discovery test; a new real-Core acceptance (area:project-hold, 8 browser projects) that places a hold through Core, checks the banner, disabled Send with kept draft, axe and no horizontal overflow, Keep paused, Release, and Core's released readback; composer-draft-continuity and critical-workspaces mocked areas for composer and workspace layout regressions.",
-  "exclusions": "No settings destination: a hold is not a setting (documented in the assistant contract). Release uses the pack's CirclePlay icon because the curated icon pack has no unlocked-lock glyph; the approved mockup's lock icon is otherwise matched. area:assistant is not selected: its real-core.spec.ts lanes carry known unrelated rot; the composer change is covered by composer-draft-continuity and the real-Core hold acceptance. tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters fails on unmodified main (ios-shell-real-core.spec.ts) and is not selected. Real-Core acceptance passed locally on model-desktop, model-chromium-320 and model-webkit-390.",
+  "change_digest": "e1282047a1436808f8a0a296a9bf6fc7e0e705e11116319d759a86e4d84ce040",
+  "reviewed_by": "Claude Code, building the approved Butler mode mockup (Figma page 162:2) on 2026-11-20",
+  "reason": "Butler mode adds a full-screen /butler view: a Core-owned status board of every non-archived project's chats (new API-worker read GET /api/v1/butler/board: waiting, working, recently failed and counted idle chats, with attention summaries, goals, idle paging and ETags) beside parallel Butler threads (ButlerSessionReservation gains thread/title: each thread is its own Butler session marked butler_thread with an operator-owned title, excluded from the panel's current-Butler lookup; GET /api/v1/butler/threads lists them across projects with state). The UI page groups cards by attention or project, expands a card to its goal and pending approval (Approve, Deny, Stop, Open chat, Ask Butler about this), starts threads in the chosen or card's project and streams several at once; the Butler panel header opens it. Selected: the global project-read suite (board and threads on SQLite here, PostgreSQL in the local run), Butler session reservation, the settings catalog destination, product-help discovery and digest, the knowledge-index digest sync, the impact-catalog checks for the new area, the new board/thread unit tests, the Butler panel component suite, and the new real-Core LAN journey in all eight assistant-real profiles.",
+  "exclusions": "Pre-existing reds on main are not selected: tests/v3/test_butler_workflow_registry.py (2 unreviewed holdProjectView/releaseProjectView signatures, unchanged by this PR; npm run build's registry guard still checks every new call), tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters (ios-shell-real-core.spec.ts is uncatalogued on main; butler-mode.spec.ts is catalogued here), and tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli. The knowledge LAN bootstrap case needs a host LAN fixture and is covered by the digest-sync case. PostgreSQL variants of the board/threads tests skip without NEBULA_TEST_POSTGRES_URL in CI; they passed locally against PostgreSQL 16. No native code changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 1,
-    "frontend": 42,
+    "python": 30,
+    "frontend": 83,
     "native": 0,
-    "playwright": 34
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_project_hold_knowledge.py"
+    "tests/v3/test_runtime_global_project_reads.py",
+    "tests/v3/test_butler_sessions.py",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
+    "tests/v3/test_runtime_host_knowledge_bootstrap.py::test_default_supervisor_opens_one_index_after_lock_and_reopens_same_digest",
+    "tests/test_playwright_impact.py::test_representative_area_mapping",
+    "tests/test_playwright_impact.py::test_full_manifest_covers_every_permanent_playwright_project",
+    "tests/test_playwright_impact.py::test_project_and_exact_entry_selection_are_catalog_bounded",
+    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans",
+    "tests/test_playwright_impact.py::test_assistant_real_core_uses_bounded_shards"
   ],
   "frontend": [
-    "ui/src/api/projectHold.test.ts",
-    "ui/src/components/ProjectHoldNotice.test.tsx",
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/components/ProjectRuntimeNotice.test.tsx",
-    "ui/src/pages/chatMobileDrawerRestore.test.tsx",
-    "ui/src/pages/chatDraftNavigation.test.tsx"
+    "ui/src/api/butlerBoard.test.ts",
+    "ui/src/pages/butlerThreads.test.ts",
+    "ui/src/assistantDestinations.test.ts",
+    "ui/src/components/NebulaControlAssistant.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:project-hold",
-    "area:composer-draft-continuity",
-    "area:critical-workspaces"
+    "area:butler-mode"
   ],
   "checks": []
 }

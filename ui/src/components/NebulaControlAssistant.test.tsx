@@ -51,6 +51,18 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("opens Butler mode from the panel header and hides the panel", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const open = screen.getByRole("button", { name: "Open Butler mode" });
+    expect(open).toHaveAttribute("title", expect.stringContaining("parallel threads"));
+    await user.click(open);
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringMatching(/^\/butler(?:\?project=.+)?$/));
+    expect(screen.getByRole("button", { name: "Show Butler" })).toBeVisible();
+  });
+
   it("starts in Chat and keeps the draft while Work and More reveal secondary controls", async () => {
     const user = userEvent.setup();
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
@@ -62,6 +74,8 @@ describe("NebulaControlAssistant", () => {
     const hide = screen.getByRole("button", { name: "Hide Butler" });
     const close = screen.getByRole("button", { name: "Close Butler" });
     expect(voice.parentElement).toBe(settings.parentElement);
+    const butlerMode = screen.getByRole("button", { name: "Open Butler mode" });
+    expect(butlerMode.nextElementSibling).toBe(voice);
     expect(voice.nextElementSibling).toBe(settings);
     expect(settings.nextElementSibling).toBe(hide);
     expect(hide.nextElementSibling).toBe(close);

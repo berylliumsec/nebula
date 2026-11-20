@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { ChevronDown, GripHorizontal, Image, Minimize2, Send, Settings2, Square, Upload, X } from "lucide-react";
+import { ChevronDown, GripHorizontal, Image, LayoutDashboard, Minimize2, Send, Settings2, Square, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
@@ -2785,6 +2785,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <div className={styles.identity}><strong>Butler</strong>{docked && engagements.length > 0
         ? <select className={styles.projectSelect} aria-label="Butler project" value={engagement?.id ?? ""} onChange={(event) => onNavigate(`/projects/${encodeURIComponent(event.target.value)}/butler`)}>{!engagement && <option value="" disabled>Choose a project</option>}{engagements.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
         : <small>{engagement?.name ?? "Choose a project"}</small>}</div>
+      {!nativeShell && <button className={`icon-button subtle ${styles.modeButton}`} type="button" aria-label="Open Butler mode" title="Open Butler mode: every project's chats and parallel threads" onClick={() => { setHidden(true); onNavigate(engagement ? `/butler?project=${encodeURIComponent(engagement.id)}` : "/butler"); }}><LayoutDashboard size={18} aria-hidden="true" /></button>}
       <button className={`icon-button subtle ${styles.voiceButton}`} type="button" aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!api || !engagement || !runtime || busy || loadingHistory} onClick={startVoice}><MicrophoneIcon size={18} aria-hidden="true" /></button>
       <button className={`icon-button subtle ${styles.settingsButton}`} type="button" aria-label="Butler settings" aria-expanded={settingsOpen && view === "more"} aria-controls="butler-settings" title="Butler settings" disabled={!api || busy} onClick={() => void openSettings()}><Settings2 size={18} /></button>
       <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Butler" title="Hide Butler" onClick={() => setHidden(true)}><Minimize2 size={18} aria-hidden="true" /></button>

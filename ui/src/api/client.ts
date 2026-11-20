@@ -3547,6 +3547,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
     isControlAssistant: value.metadata?.control_assistant === true,
+    isButlerThread: value.metadata?.butler_thread === true,
     isButlerInitiated: value.metadata?.butler_initiated === true,
     assistantConfig,
     pendingRuntimeSwitch: mapPendingRuntimeSwitch(value.metadata?.pending_runtime_switch),
@@ -9634,6 +9635,9 @@ export class ApiClient {
     harnessServiceTier?: string;
     harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
     allowCloudToolResults?: boolean;
+    /** Butler mode: start a separate Butler conversation instead of reusing the current one. */
+    thread?: boolean;
+    title?: string;
   }, signal?: AbortSignal): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>("chat/control-assistant/session", {
       method: "POST", signal,
@@ -9648,6 +9652,7 @@ export class ApiClient {
         harness_service_tier: body.harnessServiceTier,
         harness_cyber_access_program: body.harnessCyberAccessProgram,
         allow_cloud_tool_results: body.allowCloudToolResults,
+        ...(body.thread ? { thread: true, title: body.title } : {}),
       }),
     }).then(mapChatSession);
   }

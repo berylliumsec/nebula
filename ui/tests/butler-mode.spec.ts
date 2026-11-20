@@ -1,0 +1,420 @@
+import AxeBuilder from "@axe-core/playwright";
+import { createHash } from "node:crypto";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { networkInterfaces, tmpdir } from "node:os";
+import path from "node:path";
+import { expect, request as playwrightRequest, test, type Page } from "@playwright/test";
+import { coreMutation, removeCoreData, waitForCoreApi } from "./fixtures/core-api";
+import { removeCoreSockets, stopCoreWorkers } from "./fixtures/core-harness";
+import { withOwnedCleanup } from "./fixtures/owned-cleanup";
+
+/*
+ * Butler mode on a production-built LAN Core: a status board of every
+ * project's chats beside parallel Butler threads. Two threads answer at the
+ * same time; a thread survives a reload through its URL; "Ask Butler about
+ * this" starts a thread in the card's project; Stop on a card ends the chat's
+ * response and the board shows Core's new state.
+ */
+
+interface TestCore {
+  process: ChildProcessWithoutNullStreams;
+  dataDir: string;
+  origin: string;
+  token: string;
+  output?: () => string;
+}
+
+interface ModelStub {
+  origin: string;
+  server: Server;
+}
+
+
+function localNetworkIpv4(): string {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === "IPv4" && !address.internal) return address.address;
+    }
+  }
+  throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
+}
+
+async function startCore(): Promise<TestCore> {
+  const repository = path.resolve(import.meta.dirname, "../..");
+  const common = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+  const candidates = [
+    process.env.NEBULA_TEST_CORE_BIN,
+    process.env.NEBULA_CORE_BINARY,
+    path.join(repository, ".venv/bin/nebula-core"),
+    common ? path.join(path.dirname(common), ".venv/bin/nebula-core") : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const binary = candidates.find(existsSync);
+  if (!binary) throw new Error("No Nebula Core test binary is available.");
+  const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-butler-mode-core-"));
+  const token = "butler-mode-test-administration-token";
+  const child = spawn(binary, [
+    "serve", "--host", "0.0.0.0", "--port", "0", "--token", token,
+    "--allow-remote", "--allow-insecure-device-pairing", "--allow-browser-diagnostics",
+    "--data-dir", dataDir, "--static-dir", path.join(repository, "ui/dist"),
+  ], {
+    cwd: repository,
+    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) },
+  });
+  let output = "";
+  const startupTimeout = Math.max(30_000, Number(process.env.NEBULA_TEST_CORE_STARTUP_TIMEOUT_MS) || 0);
+  const origin = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`Real Core did not become ready.\n${output}`)), startupTimeout);
+    const inspect = (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      const port = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
+      if (port) {
+        clearTimeout(timeout);
+        resolve(`http://${localNetworkIpv4()}:${port[1]}`);
+      }
+    };
+    child.stdout.on("data", inspect);
+    child.stderr.on("data", (chunk) => { output += chunk.toString("utf8"); });
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Real Core exited with ${code}.\n${output}`));
+    });
+  }).catch(error => withOwnedCleanup(async () => { throw error; }, [
+    {name: "failed Butler mode fixture Core", dispose: () => stopCore({process: child, dataDir, origin: "", token, output: () => output})},
+  ]));
+  return { process: child, dataDir, origin, token, output: () => output };
+}
+
+async function stopCore(core: TestCore): Promise<void> {
+  if (core.process.exitCode === null) {
+    core.process.kill("SIGTERM");
+    await Promise.race([
+      new Promise<void>((resolve) => core.process.once("exit", () => resolve())),
+      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+    if (core.process.exitCode === null) core.process.kill("SIGKILL");
+  }
+  await stopCoreWorkers(core.dataDir);
+  await removeCoreSockets(core.dataDir);
+  const evidence = process.env.NEBULA_TEST_CORE_EVIDENCE_DIR;
+  if (evidence) {
+    const directory = path.join(evidence, path.basename(core.dataDir));
+    await mkdir(directory, {recursive: true});
+    const scrub = (value: string) => value.replaceAll(core.token, "<synthetic-token>");
+    await writeFile(path.join(directory, "fixture-output.log"), scrub(core.output?.() ?? ""));
+    const logs = path.join(core.dataDir, "logs");
+    for (const name of await readdir(logs).catch(() => [] as string[])) {
+      if (name.endsWith(".log")) await writeFile(path.join(directory, name), scrub(await readFile(path.join(logs, name), "utf8")));
+    }
+  }
+  await removeCoreData(core.dataDir);
+}
+
+const PROMPTS = {
+  held: "THREAD-A Which chats need me right now?",
+  quick: "THREAD-B Summarize this week's results.",
+  about: "Is it stuck?",
+  work: "HOLD-WORK Fuzz the parser.",
+};
+
+const ANSWERS = {
+  held: "Nothing needs you right now.",
+  quick: "Two confirmed results this week.",
+  about: "Fuzz parser is still running.",
+};
+
+/**
+ * OpenAI-compatible local model. The held thread and the ordinary chat wait
+ * for their release; every other prompt answers at once.
+ */
+async function startModelStub(holdThread: Promise<void>, holdWork: Promise<void>): Promise<ModelStub & {prompts: () => string[]}> {
+  const prompts: string[] = [];
+  const completion = (message: Record<string, unknown>, finish: string) => JSON.stringify({
+    id: "chatcmpl-butler-mode", object: "chat.completion", created: 1, model: "security-model",
+    choices: [{index: 0, message: {role: "assistant", ...message}, finish_reason: finish}],
+    usage: {prompt_tokens: 12, completion_tokens: 4, total_tokens: 16},
+  });
+  const call = (name: string, args: Record<string, unknown>) => completion({content: null, tool_calls: [{
+    id: `call-${name}-${Date.now()}`, type: "function", function: {name, arguments: JSON.stringify(args)},
+  }]}, "tool_calls");
+  const server = createServer(async (request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.end(JSON.stringify({object: "list", data: [{id: "security-model", object: "model", created: 1, owned_by: "local-acceptance"}]}));
+      return;
+    }
+    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+      response.statusCode = 404;
+      response.end(JSON.stringify({error: "not found"}));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    const tools = Array.isArray(body.tools) ? body.tools as Array<{function?: {name?: string; parameters?: {properties?: {nonce?: {enum?: string[]}}}}}> : [];
+    const nonce = tools.find(tool => tool.function?.name === "nebula_capability_probe")?.function?.parameters?.properties?.nonce?.enum?.[0];
+    if (nonce) {
+      response.end(call("nebula_capability_probe", {nonce}));
+      return;
+    }
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const texts = messages.map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? ""));
+    if (texts.some(text => text.includes("Name this conversation from its first exchange"))) {
+      response.end(completion({content: texts.some(text => text.includes(PROMPTS.work)) ? "Fuzz parser" : "Synthetic chat"}, "stop"));
+      return;
+    }
+    const synthesis = body.tool_choice === "none";
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const prompt = String(messages[lastUser]?.content ?? "");
+    const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (!synthesis && toolReplies === 0) prompts.push(prompt);
+    if (prompt.includes(PROMPTS.held)) await holdThread;
+    if (prompt.includes(PROMPTS.work)) await holdWork;
+    const finish = tools.map(tool => tool.function?.name ?? "").find(name => name.startsWith("finish_response"));
+    if (!synthesis && finish) {
+      response.end(call(finish, {}));
+      return;
+    }
+    response.end(completion({content: prompt.includes(PROMPTS.held) ? ANSWERS.held
+      : prompt.includes(PROMPTS.quick) ? ANSWERS.quick
+      : prompt.includes(PROMPTS.about) ? ANSWERS.about : "Done."}, "stop"));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  return {origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server, prompts: () => prompts};
+}
+
+async function stopModelStub(stub: ModelStub): Promise<void> {
+  stub.server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => stub.server.close(error => error ? reject(error) : resolve()));
+}
+
+async function pairBrowser(page: Page, core: TestCore, name: string): Promise<void> {
+  const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const pairingResponse = await coreMutation(pairingApi, "post", "auth/pairings", {name});
+  expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+  const pairing = await pairingResponse.json() as {secret: string; confirmation_code: string};
+  await pairingApi.dispose();
+  await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill(name);
+  // Pairing clears the fragment before submit; await the replacement document.
+  await page.getByRole("button", {name: "Pair device"}).click();
+  await expect(page).toHaveURL(`${core.origin}/`, {timeout: 20_000});
+  await expect(page.locator(".app-shell")).toBeVisible({timeout: 20_000});
+}
+
+async function openButler(page: Page): Promise<void> {
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const assistant = page.getByRole("dialog", {name: "Butler", exact: true});
+  if (await assistant.isVisible()) return;
+  const launcherName = /^(Open|Show) Butler(?:;|$)/;
+  const mobileLauncher = page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: launcherName});
+  const launcher = page.getByRole("button", {name: launcherName}).first();
+  const topMenu = page.getByRole("button", {name: "Open top menu"});
+  await expect.poll(async () => await assistant.isVisible() || await mobileLauncher.isVisible()
+    || await launcher.isVisible() || await topMenu.isVisible()).toBe(true);
+  if (await assistant.isVisible()) return;
+  if (await mobileLauncher.isVisible()) {
+    await mobileLauncher.click();
+    return;
+  }
+  if (!await launcher.isVisible()) {
+    await topMenu.focus();
+    await expect(launcher).toBeVisible();
+  }
+  // Quiet Lens gives its contour pointer events while it has keyboard focus.
+  await launcher.focus();
+  await launcher.click();
+}
+
+
+/** On a phone the board and threads are tabs; on a desktop both are visible. */
+async function showThreads(page: Page): Promise<void> {
+  const tab = page.getByRole("tab", {name: /^Threads/});
+  if (await tab.isVisible()) await tab.click();
+}
+
+async function showBoard(page: Page): Promise<void> {
+  const tab = page.getByRole("tab", {name: /^Board/});
+  if (await tab.isVisible()) await tab.click();
+}
+
+async function startThread(page: Page, prompt: string): Promise<void> {
+  await showThreads(page);
+  const rail = page.getByRole("navigation", {name: "Butler threads"});
+  const fresh = rail.getByRole("button", {name: "New", exact: true});
+  if (await fresh.isVisible()) await fresh.click();
+  const composer = page.getByRole("textbox", {name: "Message Butler"});
+  await composer.fill(prompt);
+  await composer.press("End");
+  await page.getByRole("button", {name: "Start thread"}).click();
+  await expect(composer).toHaveValue("", {timeout: 60_000});
+}
+
+test("assistant upgrade Butler mode runs parallel threads beside every project's chats on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(420_000);
+  let releaseThread!: () => void;
+  let releaseWork!: () => void;
+  const holdThread = new Promise<void>(resolve => { releaseThread = resolve; });
+  const holdWork = new Promise<void>(resolve => { releaseWork = resolve; });
+  const stub = await startModelStub(holdThread, holdWork);
+  let core: TestCore | undefined;
+  let running: Promise<unknown> | undefined;
+  await withOwnedCleanup(async () => {
+    core = await startCore();
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    try {
+      await waitForCoreApi(api, 90_000);
+      const project = async (name: string) => {
+        const response = await coreMutation(api, "post", "engagements", {name, status: "active", metadata: {}});
+        expect(response.ok(), await response.text()).toBe(true);
+        return (await response.json() as {id: string}).id;
+      };
+      const research = await project("Research fixture");
+      const bounty = await project("Bounty fixture");
+      const modelResponse = await coreMutation(api, "post", "providers", {name: "Butler mode model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+        is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+        metadata: {default_model: "security-model", options: {context_window: 32768}}});
+      expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+      const model = await modelResponse.json() as {id: string; revision: number};
+      const verified = await coreMutation(api, "post", `providers/${model.id}/capabilities/verify`, {model: "security-model", expected_revision: model.revision});
+      expect(verified.ok(), await verified.text()).toBe(true);
+      // Each project's Butler conversation holds the settings its threads reuse.
+      for (const projectId of [research, bounty]) {
+        const butler = await coreMutation(api, "post", "chat/control-assistant/session", {engagement_id: projectId, backend: "provider", provider_id: model.id, model: "security-model"});
+        expect(butler.ok(), await butler.text()).toBe(true);
+      }
+      // An ordinary chat in the other project keeps working until released.
+      running = api.post("chat/completions", {headers: {"Idempotency-Key": `butler-mode-work-${Date.now()}`}, timeout: 300_000, data: {
+        engagement_id: bounty, provider_id: model.id, model: "security-model", tools_enabled: false, include_knowledge: false,
+        allow_agent_messaging: false, messages: [{role: "user", content: PROMPTS.work}], stream: false}}).catch(error => error);
+      type Activity = Array<{session_id: string; state: string; turn_id?: string | null}>;
+      let workId = "";
+      await expect.poll(async () => {
+        const activity = await (await api.get(`chat/session-activity?engagement_id=${bounty}`)).json() as Activity;
+        workId = activity.find(item => item.state === "working")?.session_id ?? "";
+        return workId;
+      }, {timeout: 90_000}).not.toBe("");
+      // Core names the chat from its first exchange.
+      let workTitle = "";
+      await expect.poll(async () => {
+        workTitle = (await (await api.get(`chat-sessions/${workId}`)).json() as {title: string}).title;
+        return workTitle;
+      }, {timeout: 60_000}).toBe("Fuzz parser");
+      const titlePattern = workTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+      const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+      const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+      expect(entry).toBeTruthy();
+      expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+
+      await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), research);
+      await pairBrowser(page, core, "Butler mode LAN browser");
+      await page.goto(`${core.origin}/projects/${research}/workbench?view=chat`);
+      // Entry: the Butler panel opens Butler mode.
+      await openButler(page);
+      const panel = page.getByRole("dialog", {name: "Butler", exact: true});
+      await expect(panel.getByText("Research fixture", {exact: true})).toBeVisible({timeout: 60_000});
+      await panel.getByRole("button", {name: "Open Butler mode"}).click();
+      await expect(page).toHaveURL(`${core.origin}/butler?project=${research}`);
+      await expect(page.getByRole("heading", {name: "Butler mode"})).toBeVisible();
+      // Every top-bar control stays inside the viewport, down to 320 px.
+      const width = page.viewportSize()!.width;
+      for (const control of [page.getByRole("searchbox", {name: "Search chats and projects"}), page.getByRole("button", {name: "Exit Butler mode"})]) {
+        const box = await control.boundingBox();
+        expect(box && box.x >= 0 && box.x + box.width <= width + 1, `${await control.getAttribute("aria-label")} fits ${width}px`).toBe(true);
+      }
+
+      // The board shows the other project's running chat.
+      await showBoard(page);
+      const board = page.getByRole("region", {name: "Status board"});
+      const card = board.getByRole("article", {name: `${workTitle}: Working`});
+      await expect(card).toBeVisible({timeout: 60_000});
+      await expect(card).toContainText("Bounty fixture");
+      await expect(card).toContainText("Working");
+
+      await showThreads(page);
+      await expect(page.getByRole("combobox", {name: "Project for the new thread"})).toHaveValue(research);
+      // Two threads: the first is still being answered when the second finishes.
+      await startThread(page, PROMPTS.held);
+      await expect.poll(stub.prompts, {timeout: 60_000}).toContain(PROMPTS.held);
+      await startThread(page, PROMPTS.quick);
+      const conversation = page.getByRole("log", {name: "Butler thread messages"});
+      await expect(conversation.getByText(ANSWERS.quick)).toBeVisible({timeout: 90_000});
+      await page.screenshot({path: testInfo.outputPath("butler-mode-threads.png")});
+      // Threads are Core's: the open thread (in the URL) and its answer survive a reload.
+      expect(new URL(page.url()).searchParams.get("thread")).toBeTruthy();
+      await page.reload();
+      await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText(ANSWERS.quick)).toBeVisible({timeout: 60_000});
+      await showThreads(page);
+      const rail = page.getByRole("navigation", {name: "Butler threads"});
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
+      await expect(rail.getByRole("button", {name: /THREAD-A.*Working/})).toBeVisible({timeout: 30_000});
+      expect(stub.prompts().filter(prompt => prompt.includes(PROMPTS.held))).toHaveLength(1);
+      type Threads = {items: Array<{session_id: string; title: string; state: string; project: {id: string}}>};
+      const threads = await (await api.get("butler/threads")).json() as Threads;
+      expect(threads.items.map(item => item.title).sort()).toEqual([PROMPTS.held, PROMPTS.quick].sort());
+      expect(threads.items.find(item => item.title === PROMPTS.held)?.state).toBe("working");
+      // The panel's own Butler conversation is not replaced by a thread.
+      const current = await (await api.get(`chat/control-assistant/session?engagement_id=${research}`)).json() as {id: string; metadata: Record<string, unknown>};
+      expect(current.metadata.butler_thread).toBeUndefined();
+
+      // Ask Butler about a card: the thread runs in the card's project.
+      await showBoard(page);
+      await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
+      await expect(card.getByRole("button", {name: new RegExp(titlePattern)})).toHaveAttribute("aria-expanded", "true");
+      await card.getByRole("button", {name: "Ask Butler about this"}).click();
+      await expect(page.getByRole("combobox", {name: "Project for the new thread"})).toHaveValue(bounty);
+      await page.screenshot({path: testInfo.outputPath("butler-mode-ask-about.png")});
+      const composer = page.getByRole("textbox", {name: "Message Butler"});
+      await composer.fill(PROMPTS.about);
+      await page.getByRole("button", {name: "Start thread"}).click();
+      await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText(ANSWERS.about)).toBeVisible({timeout: 90_000});
+      expect(stub.prompts().find(prompt => prompt.endsWith(PROMPTS.about))).toContain(`About the chat "${workTitle}" (conversation ${workId} in this project)`);
+      const aboutThread = (await (await api.get("butler/threads")).json() as Threads).items.find(item => item.title === PROMPTS.about);
+      expect(aboutThread?.project.id).toBe(bounty);
+
+      // Stop from the card; the board shows the change only after Core reports it.
+      await showBoard(page);
+      const summary = card.getByRole("button", {name: new RegExp(titlePattern)});
+      await expect(summary).toBeVisible();
+      if (await summary.getAttribute("aria-expanded") !== "true") await summary.click();
+      await card.getByRole("button", {name: "Stop"}).click();
+      await page.getByRole("dialog").getByRole("button", {name: "Stop response"}).click();
+      await expect(board.getByRole("article", {name: new RegExp(`^${titlePattern}:`)})).toHaveCount(0, {timeout: 90_000});
+      await expect.poll(async () => ((await (await api.get(`chat/session-activity?engagement_id=${bounty}`)).json()) as Activity)
+        .find(item => item.session_id === workId)?.state, {timeout: 60_000}).toBe("idle");
+
+      // The held thread finishes on its own and shows Butler's answer.
+      releaseThread();
+      await showThreads(page);
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
+      await rail.getByRole("button", {name: /THREAD-A/}).click();
+      await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText(ANSWERS.held)).toBeVisible({timeout: 90_000});
+
+      expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+      for (const control of await page.getByRole("button").all()) {
+        if (!await control.isVisible()) continue;
+        const box = await control.boundingBox();
+        const name = await control.getAttribute("aria-label") ?? await control.textContent();
+        if (box && (await control.getAttribute("aria-label"))) expect(Math.min(box.width, box.height), `icon control ${name}`).toBeGreaterThanOrEqual(28);
+      }
+      await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+        viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+        result: "The Butler panel opened Butler mode; the board listed another project's running chat; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer."}), contentType: "application/json"});
+    } finally {
+      await api.dispose();
+    }
+  }, [
+    {name: "release held Butler thread", dispose: async () => { releaseThread(); }},
+    {name: "release held chat", dispose: async () => { releaseWork(); await running; }},
+    {name: "model stub", dispose: () => stopModelStub(stub)},
+    {name: "Butler mode fixture Core", dispose: async () => { if (core) await stopCore(core); }},
+  ]);
+});

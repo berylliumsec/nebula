@@ -48,7 +48,7 @@ from nebula.v3.settings_assistant_tools import (
 
 def test_catalog_covers_settings_destinations_without_secrets():
     result = catalog()
-    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 22
+    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 23
     assert {item["id"] for item in result["destinations"]} == {
         item["id"] for item in APP_DESTINATIONS
     }
@@ -65,6 +65,11 @@ def test_catalog_covers_settings_destinations_without_secrets():
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
     )
+    butler_mode = next(
+        item for item in result["destinations"] if item["id"] == "butler-mode"
+    )
+    assert butler_mode["path"] == "/butler"
+    assert "status board" in butler_mode["aliases"]
     assert (
         next(item for item in result["destinations"] if item["id"] == "notebook")[
             "path"

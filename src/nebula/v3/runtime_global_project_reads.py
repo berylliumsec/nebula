@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import aliased
 
+from .butler_board import butler_board_router
 from .chat_turn_headers import pending_engagement_turn_headers
 from .conditional_reads import conditional, content_etag
 from .linked_project_chats import (
@@ -194,6 +195,9 @@ def mount_global_project_reads(
 
     app.include_router(
         linked_project_chats_router(store), prefix="/api/v1", dependencies=dependencies
+    )
+    app.include_router(
+        butler_board_router(store), prefix="/api/v1", dependencies=dependencies
     )
 
     # Deployment inventory reads (the deploy gate, and Butler's pause and

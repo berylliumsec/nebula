@@ -1207,6 +1207,46 @@ should be suggested only when the update that placed the hold is no longer
 running. A hold has no Settings destination and Butler has no action that
 places or releases it; the deployer and the hold API do.
 
+## Butler mode
+
+**Butler mode** (route `/butler`) is a full-screen view for talking to Butler
+while watching every project's chats. Open it with the **Open Butler mode**
+button in the Butler panel header, or ask Butler to "open Butler mode". **Esc**
+or **Exit Butler mode** returns to the project.
+
+The **status board** reads one Core-owned list of chats across all projects
+that are not archived. Chats that need the operator (a pending approval, a
+harness question, or an interrupted response that will not resume on its own)
+come first, then working chats, then chats whose last response failed in the
+last day. Idle chats are only counted; **Idle** pages through them on request.
+Butler's own conversations, side chats and archived chats are never listed.
+**Group** switches between **Attention** and **Project**, and can show subagent
+chats as their own cards (by default a working subagent folds into its parent;
+one that needs the operator always shows). Search matches chat titles, models
+and project names. The grouping choice is remembered on this device only.
+
+Each card shows the chat's status, project, model, how long its current
+response has run and one line of what it is doing or waiting for. Expanding a
+card shows its goal and, for a pending approval, the exact request with
+**Approve** and **Deny**; **Stop** stops a working chat's response after
+confirmation; **Open chat** opens the conversation; **Ask Butler about this**
+starts a Butler thread about that chat in its project. A decision or stop is
+reported only after the next board read from Core shows the change.
+
+**Threads** run Butler conversations in parallel. Each message starts a new
+thread by default, in the project chosen beside the composer, and Butler
+answers each one at once, so the operator never waits for one answer to ask
+the next. **Reply in this thread** continues the open thread once Butler has
+answered it. Threads use the project's saved Butler settings (runtime, model,
+tools and subagents); a project with no Butler conversation yet asks the
+operator to open the Butler panel once to choose them. Threads are separate
+Butler conversations, so the Butler panel keeps its own conversation. Butler in
+a thread acts only inside that thread's project. A step that needs this
+browser (for example a picker or opening a setting) shows a note to finish it
+in the Butler panel. The open thread and the phone tab are in the URL
+(`?thread=` and `?tab=`), so reload and back return to them. On a phone,
+**Board** and **Threads** tabs share one composer.
+
 ## Closing the desktop and shutting down Core
 
 On Linux, local Core runs independently of its desktop viewer. Closing, updating,

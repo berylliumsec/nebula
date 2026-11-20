@@ -1033,7 +1033,7 @@
     },
     {
       "id": "chat.start_and_read",
-      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also lists chats from direct child projects in one Core-paged list",
+      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also lists chats from direct child projects in one Core-paged list; Butler mode reads one Core status board of every project's chats and lists Butler threads across projects",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::streamChat",
         "ui/src/pages/SessionsPage.tsx::getChatSession",
@@ -1046,7 +1046,9 @@
         "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
         "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
         "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
-        "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged"
+        "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged",
+        "ui/src/api/butlerBoard.ts::requestIfChanged",
+        "ui/src/pages/ButlerModePage.tsx::listChatMessages"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1073,7 +1075,8 @@
         "ui/src/pages/SessionsPage.tsx::getHarnessTurn",
         "ui/src/pages/SessionsPage.tsx::getHarnessTurnEvents",
         "ui/src/pages/SessionsPage.tsx::followChatTurn",
-        "ui/src/pages/SessionsPage.tsx::followHarnessTurnEvents"
+        "ui/src/pages/SessionsPage.tsx::followHarnessTurnEvents",
+        "ui/src/pages/ButlerModePage.tsx::cancelChatTurn"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1164,7 +1167,8 @@
         "ui/src/pages/SessionsPage.tsx::preflightChatRuntimeSwitch",
         "ui/src/components/McpServerChoices.tsx::getEngagementScope",
         "ui/src/components/NebulaControlAssistant.tsx::getChatAssistantConfig",
-        "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig"
+        "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig",
+        "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1212,7 +1216,9 @@
         "ui/src/components/chat-subagents/ChatSubagentPane.tsx::decideApproval",
         "ui/src/pages/SessionsPage.tsx::getApproval",
         "ui/src/state/WorkspaceContext.tsx::listApprovals",
-        "ui/src/state/WorkspaceContext.tsx::decideApproval"
+        "ui/src/state/WorkspaceContext.tsx::decideApproval",
+        "ui/src/pages/ButlerModePage.tsx::getApproval",
+        "ui/src/pages/ButlerModePage.tsx::decideApproval"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1790,7 +1796,7 @@
     },
     {
       "id": "ui.butler_conversation_protocol",
-      "entry_point": "Butler composer opens, streams, follows its queued follow-ups, polls and stops its own private conversation",
+      "entry_point": "Butler composer opens, streams, follows its queued follow-ups, polls and stops its own private conversation; Butler mode starts separate Butler threads with the project's saved Butler settings and streams each one in parallel",
       "ui_calls": [
         "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
         "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
@@ -1800,7 +1806,10 @@
         "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn",
         "ui/src/pages/SessionsPage.tsx::getControlAssistantSession",
-        "ui/src/pages/SessionsPage.tsx::resumeChatTurn"
+        "ui/src/pages/SessionsPage.tsx::resumeChatTurn",
+        "ui/src/pages/ButlerModePage.tsx::getControlAssistantSession",
+        "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
+        "ui/src/pages/ButlerModePage.tsx::streamChat"
       ],
       "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
       "butler": {
@@ -3578,7 +3587,7 @@
     },
     {
       "id": "host.cpu_budget",
-      "entry_point": "Settings → Setup → CPU budget, or an explicit Butler request to configure this Core host",
+      "entry_point": "Settings \u2192 Setup \u2192 CPU budget, or an explicit Butler request to configure this Core host",
       "ui_calls": [
         "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
         "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\""
@@ -3591,7 +3600,7 @@
       },
       "authority": "Explicit host CPU budget request; enabling/disabling additionally requires an explicit activation request. Use fresh host_id/expected_revision and enabled only when requested; omission preserves state. Core persists and reads back policy. Running requires observed live workers/affinity with executor_state=running and apply_state=applied; disabled requires zero workers. Resize/disable drains accepted PDF work.",
       "observed_result_test": "tests/v3/test_report_cpu_activation.py::test_butler_activates_and_reads_actual_running_then_disabled_workers",
-      "result": "One PDF worker pool shared across this host’s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
+      "result": "One PDF worker pool shared across this host\u2019s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
       "status": "supported"
     },
     {
@@ -3648,6 +3657,10 @@
     }
   ],
   "ui_api_calls": [
+    {
+      "key": "ui/src/api/butlerBoard.ts::requestIfChanged",
+      "count": 2
+    },
     {
       "key": "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/check-interval\"",
       "count": 1
@@ -5362,6 +5375,38 @@
     },
     {
       "key": "ui/src/pages/AgentsPage.tsx::steerRun",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::cancelChatTurn",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::decideApproval",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getApproval",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::listChatMessages",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::streamChat",
       "count": 1
     },
     {
