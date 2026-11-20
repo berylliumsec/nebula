@@ -146,6 +146,13 @@ reconciled.
 The accepted runtime manifest hashes every executable/UI asset and uses the
 build's reviewed compatibility metadata, including its migration-tree digest.
 
+Before stopping the foreground supervisor, `promote` checks every API and
+execution version in deployment status. When each is an exact commit that
+includes #1023 (workers wait out a supervisor replacement for host reads),
+running chat turns cross the restart and the deployer does not wait for
+projects to go idle. If any version is unknown or older, it still waits up to
+`HOST_QUIET_WAIT_SECONDS` for chat work to settle and refuses otherwise.
+
 Foreground host activation is separately guarded from API and execution worker
 promotion. `activate-host` targets only the exact accepted pending candidate
 after its durable stage and migration receipts are verified. It records a

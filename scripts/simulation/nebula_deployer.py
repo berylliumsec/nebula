@@ -100,6 +100,9 @@ HOST_START_ATTEMPTS = 16
 HOST_RESTART_DELAY_SECONDS = 5
 HOST_QUIET_WAIT_SECONDS = 300
 HOST_QUIET_POLL_SECONDS = 5
+# Workers built from this commit or later wait out a supervisor replacement
+# for host reads (#1023), so a turn may safely cross the host restart.
+HOST_RECONNECT_COMMIT = "445c5067072df94daa8100340e1c54ee76b3d35c"
 # Longer than an owner lease (30 s) plus Core's dead-owner recovery pass, so
 # an owner that recovers on its own is never reported.
 HOST_UNAVAILABLE_OWNER_SECONDS = 60
@@ -4377,6 +4380,44 @@ def _unavailable_owner_blocker(
     )
 
 
+def _includes_host_reconnect(version: str) -> bool:
+    try:
+        run(
+            "git", "-C", str(REPO), "merge-base", "--is-ancestor",
+            HOST_RECONNECT_COMMIT, version,
+        )
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _versions_reconnecting_to_host(client: CoreClient) -> list[str] | None:
+    """Every API and execution version, when each one reconnects to the host.
+
+    Returns None, so the caller waits for chat work to settle, when any
+    version is unknown, not an exact commit, or predates #1023.
+    """
+    status = client.get("deployment/status")
+    if not isinstance(status, dict):
+        return None
+    versions: set[Any] = {status.get("api_version")}
+    residents = status.get("resident_versions")
+    projects = status.get("projects")
+    if not isinstance(residents, list) or not isinstance(projects, list):
+        return None
+    versions.update(residents)
+    for project in projects:
+        if not isinstance(project, dict):
+            return None
+        if project.get("runtime_version") is not None:
+            versions.add(project.get("runtime_version"))
+    if not all(isinstance(item, str) and SHA.fullmatch(item) for item in versions):
+        return None
+    if not all(_includes_host_reconnect(item) for item in versions):
+        return None
+    return sorted(versions)
+
+
 def wait_quiet_restart_boundary(
     accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -4384,9 +4425,12 @@ def wait_quiet_restart_boundary(
 
     Supervisor workers outlive the host, but a worker without #1023 fails a
     turn that reads the host (admission pressure, credentials, the browser
-    bridge) while no host is running. The operator gate runs before staging
-    and migration; this repeats its chat check at the moment of the stop.
-    Reads fail closed. Nothing is stopped when chat work does not settle.
+    bridge) while no host is running. When every API and execution version
+    includes #1023 there is nothing to protect, so this returns at once and
+    running turns cross the restart. Otherwise it waits: the operator gate
+    runs before staging and migration; this repeats its chat check at the
+    moment of the stop. Reads fail closed. Nothing is stopped when chat work
+    does not settle.
 
     A turn whose execution owner is unavailable does not settle while that
     owner stays unavailable. Once the same owner has stayed unavailable for
@@ -4394,6 +4438,18 @@ def wait_quiet_restart_boundary(
     its turns, the worker and why the worker cannot advance them.
     """
     started = time.monotonic()
+    if accepted_dead_owner is None:
+        reconnecting = _versions_reconnecting_to_host(api())
+        if reconnecting is not None:
+            return {
+                "quiet_after_seconds": 0.0,
+                "waited": False,
+                "reason": (
+                    "every API and execution worker version waits out a "
+                    "supervisor replacement, so running turns cross it"
+                ),
+                "reconnecting_versions": reconnecting,
+            }
     deadline = started + HOST_QUIET_WAIT_SECONDS
     unavailable_since: dict[tuple[str, str], float] = {}
     while True:

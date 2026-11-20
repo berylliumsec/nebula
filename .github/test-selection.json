@@ -1,24 +1,23 @@
 {
-  "change_digest": "6121302c062c7c85cfe5a225c27c9f06ca8a63ef76359fb256580a34fc1ef26b",
-  "reviewed_by": "Claude Code, fixing the production chat_goals revision conflicts that failed goal turns",
-  "reason": "Goal turns with running subagents failed with 'revision conflict on chat_goals <id>: expected N, found N+1'. ChatService._charge_goal read the goal and wrote its usage against that revision with no retry; a subagent's usage charge (or active-time settle) committed in between, the RevisionConflict escaped _add_usage, and _stream_tool_turn saved it as the turn's error. The charge now plans the debit on the newest goal through revise_latest. Selected: the goal revision-race tests and the routed tool-turn tests (both new cases fail on main with the production message), plus the goal and subagent-lifecycle suites that charge goals.",
-  "exclusions": "No UI, API shape or settings change. test_chat.py, test_provider_cost_rates.py and test_butler_resources.py goal/charge cases passed locally (26) and are not selected. The in-transaction charge path is unchanged in behaviour; a PostgreSQL check against a scratch database showed it does not conflict with its own unit's goal write. No disposable LAN Core run: the race needs concurrent subagent provider responses inside a millisecond window and is not reproducible on demand through the UI; the deterministic window tests drive the real store and the real tool-turn loop.",
+  "change_digest": "28bac799224bce26393afdcd7f39bb70d611fbb936f93a9ef94d241250137746",
+  "reviewed_by": "Claude Code, unblocking supervisor-mode promotions that waited for a busy project to go idle",
+  "reason": "promote refused to stop the foreground supervisor until every project's chat activity was idle, a rule that exists only for execution workers without #1023 (which fail a turn reading the host while no host runs). A project whose subagents keep reporting never goes idle, so promotion of 111e6da was refused after the bounded wait. The deployer now skips the wait when the API version, every resident execution version and every project owner version are exact commits descending from 445c506 (#1023); any unknown, non-commit or older version keeps the existing bounded wait and refusal. Selected: the host restart and activation-boundary tests (two new activation cases and a real-git ancestry case), the dead-owner acceptance path that bypasses the skip, and the deploy-resume suite that drives activation.",
+  "exclusions": "No Core, UI or API change; deployer script and its README only. tests/test_simulation_host_activation.py and tests/test_deployer_protocol.py passed locally except one onefile-child identity case that also fails on unmodified main in this environment; test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop and test_host_switch_frees_an_orphan_left_by_a_stop_timeout likewise fail locally on unmodified main (process-signalling environment) and are left to CI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 78,
+    "python": 83,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_goal_revision_races.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_subagent_lifecycle.py"
+    "tests/test_simulation_host_restart.py",
+    "tests/test_simulation_dead_owner_activation.py",
+    "tests/test_simulation_deploy_resume.py"
   ],
   "frontend": [],
   "native": [],
