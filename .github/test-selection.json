@@ -1,5 +1,5 @@
 {
-  "change_digest": "9322039939c9b5d4b55df6c70a46041c7da7d52040cea7404b2e72d006cd1767",
+  "change_digest": "7534048a78cb2b427b9ff68424bcedb9293310d1bb02184af3168614e33c13bf",
   "reviewed_by": "Claude Code, closing the project hold's documented gaps for Missions and harness analysis",
   "reason": "Project holds (#1232) refused chat turns but not harness analysis turns or harness Missions, and a delegated Mission's synthesis or a due scheduled harness Mission would fail or start instead of waiting for the release. Now analyze_structured and a harness Mission starting now refuse with ProjectHeld; a future occurrence is saved and its due execution waits while held; delegated Mission synthesis waits instead of ending the run; a Mission's resume after an approval decision refuses with 409 while the decision stays recorded and can be posted again after release. Selected: new mission hold suite, the hold suite, the Mission suite and the harness turn lifecycle suite.",
   "exclusions": "tests/v3/test_harnesses.py passes locally except two catalog-refresh cases (test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_browser_attachment_refreshes_catalog_without_replacing_native_thread) that also fail on unmodified main here; it is not selected. No UI change.",
@@ -9,7 +9,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 57,
+    "python": 58,
     "frontend": 0,
     "native": 0,
     "playwright": 0
