@@ -148,8 +148,9 @@ def entry_words(text: str) -> frozenset[str]:
 # whether a card fits the message.
 _PRODUCT_WORDS = entry_words(
     """goal goals chat chats conversation conversations turn turns run runs
-    running project projects task tasks agent agents subagent subagents nebula
-    core tool tools work working worked status create created start started
+    running project projects engagement engagements task tasks agent agents
+    subagent subagents nebula core tool tools work working worked status
+    create created start started
     continue continued review operator butler step steps call calls called
     result results model models provider providers session sessions message
     messages complete completed completion progress report reported check
