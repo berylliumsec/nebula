@@ -2289,7 +2289,9 @@ _ROUTING_DEVIATION_LIMIT = 3
 # turn's full tool history on the API event loop. Keep a small amount of
 # provider/network overlap without letting a recovery backlog monopolize the
 # process that serves operator requests. Turns started by the operator do not
-# use this gate.
+# use this gate, and neither do recovered direct-lane turns (the operator's own
+# messages, including Butler's): a recovered subagent or goal can hold a slot
+# for hours, and an operator's resumed message must not wait behind it.
 _AUTOMATIC_RECOVERY_CONCURRENCY = 2
 # A call Core answered without running it spends no budget.
 _REFUSED_BUDGET_CLASS = "refused"
@@ -4686,7 +4688,7 @@ class ChatService:
         cancelled = False
         try:
             assert prepared.turn is not None
-            if automatic_recovery:
+            if automatic_recovery and prepared.turn.capacity_lane != "direct":
                 # Before provider admission, so recovered turns waiting for this
                 # gate never hold provider slots an operator turn could use.
                 await self._automatic_recovery_slots.acquire()
