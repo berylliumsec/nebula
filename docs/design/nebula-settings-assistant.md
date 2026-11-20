@@ -1305,6 +1305,18 @@ in the Butler panel. The open thread and the phone tab are in the URL
 (`?thread=` and `?tab=`), so reload and back return to them. On a phone,
 **Board** and **Threads** tabs share one composer.
 
+To archive or delete a Butler thread, open it and use **Archive** or
+**Delete** in its header. Archive hides the thread from Butler mode at once and
+Core keeps it in the project's archived chats, where it can be restored. Delete
+first asks "Delete this thread and its messages? This can't be undone." and
+then removes it from Core. Both wait until Butler has finished answering.
+
+While Butler works on a thread, the thread shows the same **Activity** card as
+a normal chat: its tool steps as they run, or **Queued** with Core's reason and
+queue position when the turn waits for capacity (for example a turn Core
+resumed after a restart). The card comes back from Core after a reload or on
+another device. A finished answer keeps a collapsed card of its steps.
+
 ### Butler-proposed goal chats
 
 Asked in plain words to spin up work ("triage the crash logs with Claude until

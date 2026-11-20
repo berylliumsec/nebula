@@ -67,7 +67,8 @@
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::setChatSessionArchived",
         "ui/src/pages/chatBulkActions.ts::listChatSessions",
-        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived"
+        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived",
+        "ui/src/pages/ButlerModePage.tsx::setChatSessionArchived"
       ],
       "core_owner": "ChatService and chat session metadata",
       "butler": {
@@ -120,7 +121,8 @@
       "entry_point": "Conversation menu: permanently delete a saved main chat",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::deleteChatSession",
-        "ui/src/pages/chatBulkActions.ts::deleteChatSession"
+        "ui/src/pages/chatBulkActions.ts::deleteChatSession",
+        "ui/src/pages/ButlerModePage.tsx::deleteChatSession"
       ],
       "core_owner": "ChatService and session dependency guards",
       "butler": {
@@ -1816,7 +1818,8 @@
         "ui/src/pages/SessionsPage.tsx::resumeChatTurn",
         "ui/src/pages/ButlerModePage.tsx::getControlAssistantSession",
         "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
-        "ui/src/pages/ButlerModePage.tsx::streamChat"
+        "ui/src/pages/ButlerModePage.tsx::streamChat",
+        "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn"
       ],
       "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
       "butler": {
@@ -5435,6 +5438,10 @@
       "count": 2
     },
     {
+      "key": "ui/src/pages/ButlerModePage.tsx::deleteChatSession",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig",
       "count": 1
     },
@@ -5447,7 +5454,15 @@
       "count": 1
     },
     {
+      "key": "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/ButlerModePage.tsx::listChatMessages",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::setChatSessionArchived",
       "count": 1
     },
     {

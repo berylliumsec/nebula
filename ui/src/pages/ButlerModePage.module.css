@@ -199,6 +199,43 @@
   white-space: nowrap;
 }
 
+.threadActions { display: inline-flex; flex: none; gap: 8px; margin-left: auto; }
+
+.threadAction,
+.dangerButton {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-secondary);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.threadAction:hover:not(:disabled) { background: var(--surface-hover); }
+.threadDelete { color: var(--red); }
+.dangerButton { border-color: var(--red); background: var(--red); color: var(--canvas); }
+.threadAction:disabled,
+.dangerButton:disabled { opacity: 0.5; cursor: default; }
+
+.confirmDelete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+
+.confirmDelete p { flex: 1 1 220px; margin: 0; font-size: var(--type-secondary); }
+.confirmDelete .threadActions { margin-left: 0; }
+
 .threadBar > span {
   flex: none;
   max-width: 40%;
