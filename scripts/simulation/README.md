@@ -176,6 +176,19 @@ and `release-holds` place and release holds for a stop or wind-down; every
 placed hold is saved in `project-holds.json` until Core confirms its release,
 and a host restart releases only the holds it placed.
 
+A deployment runs to completion without an operator restarting it. Core reads
+time out after 60 s and are asked again (up to four times), because deployment
+status lists every project and is slow while handoffs run. Waiting for the new
+host waits out a `degraded` status (the replaced API worker drains) within its
+bound. A project whose only handoff blockers are idle harness sessions that Core
+cannot restore is stopped at once instead of after `HANDOFF_GRACE_SECONDS`,
+because those sessions never hand off by themselves. Once every project runs the
+target, unowned execution workers of older versions are retired, so the next
+release is not held at "execution staged". Core confirms `target_execution`,
+`handoff`, `promote_api` and `rollback_code` with a bounded summary instead of
+the full deployment status, which outgrew the 64 KiB receipt and left those
+committed effects reported as uncertain.
+
 Foreground host activation is separately guarded from API and execution worker
 promotion. `activate-host` targets only the exact accepted pending candidate
 after its durable stage and migration receipts are verified. It records a

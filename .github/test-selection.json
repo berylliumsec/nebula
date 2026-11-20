@@ -1,24 +1,26 @@
 {
-  "change_digest": "49c74b958377a9f6781be758b33221072a0d768f018e3059cab1f8edcf811c61",
-  "reviewed_by": "Claude Code, making CI the only test evidence for deploys and accepting squash-merged PRs' browser evidence",
-  "reason": "prepare accepts main push CI by default, but push CI does not run Playwright, and supplemental PR evidence was accepted only for two-parent merges; the repository squash-merges, so every Playwright-selected commit (#1235, #1236) blocked a CI-backed deploy. A squash commit now binds to the one PR GitHub records as merged into it: the PR head (fetched from refs/pull/<n>/head when its branch is gone) must contain the squash parent and have the identical tree, and the existing selection, digest, artifact and job checks then apply unchanged. prepare also discovers those PR CI and Playwright runs. Verifying against the real 111e6da..a411fb8 chain exposed a second gap: GitHub cuts job names at 100 characters, so long greps hid the matrix identity; jobs are now matched to entries by the exact displayed name, one successful job per selected entry. Verified on simulation: the real chain through a411fb8 accepts (#1236 and #1235 on PR evidence) and its record re-validates. Selected: the deployer protocol suite (merge shape against real git history, squash chain binding, older recorded base, truncated job names) and the CI-default, prebuild and staged-deployer suites. The operator then asked to drop local testing as redundant: prepare no longer offers --local-tests or runs any test on the Core host (collection, pytest, vitest and Playwright are gone), and per-commit selections that overlap need no cumulative review because CI ran each commit's own selection; each selection is still validated against its diff and the union recorded. Builds, lint, the diagnostics audit, release hashes and promotion guards are unchanged. #1223 was merged with a stale selection digest, so its PR CI never ran its browser selection; a Playwright-selected commit whose PR runs did not both succeed is now proven by a successful playwright-impact.yml run dispatched on exactly that commit, whose plan must equal the trusted selector's plan with no baseline and whose every entry needs its own successful job, recorded as commit_playwright_evidence. Verified on simulation: the real chain 111e6da..51b46b7 accepts (#1236 and #1235 on PR evidence, #1223 on its exact-commit dispatch) and the record re-validates.",
-  "exclusions": "Deployer script, README and tests only; no Core or UI change. The two host-switch signalling cases in tests/test_simulation_host_restart.py fail locally on unmodified main and pass in CI; that suite is unchanged and not selected.",
+  "change_digest": "f475c996410a7c2ac27c35f67b3419801ea08e5b248bffc8789569b5a174fe32",
+  "reviewed_by": "Claude Code, hardening deploys after the 2026-11-20 d223a68 promotion needed an operator to restart it",
+  "reason": "Every deploy reported target_execution and every handoff as uncertain and needed reruns. Root cause (independently confirmed): RuntimeManagement.dispatch returned the full deployment status for promote_api, target_execution, handoff and rollback_code, and the operation receipt is bounded at 64 KiB; with 709 projects the status is ~167 KB, so the committed effect was reported as an uncertain ValueError. Core now returns a bounded summary (revision, versions, health, and the handoff's own project row). Deployer: Core reads time out after 60 s and are retried (deployment status is slow during handoffs; a 20 s timeout ended runs); waiting for the new host waits out a degraded status while the old API worker drains; a project whose only blockers are idle harness sessions Core cannot restore is stopped without waiting out the grace; promotion retires unowned workers of older versions once every project runs the target (one left behind would hold the next release at execution staged); superseded-manual reconciliation accepts succeeded promote/target receipts. Selected: runtime management (busy-host target and handoff receipts fail on main with the live symptom) and operations suites, the new read-retry tests, staged deployer (immediate stop for idle-only blockers, grace kept for others, leftover retirement), deploy-resume and deployer protocol suites.",
+  "exclusions": "tests/test_simulation_host_activation.py passes locally (including the new degraded-wait case) except the onefile identity case that fails on unmodified main here; tests/v3/test_supervisor.py and test_runtime_coordination.py pass locally and are unchanged. PostgreSQL variants run in CI. No staging replay: the busy-host status is reproduced in the runtime management tests with a 700-project status.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 82,
+    "python": 255,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_deployer_protocol.py",
-    "tests/test_simulation_deployer_ci_default.py",
-    "tests/test_simulation_deployer_prebuild.py",
-    "tests/test_staged_deployer.py"
+    "tests/v3/test_runtime_management.py",
+    "tests/v3/test_runtime_operations.py",
+    "tests/test_simulation_deploy_gate_reads.py",
+    "tests/test_staged_deployer.py",
+    "tests/test_simulation_deploy_resume.py",
+    "tests/test_deployer_protocol.py"
   ],
   "frontend": [],
   "native": [],

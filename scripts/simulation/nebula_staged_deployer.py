@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import time
 from typing import Callable
@@ -12,6 +14,12 @@ from uuid import uuid4
 _DEPLOYMENT_CHANGED = "DeploymentChanged"
 _CHANGED_RETRIES = 5
 _ATTEMPT_HISTORY = 8
+
+
+# Core's handoff blocker for an idle harness session it cannot restore.
+IDLE_UNRESTORABLE_SESSION = re.compile(
+    r"harness_sessions \S+ remains idle; its restoration is unavailable"
+)
 
 
 class StagedDeployer:
@@ -314,6 +322,27 @@ class StagedDeployer:
             return {"runtime_id": runtime_id, "state": "retired"}
 
         return effect
+
+    @staticmethod
+    def _unowned_old_workers(status: dict, version: str) -> list[str]:
+        """Execution workers of another version that own no project."""
+        processes = status.get("processes")
+        if not isinstance(processes, list):
+            return []
+        owners = {
+            row.get("runtime_id")
+            for row in status.get("projects", [])
+            if isinstance(row, dict) and row.get("runtime_id")
+        }
+        return sorted(
+            row["runtime_id"]
+            for row in processes
+            if isinstance(row, dict)
+            and row.get("role") == "execution"
+            and isinstance(row.get("runtime_id"), str)
+            and row.get("version") != version
+            and row["runtime_id"] not in owners
+        )
 
     @staticmethod
     def _no_unowned_worker(status: dict, version: str, journaled: set) -> bool:
@@ -934,6 +963,15 @@ class StagedDeployer:
             self.save(self.record)
             return True
 
+        def only_idle_unrestorable_sessions(project):
+            # Idle harness sessions that cannot be restored never hand off
+            # by themselves; waiting out the grace only delays the stop.
+            blockers = project.get("blockers") or []
+            return bool(blockers) and all(
+                isinstance(item, str) and IDLE_UNRESTORABLE_SESSION.fullmatch(item)
+                for item in blockers
+            )
+
         def evict_overdue(value, project):
             """Stop a journaled source that has not handed off within grace."""
             project_id = project["project_id"]
@@ -952,7 +990,10 @@ class StagedDeployer:
             if project_id not in started:
                 started[project_id] = self.clock()
                 self.save(self.record)
-            if self.clock() - started[project_id] < self.handoff_grace_seconds:
+            if (
+                self.clock() - started[project_id] < self.handoff_grace_seconds
+                and not only_idle_unrestorable_sessions(project)
+            ):
                 return False
             owner = {
                 "project_id": project_id,
@@ -1510,6 +1551,19 @@ class StagedDeployer:
         self.record["active"] = version
         if remaining or pinned:
             return waiting(status, remaining, pinned)
+
+        # Every project now runs the target. An unowned execution worker of
+        # another version serves nothing, but it stays resident and would hold
+        # the next release at "execution staged"; retire it now.
+        for runtime_id in self._unowned_old_workers(status, version):
+            try:
+                _, status = retire_ownerless(runtime_id, status)
+            except (RuntimeError, OSError) as error:
+                return waiting(
+                    status,
+                    [{"runtime_id": runtime_id, "detail": str(error)[:1000]}],
+                    pinned,
+                )
 
         journal["state"] = "complete"
         journal.pop("waiting_for_handoffs", None)

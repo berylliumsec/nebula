@@ -2959,7 +2959,11 @@ def reconcile_superseded_manual_deployment(
             or receipt.get("result") != saved.get("result")
         ):
             raise RuntimeError(f"Core {step} receipt differs from the saved journal")
-        if step in {"promote-api", "target"}:
+        if step in {"promote-api", "target"} and receipt.get("state") == "succeeded":
+            # Hosts that return a bounded operation summary confirm these
+            # effects directly; older hosts left them uncertain (below).
+            pass
+        elif step in {"promote-api", "target"}:
             settled = entry.get("settled")
             if (
                 receipt.get("state") != "uncertain"
@@ -4360,6 +4364,16 @@ def wait_supervisor_host_ready(
                 raise RuntimeError(
                     "Host health does not report the accepted Core and recovery identities"
                 )
+            if status.get("health") == "degraded" and not (
+                allow_degraded_workers and degraded_baseline
+            ):
+                # The replaced API worker reports degraded while it drains;
+                # wait for ready within this bound instead of failing the run.
+                last_problem = "deployment status is degraded: " + str(
+                    status.get("detail", "")
+                )[:300]
+                time.sleep(2)
+                continue
             snapshot = host_status_snapshot(
                 status,
                 allow_degraded=(allow_degraded_workers and degraded_baseline),
