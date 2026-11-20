@@ -249,7 +249,9 @@ def _curator(store, provider, tmp_path, **overrides) -> LinkedMemoryCurator:
         config=config,
     )
     curator._loop = asyncio.get_running_loop()
-    curator._last_live = 0.0
+    # No operator turn yet. Not 0.0: monotonic time starts near zero on a
+    # freshly booted CI runner, which would look like a recent turn.
+    curator._last_live = float("-inf")
     return curator
 
 
@@ -973,7 +975,7 @@ async def test_only_an_operators_turn_holds_curation_back(tmp_path):
     assert await curator._gate(state, starting=True) == "quiet_period"
     # A finished turn stays listed for a minute; background writes meanwhile
     # do not keep restarting the quiet period off it.
-    curator._last_live = 0.0
+    curator._last_live = float("-inf")
     curator.mark_live()
     assert await curator._gate(state, starting=True) is None
 
