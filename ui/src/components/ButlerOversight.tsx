@@ -53,7 +53,6 @@ function GoalRow({ goal, parentGoal, projectId, onNavigate }: {
     <div className={styles.rowHead}><strong>{goal.objective}</strong><span>{goal.actorRole === "subagent" ? "Subagent" : "Main agent"} · {goal.status.replaceAll("_", " ")}</span></div>
     {goal.actorRole === "subagent" && <small>Reports through main agent{parentGoal ? ` · ${parentGoal.objective}` : ""}</small>}
     <small>{reportLabel}{goal.coverage.reason ? ` · ${goal.coverage.reason}` : ""}</small>
-    {goal.progressDueAt && <small>Next checkpoint due {timeLabel(goal.progressDueAt) ?? "at an unknown time"}</small>}
     <WorkLink projectId={projectId} sessionId={goal.sessionId} onNavigate={onNavigate} />
   </li>;
 }
@@ -244,17 +243,17 @@ function AuthorityEditor({ api, projectId, coreState, overview, onSaved }: {
     }
   };
 
-  const supportedStatus = current?.policy?.supportedActions.includes("request_parent_status") ?? false;
+  const supportedReassess = current?.policy?.supportedActions.includes("request_parent_plan_reassessment") ?? false;
   const supportedPause = current?.policy?.supportedActions.includes("pause_urgent_machine_blocker") ?? false;
   const supportedPlanForce = current?.policy?.supportedActions.includes("force_one_task_plan") ?? false;
   const description = current?.draftAuthority === "watch" ? "Watch tracks goal state and reports incidents."
     : current?.draftAuthority === "act" ? "Act investigates project agent problems, uses available controls to repair them, and checks the result. Actions appear in Oversight."
-    : current?.draftAuthority === "steer" ? supportedStatus
-      ? "Steer can request a status or clarification from the parent main agent after Core flags an overdue goal checkpoint."
+    : current?.draftAuthority === "steer" ? supportedReassess
+      ? "Steer can ask the parent main agent to reassess its plan after Core flags a changed plan or repeated tool failures."
       : "No automatic Steer actions are available in this build."
       : current?.pauseUrgentMachineBlocker && supportedPause
-        ? "Delegate can request parent status and pause a running main goal after a reviewed, urgent agent-reported machine blocker."
-        : supportedStatus ? "Delegate can request parent status. An urgent pause requires the separate grant below."
+        ? "Delegate can ask for a plan reassessment and pause a running main goal after a reviewed, urgent agent-reported machine blocker."
+        : supportedReassess ? "Delegate can ask the parent main agent to reassess its plan. An urgent pause requires the separate grant below."
           : "No automatic Delegate actions are available in this build.";
   const savedGrant = current?.policy?.delegateActions.includes("pause_urgent_machine_blocker") ?? false;
   const savedPlanGrant = current?.policy?.delegateActions.includes("force_one_task_plan") ?? false;

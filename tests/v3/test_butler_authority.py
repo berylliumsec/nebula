@@ -17,7 +17,6 @@ from nebula.v3.butler_oversight import (
     GoalAttentionReport,
     ingest_agent_report,
     project_stream_id,
-    watch_id,
 )
 from nebula.v3.butler_review import (
     ButlerReviewOutput,
@@ -28,7 +27,6 @@ from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWr
 from nebula.v3.domain import (
     ButlerAction,
     ButlerAuthorityPolicy,
-    ButlerGoalWatch,
     ButlerProjectState,
     ChatGoal,
     ChatGoalStatus,
@@ -122,20 +120,19 @@ async def _review(store, project, worker, choice, *, why_now=""):
     return decision
 
 
-async def _overdue(store, project, goal, worker):
-    (
-        await store.update(
-            ButlerGoalWatch,
-            watch_id(goal.id),
-            {"progress_due_at": utc_now() - timedelta(seconds=1)},
-        )
-    )
-    assert (await worker.fire_due_deadlines(project.id)) == 1
-    assert any(
-        event.event_type == "goal.progress_overdue"
-        for event in (
-            await store.replay_operation_events(project_stream_id(project.id))
-        )
+STEER_REASON = "The revised plan repeats a probe without a new comparison."
+
+
+async def _plan_change(store, goal):
+    current = await store.get(ChatGoal, goal.id)
+    return await ChatGoalService(store).update(
+        current.session_id,
+        GoalUpdate(
+            expected_revision=current.revision,
+            objective=current.objective,
+            completion_criteria=current.completion_criteria,
+            plan=[*current.plan, "Repeat the same probe"],
+        ),
     )
 
 
@@ -207,7 +204,6 @@ async def test_authority_api_is_authenticated_revisioned_project_scoped_and_dura
     )
     assert changed.status_code == 200, changed.text
     assert changed.json()["effective_actions"] == [
-        "request_parent_status",
         "request_parent_plan_reassessment",
         "pause_urgent_machine_blocker",
     ]
@@ -255,8 +251,8 @@ async def test_authority_api_is_authenticated_revisioned_project_scoped_and_dura
 async def test_watch_cannot_act_and_steer_delivers_once_to_parent_main_agent(tmp_path):
     store, app, project, main, _, child, worker = await _setup(tmp_path, child=True)
     delivered = _capture_immediate_guidance(app)
-    (await _overdue(store, project, child, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, child))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     authority = app.state.butler_authority
     (await authority.process_project(project.id, worker.worker_id))
     assert (await store.count_entities(ButlerAction, engagement_id=project.id)) == 0
@@ -267,18 +263,7 @@ async def test_watch_cannot_act_and_steer_delivers_once_to_parent_main_agent(tmp
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    child_watch = await store.get(ButlerGoalWatch, watch_id(child.id))
-    (
-        await store.update(
-            ButlerGoalWatch,
-            child_watch.id,
-            {
-                "progress_due_at": utc_now() - timedelta(seconds=1),
-                "deadline_generation": child_watch.deadline_generation + 1,
-            },
-        )
-    )
-    assert (await worker.fire_due_deadlines(project.id)) == 1
+    (await _plan_change(store, child))
     # The review throttle applies per project. Advance it in this controlled fixture.
     state = await store.find_entity(ButlerProjectState, "engagement_id", project.id)
     (
@@ -288,7 +273,7 @@ async def test_watch_cannot_act_and_steer_delivers_once_to_parent_main_agent(tmp
             {"last_review_requested_at": utc_now() - timedelta(minutes=1)},
         )
     )
-    await _review(store, project, worker, "ask")
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     (await authority.process_project(project.id, worker.worker_id))
     actions = await store.find_entities(ButlerAction, {}, engagement_id=project.id)
     assert len(actions) == 1
@@ -296,7 +281,7 @@ async def test_watch_cannot_act_and_steer_delivers_once_to_parent_main_agent(tmp
     assert actions[0].target_session_id == main.id
     assert len(delivered) == 1
     assert delivered[0][1]["session_id"] == main.id
-    assert "progress checkpoint" in delivered[0][1]["text"]
+    assert "compare the current plan" in delivered[0][1]["text"]
     assert (await app.state.control_assistant_work.queue.get(main.id)).items == []
     assert (
         await app.state.control_assistant_work.queue.get(child.session_id)
@@ -579,8 +564,8 @@ async def test_revoked_authority_cancels_planned_action_before_dispatch(tmp_path
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert await authority.plan_next(project.id, worker.worker_id)
     planned = await store.find_entities(ButlerAction, {}, engagement_id=project.id)
     assert len(planned) == 1 and planned[0].status == "planned"
@@ -602,8 +587,8 @@ async def test_revoke_and_regrant_during_dispatch_cannot_use_old_event(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert await authority.plan_next(project.id, worker.worker_id)
     action = (await store.find_entities(ButlerAction, {}, engagement_id=project.id))[0]
     original_proposal = authority._proposal
@@ -649,8 +634,8 @@ async def test_changed_precedent_cancels_undelivered_action_and_requests_fresh_r
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    original = await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    original = await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert original.precedent_digest
     assert await authority.plan_next(project.id, worker.worker_id)
     action = (await store.find_entities(ButlerAction, {}, engagement_id=project.id))[0]
@@ -675,10 +660,10 @@ async def test_changed_precedent_cancels_undelivered_action_and_requests_fresh_r
         if event.payload.get("causal_event_id") == original.source_event_id
     ]
     assert len(recheck) == 1
-    assert recheck[0].event_type == "goal.progress_overdue"
+    assert recheck[0].event_type == "goal.plan_changed"
     assert recheck[0].payload["verification_state"] == "core_observed"
 
-    reconsidered = await _review(store, project, worker, "ask")
+    reconsidered = await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert reconsidered.id != original.id
     assert reconsidered.precedent_digest != original.precedent_digest
     (await authority.process_project(project.id, worker.worker_id))
@@ -696,8 +681,8 @@ async def test_memory_lookup_failure_keeps_action_planned_and_retryable(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert await authority.plan_next(project.id, worker.worker_id)
     action = (await store.find_entities(ButlerAction, {}, engagement_id=project.id))[0]
     original_search = authority.memory_service.search
@@ -773,8 +758,8 @@ async def test_attention_re_review_keeps_agent_claim_unverified_and_parent_only(
 
 async def test_new_authority_does_not_replay_older_reviewed_decisions(tmp_path):
     store, app, project, main, goal, _, worker = await _setup(tmp_path)
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     authority = app.state.butler_authority
     await authority.write(
         project.id,
@@ -792,8 +777,8 @@ async def test_interrupted_dispatch_without_queue_receipt_stays_uncertain(tmp_pa
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert await authority.plan_next(project.id, worker.worker_id)
     action = (await store.find_entities(ButlerAction, {}, engagement_id=project.id))[0]
     (
@@ -824,8 +809,8 @@ async def test_interrupted_dispatch_with_queue_receipt_is_recorded_dispatched(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     assert await authority.plan_next(project.id, worker.worker_id)
     action = (await store.find_entities(ButlerAction, {}, engagement_id=project.id))[0]
     # A Core that stopped after the parent message was queued, but before the
@@ -872,13 +857,13 @@ async def test_failed_parent_message_after_dispatch_start_settles_uncertain(tmp_
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    (await _overdue(store, project, goal, worker))
-    await _review(store, project, worker, "ask")
+    (await _plan_change(store, goal))
+    await _review(store, project, worker, "steer", why_now=STEER_REASON)
     (await authority.process_project(project.id, worker.worker_id))
     actions = await store.find_entities(ButlerAction, {}, engagement_id=project.id)
     assert attempts == [main.id]
     assert len(actions) == 1
-    assert actions[0].action_type == "request_parent_status"
+    assert actions[0].action_type == "request_parent_plan_reassessment"
     assert actions[0].status == "uncertain"
     assert actions[0].target_session_id == main.id
     assert actions[0].outcome == {"reason": "dispatch_interrupted"}
@@ -887,7 +872,7 @@ async def test_failed_parent_message_after_dispatch_start_settles_uncertain(tmp_
     assert attempts == [main.id]
 
 
-async def test_oversight_worker_delivers_granted_steer_status_request_to_parent(
+async def test_oversight_worker_delivers_granted_steer_plan_reassessment_to_parent(
     tmp_path, monkeypatch
 ):
     """The running Core oversight loop carries an operator's Steer grant through.
@@ -898,7 +883,7 @@ async def test_oversight_worker_delivers_granted_steer_status_request_to_parent(
     """
     store, app, project, main, _, child, worker = await _setup(tmp_path, child=True)
     delivered = _capture_immediate_guidance(app)
-    worker.reviewer = _Reviewer("ask")
+    worker.reviewer = _Reviewer("steer", why_now=STEER_REASON)
     failures = []
     record = butler_oversight.record_caught_exception
 
@@ -926,13 +911,7 @@ async def test_oversight_worker_delivers_granted_steer_status_request_to_parent(
             json={"authority": "steer", "delegate_actions": [], "expected_revision": 0},
         )
         assert granted.status_code == 200, granted.text
-        (
-            await store.update(
-                ButlerGoalWatch,
-                watch_id(child.id),
-                {"progress_due_at": utc_now() - timedelta(seconds=1)},
-            )
-        )
+        (await _plan_change(store, child))
         worker.notify(project.id)
         for _ in range(600):
             if "butler.project_replay_failed" in failures or recovered_after_dispatch:
@@ -946,12 +925,12 @@ async def test_oversight_worker_delivers_granted_steer_status_request_to_parent(
     assert overview.status_code == 200, overview.text
     actions = overview.json()["actions"]
     assert [(item["action_type"], item["status"]) for item in actions] == [
-        ("request_parent_status", "dispatched")
+        ("request_parent_plan_reassessment", "dispatched")
     ]
     assert actions[0]["target_session_id"] == main.id
     assert len(delivered) == 1
     assert delivered[0][1]["session_id"] == main.id
-    assert "progress checkpoint" in delivered[0][1]["text"]
+    assert "compare the current plan" in delivered[0][1]["text"]
 
 
 pytestmark = pytest.mark.anyio

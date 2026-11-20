@@ -103,7 +103,6 @@ PERIODIC_EVENTS = frozenset(
     {
         "butler.periodic_check",
         "butler.global_periodic_check",
-        "goal.progress_overdue",
         "goal.read_only_tool_failures_repeated",
     }
 )

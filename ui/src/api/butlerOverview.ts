@@ -25,7 +25,6 @@ export interface ButlerWatchedGoal {
   objective: string;
   status: string;
   actorRole: ButlerActorRole;
-  progressDueAt?: string;
   coverage: ButlerGoalCoverage;
 }
 
@@ -207,7 +206,6 @@ interface WireButlerOverview {
     objective: string;
     status: string;
     actor_role: ButlerActorRole;
-    progress_due_at?: string | null;
     coverage?: { report_capability: string; reason?: string | null };
   }>;
   incidents?: Array<{
@@ -367,7 +365,6 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       objective: goal.objective,
       status: goal.status,
       actorRole: goal.actor_role,
-      progressDueAt: goal.progress_due_at ?? undefined,
       coverage: {
         reportCapability: goal.coverage?.report_capability ?? "unknown",
         reason: goal.coverage?.reason ?? undefined,

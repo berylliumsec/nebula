@@ -69,7 +69,6 @@ def report_specs() -> dict[str, ToolSpec]:
             "criterion_advanced": text(300),
             "next_step": text(),
             "blockers": {"type": "array", "items": text(300), "maxItems": 8},
-            "next_checkpoint_at": {"type": ["string", "null"], "format": "date-time"},
             "evidence_refs": refs,
         },
         ["what_changed", "evidence_gained", "criterion_advanced", "next_step"],
