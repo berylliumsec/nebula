@@ -457,7 +457,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const heldId = threads.items.find(item => item.title === PROMPTS.held)!.session_id;
       await page.getByRole("button", {name: "Archive", exact: true}).click();
       await expect(page.getByRole("button", {name: "Archive", exact: true})).toHaveCount(0);
-      expect(new URL(page.url()).searchParams.get("thread")).toBeNull();
+      await expect.poll(() => new URL(page.url()).searchParams.get("thread")).toBeNull();
       await expect.poll(async () => ((await (await api.get("butler/threads")).json()) as Threads).items.some(item => item.session_id === heldId)).toBe(false);
       expect(((await (await api.get(`chat-sessions/${heldId}`)).json()) as {metadata: {archived_at?: string}}).metadata.archived_at).toBeTruthy();
       // Delete asks first; Cancel keeps the thread, Delete thread removes it from Core.
