@@ -136,6 +136,7 @@ from .application_model.workflow import (
 from .browser_companion import BrowserCompanion
 from .browser_engine import BrowserEngineRegistry
 from .butler_memory import BUTLER_MEMORY_INSTRUCTION
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .domain import BrowserSession
 
 from .domain import (
@@ -1210,6 +1211,21 @@ def _unresumed_goal_turn_reason(goal: ChatGoal) -> str | None:
     ):
         return "Core did not resume this interrupted response because its goal's time budget is spent."
     return None
+
+
+def butler_focus_project(session: ChatSession | None) -> str | None:
+    """The project a Butler session in ``BUTLER_HOME_PROJECT`` is about.
+
+    Butler's home sessions live in Core's own project so they run on their own
+    worker; ``metadata.butler_focus_project`` names the project they read. The
+    key deliberately does not end in ``_id``: request routing treats such
+    fields as project references, and two would be refused.
+    """
+
+    if session is None or session.engagement_id != BUTLER_HOME_PROJECT:
+        return None
+    focus = session.metadata.get("butler_focus_project")
+    return focus if isinstance(focus, str) and focus else None
 
 
 def _content_with_selected_context(
@@ -6801,6 +6817,7 @@ class ChatService:
                         settings_assistant=settings_only,
                         background_case_id=request._butler_recovery_case_id,
                         client_surface=request.client_surface,
+                        butler_focus_project=butler_focus_project(session),
                         operator_message=(
                             request.messages[-1].content if settings_only else ""
                         ),
@@ -14519,6 +14536,7 @@ class ChatService:
                         client_surface=turn.request_snapshot.get(
                             "client_surface", "browser"
                         ),
+                        butler_focus_project=butler_focus_project(session),
                     )
                 )
                 if (
