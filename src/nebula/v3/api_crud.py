@@ -36,6 +36,7 @@ from .domain import (
 from .knowledge import knowledge_summary
 from .relations import LEGACY_RELATION_MODELS, ResourceRelationService
 from .setup import create_engagement_with_default_scope
+from .deployment_protocol import RESERVED_PROJECT_IDS
 from .storage import ConflictError, NebulaStore, revision_conflict
 from .tool_results import without_results_api_key
 
@@ -93,6 +94,13 @@ class EngagementCreateRequest(Engagement):
 
     host_access_acknowledged: bool = False
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+def _refuse_reserved_project(model: type[Entity], entity_id: str) -> None:
+    """Core's own projects are not edited, archived or deleted through CRUD."""
+
+    if model is Engagement and entity_id in RESERVED_PROJECT_IDS:
+        raise ConflictError("This project belongs to Core and cannot be changed here.")
 
 
 def _public_entity(entity: Entity) -> Entity:
@@ -498,6 +506,7 @@ def _register_crud_routes(
         ) -> Entity:
             if entity.id != entity_id:
                 raise ValueError("replacement id must match the resource id")
+            _refuse_reserved_project(model, entity_id)
             current = await store.get(model, entity_id)
             if if_match is not None and current.revision != if_match:
                 raise revision_conflict(
@@ -538,6 +547,7 @@ def _register_crud_routes(
             )
             if protected:
                 raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
+            _refuse_reserved_project(model, entity_id)
             # Legacy relation arrays are edge projections: start the patch from
             # them so untouched arrays keep edges written via the relations API.
             current = await relation_service.project_legacy(
@@ -613,6 +623,7 @@ def _register_crud_routes(
             entity_id: str,
             if_match: int | None = Header(default=None, alias="If-Match"),
         ) -> Response:
+            _refuse_reserved_project(model, entity_id)
             current = await store.get(model, entity_id)
             if (
                 isinstance(current, McpServerProfile)

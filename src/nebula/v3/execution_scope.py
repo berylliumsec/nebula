@@ -60,6 +60,7 @@ from .database import (
     EntityRow,
     SearchDocumentRow,
 )
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .projection_write import SearchProjectionWrite
 from .runtime_coordination import (
     CoordinationConflict,
@@ -70,6 +71,30 @@ from .runtime_coordination import (
 _current_lease: ContextVar[ProjectLease | None] = ContextVar(
     "execution_lease", default=None
 )
+_observer_reads: ContextVar[bool] = ContextVar(
+    "execution_observer_reads", default=False
+)
+
+
+@contextmanager
+def observer_reads() -> Iterator[None]:
+    """Let the Butler home worker's reads see every project's committed rows.
+
+    Only Butler read tools enter this, and only on the worker that owns
+    ``BUTLER_HOME_PROJECT``; ``ExecutionSQLScope._execute`` refuses it on any
+    other worker. Inside it, plain SELECTs carry no project criteria and take no
+    lock in the projects they read. Row-locking SELECTs and every INSERT,
+    UPDATE and DELETE keep the owned-project predicate, so Butler can neither
+    lock nor change another project's rows: actions on another project go to
+    its owner as commands. Background controllers never run inside it, because
+    they assume they see only their own project.
+    """
+
+    token = _observer_reads.set(True)
+    try:
+        yield
+    finally:
+        _observer_reads.reset(token)
 
 
 class CommandWrites:
@@ -379,7 +404,16 @@ class ExecutionSQLScope:
         ):
             raise LeaseLost("execution task lost its project fencing token")
         projects = (context.project_id,) if context is not None else tuple(owned)
+        observing = _observer_reads.get()
+        if observing and projects != (BUTLER_HOME_PROJECT,):
+            raise CoordinationConflict(
+                "observer reads belong only to the Butler home worker"
+            )
         if isinstance(statement, Select):
+            # A row-locking read is a write for fencing: it keeps the owned
+            # predicate even while observing, so Butler cannot block another
+            # project's worker on its rows.
+            observing = observing and statement._for_update_arg is None
             mapped_tables = set()
             roots = [
                 *statement._raw_columns,
@@ -442,7 +476,10 @@ class ExecutionSQLScope:
                     raise CoordinationConflict(
                         "execution reads require mapped project columns"
                     )
-            for mapper in Base.registry.mappers:
+            # Observer reads keep the mapped-column checks above, but carry no
+            # project criteria: they see projects created mid-turn and avoid an
+            # IN list of every project on every mapper.
+            for mapper in () if observing else Base.registry.mappers:
                 predicate = self._predicate(mapper.local_table, projects)
                 if predicate is not None:
                     statement = statement.options(

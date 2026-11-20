@@ -26,7 +26,11 @@ from .database import (
     RuntimeWorkBatchProjectRow,
 )
 from .database_pool import PoolSettings
-from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
+from .deployment_protocol import (
+    BUTLER_HOME_FEATURE,
+    IDLE_RETIREMENT_FEATURE,
+    ReleaseManifest,
+)
 from .deployments import DeploymentCoordinator
 from .diagnostics import record_caught_exception, record_diagnostic
 from .release_store import ReleaseStore
@@ -330,6 +334,7 @@ async def run_worker(
             HOST_SEARCH_FEATURE,
             WORK_BATCH_FEATURE,
             STORAGE_REPORT_FEATURE,
+            BUTLER_HOME_FEATURE,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"

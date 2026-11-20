@@ -69,6 +69,7 @@ from .database import (
     RunEventRow,
     SearchDocumentRow,
 )
+from .deployment_protocol import RESERVED_PROJECT_IDS
 from .event_history import (
     EVENT_OWNER_ENTITY_KINDS,
     RUN_EVENT_OWNER_KINDS,
@@ -153,6 +154,17 @@ async def _delete_chat_turn_ledgers(session: AsyncSession, turn_ids: Any) -> Non
 
     for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
         (await session.execute(delete(table).where(table.turn_id.in_(turn_ids))))
+
+
+def not_reserved_project() -> ColumnElement[bool]:
+    """Exclude Core's own projects (``RESERVED_PROJECT_IDS``) from project rows.
+
+    The Butler home project is a real project with its own worker, but it is
+    Core's, not the operator's: project lists, counts, pickers, scans that pick
+    "the first project" and search never see it. Reading it by id still works.
+    """
+
+    return EntityRow.id.not_in(sorted(RESERVED_PROJECT_IDS))
 
 
 def not_temporary_chat_session() -> ColumnElement[bool]:
@@ -1911,6 +1923,8 @@ class NebulaStore:
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
         if model.entity_kind == "chat_sessions" and not include_temporary:
             statement = statement.where(not_temporary_chat_session())
+        if model.entity_kind == "engagements":
+            statement = statement.where(not_reserved_project())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
@@ -1997,6 +2011,8 @@ class NebulaStore:
         """The ``find_entities`` query, or None when a filter accepts no value."""
 
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
+        if model.entity_kind == "engagements":
+            statement = statement.where(not_reserved_project())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
@@ -2446,6 +2462,8 @@ class NebulaStore:
         )
         if model.entity_kind == "chat_sessions" and not include_temporary:
             statement = statement.where(not_temporary_chat_session())
+        if model.entity_kind == "engagements":
+            statement = statement.where(not_reserved_project())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         async with self.database.session() as session:
@@ -3564,6 +3582,7 @@ class NebulaStore:
         statement = (
             select(EntityRow.kind, func.count())
             .where(or_(EntityRow.kind != "chat_sessions", not_temporary_chat_session()))
+            .where(or_(EntityRow.kind != "engagements", not_reserved_project()))
             .group_by(EntityRow.kind)
         )
         if engagement_id is not None:
