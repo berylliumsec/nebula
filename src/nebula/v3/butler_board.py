@@ -29,6 +29,7 @@ from .domain import (
     Approval,
     ApprovalStatus,
     ChatGoal,
+    ChatGoalStatus,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -98,6 +99,29 @@ def _visible_projects() -> Any:
     )
 
 
+def _proposal_condition() -> Any:
+    """A chat Butler proposed whose goal is still an unstarted draft."""
+
+    goal = aliased(EntityRow)
+    drafts = (
+        select(goal.payload["session_id"].as_string())
+        .where(
+            goal.kind == ChatGoal.entity_kind,
+            goal.payload["status"].as_string() == ChatGoalStatus.DRAFT.value,
+        )
+        .scalar_subquery()
+    )
+    return and_(
+        func.coalesce(EntityRow.payload["metadata"]["proposed_by"].as_string(), "")
+        == "butler",
+        EntityRow.id.in_(drafts),
+    )
+
+
+def _is_proposal(session: ChatSession) -> bool:
+    return session.metadata.get("proposed_by") == "butler"
+
+
 def butler_board_router(store: NebulaStore) -> APIRouter:
     router = APIRouter(tags=["butler"])
 
@@ -112,7 +136,8 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
     ) -> Any:
         """Chats across every project, those needing the operator first.
 
-        ``state=active`` (the default) lists chats waiting on the operator,
+        ``state=active`` (the default) lists chats waiting on the operator
+        (including goal chats Butler proposed and nobody has started yet),
         running chats and chats whose last turn failed in the last day, with
         exact counts for every state. ``state=idle`` pages through the rest by
         recent activity. Butler's own conversations, side chats and archived
@@ -220,6 +245,33 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 )
                 or 0
             )
+            # Butler's proposed goal chats wait for the operator to start them.
+            # They have no turn yet, so they are found by their draft goal.
+            listed = [*pending, *failed]
+
+            def proposed(statement: Any) -> Any:
+                statement = visible(statement).where(_proposal_condition())
+                if listed:
+                    statement = statement.where(EntityRow.id.not_in(listed))
+                return statement
+
+            proposal_total = int(
+                await database.scalar(
+                    proposed(select(func.count()).select_from(EntityRow))
+                )
+                or 0
+            )
+            proposal_rows = (
+                list(
+                    await database.execute(
+                        proposed(select(EntityRow.payload, project.payload["name"]))
+                        .order_by(EntityRow.updated_at.desc(), EntityRow.id.desc())
+                        .limit(MAX_ACTIVE_ITEMS)
+                    )
+                )
+                if proposal_total
+                else []
+            )
 
         entries: list[tuple[ChatSession, str, str, ChatTurnHeader | None]] = []
         for payload, name in active_rows:
@@ -239,11 +291,19 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
         counts = {"waiting": 0, "working": 0, "failed": 0, "idle": 0}
         for entry in entries:
             counts[entry[2]] += 1
-        counts["idle"] = max(0, total - len(entries))
+        counts["waiting"] += proposal_total
+        counts["idle"] = max(0, total - len(entries) - proposal_total)
+        for payload, name in proposal_rows:
+            entries.append(
+                (ChatSession.model_validate(payload), str(name or ""), "waiting", None)
+            )
+        unlisted_proposals = proposal_total - len(proposal_rows)
 
         if state == "idle":
             excluded = [entry[0].id for entry in entries]
-            statement = visible(select(EntityRow.payload, project.payload["name"]))
+            statement = visible(
+                select(EntityRow.payload, project.payload["name"])
+            ).where(~_proposal_condition())
             if excluded:
                 statement = statement.where(EntityRow.id.not_in(excluded))
             statement = (
@@ -280,7 +340,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                     for entry in shown
                 ],
                 "next_offset": None,
-                "truncated": len(entries) > len(shown),
+                "truncated": len(entries) > len(shown) or unlisted_proposals > 0,
             }
         if unchanged := conditional(
             request, response, content_etag("butler-board", body)
@@ -362,6 +422,9 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
             return unchanged
         return body
 
+    from .chat_brief import chat_brief_router
+
+    router.include_router(chat_brief_router(store))
     return router
 
 
@@ -445,8 +508,22 @@ async def _item(
 ) -> dict[str, Any]:
     approval = approvals.get(session.id)
     question = questions.get(session.id)
+    goal = goals.get(session.id)
     attention: dict[str, Any] | None = None
-    if state == "waiting" and approval is not None:
+    if (
+        state == "waiting"
+        and header is None
+        and _is_proposal(session)
+        and goal is not None
+        and goal.status == ChatGoalStatus.DRAFT
+    ):
+        attention = {
+            "kind": "proposal",
+            "action_id": session.id,
+            "summary": "Butler proposed this goal chat",
+            "requested_at": session.created_at,
+        }
+    elif state == "waiting" and approval is not None:
         attention = {
             "kind": "approval",
             "action_id": approval.id,
@@ -475,7 +552,6 @@ async def _item(
         now = _WORKING_TEXT.get(header.status, "Working")
     else:
         now = None
-    goal = goals.get(session.id)
     return {
         "session_id": session.id,
         "title": session.title,
@@ -491,6 +567,11 @@ async def _item(
         "turn_status": header.status if header else None,
         "turn_started_at": header.created_at if header else None,
         "updated_at": session.updated_at,
+        "session_revision": session.revision,
+        "started_by": (
+            "butler" if session.metadata.get("butler_initiated") is True else None
+        ),
+        "proposed_by": "butler" if _is_proposal(session) else None,
         "now": now,
         "attention": attention,
         "goal": (
@@ -499,6 +580,7 @@ async def _item(
                 "status": goal.status.value,
                 "current_step": goal.current_step,
                 "plan_length": len(goal.plan),
+                "revision": goal.revision,
             }
             if goal
             else None

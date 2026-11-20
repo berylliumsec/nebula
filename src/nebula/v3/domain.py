@@ -3640,6 +3640,9 @@ class ChatGoal(Entity):
         default=DEFAULT_GOAL_RESUME_INSTRUCTION, min_length=1, max_length=4_000
     )
     current_step: int = Field(default=0, ge=0)
+    # The plan entry the agent last reported working on (0-based), separate
+    # from ``current_step``, which counts turns. None until it is reported.
+    active_plan_index: int | None = Field(default=None, ge=0)
     status: ChatGoalStatus = ChatGoalStatus.DRAFT
     token_budget: int | None = Field(default=None, ge=1)
     time_budget_seconds: int | None = Field(default=None, ge=1)
@@ -3675,6 +3678,10 @@ class ChatGoal(Entity):
         # by ``step_budget``; the plan is guidance and may be shorter than that.
         if self.status == ChatGoalStatus.BLOCKED and not self.blocked_reason:
             raise ValueError("blocked goals require a reason")
+        if self.active_plan_index is not None and self.active_plan_index >= len(
+            self.plan
+        ):
+            raise ValueError("active_plan_index must name an entry of the plan")
         if self.status == ChatGoalStatus.COMPLETED and (
             not self.completion_summary or not self.completion_evidence
         ):
