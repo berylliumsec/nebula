@@ -1,26 +1,33 @@
 {
-  "change_digest": "ce1b2fa53e666fdd158d565ec90c9b8b12450cb95aa9f9d07c2d0ca4b3e0ad54",
-  "reviewed_by": "Claude Code, fixing a live Butler thread stuck on 'Butler is working\u2026' after the 7453191 deploy",
-  "reason": "After a deploy stopped Apple Bug Bounty's worker, Core auto-resumed the operator's Butler thread turn (direct lane) at 22:38, but it never reached provider admission: _run_provider_turn makes every automatic recovery take a process-wide 2-slot semaphore (_automatic_recovery_slots) before admission and holds it until the turn ends. Two recovered subagent children holding the slots for hours left the Butler turn FIFO-queued behind 9 more (expected start 1.5-10 h later). Two independent subagents validated this from provider_turn_queue and turn data (the 22:43:55 -> 22:43:56 slot handover). The code comment already says operator turns do not use this gate. Fix: recovered direct-lane turns skip the gate; background recovery (subagents, goals) keeps the 2-at-a-time bound. Selected: a new test that holds both recovery slots and asserts a recovered direct turn still runs (fails without the fix), the existing restart-recovery bound tests in test_chat.py (now explicitly background-lane recoveries, still asserting at most 2 run), and the admission-cleanup and Butler concurrent-recovery suites.",
-  "exclusions": "Releasing the recovery slot at admission (so long background recoveries stop starving later ones) was tried and reverted: it removes the deliberate 2-running bound that test_core_restart_recovery_bounds_concurrent_provider_turns encodes for event-loop protection, so it needs its own design decision. tests/v3/test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] and tests/v3/test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent fail identically on pristine origin/main; PostgreSQL cases skip in CI without NEBULA_TEST_POSTGRES_URL, and test_butler_recovery.py is not selected. No UI change.",
+  "change_digest": "ee576795f994118deda87ad0df23587543e3b68ea71dc2e7180aa10a0684e830",
+  "reviewed_by": "Claude Code, adding Archive and Delete to Butler mode threads at the operator's request (mockup approved on Figma page 'Butler thread actions')",
+  "reason": "Butler mode had no way to archive or delete a thread. Core already supports both (PATCH chat-sessions/{id} archived, DELETE chat-sessions/{id}) and /butler/threads already hides archived threads, so this is UI only: the open thread's header gets Archive (immediate; the thread stays in the project's archived chats) and Delete (inline confirmation, then removal). Both are disabled while Butler is still answering the thread. The Butler workflow registry links the new ButlerModePage calls to the existing reviewed chat.archive and chat.delete actions, and the settings assistant guide documents the actions with a focused product-help regression. Selected: the real-Core Butler mode journey at desktop, compact and 390 px Chromium/WebKit (now archives the answered thread and checks Core keeps it archived, then cancels and confirms Delete and checks Core returns 404), plus the product-knowledge digest, Butler mode and new archive/delete help tests. The first CI run failed 3 of 4 journey projects at the Butler mode entry check (/butler instead of /butler?project=<research>), the same failure seen on #1250: the top-bar launcher built its path from the workspace's selected project, which is unset while a project page is still loading. The launcher now falls back to the project in the URL; a new NebulaControlAssistant test fails without that fix and passes with it. Also: the chat brief's goal card let long unbroken text (paths, hashes) run past its edge and collapsed the completion criteria's line breaks; its paragraphs now wrap anywhere and the criteria keep their line breaks (CSS and one class name).",
+  "exclusions": "No Core change. tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli and tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fail identically on pristine origin/main (the registry already has 2 unreviewed signatures there; this change adds none), so the rest of those files are not selected. No ButlerModePage component test exists; the real-Core journey covers the new controls. The real-Core Playwright journey was not run locally; CI runs it. Not a setting, so ui/src/settingsCatalog.ts is unchanged. ButlerChatBrief has no component test and its wrapping is CSS only; the Butler mode journey's horizontal-overflow check covers the page, but no selected test renders a goal with an unbroken path.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 119,
-    "frontend": 0,
+    "python": 3,
+    "frontend": 73,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_butler_concurrent_recovery.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/NebulaControlAssistant.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
   "checks": []
 }

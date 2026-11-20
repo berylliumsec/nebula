@@ -142,6 +142,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
   padding: 12px 14px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-panel);
@@ -151,6 +152,8 @@
 .card p,
 .now p {
   margin: 0;
+  /* Goals carry long paths, hashes and IDs with no break opportunity. */
+  overflow-wrap: anywhere;
   font-size: var(--type-body);
   line-height: var(--leading-body);
 }
@@ -329,3 +332,6 @@
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+
+/* Completion criteria are often a numbered list written with line breaks. */
+.criteria { white-space: pre-line; }

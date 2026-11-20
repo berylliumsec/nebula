@@ -187,7 +187,7 @@ export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenC
     {goal && <div className={styles.card}>
       <span className={styles.label}>Goal{goal.plan.length ? ` · ${goal.activePlanIndex !== undefined ? `step ${goal.activePlanIndex + 1} of ${goal.plan.length}` : `${goal.plan.length} planned steps`}` : ""} · {goal.status}</span>
       <p>{goal.objective}</p>
-      {goal.completionCriteria && <p className={styles.muted}>Done when: {goal.completionCriteria}</p>}
+      {goal.completionCriteria && <p className={`${styles.muted} ${styles.criteria}`}>Done when: {goal.completionCriteria}</p>}
     </div>}
 
     {(attention || goal?.blockedReason) && <div className={styles.now} data-kind={attention?.kind ?? "blocked"}>

@@ -24,7 +24,7 @@ import { THEME_OPTIONS, useTheme, type ThemePreference } from "../state/ThemeCon
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { settingCatalog, settingOpensInButler, type SettingCatalogEntry } from "../settingsCatalog";
 import { assistantDestinations, assistantDestinationPath, destinationToOpen, type AssistantDestination } from "../assistantDestinations";
-import { projectSurface, resourcePath } from "../resourceRoutes";
+import { projectIdFromPath, projectSurface, resourcePath } from "../resourceRoutes";
 import { sha256BlobHex, sha256Hex } from "../sha256";
 import { startChatTranscriptDownload } from "../pages/chatTranscriptExport";
 import { REASONING_EFFORTS, type ButlerVoiceSettings, type ChatAssistantConfig, type ChatCompletionRequest, type ChatCompletionResponse, type ChatContentBlock, type ChatMessage, type ChatStreamEvent, type ChatSubagentView, type ChatTurn, type ObservationSummary, type VoicePauseSeconds, type WritingTransformResponse } from "../api/types";
@@ -3071,7 +3071,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   const attentionLabel = `${attentionCount} open incident${attentionCount === 1 ? "" : "s"} ${attentionCount === 1 ? "needs" : "need"} attention in the selected project`;
   const toggleFloating = () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } };
-  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, attentionCount, toggle: nativeShell ? toggleFloating : () => { setHidden(true); onNavigate(butlerModePath(engagement?.id)); } }}>
+  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, attentionCount, toggle: nativeShell ? toggleFloating : () => { setHidden(true); onNavigate(butlerModePath(engagement?.id ?? projectIdFromPath(window.location.pathname))); } }}>
     <ButlerPanelBridgeContext.Provider value={{ embed: setEmbed, startVoice: startVoiceFromButlerMode, voiceAvailable: Boolean(api && engagement && runtime && !busy && !loadingHistory), attentionCount }}>
     {children}
     </ButlerPanelBridgeContext.Provider>

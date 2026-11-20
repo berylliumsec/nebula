@@ -453,6 +453,29 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await rail.getByRole("button", {name: /THREAD-A/}).click();
       await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText(ANSWERS.held)).toBeVisible({timeout: 90_000});
 
+      // Archive the answered thread: it leaves Butler mode and stays an archived chat.
+      const heldId = threads.items.find(item => item.title === PROMPTS.held)!.session_id;
+      await page.getByRole("button", {name: "Archive", exact: true}).click();
+      await expect(page.getByRole("button", {name: "Archive", exact: true})).toHaveCount(0);
+      await expect.poll(() => new URL(page.url()).searchParams.get("thread")).toBeNull();
+      await expect.poll(async () => ((await (await api.get("butler/threads")).json()) as Threads).items.some(item => item.session_id === heldId)).toBe(false);
+      expect(((await (await api.get(`chat-sessions/${heldId}`)).json()) as {metadata: {archived_at?: string}}).metadata.archived_at).toBeTruthy();
+      // Delete asks first; Cancel keeps the thread, Delete thread removes it from Core.
+      const quickId = threads.items.find(item => item.title === PROMPTS.quick)!.session_id;
+      await showThreads(page);
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
+      await rail.getByRole("button", {name: /THREAD-B/}).click();
+      await page.getByRole("button", {name: "Delete", exact: true}).click();
+      const confirm = page.getByRole("group", {name: "Confirm delete"});
+      await expect(confirm).toBeVisible();
+      await expect(confirm).toBeInViewport();
+      await confirm.getByRole("button", {name: "Cancel"}).click();
+      await expect(confirm).toHaveCount(0);
+      await page.getByRole("button", {name: "Delete", exact: true}).click();
+      await confirm.getByRole("button", {name: "Delete thread"}).click();
+      await expect.poll(async () => (await api.get(`chat-sessions/${quickId}`)).status()).toBe(404);
+      expect(((await (await api.get("butler/threads")).json()) as Threads).items.some(item => item.session_id === quickId)).toBe(false);
+
       expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
       for (const control of await page.getByRole("button").all()) {
@@ -463,7 +486,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }
