@@ -1,23 +1,31 @@
 {
-  "change_digest": "8d6bd5aac5dd449b6fe125149acd1aee6b88d1b16478456c7cc80f0b361b51ce",
-  "reviewed_by": "Claude Code, at the operator's request to drop the deployer's CI evidence requirement",
-  "reason": "The deployer's prepare required a successful main push CI run for every commit since the live release. Pull requests already merge only after their CI passes, and main push runs share a cancel-in-progress group, so back-to-back merges cancelled each other's evidence and blocked deploys. prepare now skips CI lookups by default (receipt ci_acceptance null with a reason) and --require-ci-evidence or --ci-run-id restores the check. Selected: the deployer CI-default and prebuild suites (updated for the new default plus a test pinning it) and the deployer protocol suite (CLI).",
-  "exclusions": "Only scripts/simulation/nebula_deployer.py and its tests change; no Core, UI or workflow code, so frontend, native and Playwright selections are empty and LAN validation does not apply.",
+  "change_digest": "68332f6b77e2e5f8c5587ca73e1009ca10ba1afed1f562a64f22bd6e804f3cfc",
+  "reviewed_by": "Claude Code, PR 2c of the Butler home worker design at the operator's request",
+  "reason": "A Butler session in Butler's own project now reads its focus project for read-only tools while writes stay in Butler's project: SharedButlerMemory lets the verified home lease read another project's memories (list/search only, via a host-checked target_project); a focus broker serves workspace.find/search/read from the focus project's existing folder through retrieval_workspace() (never creating it), keeping the ledger and evidence in Butler's project; chat recalls the focus project's memories, wraps tools on new and resumed turns, and turns off Butler-project work board, roster and agent messaging; Butler children inherit the focus. Selected: the four Butler home suites (new tools suite: home-lease memory reads and refusals, focus broker routing, no folder creation), shared and Butler memory (authority and RPC changed), workspace tool search (retrieval path changed), chat and Butler subagents (child metadata), Butler sessions and provider tools-context (chat tool assembly).",
+  "exclusions": "Harness Butler with a focus is PR 2d. No UI change; the flag-gated home sessions are not reachable from the UI yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; all selected suites passed locally on SQLite and the staging postgres:16.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 61,
+    "python": 163,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_deployer_protocol.py",
-    "tests/test_simulation_deployer_ci_default.py",
-    "tests/test_simulation_deployer_prebuild.py"
+    "tests/v3/test_butler_home_actions.py",
+    "tests/v3/test_butler_home_scope.py",
+    "tests/v3/test_butler_home_sessions.py",
+    "tests/v3/test_butler_home_tools.py",
+    "tests/v3/test_butler_memory.py",
+    "tests/v3/test_butler_sessions.py",
+    "tests/v3/test_butler_subagents.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_provider_tools_context.py",
+    "tests/v3/test_shared_butler_memory.py",
+    "tests/v3/test_workspace_tool_search.py"
   ],
   "frontend": [],
   "native": [],

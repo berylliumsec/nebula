@@ -63,6 +63,7 @@ from .tools import (
     AmbiguousToolState,
     ApprovalRequired,
     RETRIEVAL_TOOL_NAMES,
+    retrieval_workspace,
     InvalidToolArguments,
     PolicyDenied,
     ProjectHookPolicyDenied,
@@ -806,7 +807,7 @@ class AutomationBroker:
                 owner_id=invocation.run_id,
                 **invocation.arguments,
             )
-        workspace = WorkspaceOutputService(invocation.workspace)
+        workspace = WorkspaceOutputService(retrieval_workspace(invocation))
         if invocation.tool_name == "workspace.find":
             return workspace.find(**invocation.arguments)
         if invocation.tool_name == "workspace.search":

@@ -6462,6 +6462,12 @@ class ChatService:
                 and request.allow_cloud_tool_results
             )
         )
+        if session is not None and session.engagement_id == BUTLER_HOME_PROJECT:
+            # Butler's own project has no work board, roster or agents of its
+            # own; Butler works on its focus project through nebula.work.*.
+            work_enabled = False
+            work_roster_enabled = False
+            agent_messaging_enabled = False
         # Every subagent turn can message the assistant that delegated to it,
         # so it always routes tools, even when its task has no others.
         child_messaging = bool(subagent_child and engagement_id)
@@ -6602,9 +6608,12 @@ class ChatService:
                 # (``_with_reference_material``): in the instructions it changed
                 # the request's first bytes every turn and the provider's prompt
                 # cache missed for the whole conversation.
+                # A Butler session in Butler's own project recalls the
+                # memories of the project it is about.
                 butler_recall = (
                     await self.butler_memory.turn_context(
-                        engagement_id, request.messages[-1].content
+                        butler_focus_project(session) or engagement_id,
+                        request.messages[-1].content,
                     )
                 ).strip()
         else:
@@ -7098,6 +7107,13 @@ class ChatService:
                     )
                 except InvalidToolArguments as exc:
                     raise ChatConfigurationError(str(exc)) from exc
+            focus = butler_focus_project(session)
+            if focus is not None and self.tool_platform is not None:
+                # Workspace reads serve the project this Butler session is
+                # about; everything else stays in Butler's own project.
+                tool_components = await self.tool_platform.focus_components(
+                    tool_components, focus
+                )
             tool_suggestions: dict[str, Any] | None = None
             tool_catalog: dict[str, Any] | None = None
             tool_components = dataclass_replace(
@@ -14778,6 +14794,11 @@ class ChatService:
                 )
                 if catalog is not None:
                     components = combine_tool_components(components, catalog)
+            focus = butler_focus_project(session)
+            if focus is not None and self.tool_platform is not None:
+                components = await self.tool_platform.focus_components(
+                    components, focus
+                )
         except Exception as exc:
             record_caught_exception(
                 "chat",
