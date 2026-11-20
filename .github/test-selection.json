@@ -1,29 +1,34 @@
 {
-  "change_digest": "f475c996410a7c2ac27c35f67b3419801ea08e5b248bffc8789569b5a174fe32",
-  "reviewed_by": "Claude Code, hardening deploys after the 2026-11-20 d223a68 promotion needed an operator to restart it",
-  "reason": "Every deploy reported target_execution and every handoff as uncertain and needed reruns. Root cause (independently confirmed): RuntimeManagement.dispatch returned the full deployment status for promote_api, target_execution, handoff and rollback_code, and the operation receipt is bounded at 64 KiB; with 709 projects the status is ~167 KB, so the committed effect was reported as an uncertain ValueError. Core now returns a bounded summary (revision, versions, health, and the handoff's own project row). Deployer: Core reads time out after 60 s and are retried (deployment status is slow during handoffs; a 20 s timeout ended runs); waiting for the new host waits out a degraded status while the old API worker drains; a project whose only blockers are idle harness sessions Core cannot restore is stopped without waiting out the grace; promotion retires unowned workers of older versions once every project runs the target (one left behind would hold the next release at execution staged); superseded-manual reconciliation accepts succeeded promote/target receipts. Selected: runtime management (busy-host target and handoff receipts fail on main with the live symptom) and operations suites, the new read-retry tests, staged deployer (immediate stop for idle-only blockers, grace kept for others, leftover retirement), deploy-resume and deployer protocol suites.",
-  "exclusions": "tests/test_simulation_host_activation.py passes locally (including the new degraded-wait case) except the onefile identity case that fails on unmodified main here; tests/v3/test_supervisor.py and test_runtime_coordination.py pass locally and are unchanged. PostgreSQL variants run in CI. No staging replay: the busy-host status is reproduced in the runtime management tests with a 700-project status.",
+  "change_digest": "43d5fff07ab605a9a3957619a1b8511fd4530aca50cb3794f85abdd66596eca9",
+  "reviewed_by": "Claude Code, removing Butler's overdue goal check-in at the operator's request",
+  "reason": "Live Core showed Butler opening a new recovery chat for every goal.progress_overdue event (about 120 a day) and most ended needs_attention because provider agents cannot take a message mid-turn. The operator asked to remove the overdue check-in. Core no longer schedules progress deadlines or emits goal.progress_overdue; review, recovery, authority and memory ignore already-queued overdue events; request_parent_status is no longer an effective action; the report tool drops next_checkpoint_at; the oversight view drops 'Next checkpoint due' and its authority copy now describes plan reassessment. Selected: the Butler oversight, authority, review, pivotal-memory and handoff-action suites (authority and handoff tests now use the plan-change trigger that still exists), the two Butler oversight frontend suites, and the real-Core Butler oversight journey at desktop and 390 px.",
+  "exclusions": "tests/v3/test_universal_agent_tools.py references report_progress but 17 of its tests fail identically on unmodified origin/main locally, so it is not selected. The two PostgreSQL cases in tests/v3/test_handoff_butler_actions.py skip without NEBULA_TEST_POSTGRES_URL; they passed locally against a disposable postgres:16 container. Broader auto-impact areas (core-api shards, interface layouts, other Butler settings areas) do not touch the changed oversight code.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 255,
-    "frontend": 0,
+    "python": 65,
+    "frontend": 32,
     "native": 0,
-    "playwright": 0
+    "playwright": 2
   },
   "python": [
-    "tests/v3/test_runtime_management.py",
-    "tests/v3/test_runtime_operations.py",
-    "tests/test_simulation_deploy_gate_reads.py",
-    "tests/test_staged_deployer.py",
-    "tests/test_simulation_deploy_resume.py",
-    "tests/test_deployer_protocol.py"
+    "tests/v3/test_butler_authority.py",
+    "tests/v3/test_butler_memory_pivotal.py",
+    "tests/v3/test_butler_oversight.py",
+    "tests/v3/test_butler_review.py",
+    "tests/v3/test_handoff_butler_actions.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/butlerOverview.test.ts",
+    "ui/src/components/ButlerOversight.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-oversight/assistant-real-desktop",
+    "butler-oversight/assistant-real-chromium-390"
+  ],
   "checks": []
 }
