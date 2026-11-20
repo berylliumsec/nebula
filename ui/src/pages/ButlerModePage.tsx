@@ -12,7 +12,7 @@ import { logCaughtDiagnostic } from "../diagnostics";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle } from "./butlerThreads";
+import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, projectPickerGroups } from "./butlerThreads";
 import styles from "./ButlerModePage.module.css";
 // Already in the main bundle with the Butler panel.
 import { MicrophoneIcon } from "../components/NebulaVoice";
@@ -552,29 +552,20 @@ export function ButlerModePage() {
     </div>}
   </section>;
 
-  const projectCounts = useMemo(() => {
-    const counts = new Map<string, { waiting: number; working: number }>();
-    for (const item of board?.items ?? []) {
-      const entry = counts.get(item.project.id) ?? { waiting: 0, working: 0 };
-      if (item.state === "waiting") entry.waiting += 1;
-      if (item.state === "working") entry.working += 1;
-      counts.set(item.project.id, entry);
-    }
-    return counts;
-  }, [board]);
+  // Projects with chats that need the operator or are working come first; the
+  // rest stay one keystroke away in the picker instead of a thousand rows.
+  const { active: activeProjects, quiet: quietProjects } = projectPickerGroups(visibleProjects, board?.items ?? []);
 
   const threadsRail = <nav className={styles.rail} aria-label="Butler threads">
     <div className={styles.railHead}><h2>Projects</h2><span className={styles.muted}>one ongoing thread each</span></div>
-    <ul className={styles.threadList} aria-label="Project threads">{visibleProjects.map((project) => {
-      const counts = projectCounts.get(project.id);
-      const state = counts?.waiting ? "waiting" : counts?.working ? "working" : "done";
-      return <li key={project.id}>
-        <button type="button" className={styles.thread} aria-current={projectThreadId === project.id ? "true" : undefined} onClick={() => openProjectThread(project.id)}>
-          <span className={styles.threadHead}><i className={styles.dot} data-state={state} aria-hidden="true" /><span className={styles.threadTitle}>{project.name}</span></span>
-          <span className={styles.muted}>{counts?.waiting ? `${counts.waiting} need you` : counts?.working ? `${counts.working} working` : "Quiet"}</span>
-        </button>
-      </li>;
-    })}</ul>
+    <label className={styles.projectThreadPick}>
+      <span className="sr-only">Project thread</span>
+      <select value={projectThreadId ?? ""} onChange={(event) => { if (event.target.value) openProjectThread(event.target.value); }}>
+        <option value="" disabled>Choose a project…</option>
+        {activeProjects.length > 0 && <optgroup label="Active">{activeProjects.map(({ project, label }) => <option key={project.id} value={project.id}>{project.name} · {label}</option>)}</optgroup>}
+        {quietProjects.length > 0 && <optgroup label="Quiet">{quietProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</optgroup>}
+      </select>
+    </label>
     <div className={styles.railHead}>
       <h2>Threads</h2>
       {runningThreads > 0 && <span className={styles.muted}>{runningThreads} running</span>}

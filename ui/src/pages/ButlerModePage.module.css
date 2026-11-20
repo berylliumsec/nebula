@@ -393,6 +393,24 @@
   font-size: var(--type-secondary);
 }
 
+/* The rail's project thread picker: one control instead of a row per project. */
+.projectThreadPick {
+  display: block;
+  padding: 0 4px;
+}
+
+.projectThreadPick select {
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-control);
+}
+
 .board {
   min-width: 0;
   min-height: 0;

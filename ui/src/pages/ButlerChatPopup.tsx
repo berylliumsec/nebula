@@ -32,10 +32,12 @@ export function ButlerChatPopup({ api, sessionId, title, live, onClose, onOpenFu
   const followLatest = useRef(true);
   const returnFocus = useRef<Element | null>(null);
 
-  const visible = (items: PersistedChatMessage[]) => items.filter((item) => (item.role === "user" || item.role === "assistant") && item.content.trim());
+  // Core pages history only with replaced messages included; an edit's
+  // replaced messages are kept for reference but are not the transcript.
+  const visible = (items: PersistedChatMessage[]) => items.filter((item) => !item.replacedAt && (item.role === "user" || item.role === "assistant") && item.content.trim());
 
   const readLatest = useCallback(async (signal?: AbortSignal) => {
-    const page = await api.listChatMessages(sessionId, signal, { limit: PAGE });
+    const page = await api.listChatMessages(sessionId, signal, { includeReplaced: true, limit: PAGE });
     setMessages((current) => {
       if (!current) return page;
       // Keep older pages already read; replace the newest page with Core's copy.
@@ -102,7 +104,7 @@ export function ButlerChatPopup({ api, sessionId, title, live, onClose, onOpenFu
     const element = scroller.current;
     const before = element ? element.scrollHeight - element.scrollTop : 0;
     try {
-      const page = await api.listChatMessages(sessionId, undefined, { limit: PAGE, beforeMessageId: first.id });
+      const page = await api.listChatMessages(sessionId, undefined, { includeReplaced: true, limit: PAGE, beforeMessageId: first.id });
       followLatest.current = false;
       setMessages((current) => [...page, ...(current ?? [])]);
       setOlder({ loading: false, done: page.length < PAGE });
