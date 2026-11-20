@@ -1209,6 +1209,15 @@ def test_product_help_finds_butler_mode_board_and_parallel_threads(monkeypatch):
     assert "reply in this thread" in text
 
 
+def test_product_help_explains_archiving_and_deleting_butler_threads(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("How do I archive or delete a Butler thread?")
+    assert any(item["heading"] == "Butler mode" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "archive" in text and "archived chats" in text
+    assert "delete this thread and its messages" in text
+
+
 def test_product_help_explains_butler_proposed_goal_chats(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

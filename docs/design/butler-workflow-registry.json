@@ -67,7 +67,8 @@
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::setChatSessionArchived",
         "ui/src/pages/chatBulkActions.ts::listChatSessions",
-        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived"
+        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived",
+        "ui/src/pages/ButlerModePage.tsx::setChatSessionArchived"
       ],
       "core_owner": "ChatService and chat session metadata",
       "butler": {
@@ -120,7 +121,8 @@
       "entry_point": "Conversation menu: permanently delete a saved main chat",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::deleteChatSession",
-        "ui/src/pages/chatBulkActions.ts::deleteChatSession"
+        "ui/src/pages/chatBulkActions.ts::deleteChatSession",
+        "ui/src/pages/ButlerModePage.tsx::deleteChatSession"
       ],
       "core_owner": "ChatService and session dependency guards",
       "butler": {
@@ -5435,6 +5437,10 @@
       "count": 2
     },
     {
+      "key": "ui/src/pages/ButlerModePage.tsx::deleteChatSession",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig",
       "count": 1
     },
@@ -5448,6 +5454,10 @@
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::listChatMessages",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::setChatSessionArchived",
       "count": 1
     },
     {

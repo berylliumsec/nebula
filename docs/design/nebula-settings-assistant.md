@@ -1305,6 +1305,12 @@ in the Butler panel. The open thread and the phone tab are in the URL
 (`?thread=` and `?tab=`), so reload and back return to them. On a phone,
 **Board** and **Threads** tabs share one composer.
 
+To archive or delete a Butler thread, open it and use **Archive** or
+**Delete** in its header. Archive hides the thread from Butler mode at once and
+Core keeps it in the project's archived chats, where it can be restored. Delete
+first asks "Delete this thread and its messages? This can't be undone." and
+then removes it from Core. Both wait until Butler has finished answering.
+
 ### Butler-proposed goal chats
 
 Asked in plain words to spin up work ("triage the crash logs with Claude until

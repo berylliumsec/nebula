@@ -296,6 +296,29 @@ export function ButlerModePage() {
   const matchedChats = groups.reduce((sum, group) => sum + group.items.length, 0);
   const matchedProjects = new Set(groups.flatMap((group) => group.items.map((item) => item.project.id))).size;
   const openThreadSummary = threads.find((item) => item.sessionId === openThreadId);
+  // Archive or delete the open thread. Core keeps an archived thread in the
+  // project's archived chats; Butler mode lists only unarchived threads.
+  const [confirmDelete, setConfirmDelete] = useState<string>();
+  const [threadAction, setThreadAction] = useState<{ sessionId: string; busy?: "archive" | "delete"; error?: string }>();
+  useEffect(() => { setConfirmDelete(undefined); setThreadAction(undefined); }, [openThreadId]);
+  const removeThread = async (sessionId: string, action: "archive" | "delete") => {
+    if (!api) return;
+    setThreadAction({ sessionId, busy: action });
+    try {
+      if (action === "archive") await api.setChatSessionArchived(sessionId, true);
+      else await api.deleteChatSession(sessionId);
+      setThreads((current) => current.filter((item) => item.sessionId !== sessionId));
+      setMessages((current) => { const next = { ...current }; delete next[sessionId]; return next; });
+      setConfirmDelete(undefined);
+      setThreadAction(undefined);
+      if (openThreadId === sessionId) openThread(undefined);
+      threadsEtag.current = undefined;
+      threadsPoll.current?.poke();
+    } catch (caught) {
+      void logCaughtDiagnostic(action === "archive" ? "interface.butler_mode.thread_archive_failed" : "interface.butler_mode.thread_delete_failed", action === "archive" ? "Butler mode could not archive a thread." : "Butler mode could not delete a thread.", caught, "butler_mode");
+      setThreadAction({ sessionId, error: `${caught instanceof Error ? caught.message : `Core could not ${action} this thread.`} The thread is unchanged.` });
+    }
+  };
   const runningThreads = threads.filter((item) => item.state === "working").length;
   const visibleProjects = useMemo(() => engagements.filter((item) => item.status !== "archived"), [engagements]);
 
@@ -597,7 +620,24 @@ export function ButlerModePage() {
       {compact && <button type="button" className={styles.iconButton} aria-label="Back to threads" title="Back to threads" onClick={() => openThread(undefined)}><ArrowLeft size={16} aria-hidden="true" /></button>}
       <h2>{openThreadSummary?.title ?? "New thread"}</h2>
       {openThreadSummary && <span className={styles.muted}>{openThreadSummary.project.name}</span>}
+      {openThreadSummary && (() => {
+        const running = openThreadSummary.state === "working" || streams.current.has(openThreadSummary.sessionId) || Boolean(live[openThreadSummary.sessionId] && !live[openThreadSummary.sessionId].error);
+        const busy = threadAction?.sessionId === openThreadSummary.sessionId ? threadAction.busy : undefined;
+        const why = running ? "Butler is still answering this thread. Wait for it to finish first." : undefined;
+        return <span className={styles.threadActions}>
+          <button type="button" className={styles.threadAction} disabled={running || Boolean(busy)} title={why ?? "Hide this thread from Butler mode; it stays in the project's archived chats"} onClick={() => void removeThread(openThreadSummary.sessionId, "archive")}>{busy === "archive" ? "Archiving…" : "Archive"}</button>
+          <button type="button" className={`${styles.threadAction} ${styles.threadDelete}`} disabled={running || Boolean(busy)} title={why ?? "Delete this thread and its messages"} aria-expanded={confirmDelete === openThreadSummary.sessionId} onClick={() => setConfirmDelete(openThreadSummary.sessionId)}>Delete</button>
+        </span>;
+      })()}
     </div>
+    {openThreadSummary && confirmDelete === openThreadSummary.sessionId && <div className={styles.confirmDelete} role="group" aria-label="Confirm delete">
+      <p>Delete this thread and its messages? This can't be undone.</p>
+      <span className={styles.threadActions}>
+        <button type="button" className={styles.dangerButton} disabled={threadAction?.busy === "delete"} onClick={() => void removeThread(openThreadSummary.sessionId, "delete")}>{threadAction?.busy === "delete" ? "Deleting…" : "Delete thread"}</button>
+        <button type="button" className={styles.threadAction} disabled={threadAction?.busy === "delete"} onClick={() => setConfirmDelete(undefined)}>Cancel</button>
+      </span>
+    </div>}
+    {openThreadSummary && threadAction?.sessionId === openThreadSummary.sessionId && threadAction.error && <div className={styles.error} role="alert">{threadAction.error}</div>}
     <div className={styles.messages} role="log" aria-label="Butler thread messages" aria-live="polite">
       {!openThreadId && <p className={styles.empty}>Ask Butler about anything across your projects — what needs you, what's stuck, what to pause. Butler keeps working on each thread while you start the next.</p>}
       {openThreadId && threadError[openThreadId] && <div className={styles.error} role="alert">{threadError[openThreadId]} <button type="button" className={styles.link} onClick={() => void loadMessages(openThreadId)}>Retry</button></div>}

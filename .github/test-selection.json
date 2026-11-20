@@ -1,27 +1,31 @@
 {
-  "change_digest": "917b3d1ea83b55ce338defeba5e5d1641748d5e6358b51f4d0c559c5a8080d2d",
-  "reviewed_by": "Claude Code, fixing the ~18 minute post-deploy 'Project execution is reconnecting' outage on live Apple Bug Bounty",
-  "reason": "After the 42d2bb4 deploy, Apple Bug Bounty's recovered worker answered 503 'reconnecting' for ~18 minutes. Root cause (independently validated by a fresh subagent from raw Postgres lock-wait logs): once a recovery is verified and activation starts, the worker reports 'prepared' until its lifespan finishes, and the supervisor's handoff loop re-selects it every 0.5 s. Each pass ran _recovery_grant(check_blockers=True), which holds the project's ownership row FOR UPDATE (fenced) through _recovery_blockers' project-wide scan of chat_turns/chat_goals payload->>'execution_claim_id' (4-7 s on 3.4M rows, json payloads). Every worker transaction takes FOR KEY SHARE on that row, so activation ran one transaction per ~5.7 s supervisor cycle (193 holder transactions x 5.7 s = 18.3 min, matching the window). Fix: when the recovery is verified and the worker reports activation_started, skip the blocker check and the repeat verify/activate; a later pass marks it activated once ready. A verified recovery that has not started activating still checks blockers (an uncertain effect still holds activation). Selected: a new focused test of _advance_project_recovery plus the supervisor recovery suites (controls, recovery, reconciliation).",
-  "exclusions": "test_runtime_continuity_acceptance.py needs a production UI build and complete source, so it is not selected. 3 PostgreSQL cases in test_recovery_controls.py (pause_and_stop_run_while_recovery_is_blocked, held_worker_activates_only_after_blockers_resolve, held_target_that_ran_a_control_and_then_failed_exits) fail identically on pristine origin/main; PostgreSQL cases skip in CI without NEBULA_TEST_POSTGRES_URL. All SQLite cases pass locally with the fix. No UI change.",
+  "change_digest": "e9e1b8abbd87dc892baed0fb3b3202fb753e24ac2847de0e5a4a6652d819b0ae",
+  "reviewed_by": "Claude Code, adding Archive and Delete to Butler mode threads at the operator's request (mockup approved on Figma page 'Butler thread actions')",
+  "reason": "Butler mode had no way to archive or delete a thread. Core already supports both (PATCH chat-sessions/{id} archived, DELETE chat-sessions/{id}) and /butler/threads already hides archived threads, so this is UI only: the open thread's header gets Archive (immediate; the thread stays in the project's archived chats) and Delete (inline confirmation, then removal). Both are disabled while Butler is still answering the thread. The Butler workflow registry links the new ButlerModePage calls to the existing reviewed chat.archive and chat.delete actions, and the settings assistant guide documents the actions with a focused product-help regression. Selected: the real-Core Butler mode journey at desktop, compact and 390 px Chromium/WebKit (now archives the answered thread and checks Core keeps it archived, then cancels and confirms Delete and checks Core returns 404), plus the product-knowledge digest, Butler mode and new archive/delete help tests.",
+  "exclusions": "No Core change. tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli and tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fail identically on pristine origin/main (the registry already has 2 unreviewed signatures there; this change adds none), so the rest of those files are not selected. No ButlerModePage component test exists; the real-Core journey covers the new controls. The real-Core Playwright journey was not run locally; CI runs it. Not a setting, so ui/src/settingsCatalog.ts is unchanged.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 64,
+    "python": 3,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_recovery_activation_no_relock.py",
-    "tests/v3/test_recovery_controls.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_runtime_recovery.py"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
   "checks": []
 }
