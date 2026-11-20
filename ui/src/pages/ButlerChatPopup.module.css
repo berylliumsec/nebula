@@ -7,6 +7,10 @@
   /* A sized, shrinkable track: an auto track grew to the popup's longest
      unbroken line (title, error reference), pushing it off-screen. */
   grid-template-columns: minmax(0, 860px);
+  /* A viewport-sized row: an implicit auto row grew to the whole
+     transcript's height and centred the popup thousands of pixels below the
+     viewport on a long chat, leaving only the scrim on screen. */
+  grid-template-rows: minmax(0, 1fr);
   justify-content: center;
   align-items: center;
   padding: 24px;
