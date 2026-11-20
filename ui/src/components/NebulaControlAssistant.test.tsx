@@ -911,6 +911,21 @@ describe("NebulaControlAssistant", () => {
     expect(screen.queryByRole("dialog", { name: "Butler" })).not.toBeInTheDocument();
   });
 
+  it("opens Butler mode for the project in the URL before the workspace selects it", async () => {
+    window.history.replaceState(null, "", "/projects/project-from-url/workbench?view=chat");
+    try {
+      const user = userEvent.setup();
+      const onNavigate = vi.fn();
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}>
+        <header><NebulaAssistantLauncherButton /></header>
+      </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", { name: "Open Butler" }));
+      expect(onNavigate).toHaveBeenCalledWith("/butler?project=project-from-url");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("checks the selected project's incidents before Butler opens and clears its cue on project switch", async () => {
     let openCount = 2;
     const request = vi.fn().mockImplementation(async (path: string) => ({
