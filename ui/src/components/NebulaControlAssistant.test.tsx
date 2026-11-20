@@ -897,27 +897,18 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByRole("link", { name: "Open chat" })).toHaveAttribute("href", url);
   });
 
-  it("opens Butler mode from the launcher and keeps one conversation behind Compact", async () => {
+  it("opens Butler mode from the launcher instead of a floating panel", async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
-    function CompactButton() {
-      const bridge = useButlerPanelBridge();
-      return <button type="button" onClick={() => bridge?.openCompact()}>Compact</button>;
-    }
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}>
-      <header><NebulaAssistantLauncherButton /><CompactButton /></header>
+      <header><NebulaAssistantLauncherButton /></header>
     </NebulaControlAssistant></ThemeProvider></DialogProvider>);
     const launcher = screen.getByRole("button", { name: "Open Butler" });
     expect(launcher.closest("header")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open Butler" })).toHaveLength(1);
     await user.click(launcher);
-    // The launcher opens Butler mode; Compact there opens this panel.
     expect(onNavigate).toHaveBeenCalledWith("/butler");
-    await user.click(screen.getByRole("button", { name: "Compact" }));
-    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me find a setting");
-    await user.click(screen.getByRole("button", { name: "Hide Butler" }));
-    await user.click(screen.getByRole("button", { name: "Compact" }));
-    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me find a setting");
+    expect(screen.queryByRole("dialog", { name: "Butler" })).not.toBeInTheDocument();
   });
 
   it("checks the selected project's incidents before Butler opens and clears its cue on project switch", async () => {

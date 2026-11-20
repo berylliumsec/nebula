@@ -14,8 +14,6 @@ export interface ButlerPanelEmbed {
 export interface ButlerPanelBridge {
   /** Show the panel inside ``embed.host``; undefined returns it to its floating place. */
   embed: (embed: ButlerPanelEmbed | undefined) => void;
-  /** Open the small floating panel (Compact). */
-  openCompact: () => void;
   /** Start Butler Voice in the selected project. */
   startVoice: () => void;
   voiceAvailable: boolean;

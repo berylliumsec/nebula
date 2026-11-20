@@ -198,6 +198,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [voiceSettingsError, setVoiceSettingsError] = useState("");
   const [voiceSettingsStatus, setVoiceSettingsStatus] = useState("");
   const [effortDraft, setEffortDraft] = useState("");
+  // Butler's model, as "kind:profile:model"; empty keeps the saved one.
+  const [runtimeDraft, setRuntimeDraft] = useState("");
   const [cyberDraft, setCyberDraft] = useState<ChatAssistantConfig["harnessCyberAccessProgram"]>("automatic");
   const [subagentsDraft, setSubagentsDraft] = useState(false);
   const [subagentLimitDraft, setSubagentLimitDraft] = useState<number>();
@@ -561,9 +563,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     });
   };
 
-  const selectedSettingsRuntime = sessionConfig
+  const savedSettingsRuntime = sessionConfig
     ? { kind: sessionConfig.backend, id: sessionConfig.profileId, model: sessionConfig.model }
     : runtime;
+  const runtimeKey = (value: { kind: string; id: string; model: string } | undefined) => value ? `${value.kind}\u0000${value.id}\u0000${value.model}` : "";
+  const runtimeChoices = [
+    ...providers.filter((item) => item.enabled && item.models.length).flatMap((item) => item.models.map((model) => ({ kind: "provider" as const, id: item.id, model, label: `${item.name} · ${model}` }))),
+    ...harnesses.filter((item) => item.enabled).flatMap((item) => (item.models.length ? item.models : item.defaultModel ? [item.defaultModel] : []).map((model) => ({ kind: "harness" as const, id: item.id, model, label: `${item.name} · ${model}` }))),
+  ];
+  const draftRuntime = runtimeDraft ? runtimeChoices.find((item) => runtimeKey(item) === runtimeDraft) : undefined;
+  const selectedSettingsRuntime = draftRuntime ?? savedSettingsRuntime;
+  const runtimeChanged = Boolean(draftRuntime && runtimeKey(draftRuntime) !== runtimeKey(savedSettingsRuntime));
   const selectedHarness = selectedSettingsRuntime?.kind === "harness"
     ? harnesses.find((item) => item.id === selectedSettingsRuntime.id) : undefined;
   const selectedModelOptions = selectedHarness?.modelOptions?.find((item) => item.model === selectedSettingsRuntime?.model);
@@ -656,6 +666,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         const config = saved?.settings;
         if (restored) setSessionId(restored.id);
         setSessionConfig(config);
+        setRuntimeDraft("");
         setSettingsRevision(saved?.revision);
         setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
         setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
@@ -723,13 +734,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         : harnessSubagentDraft.enabled
           ? { allowSubagents: true, subagentProviderId: harnessSubagentDraft.providerId, subagentModel: harnessSubagentDraft.model, maxActiveSubagents: harnessSubagentDraft.limit ?? null, subagentReasoningEffort: harnessSubagentDraft.reasoningEffort ?? null }
           : { allowSubagents: false };
+      const model = runtimeChanged ? { backend: selectedSettingsRuntime.kind, profileId: selectedSettingsRuntime.id, model: selectedSettingsRuntime.model } : {};
       const patch = selectedSettingsRuntime.kind === "provider"
-        ? { reasoningEffort: effortDraft || null, ...subagents }
-        : { harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}), ...subagents };
+        ? { ...model, reasoningEffort: effortDraft || null, ...subagents }
+        : { ...model, harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}), ...subagents };
       await api.updateChatAssistantConfig(targetSessionId, current.revision, patch);
       const saved = await api.getChatAssistantConfig(targetSessionId);
       setSessionConfig(saved.settings);
       setSettingsRevision(saved.revision);
+      setRuntimeDraft("");
       setEffortDraft(saved.settings.backend === "provider" ? saved.settings.reasoningEffort ?? "" : saved.settings.harnessReasoningEffort ?? "");
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
       applySubagentDrafts(saved.settings);
@@ -2854,6 +2867,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
+          {runtimeChoices.length > 0 && <label>Model<select aria-label="Butler model" value={runtimeDraft || runtimeKey(savedSettingsRuntime)} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => { setRuntimeDraft(event.target.value); setEffortDraft(""); setCyberDraft("automatic"); }}>
+            {savedSettingsRuntime && !runtimeChoices.some((item) => runtimeKey(item) === runtimeKey(savedSettingsRuntime)) && <option value={runtimeKey(savedSettingsRuntime)}>{savedSettingsRuntime.model} · saved</option>}
+            {runtimeChoices.map((item) => <option key={runtimeKey(item)} value={runtimeKey(item)}>{item.label}</option>)}
+          </select><small>Every Butler thread in this project uses it, from the next message.</small></label>}
           {selectedSettingsRuntime?.kind === "provider" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option key={item} value={item}>{item === "none" ? "None" : item}</option>)}</select></label>}
           {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError) || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
           {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
@@ -3055,7 +3072,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const attentionLabel = `${attentionCount} open incident${attentionCount === 1 ? "" : "s"} ${attentionCount === 1 ? "needs" : "need"} attention in the selected project`;
   const toggleFloating = () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } };
   return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, attentionCount, toggle: nativeShell ? toggleFloating : () => { setHidden(true); onNavigate(butlerModePath(engagement?.id)); } }}>
-    <ButlerPanelBridgeContext.Provider value={{ embed: setEmbed, openCompact: () => { setOpen(true); setHidden(false); }, startVoice: startVoiceFromButlerMode, voiceAvailable: Boolean(api && engagement && runtime && !busy && !loadingHistory), attentionCount }}>
+    <ButlerPanelBridgeContext.Provider value={{ embed: setEmbed, startVoice: startVoiceFromButlerMode, voiceAvailable: Boolean(api && engagement && runtime && !busy && !loadingHistory), attentionCount }}>
     {children}
     </ButlerPanelBridgeContext.Provider>
     {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={`${hidden ? "Show Butler" : "Open Butler"}${attentionCount ? `; ${attentionLabel}` : ""}`} title={attentionCount ? attentionLabel : "Butler"} onClick={() => { setOpen(true); setHidden(false); }}><img src="/nebula-logo.svg" width="22" height="36" alt="" aria-hidden="true" />{attentionCount > 0 && <span className={styles.launcherAttention} aria-hidden="true" />}</button> : null}

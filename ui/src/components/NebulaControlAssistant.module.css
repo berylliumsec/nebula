@@ -225,3 +225,8 @@
 .embedHidden { display: none !important; }
 /* Settings lent to Butler mode shows only Butler's settings, not the conversation's composer. */
 .embeddedPanel[data-embed-view="more"] > :not(.body) { display: none !important; }
+/* Butler's settings use the app's control styling wherever they are shown. */
+.ownSettings .subagentToggle { display: flex; }
+.ownSettings select,
+.voiceSettings select { padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--canvas); color: var(--text); font: inherit; }
+.embeddedPanel .body { max-width: 680px; padding-left: 0; }

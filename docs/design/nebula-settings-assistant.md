@@ -1217,9 +1217,8 @@ oversight, memory and settings. The
 **Butler** launcher in the top bar opens Butler mode (the iPhone app keeps its
 docked Butler); the small panel's **Open Butler mode** button and asking Butler
 to "open Butler mode" do too. **Esc** or **Exit Butler mode** returns to the page
-the operator came from. **Compact** leaves Butler mode and opens the small
-floating Butler panel over that page for a quick question; it keeps the same
-project conversation.
+the operator came from. There is no separate floating Butler panel on the web or
+desktop.
 
 Butler's threads stay on the left. The top bar's sections switch the right
 side: **Board** (the status board), **Code & files**, **Oversight** (incidents,

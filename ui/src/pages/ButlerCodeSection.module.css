@@ -113,3 +113,10 @@
   .section { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .activity { max-height: 40vh; border-left: 0; border-top: 1px solid var(--border-soft); }
 }
+
+/* The shared editor fills Code & files, as it does in the full-screen workbench. */
+.editor :global(.code-editor-panel) { flex: 1 1 0; min-width: 0; min-height: 0; height: 100%; border: 0; border-radius: 0; }
+.editor :global(.code-editor-main) { height: 100%; min-height: 0; }
+.editor :global(.code-editor-files),
+.editor :global(.code-source-control) { max-height: none; }
+.editor :global(.code-mirror-host) { min-height: 0; }

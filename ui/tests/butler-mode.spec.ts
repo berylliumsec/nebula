@@ -407,6 +407,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
         await sections.getByRole("button", {name: "Board"}).click();
       }
       await showThreads(page);
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
       await page.getByRole("list", {name: "Project threads"}).getByRole("button", {name: /Research fixture/}).click();
       await expect(page.getByRole("region", {name: "Butler in Research fixture"}).getByRole("textbox", {name: "Ask Butler a question"})).toBeVisible({timeout: 60_000});
       if (await page.getByRole("button", {name: "Back to threads"}).isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();

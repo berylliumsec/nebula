@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, ExternalLink, Minimize2, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, ExternalLink, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { boardElapsed, cancelProposedGoalChat, goalChatProposalFromReceipt, startProposedGoalChat, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerThread } from "../api/butlerBoard";
 import type { ChatMessage, ChatStreamEvent } from "../api/types";
@@ -272,7 +272,6 @@ export function ButlerModePage() {
   useEffect(() => () => embedPanel?.(undefined), [embedPanel]);
 
   const exit = () => navigate(originProject ? `/projects/${encodeURIComponent(originProject)}/workbench` : "/");
-  const compactPanel = () => { bridge?.openCompact(); exit(); };
 
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -738,7 +737,6 @@ export function ButlerModePage() {
         {counts.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{counts.failed} failed</span>}
       </div>}
       {bridge && <button type="button" className={styles.iconButton} aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!bridge.voiceAvailable} onClick={bridge.startVoice}><MicrophoneIcon size={17} /></button>}
-      {bridge && !compact && <button type="button" className={styles.iconButton} aria-label="Compact Butler" title="Compact: the small Butler panel over the page you came from" onClick={compactPanel}><Minimize2 size={17} aria-hidden="true" /></button>}
       <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>
     </header>
     {coreState !== "online" && <div className={styles.error} role="alert">Core is unavailable. Butler mode reconnects and reads the board again when Core answers.</div>}
