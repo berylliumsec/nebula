@@ -1,30 +1,24 @@
 {
-  "change_digest": "64c395a0b4817f8b4ed893dc013738a7f8ced2a279caa934efa1acf3b1a61fbb",
-  "reviewed_by": "Claude Code, fixing the linked-memory defects found in the 2026-11-19 production card audit",
-  "reason": "Linked memory gave Core's goal kickoff operator authority, curated lessons that route around a required project hook, injected off-topic cards (a word and its stem both counted, and Nebula's own words and the project ID matched), and stalled 16.5 h because any background goal turn paused curation (an active turn now records its capacity lane so a queued goal turn is not mistaken for an operator's). Fixes are in linked_memory_curator/helper/rules/store. The fixed goal instruction texts moved to domain.py so the curator can recognise them. Selected: all linked-memory tests (6 new ones fail on main), product-knowledge freshness and linked-memory search (docs changed), the real worker-process kernel test (the curator runs in workers), and the goal start, resume, continuation and subagent-reports continuation paths whose instruction texts moved.",
-  "exclusions": "No frontend, native or Playwright tests: nothing under ui/ changes and linked memory has no operator interface. chat.py, chat_goals.py and chat_subagents.py change only where the fixed instruction texts come from (byte-identical strings), so their suites beyond the selected start, resume, continuation and subagent-report nodes are excluded. The migration head and settings-assistant catalog are unchanged. A disposable LAN Core on 192.168.1.155 with the local Qwen3.5-2B and a slow stub model validated curation alongside a busy goal, the operator-turn pause, authority, entry matching and the saved-card re-check.",
+  "change_digest": "6121302c062c7c85cfe5a225c27c9f06ca8a63ef76359fb256580a34fc1ef26b",
+  "reviewed_by": "Claude Code, fixing the production chat_goals revision conflicts that failed goal turns",
+  "reason": "Goal turns with running subagents failed with 'revision conflict on chat_goals <id>: expected N, found N+1'. ChatService._charge_goal read the goal and wrote its usage against that revision with no retry; a subagent's usage charge (or active-time settle) committed in between, the RevisionConflict escaped _add_usage, and _stream_tool_turn saved it as the turn's error. The charge now plans the debit on the newest goal through revise_latest. Selected: the goal revision-race tests and the routed tool-turn tests (both new cases fail on main with the production message), plus the goal and subagent-lifecycle suites that charge goals.",
+  "exclusions": "No UI, API shape or settings change. test_chat.py, test_provider_cost_rates.py and test_butler_resources.py goal/charge cases passed locally (26) and are not selected. The in-transaction charge path is unchanged in behaviour; a PostgreSQL check against a scratch database showed it does not conflict with its own unit's goal write. No disposable LAN Core run: the race needs concurrent subagent provider responses inside a millisecond window and is not reproducible on demand through the UI; the deterministic window tests drive the real store and the real tool-turn loop.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 41,
+    "python": 78,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_linked_memory.py",
-    "tests/v3/test_linked_memory_api.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_linked_memory_and_its_butler_actions",
-    "tests/v3/test_execution_worker_process.py::test_real_kernel_grant_delivery_and_supervisor_replacement",
-    "tests/v3/test_chat_goals.py::test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session",
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
-    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
-    "tests/v3/test_chat_subagent_lifecycle.py::test_goal_continuation_after_reports_keeps_the_operators_turn_settings",
-    "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level"
+    "tests/v3/test_goal_revision_races.py",
+    "tests/v3/test_routing_prose_answer.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_subagent_lifecycle.py"
   ],
   "frontend": [],
   "native": [],

@@ -13174,47 +13174,58 @@ class ChatService:
         """Debit ``usage`` from the goal, pausing a running goal at its budget.
 
         With ``transaction`` the charge commits with the caller's writes.
+
+        The goal is shared bookkeeping: the turn's subagents debit it after
+        each of their responses, and Core settles its active time, so its
+        revision moves while this turn runs. The debit is planned on the
+        newest saved goal, never on an earlier read, so losing that race
+        neither fails the turn nor drops or repeats a charge.
         """
 
-        write = transaction.update if transaction is not None else self.store.update
-        goal = await self.store.get(ChatGoal, goal_id)
-        combined = _added_usage(goal.usage, usage)
-        # Usage is always recorded, but only a running goal pauses on the
-        # budget: a goal the operator cancelled, completed, paused or blocked
-        # while the response was in flight keeps that state and its timestamps.
-        if (
-            goal.status == ChatGoalStatus.RUNNING
-            and goal.token_budget is not None
-            and combined.total_tokens >= goal.token_budget
-        ):
-            paused_at = utc_now()
-            paused = await write(
-                ChatGoal,
-                goal.id,
-                {
-                    "status": ChatGoalStatus.PAUSED,
-                    "paused_at": paused_at,
-                    "active_since": None,
-                    "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
-                    "blocked_reason": exhausted_reason,
-                    "usage": combined,
-                },
-                expected_revision=goal.revision,
+        paused = False
+
+        def plan(goal: ChatGoal) -> dict[str, Any]:
+            nonlocal paused
+            combined = _added_usage(goal.usage, usage)
+            # Usage is always recorded, but only a running goal pauses on the
+            # budget: a goal the operator cancelled, completed, paused or
+            # blocked while the response was in flight keeps that state and
+            # its timestamps.
+            paused = (
+                goal.status == ChatGoalStatus.RUNNING
+                and goal.token_budget is not None
+                and combined.total_tokens >= goal.token_budget
             )
+            if not paused:
+                return {"usage": combined}
+            paused_at = utc_now()
+            return {
+                "status": ChatGoalStatus.PAUSED,
+                "paused_at": paused_at,
+                "active_since": None,
+                "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                "blocked_reason": exhausted_reason,
+                "usage": combined,
+            }
+
+        if transaction is None:
+            charged = await revise_latest(self.store, ChatGoal, goal_id, plan)
+        else:
+            # A caller's unit of work retries as a whole on a conflict, and
+            # this read is repeated with it.
+            current = await self.store.get(ChatGoal, goal_id)
+            charged = await transaction.update(
+                ChatGoal, goal_id, plan(current), expected_revision=current.revision
+            )
+        if paused:
             # Its subagents spend the same budget, so they stop with it. The
             # stop runs as a task, after a caller's transaction has committed.
             (
                 await self.subagents.stop_goal_subagents_soon(
-                    paused, GOAL_BUDGET_STOP_NOTE
+                    charged, GOAL_BUDGET_STOP_NOTE
                 )
             )
-            return paused
-        return await write(
-            ChatGoal,
-            goal.id,
-            {"usage": combined},
-            expected_revision=goal.revision,
-        )
+        return charged
 
     async def _subagent_delivery_step(
         self,

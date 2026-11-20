@@ -225,6 +225,47 @@ async def test_parent_stop_survives_child_charge(tmp_path, action, status):
     assert saved_child.usage.total_tokens == 2
 
 
+async def test_goal_charge_survives_concurrent_charge(tmp_path):
+    """A subagent's charge lands between the parent turn's goal read and write.
+
+    Production turns failed with "revision conflict on chat_goals" when a
+    running subagent debited the shared goal inside the parent's own charge.
+    Both debits must land, neither twice.
+    """
+
+    store, _goals, chat, goal = await _running(tmp_path)
+    window = before_update(
+        store,
+        "_charge_goal",
+        lambda: chat._charge_goal(goal.id, USAGE),
+        direct=False,
+    )
+
+    charged = await chat._charge_goal(goal.id, USAGE)
+
+    assert window.fired
+    assert charged.usage.total_tokens == 4
+    assert (await store.get(ChatGoal, goal.id)).usage.total_tokens == 4
+
+
+async def test_goal_budget_pause_survives_concurrent_charge(tmp_path):
+    """The concurrent debit counts toward the budget the retried charge checks."""
+
+    store, _goals, chat, goal = await _running(tmp_path, token_budget=3)
+    window = before_update(
+        store,
+        "_charge_goal",
+        lambda: chat._charge_goal(goal.id, USAGE),
+        direct=False,
+    )
+
+    charged = await chat._charge_goal(goal.id, USAGE)
+
+    assert window.fired
+    assert charged.status == ChatGoalStatus.PAUSED
+    assert charged.usage.total_tokens == 4
+
+
 async def test_operator_revision_on_the_goal_itself_stays_strict(tmp_path):
     store, goals, chat, goal = await _running(tmp_path)
     before_transaction(store, "write", lambda: chat._charge_goal(goal.id, USAGE))
