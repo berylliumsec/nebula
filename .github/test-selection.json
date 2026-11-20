@@ -1,24 +1,23 @@
 {
-  "change_digest": "917b3d1ea83b55ce338defeba5e5d1641748d5e6358b51f4d0c559c5a8080d2d",
-  "reviewed_by": "Claude Code, fixing the ~18 minute post-deploy 'Project execution is reconnecting' outage on live Apple Bug Bounty",
-  "reason": "After the 42d2bb4 deploy, Apple Bug Bounty's recovered worker answered 503 'reconnecting' for ~18 minutes. Root cause (independently validated by a fresh subagent from raw Postgres lock-wait logs): once a recovery is verified and activation starts, the worker reports 'prepared' until its lifespan finishes, and the supervisor's handoff loop re-selects it every 0.5 s. Each pass ran _recovery_grant(check_blockers=True), which holds the project's ownership row FOR UPDATE (fenced) through _recovery_blockers' project-wide scan of chat_turns/chat_goals payload->>'execution_claim_id' (4-7 s on 3.4M rows, json payloads). Every worker transaction takes FOR KEY SHARE on that row, so activation ran one transaction per ~5.7 s supervisor cycle (193 holder transactions x 5.7 s = 18.3 min, matching the window). Fix: when the recovery is verified and the worker reports activation_started, skip the blocker check and the repeat verify/activate; a later pass marks it activated once ready. A verified recovery that has not started activating still checks blockers (an uncertain effect still holds activation). Selected: a new focused test of _advance_project_recovery plus the supervisor recovery suites (controls, recovery, reconciliation).",
-  "exclusions": "test_runtime_continuity_acceptance.py needs a production UI build and complete source, so it is not selected. 3 PostgreSQL cases in test_recovery_controls.py (pause_and_stop_run_while_recovery_is_blocked, held_worker_activates_only_after_blockers_resolve, held_target_that_ran_a_control_and_then_failed_exits) fail identically on pristine origin/main; PostgreSQL cases skip in CI without NEBULA_TEST_POSTGRES_URL. All SQLite cases pass locally with the fix. No UI change.",
+  "change_digest": "ce1b2fa53e666fdd158d565ec90c9b8b12450cb95aa9f9d07c2d0ca4b3e0ad54",
+  "reviewed_by": "Claude Code, fixing a live Butler thread stuck on 'Butler is working\u2026' after the 7453191 deploy",
+  "reason": "After a deploy stopped Apple Bug Bounty's worker, Core auto-resumed the operator's Butler thread turn (direct lane) at 22:38, but it never reached provider admission: _run_provider_turn makes every automatic recovery take a process-wide 2-slot semaphore (_automatic_recovery_slots) before admission and holds it until the turn ends. Two recovered subagent children holding the slots for hours left the Butler turn FIFO-queued behind 9 more (expected start 1.5-10 h later). Two independent subagents validated this from provider_turn_queue and turn data (the 22:43:55 -> 22:43:56 slot handover). The code comment already says operator turns do not use this gate. Fix: recovered direct-lane turns skip the gate; background recovery (subagents, goals) keeps the 2-at-a-time bound. Selected: a new test that holds both recovery slots and asserts a recovered direct turn still runs (fails without the fix), the existing restart-recovery bound tests in test_chat.py (now explicitly background-lane recoveries, still asserting at most 2 run), and the admission-cleanup and Butler concurrent-recovery suites.",
+  "exclusions": "Releasing the recovery slot at admission (so long background recoveries stop starving later ones) was tried and reverted: it removes the deliberate 2-running bound that test_core_restart_recovery_bounds_concurrent_provider_turns encodes for event-loop protection, so it needs its own design decision. tests/v3/test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] and tests/v3/test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent fail identically on pristine origin/main; PostgreSQL cases skip in CI without NEBULA_TEST_POSTGRES_URL, and test_butler_recovery.py is not selected. No UI change.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 64,
+    "python": 119,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_recovery_activation_no_relock.py",
-    "tests/v3/test_recovery_controls.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_runtime_recovery.py"
+    "tests/v3/test_async_admission_cleanup.py",
+    "tests/v3/test_butler_concurrent_recovery.py",
+    "tests/v3/test_chat.py"
   ],
   "frontend": [],
   "native": [],

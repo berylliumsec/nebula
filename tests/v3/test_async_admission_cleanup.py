@@ -246,3 +246,19 @@ async def test_release_error_still_releases_recovery_capacity_and_signals_done(
     assert runtime.done and runtime.error is not None
     assert scheduler._provider._value == scheduler.config.provider_limit
     assert service._automatic_recovery_slots._value == 2
+
+
+async def test_recovered_direct_turn_does_not_wait_behind_recovery_backlog(tmp_path):
+    # Live: an operator's Butler message resumed after a Core restart queued
+    # behind long-running recovered subagents that held both recovery slots.
+    store = NebulaStore(tmp_path / "direct.db")
+    service, prepared, provider = await _chat(store)
+    assert prepared.turn.capacity_lane == "direct"
+    for _ in range(2):
+        await service._automatic_recovery_slots.acquire()
+    turn_id = await service.start_provider_turn(prepared, automatic_recovery=True)
+    runtime = service._active_provider_turns[turn_id]
+    await asyncio.wait_for(asyncio.gather(runtime.task, return_exceptions=True), 10)
+    assert runtime.done and runtime.error is None
+    assert provider.requests
+    assert service._automatic_recovery_slots._value == 0
