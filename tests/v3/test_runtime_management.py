@@ -279,3 +279,101 @@ async def test_owned_project_refuses_real_shutdown_without_notifying_launcher(re
     assert result["error_type"] == "ShutdownBlocked"
     assert "admitted-project" in result["detail"]
     assert observed == [] and same_process(owner.pid, owner.process_birth)
+
+
+async def test_operations_on_a_busy_host_confirm_with_a_bounded_receipt(
+    recovery, monkeypatch
+):
+    """A host with hundreds of projects has a status far over the 64 KiB
+    receipt bound. The effect committed, so the receipt must confirm it
+    with a bounded summary instead of reporting it uncertain."""
+    from nebula.v3.deployment_protocol import ProjectDeploymentStatus
+
+    coordinator = recovery.root.coordinator
+    real_status = coordinator.status
+    targeted = []
+
+    async def big_status():
+        status = await real_status()
+        rows = [
+            ProjectDeploymentStatus(
+                project_id=f"project-{index:04d}",
+                runtime_id=f"runtime-{index:04d}",
+                runtime_version="v" * 40,
+                fencing_token=index,
+                blockers=["harness_sessions idle; its restoration is unavailable"],
+            )
+            for index in range(700)
+        ]
+        return status.model_copy(update={"projects": rows})
+
+    async def target_execution(version):
+        targeted.append(version)
+
+    monkeypatch.setattr(coordinator, "status", big_status)
+    monkeypatch.setattr(coordinator, "target_execution", target_execution)
+    assert len((await big_status()).model_dump_json().encode()) > 64 * 1024
+
+    response = await recovery.client.post(
+        PATH,
+        headers=AUTH,
+        json={
+            "operation_id": "target-busy-host",
+            "action": "target_execution",
+            "parameters": {"version": "busy-release"},
+        },
+    )
+
+    receipt = response.json()
+    assert targeted == ["busy-release"]
+    assert receipt["state"] == "succeeded", receipt
+    assert set(receipt["result"]) == {
+        "protocol",
+        "revision",
+        "api_version",
+        "target_execution_version",
+        "resident_versions",
+        "health",
+    }
+
+
+async def test_handoff_receipt_carries_only_its_project_row(recovery, monkeypatch):
+    from nebula.v3.deployment_protocol import ProjectDeploymentStatus
+
+    coordinator = recovery.root.coordinator
+    real_status = coordinator.status
+
+    async def status_with_projects():
+        status = await real_status()
+        rows = [
+            ProjectDeploymentStatus(
+                project_id=f"project-{index}",
+                runtime_id=f"runtime-{index}",
+                runtime_version="v1",
+                fencing_token=index,
+            )
+            for index in range(400)
+        ]
+        return status.model_copy(update={"projects": rows})
+
+    async def handoff(**_values):
+        return None
+
+    monkeypatch.setattr(coordinator, "status", status_with_projects)
+    monkeypatch.setattr(recovery.root, "request_project_handoff", handoff)
+    response = await recovery.client.post(
+        PATH,
+        headers=AUTH,
+        json={
+            "operation_id": "handoff-busy-host",
+            "action": "handoff",
+            "parameters": {
+                "project_id": "project-7",
+                "target_runtime_id": "runtime-new",
+            },
+        },
+    )
+    receipt = response.json()
+    assert receipt["state"] == "succeeded", receipt
+    assert receipt["result"]["project"]["project_id"] == "project-7"
+    assert "projects" not in receipt["result"]

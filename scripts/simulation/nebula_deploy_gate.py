@@ -10,7 +10,7 @@ from pathlib import Path
 import stat
 import time
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -20,6 +20,10 @@ MAX_ITEMS = 100_000
 # A retiring worker answers nothing for about a second before its project
 # becomes ownerless. Past this bound the read fails closed.
 OWNER_READ_ATTEMPTS = 3
+# Deployment status can take tens of seconds on a busy host during handoffs.
+READ_TIMEOUT_SECONDS = 60
+READ_ATTEMPTS = 4
+READ_RETRY_DELAY_SECONDS = 5.0
 OWNER_READ_DELAY_SECONDS = 1.0
 ACTIVE_RUNS = {
     "queued",
@@ -56,15 +60,33 @@ class CoreClient:
         self.token = token
 
     def get(self, path: str, **parameters: object) -> Any:
+        """Read Core; a read that times out or cannot connect is asked again.
+
+        Reads change nothing, so repeating one is safe. Deployment status lists
+        every project and can take tens of seconds while handoffs run; one slow
+        read must not end a deployment that resumes from its journal anyway.
+        """
         query = f"?{urlencode(parameters)}" if parameters else ""
         request = Request(
             f"{self.origin}/api/v1/{path.lstrip('/')}{query}",
             headers={"Authorization": f"Bearer {self.token}"},
         )
-        with urlopen(request, timeout=20) as response:
-            if response.status != 200:
-                raise ValueError(f"Core returned HTTP {response.status} for {path}")
-            return json.load(response)
+        for attempt in range(1, READ_ATTEMPTS + 1):
+            try:
+                with urlopen(request, timeout=READ_TIMEOUT_SECONDS) as response:
+                    if response.status != 200:
+                        raise ValueError(
+                            f"Core returned HTTP {response.status} for {path}"
+                        )
+                    return json.load(response)
+            except HTTPError:
+                raise
+            except (TimeoutError, URLError, ConnectionError):
+                # diagnostic-expected: a slow or briefly unreachable Core is read again; the last failure is raised.
+                if attempt == READ_ATTEMPTS:
+                    raise
+                time.sleep(READ_RETRY_DELAY_SECONDS * attempt)
+        raise AssertionError("unreachable")
 
     def all_entities(self, path: str, **parameters: object) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []

@@ -294,4 +294,37 @@ class RuntimeManagement:
                     409, "This host has no coordinated shutdown callback"
                 )
             return await root.shutdown(**values)
-        return (await root.coordinator.status()).model_dump(mode="json")
+        return await self.deployment_summary(
+            values.get("project_id") if action == "handoff" else None
+        )
+
+    async def deployment_summary(self, project_id: str | None = None) -> dict:
+        """A bounded readback of the deployment after an operation's effect.
+
+        The full status lists every project and staged release; on a busy
+        host it outgrows the 64 KiB operation receipt, and the committed effect
+        was then reported as uncertain. Deployers read status themselves, so
+        the receipt keeps only what identifies the resulting state.
+        """
+        status = (await self.supervisor.coordinator.status()).model_dump(mode="json")
+        summary = {
+            key: status.get(key)
+            for key in (
+                "protocol",
+                "revision",
+                "api_version",
+                "target_execution_version",
+                "resident_versions",
+                "health",
+            )
+        }
+        if project_id is not None:
+            summary["project"] = next(
+                (
+                    row
+                    for row in status.get("projects") or []
+                    if row.get("project_id") == project_id
+                ),
+                None,
+            )
+        return summary

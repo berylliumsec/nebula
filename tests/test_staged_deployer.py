@@ -733,3 +733,63 @@ def test_promotion_reports_each_phase_duration():
     ]
     assert all(step["seconds"] >= 0 for step in result["timings"]["steps"])
     assert result["timings"]["total_seconds"] >= 0
+
+
+IDLE_SESSION = "harness_sessions 7f265d4f remains idle; its restoration is unavailable"
+
+
+def test_idle_unrestorable_sessions_are_stopped_without_waiting_out_grace():
+    """Idle harness sessions Core cannot restore never hand off by
+    themselves; the source is stopped at once instead of after the grace."""
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.pinned = True
+    original = host.post
+
+    def post(path, request):
+        receipt = original(path, request)
+        if request["action"] == "handoff":
+            host.state["projects"][0]["blockers"] = [IDLE_SESSION, IDLE_SESSION.replace("7f265d4f", "df734f1a")]
+        return receipt
+
+    host.post = post
+    deployer = _grace_deployer(host, record, clock, grace=180)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    assert deployer.promote("v2")["status"] == "promoted"
+    assert [owner["runtime_id"] for owner, _ in stopped] == ["old"]
+    assert stopped[0][1] - 1_000.0 < 180
+
+
+def test_other_blockers_still_get_their_grace():
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.pinned = True
+    original = host.post
+
+    def post(path, request):
+        receipt = original(path, request)
+        if request["action"] == "handoff":
+            host.state["projects"][0]["blockers"] = [
+                IDLE_SESSION, "An accepted provider turn is finishing on its current runtime",
+            ]
+        return receipt
+
+    host.post = post
+    deployer = _grace_deployer(host, record, clock, grace=180)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    assert deployer.promote("v2")["status"] == "promoted"
+    assert stopped[0][1] - 1_000.0 >= 180
+
+
+def test_promotion_retires_unowned_workers_of_older_versions():
+    """A spare old worker owns no project but stays resident, which would
+    hold the next release at "execution staged"; promotion retires it."""
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.live_runtimes["spare-old"] = "v1"
+    host._refresh_resident_versions()
+    deployer = _recovery_deployer(host, record)
+
+    assert deployer.promote("v2")["status"] == "promoted"
+    retired = [values["runtime_id"] for action, values in host.calls if action == "retire"]
+    assert "spare-old" in retired
+    assert host.state["resident_versions"] == ["v2"]
