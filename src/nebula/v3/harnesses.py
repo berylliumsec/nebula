@@ -84,10 +84,12 @@ from pydantic import Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .project_hold_gate import active_hold, held_detail
 from .chat import (
     ChatError,
     ChatHistoryConflict,
     ChatPrivacyError,
+    ProjectHeld,
     ChatRequestMessage,
     ChatService,
     _turn_end_hook_payload,
@@ -11326,6 +11328,10 @@ class HarnessRuntimeService:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
+        # Refused before the chat, its message or its turn is saved.
+        hold = await active_hold(self.store, engagement_id)
+        if hold is not None:
+            raise ProjectHeld(held_detail(hold))
         project_workspace_path = (
             await self.store.get(Engagement, engagement_id)
         ).workspace_path

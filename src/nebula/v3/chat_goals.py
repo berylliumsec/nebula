@@ -51,6 +51,12 @@ from .chat_snapshot_parts import (
     split_skill_snapshots,
     stage_snapshot_parts,
 )
+from .project_hold_gate import (
+    HOLD_MARKER,
+    ProjectHoldConflict,
+    active_hold,
+    held_detail,
+)
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -807,12 +813,18 @@ class ChatGoalService:
         *,
         allow_pending_recovery: bool = False,
         retain_execution_claim: bool = False,
+        hold_id: str | None = None,
     ) -> ChatGoal:
         """Apply one goal action.
 
         ``retain_execution_claim`` is for a pause while project recovery is
         held: the claim names an interrupted owner's step whose effect is
         unknown, so pausing must not erase it. Recovery reconciles it.
+
+        ``hold_id`` is passed only by a project hold: its pause marks the goal
+        with the hold, and only that hold's release resumes it. While a
+        project is held, or a goal carries another hold's mark, every start
+        and resume is refused, whoever asks (an operator, Butler, recovery).
         """
         if retain_execution_claim and body.action != "pause":
             raise ConflictError("only a pause can run while project recovery is held")
@@ -821,6 +833,16 @@ class ChatGoalService:
             raise ConflictError(
                 "goal changed on another device; reload before retrying"
             )
+        hold_mark = goal.metadata.get(HOLD_MARKER)
+        if body.action in {"start", "resume"}:
+            if hold_mark is not None and hold_mark != hold_id:
+                raise ProjectHoldConflict(
+                    "A project hold paused this goal; it resumes when that hold "
+                    "is released"
+                )
+            hold = await active_hold(self.store, goal.engagement_id)
+            if hold is not None:
+                raise ProjectHoldConflict(held_detail(hold))
         now = utc_now()
         changes: dict = {}
         propagate: ChatGoalStatus | None = None
@@ -858,6 +880,8 @@ class ChatGoalService:
                 "execution_claim_id": None,
                 "execution_claimed_at": None,
             }
+            if hold_id is not None:
+                changes["metadata"] = {**goal.metadata, HOLD_MARKER: hold_id}
             if retain_execution_claim:
                 changes["metadata"] = marked
                 for field in (
@@ -940,10 +964,11 @@ class ChatGoalService:
                     raise ConflictError(
                         "the operator paused this goal during project recovery"
                     )
+            if OPERATOR_RECOVERY_PAUSE in goal.metadata or hold_mark is not None:
                 changes["metadata"] = {
                     key: value
                     for key, value in goal.metadata.items()
-                    if key != OPERATOR_RECOVERY_PAUSE
+                    if key not in {OPERATOR_RECOVERY_PAUSE, HOLD_MARKER}
                 }
         elif body.action == "cancel":
             if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
@@ -1033,6 +1058,7 @@ class ChatGoalService:
         reason: str | None = None,
         allow_pending_recovery: bool = False,
         check: Callable[[ChatGoal], None] | None = None,
+        hold_id: str | None = None,
     ) -> ChatGoal:
         """Apply a Core-initiated goal action on the goal's newest revision.
 
@@ -1056,6 +1082,7 @@ class ChatGoalService:
                         expected_revision=goal.revision, action=action, reason=reason
                     ),
                     allow_pending_recovery=allow_pending_recovery,
+                    hold_id=hold_id,
                 )
             except ConflictError:
                 # diagnostic-expected: only a moved revision is retried; every

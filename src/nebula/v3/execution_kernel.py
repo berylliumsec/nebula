@@ -754,6 +754,7 @@ CUSTOM_RESOURCES = {
     "butler_incidents",
     "butler_decisions",
     "butler_authority_policies",
+    "project_holds",
     "butler_actions",
     "butler_issue_destinations",
     "butler_issue_scans",
@@ -2531,6 +2532,10 @@ def create_execution_kernel(
                             exc,
                             stage="runtime-switch",
                         )
+                    holds = getattr(app.state, "project_holds", None)
+                    if holds is not None:
+                        # Its own failures are recorded per project.
+                        await holds.tick_all()
                     # Its scans run asynchronously and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
@@ -3817,7 +3822,13 @@ def create_execution_kernel(
     @app.exception_handler(ChatHistoryConflict)
     @app.exception_handler(ChatPrivacyError)
     async def chat_conflict_handler(request: Request, exc: ChatError) -> JSONResponse:
-        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=409,
+            detail=str(exc),
+            code=getattr(exc, "code", None),
+        )
 
     @app.exception_handler(ChatConfigurationError)
     async def chat_configuration_handler(
@@ -11962,6 +11973,26 @@ def create_execution_kernel(
         return await provider_chat.dispatch_running_goal(session_id, instruction)
 
     provider_chat.goal_dispatcher = dispatch_conversation_goal
+
+    from .project_holds import ProjectHoldService, project_holds_router
+
+    async def stop_harness_turn_for_hold(harness_turn_id: str, reason: str) -> None:
+        await harness_runtime.cancel_turn(harness_turn_id, reason=reason)
+
+    project_holds = ProjectHoldService(
+        store,
+        stop_provider_turn=provider_chat.stop_provider_turn,
+        stop_harness_turn=stop_harness_turn_for_hold,
+        dispatch_goal=dispatch_conversation_goal,
+        wake_subagents=provider_chat.subagents.wake_after_hold,
+        wake_queues=chat_queue.wake_after_hold,
+    )
+    app.state.project_holds = project_holds
+    app.include_router(
+        project_holds_router(project_holds),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
 
     app.include_router(
         goals_router(

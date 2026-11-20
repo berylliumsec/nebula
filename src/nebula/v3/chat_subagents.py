@@ -104,6 +104,7 @@ from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .native_hooks import discover_native_hooks
 from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
 from .skill_catalog import SkillSelection, discover_skills, native_skill_roots
+from .project_hold_gate import is_held
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -4565,6 +4566,47 @@ class SubagentService:
         elif record.parent_backend == ChatBackend.HARNESS:
             await self._steer_harness(record.parent_session_id)
 
+    async def wake_after_hold(self, engagement_id: str) -> None:
+        """Deliver what a released hold deferred in one project.
+
+        Reports are delivered to their parents, and turns whose subagent
+        wait became ready while the project was held resume. Each step
+        fails alone; a later delivery or restart pass repeats it.
+        """
+
+        parents = {
+            message.parent_session_id
+            for message in await self.store.find_entities(
+                ChatSubagentMessage,
+                {
+                    "direction": ChatSubagentMessageDirection.TO_PARENT.value,
+                    "status": ChatSubagentMessageStatus.PENDING.value,
+                },
+                engagement_id=engagement_id,
+            )
+        }
+        waiting = await self.store.find_entities(
+            ChatTurn,
+            {"status": ChatTurnStatus.WAITING_CALLBACK.value},
+            engagement_id=engagement_id,
+        )
+        steps = [
+            lambda parent=parent: self.deliver_pending(parent)
+            for parent in sorted(parents)
+        ]
+        steps += [lambda turn=turn: self._resume_waiting_turn(turn) for turn in waiting]
+        for step in steps:
+            try:
+                await step()
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.hold_release_wake_failed",
+                    "Subagent work deferred by a project hold could not resume; a later delivery retries it.",
+                    exc,
+                    stage="subagent-deliver",
+                )
+
     async def _resume_waiting_turn(self, turn: ChatTurn) -> None:
         """Resume a parent or subagent turn whose subagent wait is satisfied."""
 
@@ -4579,6 +4621,9 @@ class SubagentService:
             (await self.wait_ready(wait))
             or (await self.chat._goal_time_wait_due(latest, utc_now()))
         ):
+            return
+        if await is_held(self.store, latest.engagement_id):
+            # The turn keeps waiting; releasing the hold resumes it.
             return
         # Subagents that finish together each deliver, and each delivery tries
         # this resume. Awaits separate the check from the start, so a delivery

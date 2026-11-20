@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Request, Response, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from .project_hold_gate import is_held
 from .async_utils import cancel_and_join
 from .chat import ChatCompletionRequest, ChatHistoryConflict, unarchive_chat_session
 from .harnesses import HarnessSkillInvocation
@@ -639,7 +640,17 @@ class ChatQueueService:
             )
         )
 
+    def wake_after_hold(self):
+        """Read every queue again now that a project hold was released."""
+
+        self._parked.clear()
+        self._dormant.clear()
+        self._wake.set()
+
     async def step(self, queue, recovering=False):
+        if await is_held(self.store, queue.engagement_id):
+            # Items stay queued, unclaimed and unreviewed; release wakes them.
+            return
         # Older releases classified deliberate stops as failures needing review,
         # and a review written while a turn was only parked (waiting_callback
         # across a restart) is stale once that turn finishes. Reconcile from the
