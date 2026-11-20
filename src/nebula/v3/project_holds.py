@@ -254,9 +254,9 @@ class ProjectHoldService:
                         if (item.turn_id, item.outcome) not in seen
                     ),
                 ][-5000:],
-                "stopped_subagents": sorted(
-                    {*latest.stopped_subagents, *subagents}
-                )[:5000],
+                "stopped_subagents": sorted({*latest.stopped_subagents, *subagents})[
+                    :5000
+                ],
             }
 
         return await revise_latest(self.store, ProjectHold, hold.id, plan)
@@ -303,7 +303,9 @@ class ProjectHoldService:
 
         restored: list[ProjectHoldRestore] = []
         marked = await self.store.find_entities(
-            ChatGoal, {f"metadata.{HOLD_MARKER}": hold.id}, engagement_id=hold.engagement_id
+            ChatGoal,
+            {f"metadata.{HOLD_MARKER}": hold.id},
+            engagement_id=hold.engagement_id,
         )
         for goal in marked:
             try:

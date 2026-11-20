@@ -4590,7 +4590,10 @@ class SubagentService:
             {"status": ChatTurnStatus.WAITING_CALLBACK.value},
             engagement_id=engagement_id,
         )
-        steps = [lambda parent=parent: self.deliver_pending(parent) for parent in sorted(parents)]
+        steps = [
+            lambda parent=parent: self.deliver_pending(parent)
+            for parent in sorted(parents)
+        ]
         steps += [lambda turn=turn: self._resume_waiting_turn(turn) for turn in waiting]
         for step in steps:
             try:

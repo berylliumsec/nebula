@@ -369,14 +369,18 @@ async def test_hold_api_is_authenticated_and_refuses_goal_resume_with_its_code(
     project = await store.create(Engagement(name="Held project"))
     profile = await store.create(
         ProviderProfile(
-            name="Local", provider_type="ollama", is_local=True,
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
             model_allowlist=["model-a"],
         )
     )
     main = await store.create(
         ChatSession(
-            engagement_id=project.id, title="Main agent",
-            provider_profile_id=profile.id, model="model-a",
+            engagement_id=project.id,
+            title="Main agent",
+            provider_profile_id=profile.id,
+            model="model-a",
         )
     )
     goals = ChatGoalService(store)
@@ -386,13 +390,19 @@ async def test_hold_api_is_authenticated_and_refuses_goal_resume_with_its_code(
     await store.update(
         ChatGoal,
         draft.id,
-        {"status": ChatGoalStatus.RUNNING, "started_at": utc_now(), "active_since": utc_now()},
+        {
+            "status": ChatGoalStatus.RUNNING,
+            "started_at": utc_now(),
+            "active_since": utc_now(),
+        },
         expected_revision=draft.revision,
     )
     client = TestClient(app)
     path = f"/api/v1/engagements/{project.id}/hold"
     auth = {"Authorization": "Bearer test-token"}
-    assert (await client.post(path, json={"reason": "Core deployment"})).status_code == 401
+    assert (
+        await client.post(path, json={"reason": "Core deployment"})
+    ).status_code == 401
 
     placed = await client.post(
         path, headers=auth, json={"reason": "Core deployment", "grace_seconds": 0}

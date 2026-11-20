@@ -35,7 +35,9 @@ def held_detail(hold: ProjectHold) -> str:
     )
 
 
-async def active_hold(store: "NebulaStore", engagement_id: str | None) -> ProjectHold | None:
+async def active_hold(
+    store: "NebulaStore", engagement_id: str | None
+) -> ProjectHold | None:
     """The project's hold while it is holding or held, else None."""
 
     if not engagement_id:
