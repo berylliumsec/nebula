@@ -84,7 +84,7 @@ from pydantic import Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .project_hold_gate import active_hold, held_detail
+from .project_hold_gate import active_hold, held_detail, is_held
 from .chat import (
     ChatError,
     ChatHistoryConflict,
@@ -1278,6 +1278,10 @@ def _gateway_oci_input_schema(spec: ToolSpec) -> dict[str, Any]:
             "description": "Engagement workspace root; supplied by Nebula Core.",
         }
     return schema
+
+
+# How often a due harness Mission in a held project checks for release.
+HELD_MISSION_RECHECK_SECONDS = 5.0
 
 
 class HarnessError(RuntimeError):
@@ -10497,6 +10501,9 @@ class HarnessRuntimeService:
         naming: the session gets no command runtime, no native tools and no
         Nebula gateway, so it starts only the vendor process.
         """
+        hold = await active_hold(self.store, engagement_id)
+        if hold is not None:
+            raise ProjectHeld(held_detail(hold))
 
         profile = await self.store.get(HarnessProfile, profile_id)
         (
@@ -14540,6 +14547,12 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool = False,
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
+        if scheduled_for is None or scheduled_for <= utc_now():
+            # A Mission that would start now is refused; a future occurrence
+            # is saved and waits for the release when it comes due.
+            hold = await active_hold(self.store, engagement_id)
+            if hold is not None:
+                raise ProjectHeld(held_detail(hold))
         project_workspace_path = (
             await self.store.get(Engagement, engagement_id)
         ).workspace_path
@@ -14866,7 +14879,26 @@ class HarnessRuntimeService:
         finally:
             self._scheduled_mission_tasks.pop(run_id, None)
 
+    async def _wait_while_held(self, run_id: str) -> bool:
+        """Wait while the run's project is held; False if the run ended meanwhile.
+
+        A due occurrence, or one whose time passed while it was being saved,
+        waits for the project hold's release instead of starting.
+        """
+        while await is_held(
+            self.store, (await self.store.get(AgentRun, run_id)).engagement_id
+        ):
+            await asyncio.sleep(HELD_MISSION_RECHECK_SECONDS)
+            if (
+                self._closed
+                or (await self.store.get(AgentRun, run_id)).status != RunStatus.QUEUED
+            ):
+                return False
+        return True
+
     async def _execute_mission(self, run_id: str, turn_ids: list[str]) -> None:
+        if not await self._wait_while_held(run_id):
+            return
         try:
             run = await self.store.get(AgentRun, run_id)
             first_turn = await self.store.get(HarnessTurn, turn_ids[0])
