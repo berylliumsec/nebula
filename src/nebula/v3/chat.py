@@ -281,6 +281,7 @@ from .chat_turn_outcomes import (
     turn_outcome_metadata,
     turn_outcome_text,
 )
+from .project_hold_gate import active_hold, held_detail, is_held
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -528,6 +529,16 @@ _CallbackWait = tuple[ChatTurn, dict[str, Any], CommandExecution | None]
 
 class ChatHistoryConflict(ChatError):
     """Client history diverged from the durable session transcript."""
+
+
+class ProjectHeld(ChatHistoryConflict):
+    """The project is held (``ProjectHold``); no chat turn starts until release.
+
+    A ``ChatHistoryConflict`` so goal dispatchers defer instead of pausing the
+    goal, and the API answers 409 with code ``project_held``.
+    """
+
+    code = "project_held"
 
 
 class ChatPrivacyError(ChatError):
@@ -3380,6 +3391,10 @@ class ChatService:
                 continue
             if self.has_active_provider_turn(waiting_turn.id):
                 continue
+            if await is_held(self.store, latest.engagement_id):
+                # Materializing would leave the turn neither waiting nor
+                # resumable; it stays waiting until the hold is released.
+                continue
             try:
                 (
                     await self._materialize_callback_result(
@@ -3611,6 +3626,9 @@ class ChatService:
             saved.backend != ChatBackend.PROVIDER
             or saved.status != ChatTurnStatus.INTERRUPTED
         ):
+            return False
+        if await is_held(self.store, saved.engagement_id):
+            # Left interrupted and untouched; a pass after release resumes it.
             return False
         recovery_subagent: ChatSubagent | None = None
         if saved.request_snapshot.get("subagent_child"):
@@ -4631,6 +4649,11 @@ class ChatService:
                 queue = await session.get(ProviderTurnQueueRow, turn_id)
                 if queue is None or queue.state != "queued":
                     continue
+            if await is_held(
+                self.store, (await self.store.get(ChatTurn, turn_id)).engagement_id
+            ):
+                # Parked turns stay parked while the project is held.
+                continue
             await self.start_provider_turn(await self.prepare_resume(turn_id))
 
     async def _run_provider_turn(
@@ -5374,6 +5397,10 @@ class ChatService:
     ) -> None:
         from .storage import NotFoundError
 
+        if await is_held(self.store, schedule.engagement_id):
+            # The occurrence stays due and fires on the first pass after the
+            # hold is released, instead of being skipped as a paused goal.
+            return
         reconciled = await schedules.reconcile(schedule)
         if reconciled is None or not reconciled.enabled:
             return
@@ -6147,6 +6174,9 @@ class ChatService:
                     "chat session does not belong to the requested engagement"
                 )
             engagement_id = session.engagement_id
+        # Refused before any goal, skill or session write below.
+        await self.require_project_open(engagement_id)
+        if session is not None:
             if (await self.pending_turn(session.id)) is not None:
                 raise ChatHistoryConflict(
                     "chat session already has an active response; resume or resolve it before sending another message"
@@ -14265,7 +14295,18 @@ class ChatService:
             CommandExecutionStatus.INTERRUPTED,
         }
 
+    async def require_project_open(self, engagement_id: str | None) -> None:
+        """Refuse new or resumed chat work while the project is held."""
+
+        hold = await active_hold(self.store, engagement_id)
+        if hold is not None:
+            raise ProjectHeld(held_detail(hold))
+
     async def prepare_resume(self, turn_id: str) -> PreparedChat:
+        # Refused before reconciling effects or reactivating the turn.
+        await self.require_project_open(
+            (await self.store.get(ChatTurn, turn_id)).engagement_id
+        )
         turn = await self.reconcile_recorded_effects(turn_id)
         final_answer_recovery_value = turn.request_snapshot.get("final_answer_recovery")
         final_answer_recovery: dict[str, Any] | None = (
