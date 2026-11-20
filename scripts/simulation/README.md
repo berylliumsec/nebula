@@ -107,10 +107,18 @@ the ordered per-commit receipts and selected-job conclusions; the reviewed
 selection union must cover the entire first-parent range. Missing, repeated,
 reordered, or mismatched runs fail closed. This mode skips local test collection
 and test execution only; dependency setup, lint/diagnostic checks, builds,
-release hashes, and existing staging/promotion guards still run. It fails closed
-when a per-commit CI selection contains Playwright entries because the push CI
-workflow does not run those entries. Runs from pull requests or workflow
-dispatches are not accepted.
+release hashes, and existing staging/promotion guards still run. Push CI does
+not run Playwright entries, so a commit whose selection names them is accepted
+only with its merged pull request's successful `ci.yml` and
+`playwright-impact.yml` runs, which `prepare` discovers on the PR head. For a
+merge commit the head is its second parent. For a squash merge it is the head of
+the one PR GitHub records as merged into that commit, fetched from
+`refs/pull/<n>/head` if needed; that head must contain the squash commit's
+parent and have the identical tree, so it tested exactly what main received.
+Matrix jobs are matched to selected entries by GitHub's displayed job name, which
+is cut at 100 characters; entries that truncate to the same name each still need
+their own successful job. A Playwright-selected commit without such PR evidence
+stops preparation. Other pull request or workflow dispatch runs are not accepted.
 
 CI-only acceptance also requires the workflow files, local action definitions,
 and `scripts/test_selection.py` to match the original live baseline for every

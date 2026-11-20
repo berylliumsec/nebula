@@ -98,14 +98,63 @@ def test_discovery_stops_with_the_commit_and_reason(monkeypatch, runs, reason):
     assert "--local-tests" in str(caught.value)
 
 
-def test_discovery_refuses_playwright_selections_push_ci_cannot_prove(monkeypatch):
-    _selections(monkeypatch, playwright={MID: ["area:memory-budgets"]})
+PR_HEAD = "f" * 40
+
+
+def _pr_runs(by_workflow: dict[str, list[dict]]):
+    def github_json(path: str):
+        workflow = path.split("actions/workflows/", 1)[1].split("/", 1)[0]
+        assert f"head_sha={PR_HEAD}" in path and "event=pull_request" in path
+        return {"workflow_runs": by_workflow.get(workflow, [])}
+
+    return github_json
+
+
+def _pr_run(run_id: int, conclusion: str = "success", **overrides):
+    return {"id": run_id, "head_sha": PR_HEAD, "event": "pull_request",
+            "status": "completed", "conclusion": conclusion, **overrides}
+
+
+@pytest.mark.parametrize("parents", [[MID, PR_HEAD], [MID]])
+def test_discovery_finds_merged_pr_runs_for_playwright_commits(monkeypatch, parents):
+    """Merge commits use their second parent; squash commits use the PR
+    head GitHub records for them. Both need a successful CI and Playwright
+    pull request run on that head."""
+    _selections(monkeypatch, playwright={NEW: ["area:memory-budgets"]})
+    monkeypatch.setattr(deployer, "commit_parents", lambda _directory, sha: parents)
     monkeypatch.setattr(
-        deployer, "github_json", lambda path: pytest.fail("no CI lookup needed")
+        deployer, "squash_merged_pr_head", lambda _directory, sha: (PR_HEAD, 1236)
+    )
+    monkeypatch.setattr(
+        deployer,
+        "github_json",
+        _pr_runs({
+            "ci.yml": [_pr_run(41), _pr_run(45), _pr_run(49, "failure")],
+            "playwright-impact.yml": [_pr_run(51), _pr_run(52, event="push")],
+        }),
     )
 
-    with pytest.raises(deployer.CiEvidenceUnavailable, match="Playwright"):
-        deployer.discover_ci_run_ids(Path("."), previous=OLD, sha=NEW)
+    assert deployer.discover_pr_supplement_run_ids(
+        Path("."), previous=OLD, sha=NEW
+    ) == (["45"], ["51"])
+
+
+def test_discovery_names_a_playwright_commit_without_pr_browser_evidence(monkeypatch):
+    _selections(monkeypatch, playwright={NEW: ["area:memory-budgets"]})
+    monkeypatch.setattr(deployer, "commit_parents", lambda _directory, sha: [MID])
+    monkeypatch.setattr(
+        deployer, "squash_merged_pr_head", lambda _directory, sha: (PR_HEAD, 1236)
+    )
+    monkeypatch.setattr(
+        deployer,
+        "github_json",
+        _pr_runs({"ci.yml": [_pr_run(45)], "playwright-impact.yml": []}),
+    )
+
+    with pytest.raises(deployer.CiEvidenceUnavailable) as caught:
+        deployer.discover_pr_supplement_run_ids(Path("."), previous=OLD, sha=NEW)
+    assert NEW[:12] in str(caught.value)
+    assert "playwright-impact.yml" in str(caught.value)
 
 
 class _Stop(Exception):
@@ -132,6 +181,7 @@ def _prepare_until_acceptance(tmp_path, monkeypatch, discovered):
 
     def chain(run_ids, **kwargs):
         calls["chain"] = run_ids
+        calls["supplements"] = (kwargs["pr_ci_run_ids"], kwargs["pr_playwright_run_ids"])
         raise _Stop
 
     def plan(directory, previous):
@@ -139,6 +189,11 @@ def _prepare_until_acceptance(tmp_path, monkeypatch, discovered):
         raise _Stop
 
     monkeypatch.setattr(deployer, "discover_ci_run_ids", discover)
+    monkeypatch.setattr(
+        deployer,
+        "discover_pr_supplement_run_ids",
+        lambda directory, *, previous, sha: (["61"], ["62"]),
+    )
     monkeypatch.setattr(deployer, "verify_ci_acceptance_chain", chain)
     monkeypatch.setattr(deployer, "selected_plan", plan)
     return calls, candidate
@@ -150,6 +205,7 @@ def test_prepare_accepts_discovered_ci_evidence_by_default(tmp_path, monkeypatch
         deployer.prepare()
     assert calls["discovered"] == (candidate, OLD, NEW)
     assert calls["chain"] == ["15", "21"]
+    assert calls["supplements"] == (["61"], ["62"])
 
 
 def test_prepare_runs_local_tests_only_when_asked(tmp_path, monkeypatch):

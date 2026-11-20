@@ -948,10 +948,56 @@ def git_tree(directory: Path, sha: str) -> str:
     return tree
 
 
-def require_merged_pr_for_commit(
-    *, head_sha: str, base_sha: str, merge_sha: str, directory: Path
-) -> dict[str, Any]:
-    pulls = github_json_value(f"commits/{head_sha}/pulls")
+def require_pr_merge_shape(
+    directory: Path, *, merge_sha: str, base_sha: str, head_sha: str
+) -> str:
+    """Prove that a PR head tested exactly the tree main received.
+
+    A merge commit must have exactly ``[base, head]`` as parents. A squash
+    merge has one parent, ``base``; its PR head must contain that parent and
+    have the identical tree, so the head's diff from ``base`` is exactly the
+    squash commit's diff. Either way the head tree equals the main tree.
+    Returns the shape, "merge" or "squash".
+    """
+    parents = commit_parents(directory, merge_sha)
+    if parents == [base_sha, head_sha]:
+        shape = "merge"
+    elif parents == [base_sha]:
+        try:
+            run(
+                "git", "-C", str(directory), "merge-base", "--is-ancestor",
+                base_sha, head_sha,
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                "Squash-merged PR head does not contain its main parent"
+            ) from error
+        shape = "squash"
+    else:
+        raise RuntimeError("PR CI evidence does not match the merge commit parents")
+    if git_tree(directory, head_sha) != git_tree(directory, merge_sha):
+        raise RuntimeError("PR head tree differs from the exact main merge tree")
+    return shape
+
+
+def ensure_pr_head(directory: Path, head_sha: str, pull_number: int) -> None:
+    """Fetch a merged PR's head when its branch is gone from this clone."""
+    try:
+        run("git", "-C", str(directory), "cat-file", "-e", f"{head_sha}^{{commit}}")
+        return
+    except RuntimeError:
+        # diagnostic-expected: absent locally; fetched from the PR ref below.
+        pass
+    run(
+        "git", "-C", str(directory), "fetch", "--no-tags", "origin",
+        f"refs/pull/{pull_number}/head",
+    )
+    run("git", "-C", str(directory), "cat-file", "-e", f"{head_sha}^{{commit}}")
+
+
+def squash_merged_pr_head(directory: Path, merge_sha: str) -> tuple[str, int]:
+    """The head commit and number of the one PR squash-merged as ``merge_sha``."""
+    pulls = github_json_value(f"commits/{merge_sha}/pulls")
     if not isinstance(pulls, list):
         raise RuntimeError("GitHub associated pull request listing is malformed")
     matches = [
@@ -961,8 +1007,38 @@ def require_merged_pr_for_commit(
         and item.get("state") == "closed"
         and item.get("merged_at")
         and item.get("merge_commit_sha") == merge_sha
+        and isinstance(item.get("head"), dict)
+        and SHA.fullmatch(str(item["head"].get("sha", "")))
+        and isinstance(item.get("number"), int)
+        and item["number"] > 0
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "Squash commit is not bound to one exact merged pull request"
+        )
+    head_sha = matches[0]["head"]["sha"]
+    ensure_pr_head(directory, head_sha, matches[0]["number"])
+    return head_sha, matches[0]["number"]
+
+
+def require_merged_pr_for_commit(
+    *, head_sha: str, base_sha: str, merge_sha: str, directory: Path
+) -> dict[str, Any]:
+    pulls = github_json_value(f"commits/{head_sha}/pulls")
+    if not isinstance(pulls, list):
+        raise RuntimeError("GitHub associated pull request listing is malformed")
+    squash = len(commit_parents(directory, merge_sha)) == 1
+    matches = [
+        item
+        for item in pulls
+        if isinstance(item, dict)
+        and item.get("state") == "closed"
+        and item.get("merged_at")
+        and item.get("merge_commit_sha") == merge_sha
         and isinstance(item.get("base"), dict)
-        and item["base"].get("sha") == base_sha
+        # A squash PR's base may be an older main commit; the shape check
+        # below proves its head contains the exact main parent instead.
+        and (squash or item["base"].get("sha") == base_sha)
         and isinstance(item.get("head"), dict)
         and item["head"].get("sha") == head_sha
     ]
@@ -972,12 +1048,9 @@ def require_merged_pr_for_commit(
         )
     if not isinstance(matches[0].get("number"), int) or matches[0]["number"] < 1:
         raise RuntimeError("Merged pull request identity is invalid")
-    parent_list = commit_parents(directory, merge_sha)
-    if len(parent_list) != 2 or parent_list != [base_sha, head_sha]:
-        raise RuntimeError("PR CI evidence does not match the merge commit parents")
-    merge_tree = git_tree(directory, merge_sha)
-    if git_tree(directory, head_sha) != merge_tree:
-        raise RuntimeError("PR head tree differs from the exact main merge tree")
+    require_pr_merge_shape(
+        directory, merge_sha=merge_sha, base_sha=base_sha, head_sha=head_sha
+    )
     return matches[0]
 
 
@@ -1075,6 +1148,10 @@ def supplemental_artifact_files(
     return files, metadata, digest
 
 
+# GitHub shows at most this many characters of a job name.
+GITHUB_JOB_NAME_LIMIT = 100
+
+
 def validate_playwright_matrix_jobs(
     jobs: list[dict[str, Any]], include: list[dict[str, Any]]
 ) -> dict[str, str]:
@@ -1087,7 +1164,16 @@ def validate_playwright_matrix_jobs(
             raise RuntimeError("Playwright matrix entry is malformed")
         return tuple(entry[field] for field in fields)
 
+    def names(lane: str, entry: dict[str, Any]) -> set[str]:
+        # GitHub names a matrix job "<lane> (<values in key order>)" and shows
+        # a name over 100 characters as its first 97 plus "...".
+        name = f"{lane} ({', '.join(str(entry[key]) for key in sorted(entry))})"
+        if len(name) <= GITHUB_JOB_NAME_LIMIT:
+            return {name}
+        return {name, name[: GITHUB_JOB_NAME_LIMIT - 3] + "..."}
+
     expected = Counter(signature(entry) for entry in include)
+    remaining = list(include)
     actual: Counter[tuple[str, ...]] = Counter()
     allowed_prefixes = {"playwright", "playwright-2", "playwright-3", "playwright-4"}
     for job in jobs:
@@ -1099,11 +1185,17 @@ def validate_playwright_matrix_jobs(
             continue
         if job.get("status") != "completed" or job.get("conclusion") != "success":
             raise RuntimeError("A selected Playwright matrix job did not succeed")
-        fields = name.partition(" (")[2].split(", ")
-        if len(fields) < 5:
+        # Each successful job accounts for one selected entry whose display
+        # name it carries. When truncation leaves several entries with the
+        # same name, as many successful jobs as entries are still required.
+        match = next(
+            (index for index, entry in enumerate(remaining) if name in names(lane, entry)),
+            None,
+        )
+        if match is None:
             raise RuntimeError("GitHub Playwright job name lacks its matrix identity")
-        actual[tuple(fields[:5])] += 1
-    if actual != expected:
+        actual[signature(remaining.pop(match))] += 1
+    if actual != expected or remaining:
         raise RuntimeError(
             "Successful Playwright jobs do not cover every selected entry"
         )
@@ -1430,16 +1522,49 @@ class CiEvidenceUnavailable(RuntimeError):
     """A candidate commit has no usable CI evidence; prepare stops, nothing runs locally."""
 
 
-def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str]:
-    """Find the successful main push CI run for each first-parent commit.
+def _newest_successful_pr_run(workflow: str, head_sha: str, label: str) -> str:
+    listing = github_json(
+        f"actions/workflows/{workflow}/runs?"
+        f"head_sha={head_sha}&event=pull_request&per_page=50"
+    )
+    runs = [
+        item
+        for item in listing.get("workflow_runs", [])
+        if isinstance(item, dict)
+        and item.get("head_sha") == head_sha
+        and item.get("event") == "pull_request"
+    ]
+    succeeded = [
+        item
+        for item in runs
+        if item.get("status") == "completed" and item.get("conclusion") == "success"
+    ]
+    if not succeeded:
+        states = sorted(
+            {f"{item.get('status')}/{item.get('conclusion') or '-'}" for item in runs}
+        )
+        raise CiEvidenceUnavailable(
+            f"{label} has no successful pull request {workflow} run on its head "
+            f"{head_sha[:12]}"
+            + (f" (runs: {', '.join(states)})" if states else " (no run)")
+            + "; re-run it, or prepare with --local-tests"
+        )
+    return str(max(succeeded, key=lambda item: int(item.get("id", 0)))["id"])
 
-    CI already ran each commit's reviewed selection before and after merge, so
-    the deployer accepts that evidence instead of re-running tests on the Core
-    host. A commit without a successful run, or one whose selected checks push
-    CI cannot prove, stops preparation with the exact reason.
+
+def discover_pr_supplement_run_ids(
+    directory: Path, *, previous: str, sha: str
+) -> tuple[list[str], list[str]]:
+    """Find each Playwright-selected commit's merged-PR CI and Playwright runs.
+
+    Push CI does not run browser checks, so they come from the PR whose head
+    tested exactly the tree main received: a merge commit's second parent, or
+    the head of the PR squash-merged as the commit. Acceptance re-verifies the
+    shape, trees, selections and every selected job.
     """
 
-    run_ids: list[str] = []
+    pr_ci: list[str] = []
+    pr_playwright: list[str] = []
     for commit in first_parent_commits(directory, previous=previous, sha=sha):
         committed = json.loads(
             run(
@@ -1451,12 +1576,37 @@ def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str
                 capture=True,
             )
         )
-        if committed.get("playwright"):
+        if not committed.get("playwright"):
+            continue
+        parents = commit_parents(directory, commit)
+        if len(parents) == 2:
+            head_sha = parents[1]
+        elif len(parents) == 1:
+            head_sha, _pull = squash_merged_pr_head(directory, commit)
+        else:
             raise CiEvidenceUnavailable(
-                f"{commit[:12]} selects Playwright checks, which main push CI does not run; "
-                "pass its merged-PR runs with --ci-run-id/--ci-pr-run-id/--ci-playwright-run-id, "
-                "or prepare with --local-tests"
+                f"{commit[:12]} selects Playwright checks but is neither a merge "
+                "nor a squash commit; prepare with --local-tests"
             )
+        pr_ci.append(_newest_successful_pr_run("ci.yml", head_sha, commit[:12]))
+        pr_playwright.append(
+            _newest_successful_pr_run("playwright-impact.yml", head_sha, commit[:12])
+        )
+    return pr_ci, pr_playwright
+
+
+def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str]:
+    """Find the successful main push CI run for each first-parent commit.
+
+    CI already ran each commit's reviewed selection before and after merge, so
+    the deployer accepts that evidence instead of re-running tests on the Core
+    host. A commit without a successful run stops preparation with the exact
+    reason. A Playwright-selected commit still needs this run for its other
+    layers; its browser evidence comes from discover_pr_supplement_run_ids.
+    """
+
+    run_ids: list[str] = []
+    for commit in first_parent_commits(directory, previous=previous, sha=sha):
         listing = github_json(
             "actions/workflows/ci.yml/runs?"
             f"head_sha={commit}&branch=main&event=push&per_page=50"
@@ -1548,11 +1698,19 @@ def verify_ci_acceptance_chain(
         supplemental: dict[str, Any] | None = None
         if commit in playwright_commits:
             parents = commit_parents(directory, commit)
-            if len(parents) != 2:
-                raise RuntimeError(
-                    "Supplemental Playwright evidence requires a two-parent merge commit"
+            if len(parents) == 2:
+                base_sha, head_sha = parents
+            elif len(parents) == 1:
+                # A squash merge: its PR's runs count only for the identical tree.
+                base_sha = parents[0]
+                head_sha, _pull = squash_merged_pr_head(directory, commit)
+                require_pr_merge_shape(
+                    directory, merge_sha=commit, base_sha=base_sha, head_sha=head_sha
                 )
-            base_sha, head_sha = parents
+            else:
+                raise RuntimeError(
+                    "Supplemental Playwright evidence requires a merge or squash commit"
+                )
             pr_ci = verify_pr_ci_supplement(
                 pr_ci_run_ids[supplemental_index],
                 head_sha=head_sha,
@@ -1735,9 +1893,15 @@ def validate_ci_acceptance_record(
             )
         if directory is not None:
             head = playwright["head_commit"]
-            parents = commit_parents(directory, commit)
-            if len(parents) != 2 or parents != [baseline, head]:
-                raise RuntimeError("release CI supplemental merge parents are invalid")
+            ensure_pr_head(directory, head, int(pull_number))
+            try:
+                require_pr_merge_shape(
+                    directory, merge_sha=commit, base_sha=baseline, head_sha=head
+                )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    "release CI supplemental merge parents are invalid"
+                ) from error
             expected_tree = git_tree(directory, commit)
             if (
                 playwright["tree_sha"] != expected_tree
@@ -2070,6 +2234,9 @@ def _prepare(
     timings.begin("ci_evidence")
     if ci_run_ids is None and not local_tests:
         ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
+        pr_ci_run_ids, pr_playwright_run_ids = discover_pr_supplement_run_ids(
+            directory, previous=previous, sha=sha
+        )
     ci_acceptance = (
         verify_ci_acceptance_chain(
             ci_run_ids,
