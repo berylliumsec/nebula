@@ -1,31 +1,30 @@
 {
-  "change_digest": "68332f6b77e2e5f8c5587ca73e1009ca10ba1afed1f562a64f22bd6e804f3cfc",
-  "reviewed_by": "Claude Code, PR 2c of the Butler home worker design at the operator's request",
-  "reason": "A Butler session in Butler's own project now reads its focus project for read-only tools while writes stay in Butler's project: SharedButlerMemory lets the verified home lease read another project's memories (list/search only, via a host-checked target_project); a focus broker serves workspace.find/search/read from the focus project's existing folder through retrieval_workspace() (never creating it), keeping the ledger and evidence in Butler's project; chat recalls the focus project's memories, wraps tools on new and resumed turns, and turns off Butler-project work board, roster and agent messaging; Butler children inherit the focus. Selected: the four Butler home suites (new tools suite: home-lease memory reads and refusals, focus broker routing, no folder creation), shared and Butler memory (authority and RPC changed), workspace tool search (retrieval path changed), chat and Butler subagents (child metadata), Butler sessions and provider tools-context (chat tool assembly).",
-  "exclusions": "Harness Butler with a focus is PR 2d. No UI change; the flag-gated home sessions are not reachable from the UI yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; all selected suites passed locally on SQLite and the staging postgres:16.",
+  "change_digest": "fb0ad9b58ac843793aa9b7503002c4f894ef20f61b0b9a3afba7e4aaecd41d3e",
+  "reviewed_by": "Claude Code, PR 2d of the Butler home worker design at the operator's request",
+  "reason": "Harness Butler can now live in Butler's own project with a focus: the gateway's Butler capabilities read the focus project under observer reads and send changes as butler.action/v1 commands (focus taken from the chat session, surviving settings rollover); every catalog read, call and turn checks the focus project's local-only boundary against the harness profile; turns recall the focus project's memories; gateway workspace reads serve its existing folder via RuntimePlatform.focus_workspace (never created); direct nebula.work/settings/help gateway routes are refused for home sessions; reservation allows harness backends for home with tools_enabled=False (no vendor shell, files or command runtime). Selected: the four Butler home suites (new harness suite: focus lookup, local-only matrix, gateway workspace, reservation privacy and tools_enabled), Butler sessions, the harness gateway suites (work gateway, MCP catalog reads, harness chat goals, tool failure guidance, host CPU budget).",
+  "exclusions": "tests/v3/test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent fails identically on unmodified main (same tree as #1244), so test_butler_recovery.py is not selected; its other cases passed locally with this change. No UI change; LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; all selected suites passed locally on SQLite and the staging postgres:16.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 163,
+    "python": 187,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_home_actions.py",
+    "tests/v3/test_all_tool_failure_guidance.py",
+    "tests/v3/test_butler_home_harness.py",
     "tests/v3/test_butler_home_scope.py",
     "tests/v3/test_butler_home_sessions.py",
     "tests/v3/test_butler_home_tools.py",
-    "tests/v3/test_butler_memory.py",
     "tests/v3/test_butler_sessions.py",
-    "tests/v3/test_butler_subagents.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_provider_tools_context.py",
-    "tests/v3/test_shared_butler_memory.py",
-    "tests/v3/test_workspace_tool_search.py"
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_host_cpu_budget.py",
+    "tests/v3/test_mcp_catalog_reads.py",
+    "tests/v3/test_work_gateway.py"
   ],
   "frontend": [],
   "native": [],
