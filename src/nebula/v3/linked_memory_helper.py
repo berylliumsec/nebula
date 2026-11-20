@@ -391,9 +391,13 @@ def verify_proposals(
             basis = "same_subject"
             if link_type == "supersedes":
                 old = by_id.get(target)
-                if open_world or evasive or (
-                    old is not None
-                    and authority_rank(authority) > authority_rank(old["authority"])
+                if (
+                    open_world
+                    or evasive
+                    or (
+                        old is not None
+                        and authority_rank(authority) > authority_rank(old["authority"])
+                    )
                 ):
                     link_type, state = "contradicts", "proposed"
                 basis = "state_change"

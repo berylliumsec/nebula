@@ -1263,7 +1263,9 @@ def test_entry_matching_ignores_nebula_words_inflections_and_the_project_id():
     # not a match.
     assert pick("how many validation goals do we have running?") == []
     assert pick("which binaries completed?") == []
-    assert pick(f'{{"project_id": "{project}", "summary": "Butler check is due."}}') == []
+    assert (
+        pick(f'{{"project_id": "{project}", "summary": "Butler check is due."}}') == []
+    )
     # An ID names the card's subject on its own; short codes like R2 count.
     assert pick("check on 1af359e5") == ["r2"]
     assert pick("is R2 ready to resume after the recovery?") == ["r2"]

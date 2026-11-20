@@ -162,9 +162,7 @@ ENTRY_COMMON_SHARE = 1 / 3
 ENTRY_COMMON_MIN_CARDS = 6
 
 
-def common_entry_words(
-    cards: list[dict], project_id: str = ""
-) -> frozenset[str]:
+def common_entry_words(cards: list[dict], project_id: str = "") -> frozenset[str]:
     """Words too common in this project's cards to tell them apart."""
 
     counts: dict[str, int] = {}
@@ -213,9 +211,7 @@ def select_entry_cards(
         card_words = card["words"] - common
         overlap = words & card_words
         # A shared ID names the very thing the card is about: it counts twice.
-        shared = len(overlap) + sum(
-            1 for word in overlap if _ENTRY_ID.fullmatch(word)
-        )
+        shared = len(overlap) + sum(1 for word in overlap if _ENTRY_ID.fullmatch(word))
         semantic = prefetch.get(card["id"], 0.0)
         # Every card must share words with the new message itself; the
         # previous exchange's semantic score only lowers the bar to one word.
