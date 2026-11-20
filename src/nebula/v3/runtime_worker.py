@@ -27,6 +27,7 @@ from .database import (
 )
 from .database_pool import PoolSettings
 from .deployment_protocol import (
+    BUTLER_ACTION_COMMAND,
     BUTLER_HOME_FEATURE,
     IDLE_RETIREMENT_FEATURE,
     ReleaseManifest,
@@ -335,6 +336,7 @@ async def run_worker(
             WORK_BATCH_FEATURE,
             STORAGE_REPORT_FEATURE,
             BUTLER_HOME_FEATURE,
+            BUTLER_ACTION_COMMAND,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"

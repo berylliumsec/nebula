@@ -24,7 +24,8 @@
       "host.web-search-query/v1",
       "project.work-batch/v1",
       "storage.report/v1",
-      "butler.home/v1"
+      "butler.home/v1",
+      "butler.action/v1"
     ]
   }
 }

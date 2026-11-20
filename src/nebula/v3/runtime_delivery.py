@@ -61,6 +61,7 @@ from .runtime_chat_acceptance import (
 )
 from .storage import NebulaStore, NotFoundError
 from .runtime_coordination import REPORT_LANE, STORAGE_REPORT_COMMAND
+from .deployment_protocol import BUTLER_ACTION_COMMAND
 from .storage_report_admission import (
     STORAGE_REPORT_MINIMUM_AGE_MS,
     STORAGE_REPORT_PRUNE_BATCH,
@@ -986,6 +987,17 @@ class DurableHttpRunner:
         command: ClaimedCommand,
         released: asyncio.Event | None = None,
     ) -> None:
+        if command.name == BUTLER_ACTION_COMMAND:
+            # Typed, not HTTP: it finishes itself as succeeded or failed and
+            # never takes the uncertain path below, which would block this
+            # project's control lane.
+            from .runtime_butler_actions import run_butler_action
+
+            with execution_context(lease):
+                await run_butler_action(
+                    self.app, self.delivery.coordination, lease, command
+                )
+            return
         run = _CommandRun()
         try:
             with execution_context(lease):

@@ -24,6 +24,9 @@ IDLE_RETIREMENT_FEATURE: Final = "project.idle-retirement/v1"
 # An execution release that can host the Butler home project: it supports
 # observer reads (execution_scope.observer_reads) for that project's worker.
 BUTLER_HOME_FEATURE: Final = "butler.home/v1"
+# One Butler change from Butler's home, run by the target project's worker.
+# Also the release feature: only a worker that declares it may receive one.
+BUTLER_ACTION_COMMAND: Final = "butler.action/v1"
 SHA256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 RuntimeVersion = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$")]
 

@@ -26,6 +26,8 @@ from .runtime_coordination import (
     RecoveryBlocked,
     REPORT_LANE,
 )
+from .deployment_protocol import BUTLER_HOME_PROJECT
+from .runtime_butler_actions import RemoteButlerActions
 from .runtime_delivery import DurableHttpRunner, RuntimeDelivery
 from .runtime_host_services import host_service_client
 from .runtime_ipc import (
@@ -145,6 +147,13 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             if services.get("web_search") is True
             else UnavailableProjectSearch(),
         )
+        if (
+            lease.project_id == BUTLER_HOME_PROJECT
+            and services.get("butler_actions") is True
+        ):
+            # Butler's home worker sends its changes to other projects as
+            # commands their own workers run; see runtime_butler_actions.py.
+            platform.butler_actions = RemoteButlerActions(client, lease)
         restore_digest = (
             await restored_checkpoint(context.coordinator, lease)
             if HANDOFF_FEATURE in context.manifest.features

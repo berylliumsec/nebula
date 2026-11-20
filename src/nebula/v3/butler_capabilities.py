@@ -32,6 +32,7 @@ from .domain import (
     utc_now,
 )
 from .execution_scope import observer_reads
+from .runtime_butler_actions import ButlerAction, butler_work_changes
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
@@ -337,6 +338,7 @@ class ButlerCapabilities:
         background_runtime_local: bool = False,
         client_surface: str = "browser",
         observer: bool = False,
+        butler_actions: Any = None,
     ) -> None:
         if client_surface not in CLIENT_SURFACES:
             raise ValueError("unknown Butler client surface")
@@ -344,8 +346,10 @@ class ButlerCapabilities:
             raise ValueError("background Butler cases still run in their project")
         self._client_surface = client_surface
         # Set on Butler's home worker: project_id is the session's focus
-        # project, which this worker reads but does not own.
+        # project, which this worker reads but does not own. Its work changes
+        # go to that project's worker as butler.action/v1 commands.
         self._observer = observer
+        self._butler_actions = butler_actions if observer else None
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
         self._store = store
@@ -1188,12 +1192,16 @@ class ButlerCapabilities:
                 f"use nebula.capabilities.{route} for {name}",
                 reason=f"use_{route}",
             )
-        if self._observer and change:
-            # Changes reach another project only as commands its own worker
-            # runs under its Butler authority; that path is not built yet.
+        if (
+            self._observer
+            and change
+            and (self._butler_actions is None or name not in butler_work_changes())
+        ):
+            # Only Butler's work changes travel to another project's worker;
+            # settings, storage and other families still run in-project.
             raise CapabilityInputError(
-                f"Butler can read {self._project_name} from here but cannot "
-                "change it yet. Make this change from that project's Butler.",
+                f"Butler can't make this change to {self._project_name} from "
+                "here yet. Make it from that project's Butler.",
                 reason="home_change_unavailable",
             )
         payload = arguments.get("arguments")
@@ -1281,6 +1289,8 @@ class ButlerCapabilities:
                     payload,
                     idempotency_key=f"recovery:{self._background_case_id}:{step_id}",
                 )
+            elif self._observer and change:
+                result = await self._send_change(name, payload)
             elif self._observer:
                 with observer_reads():
                     result = await plugin._handler(payload)
@@ -1306,6 +1316,36 @@ class ButlerCapabilities:
             "butler_operation": name,
             "butler_project_id": self._project_id,
         }
+
+    async def _send_change(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Have the focus project's own worker make one Butler work change."""
+
+        if self._butler_actions is None:
+            raise CapabilityInputError(
+                "Butler's own worker cannot send changes",
+                reason="home_change_unavailable",
+            )
+        outcome = await self._butler_actions.run(
+            self._project_id,
+            ButlerAction(
+                action=name, arguments=payload, home_turn_id=self._operator_turn_id
+            ),
+        )
+        if outcome["state"] == "failed":
+            detail = outcome["result"].get("detail") or "the change was refused"
+            raise ValueError(f"{self._project_name} refused the change: {detail}")
+        if outcome["state"] == "accepted":
+            return {
+                "state": "accepted",
+                "command_id": outcome["command_id"],
+                "detail": (
+                    f"Queued behind {self._project_name}'s current work; it runs "
+                    "there within ten minutes or not at all. Read the project "
+                    "again before reporting it done."
+                ),
+            }
+        applied = outcome["result"].get("applied")
+        return applied if isinstance(applied, dict) else {"result": applied}
 
     def plugins(self) -> list[AnalysisTool]:
         descriptions = (
