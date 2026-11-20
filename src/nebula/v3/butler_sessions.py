@@ -10,22 +10,39 @@ from sqlalchemy import func, select, text
 from .advisory_keys import per_id_key
 from .chat import ChatConfigurationError
 from .database import EntityRow
+from .deployment_protocol import BUTLER_HOME_PROJECT, RESERVED_PROJECT_IDS
 from .domain import (
     ChatBackend,
     ChatSession,
     Engagement,
+    EngagementStatus,
     HarnessProfile,
     NebulaModel,
     ProviderProfile,
     ScopePolicy,
 )
+from .execution_scope import observer_reads
 from .harnesses import HarnessRuntimeService
 from .mcp import resolve_mcp_profiles
 from .storage import NebulaStore
 
 
+class ButlerFocus(NebulaModel):
+    """The project a Butler home session is about.
+
+    The field is ``project``, not ``project_id``: request routing treats every
+    ``*_id`` field as a project reference, and a reservation that named both
+    Butler's home and the focus project would be refused as ambiguous.
+    """
+
+    project: str = Field(min_length=1, max_length=200)
+
+
 class ButlerSessionReservation(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
+    # Only with engagement_id == BUTLER_HOME_PROJECT; omitted for a
+    # Nebula-wide thread.
+    focus: ButlerFocus | None = None
     backend: ChatBackend
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -62,6 +79,16 @@ class ButlerSessionReservation(NebulaModel):
             raise ValueError("harness Butler sessions require only harness_profile_id")
         if self.title is not None and not self.thread:
             raise ValueError("only a Butler thread takes a title")
+        if self.focus is not None and self.engagement_id != BUTLER_HOME_PROJECT:
+            raise ValueError("only a Butler home session takes a focus project")
+        if self.focus is not None and self.focus.project in RESERVED_PROJECT_IDS:
+            raise ValueError("Butler cannot focus on a Core project")
+        if (
+            self.engagement_id == BUTLER_HOME_PROJECT
+            and self.backend != ChatBackend.PROVIDER
+        ):
+            # Harness Butler still binds its tools to the session's project.
+            raise ValueError("Butler's own worker runs provider Butler sessions only")
         return self
 
 
@@ -78,6 +105,13 @@ async def reserve_butler_session(
     """
 
     project = await store.get(Engagement, request.engagement_id)
+    focus = request.focus.project if request.focus is not None else None
+    if focus is not None:
+        # The focus project belongs to another worker: read, never lock.
+        with observer_reads():
+            focused = await store.get(Engagement, focus)
+        if focused.status == EngagementStatus.ARCHIVED:
+            raise ChatConfigurationError("Restore the project before asking Butler")
     scope = (
         (await store.get(ScopePolicy, project.scope_policy_id))
         if project.scope_policy_id
@@ -102,14 +136,20 @@ async def reserve_butler_session(
             (
                 await transaction.session.execute(
                     text(f"SELECT pg_advisory_xact_lock({per_id_key('project_id')})"),
-                    {"project_id": f"butler-active-session:{request.engagement_id}"},
+                    {
+                        "project_id": f"butler-active-session:{request.engagement_id}"
+                        + (f":{focus}" if focus is not None else "")
+                    },
                 )
             )
+        focus_column = EntityRow.payload["metadata"]["butler_focus_project"].as_string()
         row = await transaction.session.scalar(
             select(EntityRow)
             .where(
                 EntityRow.kind == ChatSession.entity_kind,
                 EntityRow.engagement_id == request.engagement_id,
+                # Butler's home holds one current session per focus project.
+                focus_column.is_(None) if focus is None else focus_column == focus,
                 EntityRow.payload["metadata"]["control_assistant"]
                 .as_boolean()
                 .is_(True),
@@ -137,6 +177,8 @@ async def reserve_butler_session(
             if request.thread
             else {}
         )
+        if focus is not None:
+            thread_metadata["butler_focus_project"] = focus
 
         if request.backend == ChatBackend.PROVIDER:
             assert request.provider_id is not None
