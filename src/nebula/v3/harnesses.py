@@ -84,7 +84,7 @@ from pydantic import Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .project_hold_gate import active_hold, held_detail
+from .project_hold_gate import active_hold, held_detail, is_held
 from .chat import (
     ChatError,
     ChatHistoryConflict,
@@ -1278,6 +1278,10 @@ def _gateway_oci_input_schema(spec: ToolSpec) -> dict[str, Any]:
             "description": "Engagement workspace root; supplied by Nebula Core.",
         }
     return schema
+
+
+# How often a due harness Mission in a held project checks for release.
+HELD_MISSION_RECHECK_SECONDS = 5.0
 
 
 class HarnessError(RuntimeError):
@@ -10497,6 +10501,9 @@ class HarnessRuntimeService:
         naming: the session gets no command runtime, no native tools and no
         Nebula gateway, so it starts only the vendor process.
         """
+        hold = await active_hold(self.store, engagement_id)
+        if hold is not None:
+            raise ProjectHeld(held_detail(hold))
 
         profile = await self.store.get(HarnessProfile, profile_id)
         (
@@ -14540,6 +14547,12 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool = False,
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
+        if scheduled_for is None or scheduled_for <= utc_now():
+            # A Mission that would start now is refused; a future occurrence
+            # is saved and waits for the release when it comes due.
+            hold = await active_hold(self.store, engagement_id)
+            if hold is not None:
+                raise ProjectHeld(held_detail(hold))
         project_workspace_path = (
             await self.store.get(Engagement, engagement_id)
         ).workspace_path
@@ -14857,6 +14870,17 @@ class HarnessRuntimeService:
                 or (await self.store.get(AgentRun, run_id)).status != RunStatus.QUEUED
             ):
                 return
+            while await is_held(
+                self.store, (await self.store.get(AgentRun, run_id)).engagement_id
+            ):
+                # A due occurrence waits for the project hold's release.
+                await asyncio.sleep(HELD_MISSION_RECHECK_SECONDS)
+                if (
+                    self._closed
+                    or (await self.store.get(AgentRun, run_id)).status
+                    != RunStatus.QUEUED
+                ):
+                    return
             self._scheduled_mission_tasks.pop(run_id, None)
             self._mission_tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
             await self._execute_mission(run_id, turn_ids)
