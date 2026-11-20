@@ -1150,6 +1150,9 @@ class _ActiveProviderTurn:
     done: bool = False
     error: BaseException | None = None
     admission: ProviderAdmission | None = None
+    # Who is waiting on the turn: "direct" for an operator, "background" for
+    # goal, subagent, Butler and queued work. Readable before admission.
+    capacity_lane: str = "direct"
     journal_closed: bool = False
     journal_prior_history: bool = False
     journal_start_sequence: int = 0
@@ -4532,7 +4535,7 @@ class ChatService:
         (await self.provider_scheduler.enqueue(turn))
         if existing is not None and existing.cleanup_task is not None:
             existing.cleanup_task.cancel()
-        runtime = _ActiveProviderTurn()
+        runtime = _ActiveProviderTurn(capacity_lane=turn.capacity_lane)
         if self.stream_journal is not None:
             runtime.journal_prior_history = await self.stream_journal.has_history(
                 turn.id
