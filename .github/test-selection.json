@@ -1,26 +1,27 @@
 {
-  "change_digest": "b1dffe19c8835e1c06269c827ddc40df7046cee7f4e693d3207ceaf9e4516bbd",
-  "reviewed_by": "Claude Code, fixing the narrow-window Quiet Lens top menu found while repairing #1224",
-  "reason": "TopBar's Quiet Lens handle revealed on hover and on pointer focus at any width, and its blur handler closed the menu when the phone-width layout hid the focused handle. At 390px with a mouse the menu could not be opened. Hover now uses the side handle's wide-layout query, focus reveals only for :focus-visible, and a self-hide blur is ignored. Selected: TopBar unit tests (new cases fail on main) and the quiet-lens area, which now includes narrow.",
-  "exclusions": "host-startup-default also maps TopBar.tsx but only checks first-run startup on a real Core; the TopBar layout and startup copy are unchanged. phone-shell, critical-workspaces and the Zero shell journey passed locally on desktop, compact, narrow and all six mobile projects, and a disposable LAN Core run covered narrow mouse, narrow keyboard, desktop hover, and Pixel and iPhone tap.",
+  "change_digest": "b77fd87d486453fae8a960d651742d02fef50d808fb5da1a9fbc9f8c696f38d5",
+  "reviewed_by": "Claude Code, fixing the production chat_goals revision conflicts that failed goal turns",
+  "reason": "Goal turns with running subagents failed with 'revision conflict on chat_goals <id>: expected N, found N+1'. ChatService._charge_goal read the goal and wrote its usage against that revision with no retry; a subagent's usage charge (or active-time settle) committed in between, the RevisionConflict escaped _add_usage, and _stream_tool_turn saved it as the turn's error. The charge now plans the debit on the newest goal through revise_latest. Selected: the goal revision-race tests and the routed tool-turn tests (both new cases fail on main with the production message), plus the goal and subagent-lifecycle suites that charge goals.",
+  "exclusions": "No UI, API shape or settings change. test_chat.py, test_provider_cost_rates.py and test_butler_resources.py goal/charge cases passed locally (26) and are not selected. The in-transaction charge path is unchanged in behaviour; a PostgreSQL check against a scratch database showed it does not conflict with its own unit's goal write. No disposable LAN Core run: the race needs concurrent subagent provider responses inside a millisecond window and is not reproducible on demand through the UI; the deterministic window tests drive the real store and the real tool-turn loop.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 21,
+    "python": 78,
+    "frontend": 0,
     "native": 0,
-    "playwright": 11
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/TopBar.test.tsx"
+  "python": [
+    "tests/v3/test_goal_revision_races.py",
+    "tests/v3/test_routing_prose_answer.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_subagent_lifecycle.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:quiet-lens"
-  ],
+  "playwright": [],
   "checks": []
 }
