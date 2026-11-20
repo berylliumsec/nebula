@@ -34,7 +34,7 @@ import time
 import zipfile
 from uuid import uuid4
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from urllib.error import HTTPError
 
@@ -106,6 +106,13 @@ HOST_RECONNECT_COMMIT = "445c5067072df94daa8100340e1c54ee76b3d35c"
 # Longer than an owner lease (30 s) plus Core's dead-owner recovery pass, so
 # an owner that recovers on its own is never reported.
 HOST_UNAVAILABLE_OWNER_SECONDS = 60
+# Project holds (Core #1232): turns may finish for the grace period, then
+# Core stops them. The wait covers the grace, Core's 15 s hold pass and the
+# stop settling.
+PROJECT_HOLD_GRACE_SECONDS = 180
+PROJECT_HOLD_WAIT_SECONDS = 600
+PROJECT_HOLD_POLL_SECONDS = 5
+HOST_RESTART_HOLD_PREFIX = "host-restart-"
 # A promote or cycle that finds a prebuild holding the deploy lock waits this
 # long for it: the prebuild is producing the release that promote needs.
 PREBUILD_LOCK_WAIT_SECONDS = 1800
@@ -4418,6 +4425,232 @@ def _versions_reconnecting_to_host(client: CoreClient) -> list[str] | None:
     return sorted(versions)
 
 
+def core_write(path: str, payload: dict, *, idempotency_key: str) -> Any:
+    """POST an ordinary Core write; the key makes a retried request exact."""
+    client = api()
+    request = Request(
+        f"{client.origin}/api/v1/{path}",
+        data=json.dumps(payload, separators=(",", ":")).encode(),
+        headers={
+            "Authorization": f"Bearer {client.token}",
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotency_key,
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+def holds_state_path() -> Path:
+    # Separate from deployer-state.json: promotion saves its own copy of that
+    # record, which would overwrite a hold saved in between.
+    return STATE.with_name("project-holds.json")
+
+
+def _saved_holds() -> dict[str, Any]:
+    path = holds_state_path()
+    if not path.exists():
+        return {}
+    holds = json.loads(path.read_text())
+    if not isinstance(holds, dict):
+        raise RuntimeError("Saved project holds are malformed; inspect them before releasing")
+    return holds
+
+
+def _save_holds(holds: dict[str, Any]) -> None:
+    if holds:
+        atomic_json(holds_state_path(), holds)
+    else:
+        holds_state_path().unlink(missing_ok=True)
+
+
+def _unrouted(error: HTTPError) -> bool:
+    """Whether a 404 is the framework's unknown route, not an unknown project."""
+    try:
+        body = json.loads(error.read() or b"{}")
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("detail") == "Not Found"
+
+
+def place_project_hold(
+    project_id: str, *, deployment_id: str, reason: str, grace_seconds: int
+) -> str | None:
+    """Hold one project's chat work; None when Core predates project holds.
+
+    The hold is saved in deployer state before this returns, so a later
+    ``release-holds`` releases it even if this run stops.
+    """
+    try:
+        view = core_write(
+            f"engagements/{quote(project_id, safe='')}/hold",
+            {
+                "reason": reason,
+                "deployment_id": deployment_id,
+                "grace_seconds": grace_seconds,
+            },
+            idempotency_key=f"project-hold:{deployment_id}:{project_id}",
+        )
+    except HTTPError as error:
+        if error.code == 405 or (
+            error.code == 404 and _unrouted(error)
+        ):
+            # The route itself is missing: this Core predates project holds.
+            return None
+        raise
+    hold = view.get("hold") if isinstance(view, dict) else None
+    if not isinstance(hold, dict) or not isinstance(hold.get("id"), str):
+        raise RuntimeError(f"Core returned no hold for project {project_id}")
+    saved = _saved_holds()
+    saved[project_id] = {
+        "hold_id": hold["id"],
+        "deployment_id": deployment_id,
+        "reason": reason,
+        "placed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_holds(saved)
+    return hold["id"]
+
+
+def release_project_holds(
+    *, reason: str, deployment_prefix: str | None = None
+) -> dict[str, Any]:
+    """Release the holds this deployer placed and saved; report each.
+
+    ``deployment_prefix`` limits release to holds whose deployment ID starts
+    with it, so a host restart never releases an operator's stop holds.
+    """
+    saved = _saved_holds()
+    released: dict[str, Any] = {}
+    failed: dict[str, str] = {}
+    for project_id, entry in sorted(saved.items()):
+        if deployment_prefix is not None and not (
+            isinstance(entry, dict)
+            and str(entry.get("deployment_id", "")).startswith(deployment_prefix)
+        ):
+            continue
+        hold_id = entry.get("hold_id") if isinstance(entry, dict) else None
+        if not isinstance(hold_id, str):
+            failed[project_id] = "saved hold has no ID"
+            continue
+        try:
+            view = core_write(
+                f"engagements/{quote(project_id, safe='')}/hold/"
+                f"{quote(hold_id, safe='')}/release",
+                {"reason": reason},
+                idempotency_key=f"project-hold-release:{hold_id}",
+            )
+        except (HTTPError, OSError, ValueError) as error:
+            failed[project_id] = str(error)[:300]
+            continue
+        hold = view.get("hold") if isinstance(view, dict) else {}
+        released[project_id] = {
+            "hold_id": hold_id,
+            "status": hold.get("status") if isinstance(hold, dict) else None,
+            "restored_goals": hold.get("restored_goals", [])
+            if isinstance(hold, dict)
+            else [],
+        }
+    _save_holds(
+        {
+            project_id: entry
+            for project_id, entry in _saved_holds().items()
+            if project_id not in released
+        }
+    )
+    return {"released": released, "failed": failed}
+
+
+def hold_projects_until_quiet(
+    *,
+    deployment_id: str,
+    reason: str,
+    project_ids: list[str] | None = None,
+    grace_seconds: int = PROJECT_HOLD_GRACE_SECONDS,
+) -> dict[str, Any] | None:
+    """Hold projects until none has chat work; None if Core has no holds.
+
+    ``project_ids`` holds exactly those projects; without it every project
+    with chat work is held, and any project that becomes busy while this
+    waits is held too. Core stops what is still running after the grace.
+    """
+    started = time.monotonic()
+    deadline = started + grace_seconds + PROJECT_HOLD_WAIT_SECONDS
+    held: dict[str, str] = {}
+    targets = list(project_ids or [])
+    while True:
+        busy = _restart_boundary_activity(api())
+        for project_id in [*targets, *busy]:
+            if project_id in held:
+                continue
+            hold_id = place_project_hold(
+                project_id,
+                deployment_id=deployment_id,
+                reason=reason,
+                grace_seconds=grace_seconds,
+            )
+            if hold_id is None:
+                if held:
+                    raise RuntimeError(
+                        "Core accepted some project holds and refused another; "
+                        "release them with release-holds"
+                    )
+                return None
+            held[project_id] = hold_id
+        if not busy:
+            return {
+                "quiet_after_seconds": round(time.monotonic() - started, 1),
+                "holds": held,
+            }
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Chat work in {len(busy)} held project(s) did not stop within "
+                f"{grace_seconds + PROJECT_HOLD_WAIT_SECONDS}s, so nothing was "
+                "stopped or restarted; the holds stay in place until release-holds: "
+                + ", ".join(list(busy)[:10])
+            )
+        time.sleep(PROJECT_HOLD_POLL_SECONDS)
+
+
+def hold_command(
+    project_ids: list[str] | None, reason: str, grace_seconds: int
+) -> dict[str, Any]:
+    """Hold the named projects, or every live project, until no chat work runs.
+
+    Without ``project_ids`` it holds each project that has an execution
+    worker; a project without one runs nothing, and a hold request would only
+    start a worker for it. Any project that becomes busy meanwhile is held too.
+    """
+    if project_ids:
+        projects = list(project_ids)
+    else:
+        status = api().get("deployment/status")
+        rows = status.get("projects") if isinstance(status, dict) else None
+        if not isinstance(rows, list):
+            raise RuntimeError("Core deployment status has an invalid shape")
+        projects = sorted(
+            row["project_id"]
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("project_id"), str)
+            and not row["project_id"].startswith("__")
+            and row.get("runtime_id")
+        )
+    held = hold_projects_until_quiet(
+        deployment_id=f"operator-stop-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}",
+        reason=reason,
+        project_ids=projects,
+        grace_seconds=grace_seconds,
+    )
+    if held is None:
+        raise RuntimeError(
+            "This Core predates project holds; coordinate the stop with Butler "
+            "as AGENTS.md describes for older releases"
+        )
+    return {"status": "held", **held}
+
+
 def wait_quiet_restart_boundary(
     accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -4450,6 +4683,17 @@ def wait_quiet_restart_boundary(
                 ),
                 "reconnecting_versions": reconnecting,
             }
+        # Older workers need a quiet boundary. Core holds every busy project
+        # instead of waiting for it to settle on its own; the caller releases
+        # the holds once the new host is up. A Core without holds falls back
+        # to the bounded wait below.
+        pending = state().get("pending")
+        holds = hold_projects_until_quiet(
+            deployment_id=f"{HOST_RESTART_HOLD_PREFIX}{pending or 'unknown'}",
+            reason="Core supervisor restart for a deployment",
+        )
+        if holds is not None:
+            return {**holds, "waited": True}
     deadline = started + HOST_QUIET_WAIT_SECONDS
     unavailable_since: dict[tuple[str, str], float] = {}
     while True:
@@ -4736,7 +4980,45 @@ def activate_supervisor_host(
     allow_degraded_workers: bool = False,
     accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Restart only the foreground supervisor from an accepted staged release."""
+    """Restart only the foreground supervisor from an accepted staged release.
+
+    Projects held for the restart boundary are released afterwards, whether
+    the activation succeeded or rolled back; a release Core does not confirm
+    stays saved for ``release-holds``.
+    """
+    try:
+        result = _activate_supervisor_host(
+            record,
+            version,
+            allow_degraded_workers=allow_degraded_workers,
+            accepted_dead_owner=accepted_dead_owner,
+        )
+    except BaseException:
+        _release_restart_holds()
+        raise
+    released = _release_restart_holds()
+    if released["released"] or released["failed"]:
+        result = {**result, "restart_holds": released}
+    return result
+
+
+def _release_restart_holds() -> dict[str, Any]:
+    try:
+        return release_project_holds(
+            reason="Core supervisor restart finished",
+            deployment_prefix=HOST_RESTART_HOLD_PREFIX,
+        )
+    except Exception as error:  # the holds stay saved for release-holds
+        return {"released": {}, "failed": {"*": str(error)[:300]}}
+
+
+def _activate_supervisor_host(
+    record: dict[str, Any],
+    version: str,
+    *,
+    allow_degraded_workers: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if record.get("deployment_mode") != "supervisor":
         raise RuntimeError("Host activation requires supervisor deployment mode")
     deployment = record.get("runtime_deployment")
@@ -6380,6 +6662,8 @@ def main() -> int:
             "cycle",
             "prebuild",
             "status",
+            "hold",
+            "release-holds",
         ),
     )
     parser.add_argument(
@@ -6452,6 +6736,24 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--project",
+        action="append",
+        help=(
+            "hold: hold this project (repeat); without it every project is held, "
+            "as a whole-Core stop needs"
+        ),
+    )
+    parser.add_argument(
+        "--reason",
+        help="hold or release-holds: operator-facing reason recorded on each hold",
+    )
+    parser.add_argument(
+        "--grace-seconds",
+        type=int,
+        default=PROJECT_HOLD_GRACE_SECONDS,
+        help="hold: seconds running turns may finish before Core stops them",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="validate a supported supersession reconciliation without changing deployer state",
@@ -6520,14 +6822,33 @@ def main() -> int:
         raise RuntimeError(
             "--dry-run is supported only for manual supersession reconciliation"
         )
+    if (args.project is not None or args.reason is not None) and args.action not in {
+        "hold",
+        "release-holds",
+    }:
+        raise RuntimeError("--project and --reason are supported only with hold")
+    if args.action == "hold" and not args.reason:
+        raise RuntimeError("hold requires --reason")
+    if not 0 <= args.grace_seconds <= 3600:
+        raise RuntimeError("--grace-seconds must be between 0 and 3600")
     lock_path = ROOT / ".deploy.lock"
     with lock_path.open("a+") as lock:
         busy = acquire_deploy_lock(lock, lock_path, args.action)
         result = (
             {"status": "skipped", "reason": "deploy_lock_busy", "holder": busy}
             if busy is not None
-            else {"status": "state", **state()}
+            else {
+                "status": "state",
+                **state(),
+                "project_holds": _saved_holds(),
+            }
             if args.action == "status"
+            else hold_command(args.project, args.reason, args.grace_seconds)
+            if args.action == "hold"
+            else release_project_holds(
+                reason=args.reason or "Released by the operator"
+            )
+            if args.action == "release-holds"
             else prepare(
                 ci_run_ids=args.ci_run_id,
                 pr_ci_run_ids=args.ci_pr_run_id,
