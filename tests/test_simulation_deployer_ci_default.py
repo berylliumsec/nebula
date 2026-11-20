@@ -95,7 +95,7 @@ def test_discovery_stops_with_the_commit_and_reason(monkeypatch, runs, reason):
     with pytest.raises(deployer.CiEvidenceUnavailable) as caught:
         deployer.discover_ci_run_ids(Path("."), previous=OLD, sha=NEW)
     assert NEW[:12] in str(caught.value) and reason in str(caught.value)
-    assert "--local-tests" in str(caught.value)
+    assert "re-run it" in str(caught.value)
 
 
 PR_HEAD = "f" * 40
@@ -208,18 +208,12 @@ def test_prepare_accepts_discovered_ci_evidence_by_default(tmp_path, monkeypatch
     assert calls["supplements"] == (["61"], ["62"])
 
 
-def test_prepare_runs_local_tests_only_when_asked(tmp_path, monkeypatch):
-    calls, _candidate = _prepare_until_acceptance(tmp_path, monkeypatch, ["15"])
-    with pytest.raises(_Stop):
-        deployer.prepare(local_tests=True)
-    assert "discovered" not in calls and "chain" not in calls
-    assert calls["local_plan"] is True
-    with pytest.raises(RuntimeError, match="cannot be combined"):
-        deployer.prepare(local_tests=True, ci_run_ids=["15"])
-
-
-def test_prepare_never_falls_back_to_local_tests(tmp_path, monkeypatch):
+def test_prepare_has_no_local_test_mode(tmp_path, monkeypatch):
+    """Tests run in CI; the deployer neither offers nor falls back to a
+    local run."""
     calls, _candidate = _prepare_until_acceptance(tmp_path, monkeypatch, [])
+    with pytest.raises(TypeError):
+        deployer.prepare(local_tests=True)
 
     def missing(directory, *, previous, sha):
         raise deployer.CiEvidenceUnavailable("no successful main push CI run")
@@ -228,6 +222,41 @@ def test_prepare_never_falls_back_to_local_tests(tmp_path, monkeypatch):
     with pytest.raises(deployer.CiEvidenceUnavailable):
         deployer.prepare()
     assert "local_plan" not in calls
+
+
+def test_overlapping_selections_need_no_cumulative_review(tmp_path, monkeypatch):
+    """Overlapping selections were reviewed for local counting only; CI ran
+    each commit's own selection, so the union is recorded as it is."""
+    directory = tmp_path / "candidate"
+    (directory / "build").mkdir(parents=True)
+    selections = {
+        MID: {"python": ["tests/test_a.py"], "frontend": [], "native": [],
+              "playwright": [], "expected_tests": {"python": 3, "frontend": 0,
+              "native": 0, "playwright": 0}},
+        NEW: {"python": ["tests/test_a.py", "tests/test_b.py"], "frontend": [],
+              "native": [], "playwright": [], "expected_tests": {"python": 5,
+              "frontend": 0, "native": 0, "playwright": 0}},
+    }
+
+    def run(*args, capture=False, cwd=None, **_kwargs):
+        if args[:4] == ("git", "-C", str(directory), "rev-list"):
+            return f"{MID}\n{NEW}"
+        if "rev-parse" in args:
+            return {f"{MID}^": OLD, f"{NEW}^": MID}[args[-1]]
+        if "show" in args:
+            commit = args[-1].split(":", 1)[0]
+            return json.dumps(selections[commit])
+        if "scripts/test_selection.py" in args:
+            commit = args[args.index("--candidate") + 1]
+            return json.dumps({**selections[commit], "change_digest": commit[:8]})
+        pytest.fail(f"unexpected command: {args!r}")
+
+    monkeypatch.setattr(deployer, "run", run)
+    monkeypatch.setattr(deployer, "commit_at", lambda _directory: NEW)
+    plan = deployer.selected_plan(directory, OLD)
+    assert plan["python"] == ["tests/test_a.py", "tests/test_b.py"]
+    assert plan["overlaps"] == {"python": ["tests/test_a.py"]}
+    assert [item["commit"] for item in plan["reviewed_commits"]] == [MID, NEW]
 
 
 class LegacyClient:

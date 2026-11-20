@@ -346,9 +346,8 @@ def candidate(sha: str) -> Path:
     return directory
 
 
-def selected_plan(
-    directory: Path, previous: str
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def selected_plan(directory: Path, previous: str) -> dict[str, Any]:
+    """Validate every commit's diff-bound selection and record their union."""
     build = directory / "build"
     build.mkdir(exist_ok=True)
     selected = build / "simulation-test-selection.json"
@@ -436,95 +435,16 @@ def selected_plan(
         raise RuntimeError(
             "candidate deployment history did not reach its exact commit"
         )
-    if overlaps:
-        review = ROOT / "cumulative-reviews" / f"{previous}-{head}.json"
-        if not review.is_file() or review.is_symlink():
-            raise RuntimeError(
-                f"overlapping selections require an exact cumulative review: {overlaps}"
-            )
-        receipt = build / "simulation-cumulative-selection-receipt.json"
-        reviewed = json.loads(
-            run(
-                "/usr/bin/python3",
-                "scripts/test_selection.py",
-                "--baseline",
-                previous,
-                "--candidate",
-                head,
-                "--plan",
-                str(review),
-                "--output",
-                str(receipt),
-                cwd=directory,
-                capture=True,
-            )
-        )
-        if reviewed.get("coverage_review_required") or not reviewed.get(
-            "change_digest"
-        ):
-            raise RuntimeError("cumulative selection failed diff-bound validation")
-        if (
-            reviewed.get("baseline_commit") != previous
-            or reviewed.get("candidate_commit") != head
-            or reviewed.get("reviewed_commits") != commits
-        ):
-            raise RuntimeError(
-                "cumulative selection does not name the exact deployment history"
-            )
-        for kind in ("python", "frontend", "native", "playwright"):
-            if reviewed[kind] != plan[kind]:
-                raise RuntimeError(
-                    f"cumulative {kind} selection differs from reviewed commit union"
-                )
-        plan["expected_tests"] = reviewed["expected_tests"]
-        plan["reason"] = reviewed["reason"]
-        plan["exclusions"] = reviewed["exclusions"]
-        plan["cumulative_review"] = str(review)
-        plan["cumulative_change_digest"] = reviewed["change_digest"]
-        plan["overlaps"] = overlaps
-    else:
-        plan["reason"] = (
-            f"Combined focused selections from {len(commits)} reviewed main commits."
-        )
-        plan["exclusions"] = (
-            "Each commit keeps its own diff-bound review; no duplicate selectors."
-        )
+    # Tests run in CI, once per commit; a selection repeated by later commits
+    # is recorded, not re-reviewed, because nothing is counted or run here.
+    plan["overlaps"] = overlaps
+    plan["reason"] = (
+        f"Combined focused selections from {len(commits)} reviewed main commits; "
+        "CI ran each commit's selection."
+    )
+    plan["exclusions"] = "Each commit keeps its own diff-bound review."
     atomic_json(selected, plan)
-    impact = build / "simulation-playwright-selection.json"
-    args = [
-        "/usr/bin/python3",
-        "scripts/playwright_impact.py",
-        "select",
-        "--manifest",
-        "ui/playwright-impact.json",
-        "--baseline",
-        previous,
-        "--candidate",
-        "HEAD",
-        "--review-reason",
-        f"{plan['reason']} {plan['exclusions']}",
-        "--output",
-        str(impact),
-        "--receipt",
-        str(build / "simulation-playwright-receipt.md"),
-    ]
-    for selector in plan["playwright"]:
-        qualified = (
-            selector
-            if selector.startswith(("area:", "entry:", "project:"))
-            else f"entry:{selector}"
-        )
-        args += ["--selection", qualified]
-    if not plan["playwright"]:
-        args += ["--selection", "none"]
-    run(*args, cwd=directory, capture=True)
-    selected_impact = json.loads(impact.read_text())
-    if selected_impact.get("coverage_review_required"):
-        raise RuntimeError("Playwright impact selection requires review")
-    entries = selected_impact.get("include")
-    if not isinstance(entries, list):
-        raise RuntimeError("Playwright selection is malformed")
-    return plan, entries
+    return plan
 
 
 class _StripAuthorizationRedirect(HTTPRedirectHandler):
@@ -1547,7 +1467,7 @@ def _newest_successful_pr_run(workflow: str, head_sha: str, label: str) -> str:
             f"{label} has no successful pull request {workflow} run on its head "
             f"{head_sha[:12]}"
             + (f" (runs: {', '.join(states)})" if states else " (no run)")
-            + "; re-run it, or prepare with --local-tests"
+            + "; re-run it"
         )
     return str(max(succeeded, key=lambda item: int(item.get("id", 0)))["id"])
 
@@ -1586,7 +1506,7 @@ def discover_pr_supplement_run_ids(
         else:
             raise CiEvidenceUnavailable(
                 f"{commit[:12]} selects Playwright checks but is neither a merge "
-                "nor a squash commit; prepare with --local-tests"
+                "nor a squash commit, so no pull request runs can prove them"
             )
         pr_ci.append(_newest_successful_pr_run("ci.yml", head_sha, commit[:12]))
         pr_playwright.append(
@@ -1634,7 +1554,7 @@ def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str
             raise CiEvidenceUnavailable(
                 f"{commit[:12]} has no successful main push CI run"
                 + (f" (runs: {', '.join(states)})" if states else " (no run yet)")
-                + "; wait for CI, re-run it, or prepare with --local-tests"
+                + "; wait for CI or re-run it"
             )
         newest = max(succeeded, key=lambda item: int(item.get("id", 0)))
         run_ids.append(str(newest["id"]))
@@ -2052,26 +1972,6 @@ def ci_acceptance_receipts(ci: dict[str, Any]) -> list[dict[str, Any]]:
     raise RuntimeError("CI acceptance record has an unsupported source")
 
 
-def browser_args(entry: dict[str, Any]) -> list[str]:
-    test_match, project, shard = (
-        entry.get(key) for key in ("test_match", "project", "shard")
-    )
-    if not all(
-        isinstance(value, str) and value for value in (test_match, project, shard)
-    ):
-        raise RuntimeError("Playwright selection has an invalid entry")
-    if not test_match.startswith("tests/") or not test_match.endswith(
-        (".spec.ts", ".spec.tsx")
-    ):
-        raise RuntimeError("Playwright selection must name an individual spec")
-    args = [test_match, "--project", project, "--workers", "1", "--shard", shard]
-    if entry.get("grep"):
-        args += ["--grep", str(entry["grep"])]
-    if project == "real-core" and shard != "1/1":
-        args.append("--fully-parallel")
-    return args
-
-
 def write_runtime_manifest(directory: Path, version: str, **compatibility) -> str:
     runtime = directory / "dist/nebula-runtime"
     executable = runtime / "bin/nebula-core"
@@ -2139,21 +2039,19 @@ def prepare(
     ci_run_ids: list[str] | None = None,
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
-    local_tests: bool = False,
 ) -> dict[str, Any]:
     """Build and accept origin/main for this Core host.
 
-    By default the candidate is accepted on the CI evidence for every commit
-    since the live release (discovered automatically). ``local_tests`` re-runs
-    the reviewed selection on this host instead; it is never a silent fallback.
-    Each step's duration is reported as it ends and kept in the receipt.
+    The candidate is accepted on the CI evidence for every commit since the
+    live release (discovered automatically, or named run IDs). Tests run in
+    CI only; this host builds, lints and verifies the release. Each step's
+    duration is reported as it ends and kept in the receipt.
     """
     with StepTimings("prepare").run() as timings:
         return _prepare(
             ci_run_ids=ci_run_ids,
             pr_ci_run_ids=pr_ci_run_ids,
             pr_playwright_run_ids=pr_playwright_run_ids,
-            local_tests=local_tests,
             timings=timings,
         )
 
@@ -2163,15 +2061,8 @@ def _prepare(
     ci_run_ids: list[str] | None,
     pr_ci_run_ids: list[str] | None,
     pr_playwright_run_ids: list[str] | None,
-    local_tests: bool,
     timings: StepTimings,
 ) -> dict[str, Any]:
-    if local_tests and (
-        ci_run_ids is not None
-        or pr_ci_run_ids is not None
-        or pr_playwright_run_ids is not None
-    ):
-        raise RuntimeError("--local-tests cannot be combined with CI run IDs")
     if ci_run_ids is None and (
         pr_ci_run_ids is not None or pr_playwright_run_ids is not None
     ):
@@ -2232,103 +2123,39 @@ def _prepare(
     timings.begin("checkout")
     directory = candidate(sha)
     timings.begin("ci_evidence")
-    if ci_run_ids is None and not local_tests:
+    if ci_run_ids is None:
         ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
         pr_ci_run_ids, pr_playwright_run_ids = discover_pr_supplement_run_ids(
             directory, previous=previous, sha=sha
         )
-    ci_acceptance = (
-        verify_ci_acceptance_chain(
-            ci_run_ids,
-            previous=previous,
-            sha=sha,
-            directory=directory,
-            pr_ci_run_ids=pr_ci_run_ids,
-            pr_playwright_run_ids=pr_playwright_run_ids,
-        )
-        if ci_run_ids is not None
-        else None
+    ci_acceptance = verify_ci_acceptance_chain(
+        ci_run_ids,
+        previous=previous,
+        sha=sha,
+        directory=directory,
+        pr_ci_run_ids=pr_ci_run_ids,
+        pr_playwright_run_ids=pr_playwright_run_ids,
     )
-    plan, entries = selected_plan(directory, previous)
-    if ci_acceptance is not None:
-        reviewed = plan.get("reviewed_commits", [])
-        receipts = ci_acceptance_receipts(ci_acceptance)
-        accepted_commits = [
-            {
-                "commit": item["commit"],
-                "baseline": item["baseline"],
-                "change_digest": item["selection_change_digest"],
-            }
-            for item in receipts
-        ]
-        if reviewed != accepted_commits:
-            raise RuntimeError(
-                "deployer selection does not match the ordered CI receipt chain"
-            )
+    plan = selected_plan(directory, previous)
+    reviewed = plan.get("reviewed_commits", [])
+    receipts = ci_acceptance_receipts(ci_acceptance)
+    accepted_commits = [
+        {
+            "commit": item["commit"],
+            "baseline": item["baseline"],
+            "change_digest": item["selection_change_digest"],
+        }
+        for item in receipts
+    ]
+    if reviewed != accepted_commits:
+        raise RuntimeError(
+            "deployer selection does not match the ordered CI receipt chain"
+        )
     timings.begin("python_dependencies")
     run(POETRY, "check", cwd=directory)
     run(POETRY, "install", "--with", "dev", "--no-interaction", cwd=directory)
     timings.begin("ui_dependencies")
     run("npm", "--prefix", "ui", "ci", "--no-audit", "--no-fund", cwd=directory)
-    collected = 0
-    if ci_acceptance is None:
-        timings.begin("local_tests")
-        for target in plan["python"]:
-            listed = run(
-                POETRY,
-                "run",
-                "pytest",
-                "--collect-only",
-                "-q",
-                target,
-                cwd=directory,
-                capture=True,
-            )
-            match = re.search(r"(\d+) tests? collected", listed)
-            if match is None:
-                raise RuntimeError("selected Python target collected no tests")
-            collected += int(match.group(1))
-        if collected != plan["expected_tests"]["python"]:
-            raise RuntimeError(
-                "Python collection disagrees with the reviewed test count"
-            )
-        if plan["frontend"]:
-            listed_frontend = run(
-                str(directory / "ui/node_modules/.bin/vitest"),
-                "list",
-                *plan["frontend"],
-                cwd=directory,
-                capture=True,
-            )
-            frontend_count = sum(
-                line.startswith("ui/src/") for line in listed_frontend.splitlines()
-            )
-        else:
-            frontend_count = 0
-    else:
-        collected = plan["expected_tests"]["python"]
-        frontend_count = plan["expected_tests"]["frontend"]
-    if ci_acceptance is None:
-        if frontend_count != plan["expected_tests"]["frontend"]:
-            raise RuntimeError(
-                "frontend collection disagrees with the reviewed test count"
-            )
-        for target in plan["python"]:
-            run(POETRY, "run", "pytest", "-q", target, cwd=directory)
-        for target in plan["frontend"]:
-            run(
-                "npm",
-                "--prefix",
-                "ui",
-                "test",
-                "--",
-                target.removeprefix("ui/"),
-                cwd=directory,
-            )
-    # Native selections are exact Rust test names; a Linux host must not claim
-    # to have run macOS-only cases. Keep that candidate pending for review.
-    if plan["native"] and ci_acceptance is None:
-        raise RuntimeError("selected native tests need an approved macOS runner")
     timings.begin("ui_lint_and_audit")
     run("npm", "--prefix", "ui", "run", "lint", "--if-present", cwd=directory)
     run("npm", "--prefix", "ui", "run", "audit:diagnostics", cwd=directory)
@@ -2362,65 +2189,6 @@ def _prepare(
         cwd=directory,
         capture=True,
     )
-    test_python = ""
-    if ci_acceptance is None and entries:
-        test_python = run(
-            POETRY, "env", "info", "--executable", cwd=directory, capture=True
-        )
-        if not Path(test_python).is_file() or not os.access(test_python, os.X_OK):
-            raise RuntimeError(
-                "selected browser tests require the candidate Python interpreter"
-            )
-    browser_env = {
-        "NEBULA_TEST_PYTHON": test_python,
-        "NEBULA_TEST_CORE_BIN": str(directory / "dist/nebula-core"),
-        # The production unit runs `serve` with the built static directory.
-        # Real-Core LAN tests must exercise that HTTPS path, not `ui` mode,
-        # which does not forward the fixture's TLS certificate options.
-        "NEBULA_TEST_CORE_EMBEDDED_UI": "0",
-        "NEBULA_UI_TEST_COMMAND": "npm run preview -- --host 0.0.0.0 --port 1420",
-    }
-    listed = 0
-    if ci_acceptance is None:
-        timings.begin("browser_tests")
-        for entry in entries:
-            args = browser_args(entry)
-            result = run(
-                "npm",
-                "--prefix",
-                "ui",
-                "run",
-                "test:e2e",
-                "--",
-                *args,
-                "--list",
-                cwd=directory,
-                env=browser_env,
-                capture=True,
-            )
-            match = re.search(r"Total: (\d+) tests? in", result)
-            if match is None or int(match.group(1)) < 1:
-                raise RuntimeError("selected browser entry collected no tests")
-            listed += int(match.group(1))
-        if listed != plan["expected_tests"]["playwright"]:
-            raise RuntimeError(
-                "browser collection disagrees with the reviewed test count"
-            )
-        for entry in entries:
-            run(
-                "npm",
-                "--prefix",
-                "ui",
-                "run",
-                "test:e2e",
-                "--",
-                *browser_args(entry),
-                cwd=directory,
-                env=browser_env,
-                timeout=600,
-            )
-    else:
-        listed = plan["expected_tests"]["playwright"]
     timings.begin("release_copy")
     if commit_at(directory) != sha:
         raise RuntimeError("candidate source changed during preparation")
@@ -2462,10 +2230,6 @@ def _prepare(
         directory / "build/simulation-test-selection.json",
         staging / "build/simulation-test-selection.json",
     )
-    shutil.copy2(
-        directory / "build/simulation-playwright-receipt.md",
-        staging / "build/simulation-playwright-receipt.md",
-    )
     compatibility = json.loads(
         run(
             POETRY,
@@ -2483,9 +2247,10 @@ def _prepare(
         "commit": sha,
         "previous": previous,
         "built_at": timestamp,
+        # Counts of the tests CI ran for the reviewed selections.
         "python_tests": plan["expected_tests"]["python"],
-        "frontend_tests": frontend_count,
-        "browser_tests": listed,
+        "frontend_tests": plan["expected_tests"]["frontend"],
+        "browser_tests": plan["expected_tests"]["playwright"],
         "core_sha256": sha256(staging / "dist/nebula-core"),
         "web_manifest_sha256": sha256(staging / "ui/dist/web-build.json"),
         "test_selection_sha256": sha256(staging / ".github/test-selection.json"),
@@ -2495,8 +2260,7 @@ def _prepare(
         "status": "accepted_candidate",
         "runtime_manifest_sha256": runtime_digest,
     }
-    if ci_acceptance is not None:
-        receipt["ci_acceptance"] = ci_acceptance
+    receipt["ci_acceptance"] = ci_acceptance
     receipt["timings"] = timings.record()
     atomic_json(staging / "simulation-acceptance.json", receipt)
     os.replace(staging, release)
@@ -6858,14 +6622,6 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--local-tests",
-        action="store_true",
-        help=(
-            "re-run the reviewed test selection on this host instead of accepting "
-            "the commits' CI evidence (prepare only)"
-        ),
-    )
-    parser.add_argument(
         "--backup",
         action="store_true",
         help=(
@@ -6929,8 +6685,6 @@ def main() -> int:
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
         raise RuntimeError("--ci-run-id is supported only with prepare")
-    if args.local_tests and args.action != "prepare":
-        raise RuntimeError("--local-tests is supported only with prepare")
     if args.backup and args.action not in {"promote", "cycle"}:
         raise RuntimeError("--backup is supported only with promote or cycle")
     if (
@@ -7020,7 +6774,6 @@ def main() -> int:
                 ci_run_ids=args.ci_run_id,
                 pr_ci_run_ids=args.ci_pr_run_id,
                 pr_playwright_run_ids=args.ci_playwright_run_id,
-                local_tests=args.local_tests,
             )
             if args.action == "prepare"
             else reconcile_runtime_deployment(args.deployment_id)
