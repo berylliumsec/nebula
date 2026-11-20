@@ -1908,6 +1908,8 @@ export interface ChatGoal {
   handoffSourceSessionId?: Identifier;
   handoffTargetSessionId?: Identifier;
   handoffReason?: string;
+  /** A Core project hold paused this goal; only the hold's release resumes it. */
+  heldByProject?: boolean;
   /** Set when a running goal is not executing because no ready worker serves its project. */
   executionWaiting?: { reason: "starting" | "held" | "closing"; detail: string };
   revision: number;
