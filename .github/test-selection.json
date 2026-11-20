@@ -1,37 +1,27 @@
 {
-  "change_digest": "4bc4cd2b59bbeb9a44bf9daa6faa46e643b81c50a518f35eb95ed48617416300",
-  "reviewed_by": "Claude Code for the operator-approved Quiet Lens polish (13 Figma cards)",
-  "reason": "Quiet Lens (default theme) polish: CSS in quiet-lens.css plus small markup changes in SessionsPage (duplicate runtime id dropped from chat headers, labelled jump pills), WorkPage (initials tile, Idle/non-zero status counts, data-empty summary counts, Agent tools switch with unchanged accessible names), ProjectPage (active tab scrolled into view) and HostPressureSettings (Effective omitted when equal to Saved). Selected: unit tests for Work, host pressure and the new label/initials helpers; Playwright for chat scroll jumps (desktop, compact, Chromium and WebKit phones), the activity ledger turn footer, phone Workbench navigation and route ownership, and the real-Core LAN Work import journey that exercises project rows and the Agent tools toggle.",
-  "exclusions": "critical-workspaces is excluded: its baselines were already stale on main (storage-identity notice, Storage nav, Current progress, Results tab) and its Zero panoramic-shell test fails on main in CI (run 44554839053) and locally; those screens use Zero/Light, not Quiet Lens. quiet-lens and phone-shell areas are excluded because each bundles a test red on main (theme picker cannot find 'Advanced settings'; Zero panoramic shell cannot find the Appearance 'Light' button); the Quiet Lens first-run test and the other nine phone-shell tests passed locally on this branch. work-import WebKit projects are excluded because device pairing fails on pristine main locally. No Python, native or settings-catalog changes.",
+  "change_digest": "49c74b958377a9f6781be758b33221072a0d768f018e3059cab1f8edcf811c61",
+  "reviewed_by": "Claude Code, making CI the only test evidence for deploys and accepting squash-merged PRs' browser evidence",
+  "reason": "prepare accepts main push CI by default, but push CI does not run Playwright, and supplemental PR evidence was accepted only for two-parent merges; the repository squash-merges, so every Playwright-selected commit (#1235, #1236) blocked a CI-backed deploy. A squash commit now binds to the one PR GitHub records as merged into it: the PR head (fetched from refs/pull/<n>/head when its branch is gone) must contain the squash parent and have the identical tree, and the existing selection, digest, artifact and job checks then apply unchanged. prepare also discovers those PR CI and Playwright runs. Verifying against the real 111e6da..a411fb8 chain exposed a second gap: GitHub cuts job names at 100 characters, so long greps hid the matrix identity; jobs are now matched to entries by the exact displayed name, one successful job per selected entry. Verified on simulation: the real chain through a411fb8 accepts (#1236 and #1235 on PR evidence) and its record re-validates. Selected: the deployer protocol suite (merge shape against real git history, squash chain binding, older recorded base, truncated job names) and the CI-default, prebuild and staged-deployer suites. The operator then asked to drop local testing as redundant: prepare no longer offers --local-tests or runs any test on the Core host (collection, pytest, vitest and Playwright are gone), and per-commit selections that overlap need no cumulative review because CI ran each commit's own selection; each selection is still validated against its diff and the union recorded. Builds, lint, the diagnostics audit, release hashes and promotion guards are unchanged. #1223 was merged with a stale selection digest, so its PR CI never ran its browser selection; a Playwright-selected commit whose PR runs did not both succeed is now proven by a successful playwright-impact.yml run dispatched on exactly that commit, whose plan must equal the trusted selector's plan with no baseline and whose every entry needs its own successful job, recorded as commit_playwright_evidence. Verified on simulation: the real chain 111e6da..51b46b7 accepts (#1236 and #1235 on PR evidence, #1223 on its exact-commit dispatch) and the record re-validates.",
+  "exclusions": "Deployer script, README and tests only; no Core or UI change. The two host-switch signalling cases in tests/test_simulation_host_restart.py fail locally on unmodified main and pass in CI; that suite is unchanged and not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 29,
+    "python": 82,
+    "frontend": 0,
     "native": 0,
-    "playwright": 13
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/WorkPage.test.tsx",
-    "ui/src/components/HostPressureSettings.test.tsx",
-    "ui/src/pages/runtimeLabel.test.ts"
+  "python": [
+    "tests/test_deployer_protocol.py",
+    "tests/test_simulation_deployer_ci_default.py",
+    "tests/test_simulation_deployer_prebuild.py",
+    "tests/test_staged_deployer.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "chat-scroll-navigation/desktop",
-    "chat-scroll-navigation/compact",
-    "chat-scroll-navigation/mobile-chromium-small",
-    "chat-scroll-navigation/mobile-webkit",
-    "activity-ledger/desktop",
-    "ios-mobile-web-regression/mobile-webkit",
-    "phone-route-ownership/mobile-chromium-small",
-    "phone-route-ownership/mobile-webkit-small",
-    "work-import/assistant-real-desktop",
-    "work-import/assistant-real-chromium-390"
-  ],
+  "playwright": [],
   "checks": []
 }

@@ -78,14 +78,14 @@ Do not delete that state during an unverified recovery just to meet the normal
 one-snapshot count. Record the exception and resolve it after recovery is
 verified.
 
-`nebula_deployer.py prepare` accepts CI evidence by default: for every
-first-parent commit from the live release to `origin/main` it finds the newest
-successful `main` push run of `.github/workflows/ci.yml` and verifies it as
-below, without re-running tests on this host. A commit with no successful run
-(none yet, failed, or still running) or with Playwright entries (which push CI
-does not run) stops preparation with the commit and reason; the deployer never
-falls back to local tests on its own. `prepare --local-tests` re-runs the
-reviewed selection on this host instead. To name runs explicitly, pass
+`nebula_deployer.py prepare` accepts CI evidence only; it never runs tests
+on this host. For every first-parent commit from the live release to
+`origin/main` it finds the newest successful `main` push run of
+`.github/workflows/ci.yml` and verifies it as below. A commit with no successful
+run (none yet, failed, or still running) stops preparation with the commit and
+reason. Each commit's selection is still validated against its own diff, and the
+union is recorded; selections repeated by later commits need no extra review,
+because CI already ran each commit's own selection. To name runs explicitly, pass
 `--ci-run-id <run-id>` once per commit, oldest to newest, such as
 `prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
 requires exactly one distinct successful `main` push run from the active
@@ -105,12 +105,26 @@ six exact Ubuntu/macOS and Python 3.11–3.13 job names still validate, and no
 other substitute does. The immutable acceptance record retains
 the ordered per-commit receipts and selected-job conclusions; the reviewed
 selection union must cover the entire first-parent range. Missing, repeated,
-reordered, or mismatched runs fail closed. This mode skips local test collection
-and test execution only; dependency setup, lint/diagnostic checks, builds,
-release hashes, and existing staging/promotion guards still run. It fails closed
-when a per-commit CI selection contains Playwright entries because the push CI
-workflow does not run those entries. Runs from pull requests or workflow
-dispatches are not accepted.
+reordered, or mismatched runs fail closed. Dependency setup, lint/diagnostic checks, builds,
+release hashes, and existing staging/promotion guards still run. Push CI does
+not run Playwright entries, so a commit whose selection names them is accepted
+only with its merged pull request's successful `ci.yml` and
+`playwright-impact.yml` runs, which `prepare` discovers on the PR head. For a
+merge commit the head is its second parent. For a squash merge it is the head of
+the one PR GitHub records as merged into that commit, fetched from
+`refs/pull/<n>/head` if needed; that head must contain the squash commit's
+parent and have the identical tree, so it tested exactly what main received.
+Matrix jobs are matched to selected entries by GitHub's displayed job name, which
+is cut at 100 characters; entries that truncate to the same name each still need
+their own successful job. If that PR's own runs did not both succeed (for
+example, its CI refused a stale selection), the commit is proven instead by a
+successful `playwright-impact.yml` run dispatched on exactly that commit (push a
+branch at the commit and dispatch with the commit's selectors and a review
+reason). Its plan must equal the trusted selector's plan for the commit's
+committed selection, with no baseline, and every entry needs its own successful
+job; the receipt records it as `commit_playwright_evidence`, never as PR
+evidence. A Playwright-selected commit with neither stops preparation. Other pull
+request or workflow dispatch runs are not accepted.
 
 CI-only acceptance also requires the workflow files, local action definitions,
 and `scripts/test_selection.py` to match the original live baseline for every
