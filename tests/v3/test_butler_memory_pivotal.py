@@ -86,7 +86,7 @@ async def _decision_event(
     event_key="",
 ):
     verification = "core_observed" if observed else "agent_reported"
-    source_type = "goal.progress_overdue" if observed else "agent.attention_reported"
+    source_type = "goal.blocked" if observed else "agent.attention_reported"
     async with store.transaction() as transaction:
         source = await _append_project_event(
             transaction,

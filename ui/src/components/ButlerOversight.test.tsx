@@ -11,7 +11,6 @@ const overview = {
   watched_goals: [{
     goal_id: "goal-main", session_id: "chat-main", parent_goal_id: null,
     objective: "Investigate the parser", status: "running", actor_role: "main_agent",
-    progress_due_at: "2026-10-15T15:00:00Z",
     coverage: { report_capability: "turn_output_only", reason: "Completed goal turns receive bounded semantic review. Structured harness progress reports are not connected yet." },
   }, {
     goal_id: "goal-child", session_id: "chat-child", parent_goal_id: "goal-main",
@@ -499,15 +498,15 @@ describe("ButlerOversight", () => {
         revision += 1;
       }
       return Promise.resolve({ project_id: "project-a", authority, revision, delegate_actions: [],
-        effective_actions: authority === "watch" ? [] : ["request_parent_status"],
-        supported_actions: ["request_parent_status", "pause_urgent_machine_blocker"] });
+        effective_actions: authority === "watch" ? [] : ["request_parent_plan_reassessment"],
+        supported_actions: ["request_parent_plan_reassessment", "pause_urgent_machine_blocker"] });
     });
     render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
     await user.click(await screen.findByText("Oversight settings"));
     const select = await screen.findByRole("combobox", { name: "Butler authority" });
     expect(within(select).getAllByRole("option")).toHaveLength(3);
     await user.selectOptions(select, "steer");
-    expect(screen.getByText(/request a status or clarification from the parent main agent/)).toBeVisible();
+    expect(screen.getByText(/ask the parent main agent to reassess its plan/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save authority" }));
     await waitFor(() => expect(screen.getByText("2 watched goals · Steer")).toBeVisible());
     expect(request).toHaveBeenCalledWith("engagements/project-a/butler/authority", {
@@ -519,7 +518,7 @@ describe("ButlerOversight", () => {
   it("requires an explicit Delegate grant for urgent pause and disables changes offline", async () => {
     const user = userEvent.setup();
     const policy = { project_id: "project-a", authority: "watch", revision: 2, delegate_actions: [], effective_actions: [],
-      supported_actions: ["request_parent_status", "pause_urgent_machine_blocker"] };
+      supported_actions: ["request_parent_plan_reassessment", "pause_urgent_machine_blocker"] };
     const request = vi.fn().mockImplementation((path: string, init?: RequestInit) => path.endsWith("/overview")
       ? Promise.resolve({ ...overview, capabilities: { ...overview.capabilities, authority_levels: ["watch", "steer", "delegate"] } })
       : Promise.resolve(init?.method === "PUT" ? { ...policy, authority: "delegate", revision: 3,
@@ -546,7 +545,7 @@ describe("ButlerOversight", () => {
   it("saves Butler's one-task planning grant separately from urgent pause", async () => {
     const user = userEvent.setup();
     const policy = { project_id: "project-a", authority: "watch", revision: 2, delegate_actions: [], effective_actions: [],
-      supported_actions: ["request_parent_status", "pause_urgent_machine_blocker", "force_one_task_plan"] };
+      supported_actions: ["request_parent_plan_reassessment", "pause_urgent_machine_blocker", "force_one_task_plan"] };
     const request = vi.fn().mockImplementation((path: string, init?: RequestInit) => path.endsWith("/overview")
       ? Promise.resolve({...overview, capabilities: {...overview.capabilities, authority_levels: ["watch", "steer", "delegate"]}})
       : Promise.resolve(init?.method === "PUT" ? {...policy, authority: "delegate", revision: 3,
@@ -575,10 +574,10 @@ describe("ButlerOversight", () => {
         writes += 1;
         if (writes === 1) { revision = 2; return Promise.reject(new ApiError("changed", 409)); }
         return Promise.resolve({ project_id: "project-a", authority: "steer", revision: 3, delegate_actions: [],
-          effective_actions: ["request_parent_status"], supported_actions: ["request_parent_status"] });
+          effective_actions: ["request_parent_plan_reassessment"], supported_actions: ["request_parent_plan_reassessment"] });
       }
       return Promise.resolve({ project_id: "project-a", authority: "watch", revision, delegate_actions: [],
-        effective_actions: [], supported_actions: ["request_parent_status"] });
+        effective_actions: [], supported_actions: ["request_parent_plan_reassessment"] });
     });
     render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
     await user.click(await screen.findByText("Oversight settings"));

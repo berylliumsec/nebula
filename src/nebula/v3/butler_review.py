@@ -60,7 +60,6 @@ MEANINGFUL_EVENTS = frozenset(
         "agent.attention_reported",
         "agent.plan_changed",
         "agent.turn_completed",
-        "goal.progress_overdue",
         "goal.plan_changed",
         "goal.blocked",
         "goal.read_only_tool_failures_repeated",
@@ -556,8 +555,6 @@ def _semantic_incident_key(event: OperationEvent, packet: ButlerReviewPacket) ->
         raise ConflictError("review escalation belongs to another project")
     if payload.incident_key:
         return payload.incident_key
-    if event.event_type == "goal.progress_overdue":
-        return f"goal-progress-overdue:{packet.goal_id}"
     goal_digest = hashlib.sha256(packet.goal_id.encode()).hexdigest()[:24]
     return f"semantic:{event.event_type}:{goal_digest}"
 

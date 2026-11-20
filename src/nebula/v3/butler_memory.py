@@ -851,8 +851,7 @@ class ButlerMemoryService:
             or decision.status != "reviewed"
             or decision.choice not in {"steer", "escalate"}
             or decision.source_verification_state != "core_observed"
-            or decision.source_event_type
-            not in {"goal.progress_overdue", "goal.blocked", "goal.plan_changed"}
+            or decision.source_event_type not in {"goal.blocked", "goal.plan_changed"}
         ):
             return None
         source = await store.replay_operation_events(

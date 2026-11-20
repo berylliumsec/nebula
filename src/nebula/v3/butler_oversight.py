@@ -62,9 +62,8 @@ if TYPE_CHECKING:
 
 
 PROJECT_STREAM_KIND = "butler_project"
-PROGRESS_INTERVAL = timedelta(minutes=30)
-MAX_CHECKPOINT_INTERVAL = timedelta(hours=2)
 LEASE_DURATION = timedelta(seconds=60)
+PROJECT_RECHECK_SECONDS = 30.0
 OVERVIEW_PAGE_SIZE = 50
 
 
@@ -168,7 +167,6 @@ class GoalProgressReport(NebulaModel):
     criterion_advanced: str = Field(min_length=1, max_length=300)
     next_step: str = Field(min_length=1, max_length=500)
     blockers: list[str] = Field(default_factory=list, max_length=8)
-    next_checkpoint_at: datetime | None = None
     evidence_refs: list[ReportEvidenceRef] = Field(default_factory=list, max_length=8)
 
     @field_validator("evidence_gained", "blockers")
@@ -177,13 +175,6 @@ class GoalProgressReport(NebulaModel):
         if any(not value.strip() or len(value) > 300 for value in values):
             raise ValueError("report entries must contain 1 to 300 characters")
         return values
-
-    @field_validator("next_checkpoint_at")
-    @classmethod
-    def checkpoint_is_aware(cls, value: datetime | None) -> datetime | None:
-        if value is not None and value.utcoffset() is None:
-            raise ValueError("next checkpoint must include a timezone")
-        return value
 
 
 class GoalAttentionReport(NebulaModel):
@@ -277,9 +268,7 @@ async def _ensure_project_state(
         )
 
 
-def _watch_for_goal(
-    goal: ChatGoal, *, now: datetime, recovered: bool = False
-) -> ButlerGoalWatch:
+def _watch_for_goal(goal: ChatGoal, *, recovered: bool = False) -> ButlerGoalWatch:
     running = goal.status == ChatGoalStatus.RUNNING
     return ButlerGoalWatch(
         id=watch_id(goal.id),
@@ -288,7 +277,6 @@ def _watch_for_goal(
         session_id=goal.session_id,
         parent_goal_id=goal.parent_goal_id,
         status=goal.status,
-        progress_due_at=now + PROGRESS_INTERVAL if running else None,
         deadline_generation=1 if running else 0,
         report_capability="turn_output_only",
         coverage_reason=(
@@ -386,7 +374,7 @@ async def record_goal_transition(
         transaction, ButlerGoalWatch, watch_id(after.id)
     )
     if prior is None:
-        watch = _watch_for_goal(after, now=now)
+        watch = _watch_for_goal(after)
         (await transaction.add(watch))
     else:
         running = after.status == ChatGoalStatus.RUNNING
@@ -395,15 +383,12 @@ async def record_goal_transition(
             prior.id,
             {
                 "status": after.status,
-                "progress_due_at": now + PROGRESS_INTERVAL if running else None,
+                "progress_due_at": None,
                 "deadline_generation": (
                     prior.deadline_generation + 1
                     if running
                     else prior.deadline_generation
                 ),
-                "overdue_emitted_generation": None
-                if running
-                else prior.overdue_emitted_generation,
                 "closed_at": None,
                 "report_capability": "turn_output_only",
                 "coverage_reason": _coverage_reason(),
@@ -778,12 +763,6 @@ async def ingest_agent_report(
         incident = None
         key = None
         if isinstance(body, GoalProgressReport):
-            due = now + PROGRESS_INTERVAL
-            if body.next_checkpoint_at is not None:
-                due = max(
-                    now + timedelta(minutes=5),
-                    min(body.next_checkpoint_at, now + MAX_CHECKPOINT_INTERVAL),
-                )
             (
                 await transaction.update(
                     ButlerGoalWatch,
@@ -791,9 +770,6 @@ async def ingest_agent_report(
                     {
                         **coverage_changes,
                         "last_progress_at": now,
-                        "progress_due_at": due,
-                        "deadline_generation": watch.deadline_generation + 1,
-                        "overdue_emitted_generation": None,
                     },
                     expected_revision=watch.revision,
                 )
@@ -998,11 +974,7 @@ class ButlerOversightService:
                         project_stream_id(goal.engagement_id)
                     )
                 )
-                (
-                    await transaction.add(
-                        _watch_for_goal(current, now=now, recovered=True)
-                    )
-                )
+                (await transaction.add(_watch_for_goal(current, recovered=True)))
                 (
                     await _append_project_event(
                         transaction,
@@ -1139,215 +1111,6 @@ class ButlerOversightService:
                     expected_revision=state.revision,
                 )
 
-    async def fire_due_deadlines(self, engagement_id: str) -> int:
-        """Emit each due generation once; overdue is a signal, not a finding."""
-
-        fired = 0
-        now = utc_now()
-        async for watch in self.store.iter_readable_entities(
-            ButlerGoalWatch,
-            {"status": ChatGoalStatus.RUNNING.value},
-            engagement_id=engagement_id,
-        ):
-            if watch.progress_due_at is None or watch.progress_due_at > now:
-                continue
-            if watch.overdue_emitted_generation == watch.deadline_generation:
-                continue
-            try:
-                async with self.store.transaction() as transaction:
-                    (
-                        await transaction.lock_operation_stream(
-                            project_stream_id(engagement_id)
-                        )
-                    )
-                    state = await _entity_in_transaction(
-                        transaction, ButlerProjectState, project_state_id(engagement_id)
-                    )
-                    checked_at = utc_now()
-                    if (
-                        state is None
-                        or state.lease_owner != self.worker_id
-                        or state.lease_expires_at is None
-                        or state.lease_expires_at <= checked_at
-                    ):
-                        return fired
-                    # Claim the next lease interval before emitting a deadline.
-                    # The renewal and event both roll back if ownership races.
-                    (
-                        await transaction.update(
-                            ButlerProjectState,
-                            state.id,
-                            {"lease_expires_at": checked_at + LEASE_DURATION},
-                            expected_revision=state.revision,
-                        )
-                    )
-                    current = await _entity_in_transaction(
-                        transaction, ButlerGoalWatch, watch.id
-                    )
-                    goal = await _entity_in_transaction(
-                        transaction, ChatGoal, watch.goal_id
-                    )
-                    if (
-                        current is None
-                        or goal is None
-                        or goal.status != ChatGoalStatus.RUNNING
-                        or current.status != ChatGoalStatus.RUNNING
-                        or current.progress_due_at is None
-                        or current.progress_due_at > utc_now()
-                        or current.overdue_emitted_generation
-                        == current.deadline_generation
-                    ):
-                        continue
-                    (
-                        await transaction.update(
-                            ButlerGoalWatch,
-                            current.id,
-                            {
-                                "progress_due_at": None,
-                                "overdue_emitted_generation": current.deadline_generation,
-                            },
-                            expected_revision=current.revision,
-                        )
-                    )
-                    (
-                        await _append_project_event(
-                            transaction,
-                            engagement_id=engagement_id,
-                            event_type="goal.progress_overdue",
-                            payload=ButlerEventPayload(
-                                project_id=engagement_id,
-                                goal_id=goal.id,
-                                session_id=goal.session_id,
-                                source="core",
-                                actor_role=(
-                                    "subagent" if goal.parent_goal_id else "main_agent"
-                                ),
-                                parent_goal_id=goal.parent_goal_id,
-                                summary="Goal progress checkpoint is overdue; work may still be in progress.",
-                                metrics={
-                                    "deadline_generation": current.deadline_generation
-                                },
-                                verification_state="core_observed",
-                                evidence_refs=[
-                                    ButlerEvidenceRef(
-                                        kind="goal",
-                                        id=goal.id,
-                                        project_id=engagement_id,
-                                    )
-                                ],
-                            ),
-                            idempotency_key=(
-                                f"goal:{goal.id}:deadline:{current.deadline_generation}"
-                            ),
-                            now=utc_now(),
-                        )
-                    )
-                    key = _progress_incident_key(goal.id)
-                    record_id = incident_id(engagement_id, key)
-                    previous = await _entity_in_transaction(
-                        transaction, ButlerIncident, record_id
-                    )
-                    if previous is None:
-                        (
-                            await transaction.add(
-                                ButlerIncident(
-                                    id=record_id,
-                                    engagement_id=engagement_id,
-                                    incident_key=key,
-                                    source="goal_checkpoint",
-                                    verification_state="core_observed",
-                                    summary="Progress checkpoint is overdue.",
-                                    impact=(
-                                        "Core has not received a schema-checked progress "
-                                        "report since this goal's previous checkpoint."
-                                    ),
-                                    next_action="Review the goal and request an update through its main agent.",
-                                    evidence_refs=[
-                                        ButlerEvidenceRef(
-                                            kind="goal",
-                                            id=goal.id,
-                                            project_id=engagement_id,
-                                        ).model_dump()
-                                    ],
-                                    goal_ids=[goal.id],
-                                    session_ids=[goal.session_id],
-                                    observed_at=checked_at,
-                                )
-                            )
-                        )
-                        incident_event = "incident.opened"
-                    elif previous.status == "resolved":
-                        (
-                            await transaction.update(
-                                ButlerIncident,
-                                previous.id,
-                                {
-                                    "status": "open",
-                                    "acknowledged_at": None,
-                                    "resolved_at": None,
-                                    "observed_at": checked_at,
-                                },
-                                expected_revision=previous.revision,
-                            )
-                        )
-                        incident_event = "incident.reopened"
-                    else:
-                        incident_event = None
-                    if incident_event is not None:
-                        (
-                            await _append_project_event(
-                                transaction,
-                                engagement_id=engagement_id,
-                                event_type=incident_event,
-                                payload=ButlerEventPayload(
-                                    project_id=engagement_id,
-                                    goal_id=goal.id,
-                                    session_id=goal.session_id,
-                                    source="core",
-                                    actor_role="core",
-                                    summary="Progress checkpoint is overdue; work may still be in progress.",
-                                    verification_state="core_observed",
-                                    evidence_refs=[
-                                        ButlerEvidenceRef(
-                                            kind="incident",
-                                            id=record_id,
-                                            project_id=engagement_id,
-                                        ),
-                                        ButlerEvidenceRef(
-                                            kind="goal",
-                                            id=goal.id,
-                                            project_id=engagement_id,
-                                        ),
-                                    ],
-                                    incident_key=key,
-                                ),
-                                idempotency_key=(
-                                    f"progress-overdue-incident:{record_id}:{current.deadline_generation}"
-                                ),
-                                now=checked_at,
-                            )
-                        )
-                fired += 1
-            except ConflictError:
-                # diagnostic-expected: a concurrent worker already advanced this deadline.
-                continue
-        return fired
-
-    async def _next_wait_seconds(self, engagement_id: str) -> float:
-        now = utc_now()
-        due_times = [
-            watch.progress_due_at
-            async for watch in self.store.iter_readable_entities(
-                ButlerGoalWatch,
-                {"status": ChatGoalStatus.RUNNING.value},
-                engagement_id=engagement_id,
-            )
-            if watch.progress_due_at is not None
-        ]
-        if not due_times:
-            return 30.0
-        return max(0.25, min(30.0, (min(due_times) - now).total_seconds()))
-
     async def _run_improvements(self, engagement_id: str) -> None:
         if self.improvement_service is None:
             return
@@ -1387,7 +1150,6 @@ class ButlerOversightService:
                 if owned and await is_held(self.store, engagement_id):
                     owned = False
                 if owned:
-                    await self.fire_due_deadlines(engagement_id)
                     from .butler_review import review_pending
 
                     await review_pending(
@@ -1433,7 +1195,7 @@ class ButlerOversightService:
                                 stage="memory_capture",
                             )
                     self._schedule_improvements(engagement_id)
-                wait_seconds = await self._next_wait_seconds(engagement_id)
+                wait_seconds = PROJECT_RECHECK_SECONDS
             except Exception as exc:
                 record_caught_exception(
                     "butler",
@@ -1442,7 +1204,7 @@ class ButlerOversightService:
                     exc,
                     stage="oversight",
                 )
-                wait_seconds = 30.0
+                wait_seconds = PROJECT_RECHECK_SECONDS
             try:
                 await asyncio.wait_for(signal.wait(), timeout=wait_seconds)
             except TimeoutError:
@@ -1507,7 +1269,6 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                     "actor_role": "subagent" if goal.parent_goal_id else "main_agent",
                     "objective": goal.objective[:300],
                     "status": goal.status.value,
-                    "progress_due_at": watch.progress_due_at,
                     "coverage": {
                         "report_capability": watch.report_capability,
                         "reason": watch.coverage_reason,
