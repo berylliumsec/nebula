@@ -137,12 +137,14 @@ def test_reservation_shapes():
             focus=ButlerFocus(project=BUTLER_HOME_PROJECT),
             **provider,
         )
-    with pytest.raises(ValueError, match="provider Butler"):
-        ButlerSessionReservation(
-            engagement_id=BUTLER_HOME_PROJECT,
-            backend=ChatBackend.HARNESS,
-            harness_profile_id="harness",
-        )
+    # Harness Butler can live in Butler's own project too (PR 2d).
+    harness = ButlerSessionReservation(
+        engagement_id=BUTLER_HOME_PROJECT,
+        backend=ChatBackend.HARNESS,
+        harness_profile_id="harness",
+        focus=ButlerFocus(project="target"),
+    )
+    assert harness.focus.project == "target"
 
 
 async def _inert_provider(control):

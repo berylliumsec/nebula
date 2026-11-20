@@ -641,10 +641,8 @@ class RuntimePlatform:
             specs={spec.name: spec for spec in registry.specs()},
         )
 
-    async def focus_components(
-        self, components: RuntimeToolComponents, project_id: str
-    ) -> RuntimeToolComponents:
-        """Point a Butler home session's workspace reads at its focus project.
+    async def focus_workspace(self, project_id: str) -> tuple[str, Path | None]:
+        """A focus project's name and existing workspace folder, if any.
 
         Unlike ``workspace_for``, this never creates or re-permissions the
         focus project's folder: Butler only reads what is already there.
@@ -666,7 +664,15 @@ class RuntimePlatform:
             )
             if candidate.is_dir():
                 workspace = candidate
-        return with_butler_focus(components, project.name, workspace)
+        return project.name, workspace
+
+    async def focus_components(
+        self, components: RuntimeToolComponents, project_id: str
+    ) -> RuntimeToolComponents:
+        """Point a Butler home session's workspace reads at its focus project."""
+
+        name, workspace = await RuntimePlatform.focus_workspace(self, project_id)
+        return with_butler_focus(components, name, workspace)
 
     async def workspace_for(self, engagement_id: str) -> Path:
         engagement = await self.store.get(Engagement, engagement_id)

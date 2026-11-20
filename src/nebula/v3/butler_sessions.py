@@ -83,12 +83,6 @@ class ButlerSessionReservation(NebulaModel):
             raise ValueError("only a Butler home session takes a focus project")
         if self.focus is not None and self.focus.project in RESERVED_PROJECT_IDS:
             raise ValueError("Butler cannot focus on a Core project")
-        if (
-            self.engagement_id == BUTLER_HOME_PROJECT
-            and self.backend != ChatBackend.PROVIDER
-        ):
-            # Harness Butler still binds its tools to the session's project.
-            raise ValueError("Butler's own worker runs provider Butler sessions only")
         return self
 
 
@@ -228,6 +222,21 @@ async def reserve_butler_session(
                     allow_remote_mcp=request.allow_cloud_tool_results,
                 )
             )
+            home = request.engagement_id == BUTLER_HOME_PROJECT
+            if focus is not None and not harness_profile.privacy.local_only:
+                # The session's scope is Butler's project; the focus project's
+                # local-only boundary is checked here and on every turn.
+                with observer_reads():
+                    scope = (
+                        await store.get(ScopePolicy, focused.scope_policy_id)
+                        if focused.scope_policy_id
+                        else None
+                    )
+                if scope is not None and scope.local_only:
+                    raise ChatConfigurationError(
+                        f"{focused.name} keeps its data on local models; "
+                        "choose a local harness for Butler."
+                    )
             session = await harness_runtime.create_session(
                 engagement_id=request.engagement_id,
                 profile_id=harness_profile.id,
@@ -241,6 +250,10 @@ async def reserve_butler_session(
                     else request.harness_cyber_access_program
                 ),
                 control_assistant=True,
+                # Butler's own project gives the vendor CLI no shell, files or
+                # command runtime: Butler reaches projects only through Core's
+                # gateway, where reads and changes are checked.
+                tools_enabled=not home,
                 transaction=transaction,
             )
             chat = ChatSession(
