@@ -1,29 +1,27 @@
 {
-  "change_digest": "e5b04f6d17e2fe9f767e2e7441e0d12f8dabd94c2b656a42c6701d80d51c3419",
-  "reviewed_by": "Claude Code, fixing the operator's empty full-chat popup in Butler mode on live",
-  "reason": "Opening a chat from Butler mode dimmed the page but never showed the transcript. ButlerChatPopup's .layer grid declared columns but no rows, so the popup sat in an implicit auto row sized to the full transcript; height min(86vh, 100%) then resolved against that row and align-items: center put the popup thousands of pixels below the viewport (measured top 5,124-8,244 px on a 1,082 px window with 60 long messages), leaving only the scrim, whose 'Close chat' tooltip was the one thing visible. It was latent until #1247 made long transcripts load. Root cause independently validated by a separate subagent. The layer now has grid-template-rows: minmax(0, 1fr). Selected: ButlerChatPopup component tests (new check that the layer row is viewport-sized with a 60-message transcript) and the real-Core Butler mode journey, which now opens a chat taller than the viewport and asserts the popup's vertical bounds, at desktop, compact and 390 px Chromium/WebKit, matching #1247's selection.",
-  "exclusions": "No Core change, so no Python tests. Only the popup's CSS changed; no other UI area renders it.",
+  "change_digest": "917b3d1ea83b55ce338defeba5e5d1641748d5e6358b51f4d0c559c5a8080d2d",
+  "reviewed_by": "Claude Code, fixing the ~18 minute post-deploy 'Project execution is reconnecting' outage on live Apple Bug Bounty",
+  "reason": "After the 42d2bb4 deploy, Apple Bug Bounty's recovered worker answered 503 'reconnecting' for ~18 minutes. Root cause (independently validated by a fresh subagent from raw Postgres lock-wait logs): once a recovery is verified and activation starts, the worker reports 'prepared' until its lifespan finishes, and the supervisor's handoff loop re-selects it every 0.5 s. Each pass ran _recovery_grant(check_blockers=True), which holds the project's ownership row FOR UPDATE (fenced) through _recovery_blockers' project-wide scan of chat_turns/chat_goals payload->>'execution_claim_id' (4-7 s on 3.4M rows, json payloads). Every worker transaction takes FOR KEY SHARE on that row, so activation ran one transaction per ~5.7 s supervisor cycle (193 holder transactions x 5.7 s = 18.3 min, matching the window). Fix: when the recovery is verified and the worker reports activation_started, skip the blocker check and the repeat verify/activate; a later pass marks it activated once ready. A verified recovery that has not started activating still checks blockers (an uncertain effect still holds activation). Selected: a new focused test of _advance_project_recovery plus the supervisor recovery suites (controls, recovery, reconciliation).",
+  "exclusions": "test_runtime_continuity_acceptance.py needs a production UI build and complete source, so it is not selected. 3 PostgreSQL cases in test_recovery_controls.py (pause_and_stop_run_while_recovery_is_blocked, held_worker_activates_only_after_blockers_resolve, held_target_that_ran_a_control_and_then_failed_exits) fail identically on pristine origin/main; PostgreSQL cases skip in CI without NEBULA_TEST_POSTGRES_URL. All SQLite cases pass locally with the fix. No UI change.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 2,
+    "python": 64,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/ButlerChatPopup.test.tsx"
+  "python": [
+    "tests/v3/test_recovery_activation_no_relock.py",
+    "tests/v3/test_recovery_controls.py",
+    "tests/v3/test_recovery_reconciliation.py",
+    "tests/v3/test_runtime_recovery.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
-  ],
+  "playwright": [],
   "checks": []
 }

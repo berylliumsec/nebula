@@ -751,9 +751,19 @@ class RuntimeSupervisor:
                 expected_lease=lease,
             )
             status = await self._recovery_status(lease)
+        # Blockers gate verification and the start of activation. Once a
+        # verified worker is activating, its application may re-claim work and
+        # a check can no longer stop it; checking anyway held the owner row
+        # FOR UPDATE through a project-wide scan on every pass and starved the
+        # activating worker's transactions.
+        activating = (
+            phase == "verified"
+            and status.get("state") == "prepared"
+            and status.get("activation_started") is True
+        )
         current, current_operation, phase, digest = await self._recovery_grant(
             row,
-            check_blockers=status.get("state") != "ready",
+            check_blockers=status.get("state") != "ready" and not activating,
         )
         if (
             current != lease
@@ -767,6 +777,9 @@ class RuntimeSupervisor:
             raise CoordinationConflict(
                 "The target has not prepared this exact recovery checkpoint"
             )
+        if activating:
+            # Activation is already under way; a later pass sees it ready.
+            return lease
         await self.coordinator.verify_recovery(
             lease,
             operation_id=operation_id,
