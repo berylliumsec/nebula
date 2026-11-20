@@ -97,3 +97,31 @@ export function butlerQuestionAbout(item: ButlerBoardItem | undefined, prompt: s
   const status = item.now ? ` Current status: ${item.now}.` : "";
   return `About the chat "${item.title}" (conversation ${item.sessionId} in this project).${status}\n\n${prompt}`;
 }
+
+/**
+ * The project thread picker's groups: projects with chats that need the
+ * operator or are working come first, labelled with their counts; the rest
+ * are quiet. Archived projects are left out.
+ */
+export function projectPickerGroups<T extends { id: string; status?: string }>(
+  projects: readonly T[],
+  items: readonly Pick<ButlerBoardItem, "state" | "project">[],
+): { active: { project: T; label: string }[]; quiet: T[] } {
+  const counts = new Map<string, { waiting: number; working: number }>();
+  for (const item of items) {
+    const entry = counts.get(item.project.id) ?? { waiting: 0, working: 0 };
+    if (item.state === "waiting") entry.waiting += 1;
+    if (item.state === "working") entry.working += 1;
+    counts.set(item.project.id, entry);
+  }
+  const active: { project: T; label: string }[] = [];
+  const quiet: T[] = [];
+  for (const project of projects) {
+    if (project.status === "archived") continue;
+    const entry = counts.get(project.id);
+    if (entry?.waiting) active.push({ project, label: `${entry.waiting} need you` });
+    else if (entry?.working) active.push({ project, label: `${entry.working} working` });
+    else quiet.push(project);
+  }
+  return { active, quiet };
+}

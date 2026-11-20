@@ -370,6 +370,16 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await brief.getByRole("button", {name: "Open full chat"}).click();
       const popup = page.getByRole("dialog", {name: `Chat: ${workTitle}`});
       await expect(popup.getByRole("log")).toBeVisible();
+      // The transcript loads (Core pages history only with replaced messages
+      // included) and the popup sits inside the viewport, centred.
+      await expect(popup.getByRole("log").getByText(PROMPTS.work)).toBeVisible({timeout: 30_000});
+      await expect(popup.getByRole("alert")).toHaveCount(0);
+      const box = await popup.boundingBox();
+      const viewport = page.viewportSize();
+      expect(box && viewport).toBeTruthy();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
+      if (viewport!.width > 760) expect(Math.abs(box!.x + box!.width / 2 - viewport!.width / 2)).toBeLessThanOrEqual(2);
       await page.keyboard.press("Escape");
       await expect(popup).toHaveCount(0);
       await expect(brief).toBeVisible();
@@ -408,7 +418,8 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await showThreads(page);
       if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
-      await page.getByRole("list", {name: "Project threads"}).getByRole("button", {name: /Research fixture/}).click();
+      // One picker, not a row per project: Core may hold a thousand projects.
+      await page.getByRole("combobox", {name: "Project thread"}).selectOption(research);
       await expect(page.getByRole("region", {name: "Butler in Research fixture"}).getByRole("textbox", {name: "Ask Butler a question"})).toBeVisible({timeout: 60_000});
       if (await page.getByRole("button", {name: "Back to threads"}).isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
 

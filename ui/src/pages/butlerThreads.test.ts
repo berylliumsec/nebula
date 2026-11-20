@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatAssistantConfig, HarnessProfile, ProviderHealth } from "../api/types";
-import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle } from "./butlerThreads";
+import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, projectPickerGroups } from "./butlerThreads";
 
 const config: ChatAssistantConfig = {
   backend: "provider",
@@ -60,5 +60,29 @@ describe("Butler mode threads", () => {
     expect(about).toContain('About the chat "Kernel fuzz" (conversation s9 in this project). Current status: Approve run_command: make install.');
     expect(about.endsWith("Is this safe?")).toBe(true);
     expect(butlerQuestionAbout(undefined, "Plain")).toBe("Plain");
+  });
+});
+
+describe("project thread picker", () => {
+  it("puts projects with waiting or working chats first and leaves archived out", () => {
+    const projects = [
+      { id: "quiet", name: "Quiet", status: "active" },
+      { id: "busy", name: "Busy", status: "active" },
+      { id: "needs", name: "Needs you", status: "active" },
+      { id: "old", name: "Old", status: "archived" },
+    ];
+    const items = [
+      { state: "working", project: { id: "busy", name: "Busy" } },
+      { state: "working", project: { id: "busy", name: "Busy" } },
+      { state: "working", project: { id: "needs", name: "Needs you" } },
+      { state: "waiting", project: { id: "needs", name: "Needs you" } },
+      { state: "working", project: { id: "old", name: "Old" } },
+    ] as Parameters<typeof projectPickerGroups>[1];
+    const groups = projectPickerGroups(projects, items);
+    expect(groups.active.map(({ project, label }) => [project.id, label])).toEqual([
+      ["busy", "2 working"],
+      ["needs", "1 need you"],
+    ]);
+    expect(groups.quiet.map((project) => project.id)).toEqual(["quiet"]);
   });
 });
