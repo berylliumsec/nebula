@@ -149,15 +149,16 @@
   .backdrop:not([hidden]) { position: fixed; z-index: 84; inset: 0; display: block; width: 100%; height: 100%; border: 0; background: rgb(0 0 0 / 28%); cursor: default; }
   .backdrop:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; }
   .panel { left: 50%; right: auto; top: auto; bottom: calc(var(--panel-visual-bottom, 0px) + max(12px, env(safe-area-inset-bottom))); width: min(560px, calc(100vw - 24px)); height: min(78dvh, 640px, calc(var(--panel-visual-height, 100dvh) - 24px - env(safe-area-inset-bottom))); max-height: calc(var(--panel-visual-height, 100dvh) - 24px - env(safe-area-inset-bottom)); padding: 0; transform: translateX(-50%); }
-  .header { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 44px); gap: 6px; padding: 8px 12px; }
+  .header { display: grid; grid-template-columns: minmax(0, 1fr) repeat(5, 44px); gap: 6px; padding: 8px 12px; }
   .header .dragButton { display: none; }
   .identity { grid-column: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
   .identity strong { flex: none; white-space: nowrap; }
   .identity small { max-width: 100%; }
-  .header .voiceButton { grid-column: 2; }
-  .header .settingsButton { grid-column: 3; }
-  .header .hideButton { grid-column: 4; }
-  .header .closeButton { grid-column: 5; }
+  .header .modeButton { grid-column: 2; }
+  .header .voiceButton { grid-column: 3; }
+  .header .settingsButton { grid-column: 4; }
+  .header .hideButton { grid-column: 5; }
+  .header .closeButton { grid-column: 6; }
   .body { flex: 1; min-height: 0; }
   .transcript { max-height: none; overflow: visible; }
   .turnStatus { flex-wrap: wrap; }

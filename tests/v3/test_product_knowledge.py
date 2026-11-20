@@ -1191,3 +1191,19 @@ def test_product_help_explains_queueing_messages_for_butler(monkeypatch):
     text = "\n".join(str(item["text"]) for item in matches).lower()
     assert "butler queue" in text and "follow-up queue" in text
     assert "needs review" in text
+
+
+def test_product_help_finds_butler_mode_board_and_parallel_threads(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    for question in (
+        "How do I see every running chat across projects and what needs me?",
+        "Can I ask Butler several things at once in parallel threads?",
+    ):
+        matches = search_product_knowledge(question)
+        assert any(item["heading"] == "Butler mode" for item in matches), question
+    text = "\n".join(
+        str(item["text"])
+        for item in search_product_knowledge("Butler mode status board threads")
+    ).lower()
+    assert "/butler" in text
+    assert "reply in this thread" in text
