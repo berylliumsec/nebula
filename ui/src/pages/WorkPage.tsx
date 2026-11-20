@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
@@ -50,6 +50,22 @@ function WorkUpdateDetails({ update, projectId }: { update: WorkUpdate; projectI
     {update.blocker && <small className="work-blocker">Blocked: {update.blocker}</small>}
     {update.source_session_id && <Link to={resourcePath(update.source_engagement_id ?? projectId, "conversation", update.source_session_id)}>Open conversation <ArrowRight size={13} /></Link>}
   </>;
+}
+
+type ProjectStatusCountValues = { working: number; waiting: number; inProgress: number; blocked: number; review: number };
+const PROJECT_STATUS_LABELS = [["working", "working"], ["waiting", "waiting"], ["inProgress", "in progress"], ["blocked", "blocked"], ["review", "in review"]] as const;
+
+/** Rows list only the counts that are non-zero; a project with no active work reads as idle. */
+function ProjectStatusCounts({ counts }: { counts: ProjectStatusCountValues }) {
+  const active = PROJECT_STATUS_LABELS.filter(([key]) => counts[key] > 0);
+  if (!active.length) return <span className="work-project-status idle">Idle</span>;
+  return <span className="work-project-status">{active.map(([key, label], index) => <Fragment key={key}>{index > 0 && <span className="sr-only">, </span>}<span className={`work-project-count ${key}`}>{counts[key]} {label}</span></Fragment>)}</span>;
+}
+
+export function projectInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "").slice(0, 2);
+  return letters.toLocaleUpperCase();
 }
 
 export function WorkPage() {
@@ -441,7 +457,7 @@ export function WorkPage() {
       <div className="work-head-actions">
         <span className={`work-live-state ${liveState}`} role="status">{liveState === "live" ? "Live" : liveState === "connecting" ? "Connecting…" : liveState === "offline" ? "Offline" : "Reconnecting…"}</span>
         <button className="button quiet work-refresh" type="button" aria-label="Refresh Work" title="Refresh Work" onClick={() => void refresh()}><RefreshCw size={16} /></button>
-        {projectId && <button className="button quiet" type="button" disabled={busy || coreState !== "online"} onClick={() => void toggle()}>{enabled ? "Disable agent tools" : "Enable agent tools"}</button>}
+        {projectId && <button className="button quiet work-agent-tools-switch" type="button" aria-label={enabled ? "Disable agent tools" : "Enable agent tools"} title={enabled ? "Agent tools are on" : "Agent tools are off"} data-state={enabled ? "on" : "off"} disabled={busy || coreState !== "online"} onClick={() => void toggle()}><span>Agent tools</span><span className="work-switch-track" aria-hidden="true" /></button>}
         <button className="button primary" type="button" disabled={!api || coreState !== "online" || (!projectId && !activeProjects.length)} onClick={() => setShowCreate(true)}><Plus size={16} /> New item</button>
       </div>
     </header>
@@ -450,7 +466,7 @@ export function WorkPage() {
     {error && <div className="work-error" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" className="button quiet" onClick={() => void refresh()}>Retry</button></div>}
     {loading ? <div className="work-loading" role="status">Loading Work…</div> : <>
       <section className="work-summary" aria-label="Work summary">
-        {summaryOptions.map((option) => <button key={option.id} type="button" aria-label={`${option.count} ${option.label}`} aria-pressed={summaryView === option.id} aria-controls={summaryView ? "work-summary-detail" : undefined} onClick={() => setSummaryView(option.id)}><strong>{option.count}</strong><span>{option.label}</span></button>)}
+        {summaryOptions.map((option) => <button key={option.id} type="button" aria-label={`${option.count} ${option.label}`} aria-pressed={summaryView === option.id} aria-controls={summaryView ? "work-summary-detail" : undefined} data-empty={option.count === 0 ? "true" : undefined} onClick={() => setSummaryView(option.id)}><strong>{option.count}</strong><span>{option.label}</span></button>)}
       </section>
       {selectedSummary && <section className="work-panel work-summary-detail" id="work-summary-detail" aria-label={`${selectedSummary.label} details`}>
         <div className="work-panel-head"><h2>{selectedSummary.label}</h2><span>{selectedSummary.count}</span></div>
@@ -491,7 +507,7 @@ export function WorkPage() {
             const expanded = Boolean(projectQuery.trim()) || expandedProjects.has(project.id);
             return <div className={`work-project-row${depth ? " is-child" : ""}`} key={project.id} style={{ paddingLeft: Math.min(depth, 5) * 22 }}>
               {childCount > 0 ? <button type="button" aria-label={`${expanded ? "Hide" : "Show"} subprojects of ${project.name}`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(project.id)) next.delete(project.id); else next.add(project.id); return next; })}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="work-project-spacer" />}
-              <div className="work-project-content"><Link className="work-project-primary" to={projectRoot(project.id)}><span className="work-project-main"><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small>{!projectItems.latest && <small>No check-ins yet</small>}</span><span className="work-project-status">{projectItems.working} working · {projectItems.waiting} waiting · {projectItems.inProgress} in progress · {projectItems.blocked} blocked · {projectItems.review} review</span><ArrowRight size={16} /></Link>
+              <div className="work-project-content"><Link className="work-project-primary" to={projectRoot(project.id)}><span className="work-project-initials" aria-hidden="true">{projectInitials(project.name)}</span><span className="work-project-main"><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}{projectItems.latest ? "" : " · No check-ins yet"}</small></span><ProjectStatusCounts counts={projectItems} /><ArrowRight size={16} /></Link>
                 {projectItems.latest && <Link className="work-project-latest" to={projectSurface(projectItems.latest.engagement_id, "work", projectItems.latest.id)}><span><strong>Latest check-in: {projectItems.latest.title}</strong><small>{projectName(projectItems.latest.engagement_id)} · {time(projectItems.latest.last_update_at)}</small>{latestUpdate && <small>{latestUpdate.blocker ? `Blocked: ${latestUpdate.blocker}` : latestUpdate.next_step ? `Next: ${latestUpdate.next_step}` : latestUpdate.summary}</small>}</span><ArrowRight size={15} aria-hidden="true" /></Link>}</div>
             </div>;
           })}</div>

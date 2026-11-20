@@ -1,4 +1,5 @@
 import { BookOpen, FileSearch, LayoutDashboard, ListTodo, Network, Sparkles } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { projectRoot, projectSurface } from "../resourceRoutes";
 import { AssetsPage } from "./AssetsPage";
@@ -30,6 +31,12 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
   const requested = searchParams.get("view");
   const view: ProjectView = canonicalView ?? (isProjectView(requested) ? requested : "overview");
 
+  const tabsRef = useRef<HTMLElement>(null);
+  // Narrow layouts scroll the tab row sideways; keep the current section in view.
+  useEffect(() => {
+    tabsRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [view]);
+
   const selectView = (next: ProjectView) => {
     if (projectId) {
       navigate(next === "overview" ? projectRoot(projectId) : projectSurface(projectId, next));
@@ -44,7 +51,7 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
 
   return (
     <div className="project-workspace">
-      <nav className="project-tabs project-sections" aria-label="Project sections">
+      <nav ref={tabsRef} className="project-tabs project-sections" aria-label="Project sections">
         {projectViews.map(({ id, label, icon: Icon }) => (
           <button
             className={view === id ? "active" : undefined}

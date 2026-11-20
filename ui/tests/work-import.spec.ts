@@ -164,7 +164,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await page.goto(`${core.origin}/projects`);
     await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     const parentProject = page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ }).first();
-    await expect(parentProject).toContainText("1 working · 0 waiting · 0 in progress · 1 blocked · 0 review");
+    await expect(parentProject).toContainText("1 working, 1 blocked");
     await expect(page.locator(".work-project-list").getByRole("link", { name: /Latest check-in: Review the release plan/ }).first()).toHaveAttribute("href", new RegExp(`/projects/${importedResult.projects.at(-1)!.engagement_id}/work/${importedResult.projects.at(-1)!.items[0].item_id}$`));
     await page.getByRole("button", { name: "Track work" }).click();
     const trackDialog = page.getByRole("dialog", { name: "Track conversation work" });
