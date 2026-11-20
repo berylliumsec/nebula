@@ -139,6 +139,7 @@ from .butler_memory import BUTLER_MEMORY_INSTRUCTION
 from .domain import BrowserSession
 
 from .domain import (
+    GOAL_CONTINUE_INSTRUCTION,
     AgentRun,
     Approval,
     ApprovalStatus,
@@ -2266,13 +2267,7 @@ _REFUSED_BUDGET_CLASS = "refused"
 # without a change, so a late start report from its runtime still wins.
 _STALE_APPROVED_CALL_AGE = timedelta(minutes=10)
 # What Core asks when a running goal continues without an operator message.
-_GOAL_CONTINUE_INSTRUCTION = (
-    "Review the active conversation goal and its completion criteria. Is the "
-    "goal complete? If it is complete, call the offered goal_complete tool with a final summary "
-    "and concrete evidence, then give the operator a concise handoff. If it is "
-    "not complete, continue making concrete progress toward the goal now. Do "
-    "not stop merely to report status."
-)
+_GOAL_CONTINUE_INSTRUCTION = GOAL_CONTINUE_INSTRUCTION
 
 
 _GOAL_TIME_FIVE_MINUTE_REMINDER = (
