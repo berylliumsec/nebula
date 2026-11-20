@@ -1,29 +1,29 @@
 {
-  "change_digest": "a99538b74c6891655d8568f3eb0ff9f493dac17f304e75338888a6e99799ab6f",
-  "reviewed_by": "Claude Code, PR 1 of the Butler home worker design at the operator's request",
-  "reason": "Live Core showed Butler questions taking 4-50 minutes because every transaction of a project's worker runs one at a time and Apple Bug Bounty held 45-84 concurrent turns. This PR adds the foundation for running Butler on its own worker: a reserved __nebula_butler__ project hidden from store listings, counts, overview, search and CRUD edits; observer_reads(), which lets only the home project's worker read other projects' committed rows while row locks and writes stay fenced to its own project; and a butler.home/v1 release feature that gates admission, plus a capacity-retirement exemption. Selected: the new scope suite (observer reads, write and lock fencing, refusal on other workers, hidden listings, search and CRUD guards, admission gate), the existing execution-scope suite (SELECT branch changed), mixed-release idle retirement and admission retry/capacity (auto-admission changed), runtime worker features and bundle tests (release feature list changed), and the deployer protocol and simulation bundle tests (manifest features).",
-  "exclusions": "tests/v3/test_execution_locks.py::test_handoff_waits_for_an_in_flight_source_write[postgresql] fails identically on unmodified origin/main a50eecc (3/3 runs locally), so test_execution_locks.py is not selected; its other cases passed with this change. No UI, settings or operator-visible behaviour changes: nothing creates the home project yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; all selected suites passed locally against the staging postgres:16 container (nebula_pytest database).",
+  "change_digest": "f26ccf605840912b9e11c3e1012c646b714b1399082c4059eabb13a5b2de4dab",
+  "reviewed_by": "Claude Code, PR 2a of the Butler home worker design at the operator's request",
+  "reason": "Follows #1241 (merged). Behind NEBULA_BUTLER_HOME_WORKER (off), a Butler reservation for __nebula_butler__ makes the API create Butler's home project once and route the reservation there; the request carries focus.project and Butler keeps one home session per focus project. On the home worker the provider Butler gateway reads the focus project under observer_reads() and refuses changes; each home turn checks the focus project's local_only boundary; home sessions are provider-only; the new-project name scan skips reserved projects. Selected: the new home-session suite and PR 1's scope suite (creation race, name scan, reservation per focus, gateway observer reads, change and local-only refusal), Butler sessions and subagents (reservation changed), the API worker and global API (new pre-routing hook), execution-worker write locks (reservation under a worker scope), and the MCP context and provider tools-context suites (chat_components signature changed).",
+  "exclusions": "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings and tests/v3/test_settings_assistant_tools.py::test_provider_tools_are_bounded_to_catalog_and_project fail identically on unmodified origin/main 8fb8023 (after #1240), so those two files are not selected; their other cases passed locally with this change. No UI or operator-visible change: the flag is off and nothing in the UI reserves a home session yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; the selected suites passed locally on SQLite and the staging postgres:16 (nebula_pytest).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 271,
+    "python": 159,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_deployer_protocol.py",
-    "tests/test_simulation_runtime_bundle.py",
-    "tests/v3/test_admission_retry.py",
+    "tests/v3/test_api_worker.py",
     "tests/v3/test_butler_home_scope.py",
-    "tests/v3/test_execution_scope.py",
-    "tests/v3/test_mixed_release_idle_retirement.py",
-    "tests/v3/test_runtime_bundle.py",
-    "tests/v3/test_runtime_capacity.py",
-    "tests/v3/test_runtime_worker_features.py"
+    "tests/v3/test_butler_home_sessions.py",
+    "tests/v3/test_butler_sessions.py",
+    "tests/v3/test_butler_subagents.py",
+    "tests/v3/test_execution_worker_write_locks.py",
+    "tests/v3/test_mcp_context_mode.py",
+    "tests/v3/test_provider_tools_context.py",
+    "tests/v3/test_runtime_global_api.py"
   ],
   "frontend": [],
   "native": [],

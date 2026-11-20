@@ -31,6 +31,7 @@ from .domain import (
     message_is_replaced,
     utc_now,
 )
+from .execution_scope import observer_reads
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
@@ -308,7 +309,13 @@ class ButlerCapabilities:
     @classmethod
     async def create(cls, *args, **kwargs) -> "ButlerCapabilities":
         instance = cls.__new__(cls)
-        await instance._initialize(*args, **kwargs)
+        if kwargs.get("observer"):
+            # Butler's home worker reads the focus project's committed rows;
+            # setup reads that project's name, policy and settings.
+            with observer_reads():
+                await instance._initialize(*args, **kwargs)
+        else:
+            await instance._initialize(*args, **kwargs)
         return instance
 
     async def _initialize(
@@ -329,10 +336,16 @@ class ButlerCapabilities:
         instructions_root: Path | None = None,
         background_runtime_local: bool = False,
         client_surface: str = "browser",
+        observer: bool = False,
     ) -> None:
         if client_surface not in CLIENT_SURFACES:
             raise ValueError("unknown Butler client surface")
+        if observer and background_case_id is not None:
+            raise ValueError("background Butler cases still run in their project")
         self._client_surface = client_surface
+        # Set on Butler's home worker: project_id is the session's focus
+        # project, which this worker reads but does not own.
+        self._observer = observer
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
         self._store = store
@@ -1175,6 +1188,14 @@ class ButlerCapabilities:
                 f"use nebula.capabilities.{route} for {name}",
                 reason=f"use_{route}",
             )
+        if self._observer and change:
+            # Changes reach another project only as commands its own worker
+            # runs under its Butler authority; that path is not built yet.
+            raise CapabilityInputError(
+                f"Butler can read {self._project_name} from here but cannot "
+                "change it yet. Make this change from that project's Butler.",
+                reason="home_change_unavailable",
+            )
         payload = arguments.get("arguments")
         if not isinstance(payload, dict):
             raise CapabilityInputError(
@@ -1260,6 +1281,9 @@ class ButlerCapabilities:
                     payload,
                     idempotency_key=f"recovery:{self._background_case_id}:{step_id}",
                 )
+            elif self._observer:
+                with observer_reads():
+                    result = await plugin._handler(payload)
             else:
                 result = await plugin._handler(payload)
             refuse_browser_handoff(name, result, self._client_surface)

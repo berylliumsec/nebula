@@ -17,6 +17,7 @@ from .artifacts import ArtifactStore
 from .context_retrieval import DenseEncoder
 from .conversation_search import ConversationSearchTool
 from .knowledge_search import KnowledgeSearcher, KnowledgeSearchTool
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .diagnostics import gather_diagnostic, record_caught_exception
 from .domain import (
     Approval,
@@ -430,6 +431,38 @@ class RuntimePlatform:
             raise ValueError("MCP service must use the runtime platform store")
         self.mcp_service = service
 
+    async def _check_focus_privacy(
+        self, project_id: str | None, provider: ModelProvider | None
+    ) -> None:
+        """Butler's home must not carry a local-only project to a cloud model.
+
+        The session's own scope is Butler's home, so the provider check that
+        guards every project chat never sees the focus project's boundary.
+        Every home turn checks it here, so a later local-only change applies.
+        """
+
+        from .execution_scope import observer_reads
+        from .privacy import (
+            ProviderPrivacyViolation,
+            validate_engagement_provider_privacy,
+        )
+
+        if project_id is None or provider is None:
+            raise RuntimePlatformError(
+                "Butler's own worker needs a provider model to read a project"
+            )
+        with observer_reads():
+            project = await self.store.get(Engagement, project_id)
+            try:
+                await validate_engagement_provider_privacy(
+                    self.store, project, provider
+                )
+            except ProviderPrivacyViolation as exc:
+                raise RuntimePlatformError(
+                    f"{project.name} keeps its data on local models; switch "
+                    "Butler to a local model to ask about it."
+                ) from exc
+
     async def chat_components(
         self,
         *,
@@ -445,9 +478,14 @@ class RuntimePlatform:
         operator_message: str = "",
         background_case_id: str | None = None,
         client_surface: str = "browser",
+        butler_focus_project: str | None = None,
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
-        """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
+        """Build MCP and SSH-environment components; OCI commands are fixed elsewhere.
+
+        A Butler session in ``BUTLER_HOME_PROJECT`` passes its focus project:
+        Butler's actions then read that project through observer reads.
+        """
 
         operator_turn_id = turn_id
         del model
@@ -477,11 +515,17 @@ class RuntimePlatform:
         if settings_assistant:
             from .butler_capabilities import ButlerCapabilities
 
+            observer = bool(
+                engagement_id == BUTLER_HOME_PROJECT and butler_focus_project
+            )
+            if observer:
+                await self._check_focus_privacy(butler_focus_project, provider)
             for plugin in (
                 await ButlerCapabilities.create(
                     self.store,
                     self.artifact_store,
-                    engagement_id,
+                    butler_focus_project if observer else engagement_id,
+                    observer=observer,
                     settings_api=self.settings_assistant_api,
                     work=self.control_assistant_work,
                     memory=self.butler_memory,
