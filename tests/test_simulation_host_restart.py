@@ -650,3 +650,87 @@ def test_restart_boundary_does_not_blame_a_pinned_live_owner(
 
     with pytest.raises(RuntimeError, match="stayed queued, admitting or running"):
         deployer.wait_quiet_restart_boundary()
+
+
+class ReconnectingCore(QuietCore):
+    """Busy chat work owned by workers whose versions are exact commits."""
+
+    def __init__(self, versions: dict[str, str], busy_reads: int = 10_000) -> None:
+        super().__init__(busy_reads=busy_reads)
+        self.versions = versions
+
+    def get(self, path: str, **parameters):
+        if path == "deployment/status":
+            status = super().get(path, **parameters)
+            status["api_version"] = self.versions["api"]
+            status["resident_versions"] = [self.versions["worker"]]
+            status["projects"][0]["runtime_version"] = self.versions["worker"]
+            return status
+        return super().get(path, **parameters)
+
+
+def test_activation_restarts_under_running_turns_when_every_worker_reconnects(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Workers with #1023 wait out the host replacement, so a project that
+    never goes idle no longer holds the deployment."""
+    core = ReconnectingCore({"api": API, "worker": API})
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(deployer, "_includes_host_reconnect", lambda _version: True)
+    monkeypatch.setattr(deployer, "HOST_QUIET_WAIT_SECONDS", 0.3, raising=False)
+    record = promotion_record()
+
+    result = deployer.activate_supervisor_host(record, NEW)
+
+    assert result["status"] == "host_activated"
+    boundary = record["host_activation"]["restart_boundary"]
+    assert boundary["waited"] is False
+    assert boundary["reconnecting_versions"] == [API]
+    assert core.reads == []
+
+
+def test_activation_still_waits_when_one_worker_predates_host_reconnect(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_worker = "c" * 40
+    core = ReconnectingCore({"api": API, "worker": old_worker})
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(
+        deployer, "_includes_host_reconnect", lambda version: version != old_worker
+    )
+    monkeypatch.setattr(deployer, "HOST_QUIET_WAIT_SECONDS", 0.3, raising=False)
+    old_supervisor = dict(host.supervisor)
+    record = promotion_record()
+
+    with pytest.raises(RuntimeError, match="host restart boundary"):
+        deployer.activate_supervisor_host(record, NEW)
+
+    assert "stop" not in host.events
+    assert alive(old_supervisor)
+
+
+def test_host_reconnect_support_follows_commit_ancestry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def git(*argv: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *argv],
+            check=True, capture_output=True, text=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "before")
+    before = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "reconnect")
+    reconnect = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "after")
+    after = git("rev-parse", "HEAD")
+    monkeypatch.setattr(deployer, "REPO", tmp_path)
+    monkeypatch.setattr(deployer, "HOST_RECONNECT_COMMIT", reconnect)
+
+    assert deployer._includes_host_reconnect(after)
+    assert deployer._includes_host_reconnect(reconnect)
+    assert not deployer._includes_host_reconnect(before)
+    assert not deployer._includes_host_reconnect("d" * 40)
