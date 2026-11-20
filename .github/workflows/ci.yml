@@ -271,6 +271,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
+      - name: Build product knowledge for selected host guidance checks
+        # The host services suite syncs the generated product knowledge index;
+        # it is not committed, so build it whenever that suite is selected.
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_runtime_host_services.py')
+        run: |
+          poetry run python scripts/build_product_knowledge.py
+          poetry run python scripts/build_product_knowledge.py --verify
       - name: Test
         if: env.RUN_SELECTED == 'true'
         env:

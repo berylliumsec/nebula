@@ -1,34 +1,22 @@
 {
-  "change_digest": "bd5eb2c4e66b85046f6e151afca1a763cf5e0c7c1454ec3089401eaaf3508ed0",
+  "change_digest": "a688a58b5f0213d4e70537d93ea3370c2c96e64a2fa5def91c9c5f4a7836f640",
   "reviewed_by": "Claude Code, PR 2b of the Butler home worker design at the operator's request",
-  "reason": "Stacked on PR #1242. Butler's home worker sends changes to its focus project as butler.action/v1 commands: host RPCs (submit, result) accept only the home lease and Butler's listed work changes and resend idempotently; the host stamps a 10-minute expiry and submits on the target's control lane only when its live owner, staged target and any handoff target declare the feature (an older worker would leave the command uncertain and block that lane); DurableHttpRunner runs the target handler, which re-validates, refuses expired or archived, runs dispatch_work_tool and never leaves the command uncertain; the gateway sends nebula.work.* changes this way. Selected: the new action suite plus PR 1/2a home suites; runtime delivery, coordination, orphan recovery and execution worker (runner branch, typed control command, worker wiring); host services and host search (new RPCs and capability); worker features, bundle and mixed-release (new release feature); Butler sessions and provider tools-context (gateway construction).",
-  "exclusions": "tests/v3/test_butler_capabilities.py and tests/v3/test_settings_assistant_tools.py each contain a case that fails identically on unmodified origin/main 8fb8023 (after #1240), so they are not selected. No UI or operator-visible change: NEBULA_BUTLER_HOME_WORKER is off and no UI reserves a home session yet, so frontend and Playwright selections are empty and LAN validation does not apply. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL in CI; every selected file passed locally on SQLite and the staging postgres:16 (nebula_pytest), with the product knowledge index built locally as CI builds it.",
+  "reason": "Follows #1241 and #1242 (merged). Re-run of only the tests that failed in CI run 44788459239 (job 136469625509) on this change: the two product-guidance tests in tests/v3/test_runtime_host_services.py, on SQLite and PostgreSQL. They failed with FileNotFoundError because CI built the generated product knowledge index only for UI-journey selections; ci.yml now builds and verifies it whenever test_runtime_host_services.py is selected. The other 478 selected tests (Butler home action, session and scope suites; runtime delivery, coordination, orphan recovery, execution worker; host services and host search; worker features, bundle, mixed release; Butler sessions; provider tools-context) passed in that same run on identical product code; this commit adds only the CI step and this receipt. Selection narrowed to the failed tests at the operator's request.",
+  "exclusions": "Every other test in the earlier selection passed in run 44788459239 on the same product code, so it is not re-run, per the operator's request to run only the failed tests. test_butler_capabilities.py and test_settings_assistant_tools.py each contain a case red on origin/main 8fb8023 (#1240). No UI change; LAN validation does not apply. The four selected tests passed locally after build_product_knowledge.py and --verify, on SQLite and the staging postgres:16.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 482,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_home_actions.py",
-    "tests/v3/test_butler_home_scope.py",
-    "tests/v3/test_butler_home_sessions.py",
-    "tests/v3/test_butler_sessions.py",
-    "tests/v3/test_execution_worker.py",
-    "tests/v3/test_mixed_release_idle_retirement.py",
-    "tests/v3/test_provider_tools_context.py",
-    "tests/v3/test_runtime_bundle.py",
-    "tests/v3/test_runtime_coordination.py",
-    "tests/v3/test_runtime_delivery.py",
-    "tests/v3/test_runtime_host_search.py",
-    "tests/v3/test_runtime_host_services.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_runtime_worker_features.py"
+    "tests/v3/test_runtime_host_services.py::test_guidance_mirror_failure_is_reported_while_packaged_help_remains_available",
+    "tests/v3/test_runtime_host_services.py::test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart"
   ],
   "frontend": [],
   "native": [],
