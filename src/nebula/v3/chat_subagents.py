@@ -72,6 +72,7 @@ from .chat_snapshot_parts import resolve_request_snapshot
 from .environments import enabled_snapshot_ssh_ids
 from .domain import (
     CHAT_SUBAGENT_TERMINAL_STATUSES,
+    SUBAGENT_REPORTS_INSTRUCTION,
     AgentRun,
     Approval,
     ChatBackend,
@@ -5089,7 +5090,7 @@ class SubagentService:
                     messages=[
                         ChatRequestMessage(
                             role=ChatRole.USER,
-                            content="Subagent reports are ready. Continue the conversation goal.",
+                            content=SUBAGENT_REPORTS_INSTRUCTION,
                         )
                     ],
                     include_knowledge=False,

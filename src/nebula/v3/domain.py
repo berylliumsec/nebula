@@ -3594,6 +3594,38 @@ DEFAULT_GOAL_RESUME_INSTRUCTION = (
     "operator message."
 )
 
+GOAL_START_INSTRUCTION = (
+    "Begin work on the active conversation goal now. Review the goal "
+    "objective and completion criteria provided by Core, then make "
+    "concrete progress without waiting for another operator message."
+)
+"""What Core asks when an operator starts a goal."""
+
+GOAL_CONTINUE_INSTRUCTION = (
+    "Review the active conversation goal and its completion criteria. Is the "
+    "goal complete? If it is complete, call the offered goal_complete tool with a final summary "
+    "and concrete evidence, then give the operator a concise handoff. If it is "
+    "not complete, continue making concrete progress toward the goal now. Do "
+    "not stop merely to report status."
+)
+"""What Core asks when a running goal continues without an operator message."""
+
+SUBAGENT_REPORTS_INSTRUCTION = (
+    "Subagent reports are ready. Continue the conversation goal."
+)
+"""What Core asks when a goal's subagents have reported."""
+
+CORE_GOAL_INSTRUCTIONS = frozenset(
+    {
+        GOAL_START_INSTRUCTION,
+        GOAL_CONTINUE_INSTRUCTION,
+        SUBAGENT_REPORTS_INSTRUCTION,
+        DEFAULT_GOAL_RESUME_INSTRUCTION,
+    }
+)
+"""Fixed texts Core sends as a goal's user message. They state no project fact
+and are not the operator's words."""
+
 
 class ChatGoal(Entity):
     """One Core-owned provider-chat objective with explicit lifecycle and limits."""
