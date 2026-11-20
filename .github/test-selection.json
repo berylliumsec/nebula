@@ -1,8 +1,8 @@
 {
-  "change_digest": "6af0c2b72575f8d9ad798a54a6eb8922413bcba7b27afbb716610c2b5e0158d1",
-  "reviewed_by": "Claude Code, making Butler mode's Projects picker and board searchable",
-  "reason": "Operator asked for Butler mode's Projects picker (~1,000 projects in a native select) and the board's Group: Project view to be searchable. The rail select becomes ButlerProjectPicker, a combobox following the chat model picker pattern (type to filter, Active before Quiet with counts, arrows/Enter/Esc, first 80 rows). The board search moves from the top bar to beside Group and filters loaded cards instantly by title, project and model before Core's debounced search. Selected: the Butler thread/search helper tests, the new picker component tests, the popup test for the shared page module, and the four butler-mode real-Core Playwright projects, whose journey now searches the board and picks a project by typing.",
-  "exclusions": "Only Butler mode's page, its new picker and the settings-assistant doc changed; Core, the API client and other pages are untouched. The Group menu keeps its two options, so no other suite covers this.",
+  "change_digest": "e5b04f6d17e2fe9f767e2e7441e0d12f8dabd94c2b656a42c6701d80d51c3419",
+  "reviewed_by": "Claude Code, fixing the operator's empty full-chat popup in Butler mode on live",
+  "reason": "Opening a chat from Butler mode dimmed the page but never showed the transcript. ButlerChatPopup's .layer grid declared columns but no rows, so the popup sat in an implicit auto row sized to the full transcript; height min(86vh, 100%) then resolved against that row and align-items: center put the popup thousands of pixels below the viewport (measured top 5,124-8,244 px on a 1,082 px window with 60 long messages), leaving only the scrim, whose 'Close chat' tooltip was the one thing visible. It was latent until #1247 made long transcripts load. Root cause independently validated by a separate subagent. The layer now has grid-template-rows: minmax(0, 1fr). Selected: ButlerChatPopup component tests (new check that the layer row is viewport-sized with a 60-message transcript) and the real-Core Butler mode journey, which now opens a chat taller than the viewport and asserts the popup's vertical bounds, at desktop, compact and 390 px Chromium/WebKit, matching #1247's selection.",
+  "exclusions": "No Core change, so no Python tests. Only the popup's CSS changed; no other UI area renders it.",
   "python_versions": [
     "3.12"
   ],
@@ -10,15 +10,13 @@
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 12,
+    "frontend": 2,
     "native": 0,
     "playwright": 4
   },
   "python": [],
   "frontend": [
-    "ui/src/pages/ButlerChatPopup.test.tsx",
-    "ui/src/pages/ButlerProjectPicker.test.tsx",
-    "ui/src/pages/butlerThreads.test.ts"
+    "ui/src/pages/ButlerChatPopup.test.tsx"
   ],
   "native": [],
   "playwright": [

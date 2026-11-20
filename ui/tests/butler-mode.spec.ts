@@ -120,6 +120,9 @@ const PROMPTS = {
   work: "HOLD-WORK Fuzz the parser.",
 };
 
+/** A long first message: a long transcript once pushed the popup off-screen. */
+const WORK_LOG = Array.from({length: 120}, (_, index) => `Crash ${index + 1}: parser rejected input at offset ${index * 64}.`).join("\n");
+
 const ANSWERS = {
   held: "Nothing needs you right now.",
   quick: "Two confirmed results this week.",
@@ -292,7 +295,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       // An ordinary chat in the other project keeps working until released.
       running = api.post("chat/completions", {headers: {"Idempotency-Key": `butler-mode-work-${Date.now()}`}, timeout: 300_000, data: {
         engagement_id: bounty, provider_id: model.id, model: "security-model", tools_enabled: false, include_knowledge: false,
-        allow_agent_messaging: false, messages: [{role: "user", content: PROMPTS.work}], stream: false}}).catch(error => error);
+        allow_agent_messaging: false, messages: [{role: "user", content: `${PROMPTS.work}\n${WORK_LOG}`}], stream: false}}).catch(error => error);
       type Activity = Array<{session_id: string; state: string; turn_id?: string | null}>;
       let workId = "";
       await expect.poll(async () => {
@@ -383,7 +386,8 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const popup = page.getByRole("dialog", {name: `Chat: ${workTitle}`});
       await expect(popup.getByRole("log")).toBeVisible();
       // The transcript loads (Core pages history only with replaced messages
-      // included) and the popup sits inside the viewport, centred.
+      // included) and the popup sits inside the viewport, centred, even though
+      // the transcript is taller than the viewport.
       await expect(popup.getByRole("log").getByText(PROMPTS.work)).toBeVisible({timeout: 30_000});
       await expect(popup.getByRole("alert")).toHaveCount(0);
       const box = await popup.boundingBox();
@@ -391,6 +395,9 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       expect(box && viewport).toBeTruthy();
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height + 1);
+      await expect(popup.getByRole("button", {name: "Open in workbench"})).toBeInViewport();
       if (viewport!.width > 760) expect(Math.abs(box!.x + box!.width / 2 - viewport!.width / 2)).toBeLessThanOrEqual(2);
       await page.keyboard.press("Escape");
       await expect(popup).toHaveCount(0);

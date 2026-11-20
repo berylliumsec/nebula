@@ -36,4 +36,15 @@ describe("Butler mode chat popup", () => {
     // Older pages start before the oldest stored row, replaced or not.
     await waitFor(() => expect(listChatMessages).toHaveBeenLastCalledWith("chat-1", undefined, { includeReplaced: true, limit: 60, beforeMessageId: "m1" }));
   });
+
+  it("sizes its layout row to the viewport, not to a long transcript", async () => {
+    // An implicit auto row grew to the transcript's full height and centred
+    // the popup far below the viewport; only the scrim stayed on screen.
+    const long = Array.from({ length: 60 }, (_, index) => message(index + 1, index % 2 ? "assistant" : "user", `Message ${index + 1} ${"long line ".repeat(100)}`));
+    const api = { listChatMessages: vi.fn(async () => long) } as unknown as ApiClient;
+    render(<ButlerChatPopup api={api} sessionId="chat-1" title="Long chat" live={false} onClose={vi.fn()} onOpenFull={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Chat: Long chat" });
+    expect(await screen.findByText(/^Message 60 /)).toBeInTheDocument();
+    expect(getComputedStyle(dialog.parentElement!).gridTemplateRows).toBe("minmax(0, 1fr)");
+  });
 });
