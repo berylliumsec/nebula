@@ -14870,17 +14870,6 @@ class HarnessRuntimeService:
                 or (await self.store.get(AgentRun, run_id)).status != RunStatus.QUEUED
             ):
                 return
-            while await is_held(
-                self.store, (await self.store.get(AgentRun, run_id)).engagement_id
-            ):
-                # A due occurrence waits for the project hold's release.
-                await asyncio.sleep(HELD_MISSION_RECHECK_SECONDS)
-                if (
-                    self._closed
-                    or (await self.store.get(AgentRun, run_id)).status
-                    != RunStatus.QUEUED
-                ):
-                    return
             self._scheduled_mission_tasks.pop(run_id, None)
             self._mission_tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
             await self._execute_mission(run_id, turn_ids)
@@ -14890,7 +14879,26 @@ class HarnessRuntimeService:
         finally:
             self._scheduled_mission_tasks.pop(run_id, None)
 
+    async def _wait_while_held(self, run_id: str) -> bool:
+        """Wait while the run's project is held; False if the run ended meanwhile.
+
+        A due occurrence, or one whose time passed while it was being saved,
+        waits for the project hold's release instead of starting.
+        """
+        while await is_held(
+            self.store, (await self.store.get(AgentRun, run_id)).engagement_id
+        ):
+            await asyncio.sleep(HELD_MISSION_RECHECK_SECONDS)
+            if (
+                self._closed
+                or (await self.store.get(AgentRun, run_id)).status != RunStatus.QUEUED
+            ):
+                return False
+        return True
+
     async def _execute_mission(self, run_id: str, turn_ids: list[str]) -> None:
+        if not await self._wait_while_held(run_id):
+            return
         try:
             run = await self.store.get(AgentRun, run_id)
             first_turn = await self.store.get(HarnessTurn, turn_ids[0])
