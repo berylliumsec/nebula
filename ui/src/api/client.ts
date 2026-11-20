@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { ProjectHoldWatch } from "./projectHold";
 import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeDetail, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
   receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
@@ -3636,6 +3637,7 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     handoffSourceSessionId: typeof value.metadata?.handoff_source_session_id === "string" ? value.metadata.handoff_source_session_id : undefined,
     handoffTargetSessionId: typeof value.metadata?.handoff_target_session_id === "string" ? value.metadata.handoff_target_session_id : undefined,
     handoffReason: typeof value.metadata?.handoff_reason === "string" ? value.metadata.handoff_reason : undefined,
+    heldByProject: typeof value.metadata?.project_hold_id === "string",
     executionWaiting: value.execution && typeof value.execution.detail === "string" && ["starting", "held", "closing"].includes(value.execution.reason)
       ? { reason: value.execution.reason, detail: value.execution.detail }
       : undefined,
@@ -5081,6 +5083,8 @@ export class ApiClient {
   private readonly responseAttempts = new WeakMap<Response, PendingRequest>();
   /** Project reads waiting for a retired or starting project worker. */
   readonly projectRuntime = new ProjectRuntimeRecovery((path, signal) => this.probeProjectRuntime(path, signal));
+  /** Core project holds for the projects a view is showing (#1232). */
+  readonly projectHolds = new ProjectHoldWatch((path, init) => this.request(path, init));
 
   /** When Core last answered any request; see lastReachableAt(). */
   private lastReachable = 0;
@@ -5494,6 +5498,8 @@ export class ApiClient {
       }
       // An idle project's worker has retired, or a readmitted one is starting.
       // The read is repeated when it is back; it is not an operation failure.
+      // Core refused work because a project is held: show the hold now.
+      if (error.code === "project_held") this.projectHolds.refreshAll();
       const runtimeAway = read && isProjectRuntimeUnavailable(error);
       if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error), projectRuntimeDetail(error));
       else if (read) this.projectRuntime.answered(path);

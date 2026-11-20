@@ -1,27 +1,35 @@
 {
-  "change_digest": "5a01b6aae071df6f495a07f5d103e060a9521848095077697837ccfb89b153cd",
-  "reviewed_by": "Claude Code, replacing the Butler deployment wind-down with Core project holds in the deployer",
-  "reason": "Deployments that need a quiet boundary relied on asking Butler to pause work, which did not hold on 2026-11-20. The deployer now uses Core's project holds (#1232): at a host restart with workers older than #1023 it holds each busy project (and any that becomes busy), waits until no held project has chat work, restarts, and releases only the holds it placed, also when activation fails. New hold and release-holds commands place and release holds for a whole-Core stop or a project wind-down; every hold is saved in project-holds.json, separate from deployer-state.json, until Core confirms its release. A Core without the hold route (framework 404/405) falls back to the existing bounded wait. AGENTS.md now describes the hold procedure and keeps the Butler procedure only for Cores older than #1232. Selected: host restart suite (5 new hold cases), deploy resume, dead-owner activation and staged deployer suites.",
-  "exclusions": "Deployer scripts, their README, tests and AGENTS.md only; no Core or UI change. tests/test_simulation_host_activation.py and tests/test_deployer_protocol.py pass locally except one onefile identity case that also fails on unmodified main here; two host-switch signalling cases in the host restart suite fail locally on unmodified main and pass in CI.",
+  "change_digest": "0bd428807ba4bb48492c5b8ff40528fbe0f1f7043d24d8de32345344bf03d202",
+  "reviewed_by": "Claude Code, building the approved held-project banner (Figma page Project hold, 172:2)",
+  "reason": "Core project holds (#1232) had no interface. A shared ProjectHoldWatch on ApiClient polls the open project's hold (30 s, 5 s while held, refreshed at once when Core refuses work with project_held, stopped on a Core without the route). ProjectHoldNotice shows 'Pausing work in this project' with the grace countdown, then 'Work in this project is paused' with a bordered Release control (icon-only at phone width) behind a confirmation. The composer keeps the draft, disables Send and says when sending works again; the goal panel shows 'paused by update' and hides Resume for goals the hold paused. The assistant contract gains a 'Projects paused for a Core update' section. Selected: new unit suites and the goal panel, runtime notice and chat page suites; the bundled-guidance discovery test; a new real-Core acceptance (area:project-hold, 8 browser projects) that places a hold through Core, checks the banner, disabled Send with kept draft, axe and no horizontal overflow, Keep paused, Release, and Core's released readback; composer-draft-continuity and critical-workspaces mocked areas for composer and workspace layout regressions.",
+  "exclusions": "No settings destination: a hold is not a setting (documented in the assistant contract). Release uses the pack's CirclePlay icon because the curated icon pack has no unlocked-lock glyph; the approved mockup's lock icon is otherwise matched. area:assistant is not selected: its real-core.spec.ts lanes carry known unrelated rot; the composer change is covered by composer-draft-continuity and the real-Core hold acceptance. tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters fails on unmodified main (ios-shell-real-core.spec.ts) and is not selected. Real-Core acceptance passed locally on model-desktop, model-chromium-320 and model-webkit-390.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 111,
-    "frontend": 0,
+    "python": 1,
+    "frontend": 42,
     "native": 0,
-    "playwright": 0
+    "playwright": 34
   },
   "python": [
-    "tests/test_simulation_host_restart.py",
-    "tests/test_simulation_deploy_resume.py",
-    "tests/test_simulation_dead_owner_activation.py",
-    "tests/test_staged_deployer.py"
+    "tests/v3/test_project_hold_knowledge.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/projectHold.test.ts",
+    "ui/src/components/ProjectHoldNotice.test.tsx",
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/components/ProjectRuntimeNotice.test.tsx",
+    "ui/src/pages/chatMobileDrawerRestore.test.tsx",
+    "ui/src/pages/chatDraftNavigation.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:project-hold",
+    "area:composer-draft-continuity",
+    "area:critical-workspaces"
+  ],
   "checks": []
 }

@@ -985,3 +985,50 @@ test("global Work observes distinct execution workers across API replacement and
     await Promise.allSettled(viewers.filter(viewer => !viewer.isClosed()).map(viewer => viewer.close()));
   }
 });
+
+test("a project held for a Core update pauses the composer and resumes on release", async ({page, request}, info) => {
+  const control = await controller(request);
+  const fixture = await control.reset(false, false, undefined, true);
+  await pair(page, request, fixture);
+  const headers = {Authorization: `Bearer ${fixture.token}`};
+  const core = (path: string) => `${fixture.origin}/api/v1/${path}`;
+  const chat = `/projects/continuity-project/workbench?view=chat&session=${fixture.session_id}`;
+  await page.goto(chat);
+  const composer = page.locator(".chat-composer textarea");
+  await expect(composer).toBeVisible({timeout: 60_000});
+
+  // The deployer places the hold through Core; the open view sees it.
+  const placed = await request.post(core("engagements/continuity-project/hold"), {
+    headers: {...headers, "Idempotency-Key": randomUUID()},
+    data: {reason: "Core supervisor restart for a deployment", deployment_id: "browser-acceptance", grace_seconds: 0},
+  });
+  expect(placed.ok(), await placed.text()).toBe(true);
+  await page.reload();
+  const banner = page.getByRole("status").filter({hasText: "Work in this project is paused"});
+  await expect(banner).toBeVisible({timeout: 60_000});
+  await expect(banner).toContainText("Saved work is safe.");
+
+  // The draft is kept and Send waits for the release, saying so.
+  await composer.fill("Also check the second parser lane once you are back");
+  await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeDisabled();
+  await expect(page.getByText("Sending works again when this project’s hold is released. Your draft is kept.")).toBeVisible();
+  expect((await new AxeBuilder({page}).include(".project-hold-notice").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({path: info.outputPath("held.png"), fullPage: true});
+
+  // Release confirms first; keeping it paused changes nothing.
+  const release = page.getByRole("button", {name: "Release hold"});
+  await release.click();
+  await page.getByRole("button", {name: "Keep paused"}).click();
+  await expect(banner).toBeVisible();
+  await release.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Release only if the update that placed it is no longer running.");
+  await dialog.getByRole("button", {name: "Release", exact: true}).click();
+  await expect(banner).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
+  await expect(composer).toHaveValue("Also check the second parser lane once you are back");
+  const after = await (await request.get(core("engagements/continuity-project/hold"), {headers})).json();
+  expect(after.held).toBe(false);
+  expect(after.hold.status).toBe("released");
+});

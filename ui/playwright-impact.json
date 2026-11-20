@@ -141,6 +141,16 @@
       {"area":"project-view-lease","project":"model-chromium-430","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"an open project view brings up a chatless project's worker and lets it retire after leaving$"},
       {"area":"project-view-lease","project":"model-webkit-430","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"an open project view brings up a chatless project's worker and lets it retire after leaving$"}
     ],
+    "project-hold": [
+      {"area":"project-hold","project":"model-desktop","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-compact","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-chromium-320","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-webkit-320","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-chromium-390","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-webkit-390","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-chromium-430","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"},
+      {"area":"project-hold","project":"model-webkit-430","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"a project held for a Core update pauses the composer and resumes on release$"}
+    ],
     "runtime-pane-recovery": [
       {"area":"runtime-pane-recovery","project":"model-desktop","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"worker-backed panes wait calmly while an idle project's worker is away and recover without a reload$"},
       {"area":"runtime-pane-recovery","project":"model-compact","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"worker-backed panes wait calmly while an idle project's worker is away and recover without a reload$"},

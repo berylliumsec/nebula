@@ -1188,6 +1188,25 @@ conversation. Reloading preserves the same case and investigation, and restartin
 Core reattaches to existing investigation turns rather than duplicating work.
 
 
+## Projects paused for a Core update
+
+A Core update can hold a project (`ProjectHold`; see
+[Project holds](project-holds.md)). While a project is held, the workspace
+shows "Pausing work in this project" while running responses use their grace
+period, then "Work in this project is paused". No chat work starts in a held
+project: Send is disabled with the draft kept, goals the hold paused read
+"Goal paused by update · resumes automatically" and have no Resume control,
+and queued messages, subagent reports and schedules wait. Nothing is lost or
+failed. Releasing the hold resumes exactly the goals it paused; goals that were
+paused before stay paused.
+
+When an operator asks why work stopped, or why Send or Resume is unavailable,
+explain the hold and that it ends on its own when the update finishes. The
+banner's **Release** control (an icon button at phone width) confirms first and
+should be suggested only when the update that placed the hold is no longer
+running. A hold has no Settings destination and Butler has no action that
+places or releases it; the deployer and the hold API do.
+
 ## Closing the desktop and shutting down Core
 
 On Linux, local Core runs independently of its desktop viewer. Closing, updating,
@@ -1206,8 +1225,9 @@ Remote Core is controlled by its own host; the local shutdown control is hidden
 when the desktop is connected to a remote Core.
 
 An existing installation that predates independent Core needs one coordinated
-restart before adoption. Follow the project's Butler deployment coordination
-procedure, stop every legacy Core using that database, then run
+restart before adoption. Hold the projects for the stop as AGENTS.md describes
+(the Butler procedure for Cores older than project holds), stop every legacy
+Core using that database, then run
 `nebula-core runtime-adopt --confirm-core-stopped --data-dir <existing-directory>`.
 Keep any configured administration credential in `NEBULA_V3_API_TOKEN` for this
 command. Adoption preserves the database and files in place; it does not merge
