@@ -2304,6 +2304,8 @@ export interface ChatSessionSummary {
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
   isControlAssistant?: boolean;
+  /** A Butler mode thread: a Butler conversation beside the project's current one. */
+  isButlerThread?: boolean;
   /** Core records chats created by Butler separately from ordinary conversations. */
   isButlerInitiated?: boolean;
   pendingRuntimeSwitch?: PendingRuntimeSwitch;
