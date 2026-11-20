@@ -255,6 +255,7 @@ def test_ci_acceptance_chain_binds_each_commit_to_exact_run(monkeypatch, tmp_pat
         directory,
         trusted_baseline,
         supplemental_playwright=None,
+        commit_playwright=None,
     ):
         calls.append((run_id, previous, sha, directory, trusted_baseline))
         return receipts[len(calls) - 1]
@@ -956,3 +957,132 @@ def test_pr_playwright_matrix_matches_github_truncated_job_names():
                      "status": "completed", "conclusion": "success"}]
     with pytest.raises(RuntimeError, match="lacks its matrix identity"):
         deployer.validate_playwright_matrix_jobs(stray, include)
+
+
+def _dispatch_fixture(monkeypatch, *, event="workflow_dispatch", head=PR_MERGE,
+                      candidate=PR_MERGE, baseline=None):
+    selection = _ci_plan(playwright=["area:browser-harness"])
+    entry = {"area": "browser-harness", "grep": "browser harness",
+             "project": "desktop", "runtime": "mock", "shard": "1/1",
+             "test_match": "tests/interface.spec.ts"}
+    plan = {"candidate_sha": candidate, "baseline_sha": baseline,
+            "coverage_review_required": False, "include": [entry],
+            "review_reason": "Run the merged commit's reviewed selection."}
+    run_info = {
+        "head_sha": head, "head_branch": "claude/evidence", "event": event,
+        "status": "completed", "conclusion": "success",
+        "repository": {"full_name": "berylliumsec/nebula"}, "workflow_id": 78,
+        "run_attempt": 1,
+        "html_url": "https://github.com/berylliumsec/nebula/actions/runs/70001",
+    }
+    monkeypatch.setattr(
+        deployer, "github_json",
+        lambda path: run_info if path == "actions/runs/70001"
+        else {"path": ".github/workflows/playwright-impact.yml", "state": "active"},
+    )
+    monkeypatch.setattr(deployer, "verify_ci_trust_inputs", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        deployer, "supplemental_artifact_files",
+        lambda *_args: (
+            {"playwright-impact-plan.json": json.dumps(plan).encode(),
+             "playwright-impact-receipt.md": b"receipt"},
+            {"expired": False, "expires_at": "2026-12-20T00:00:00Z"},
+            "a" * 64,
+        ),
+    )
+    monkeypatch.setattr(deployer, "run", lambda *_args, **_kwargs: json.dumps(selection))
+    calls = []
+
+    def expected(selection, **kwargs):
+        calls.append(kwargs)
+        return ({**plan, "candidate_sha": PR_MERGE, "baseline_sha": None}, "receipt")
+
+    monkeypatch.setattr(deployer, "expected_pr_playwright_plan", expected)
+    name = "playwright (browser-harness, browser harness, desktop, mock, 1/1, tests/interface.spec.ts)"
+    monkeypatch.setattr(
+        deployer, "github_run_jobs",
+        lambda _run_id: [
+            {"name": "plan", "status": "completed", "conclusion": "success"},
+            {"name": "gate", "status": "completed", "conclusion": "success"},
+            {"name": name, "status": "completed", "conclusion": "success"},
+        ],
+    )
+    return calls
+
+
+def test_exact_commit_playwright_dispatch_is_browser_evidence(monkeypatch, tmp_path):
+    calls = _dispatch_fixture(monkeypatch)
+    evidence = deployer.verify_commit_playwright_run(
+        "70001", commit=PR_MERGE, directory=tmp_path, trusted_baseline=OLD
+    )
+    assert evidence["source"] == "github-actions-commit-playwright"
+    assert evidence["commit"] == PR_MERGE and evidence["run_id"] == 70001
+    assert len(evidence["selected_jobs"]) == 3
+    # The trusted selector is asked for the commit itself, with no baseline,
+    # and the operator's recorded reason.
+    assert calls == [{
+        "head_sha": PR_MERGE, "base_sha": None, "directory": tmp_path,
+        "trusted_baseline": OLD,
+        "review_reason": "Run the merged commit's reviewed selection.",
+    }]
+
+
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"event": "pull_request"}, "dispatch on the exact commit"),
+        ({"head": "1" * 40}, "dispatch on the exact commit"),
+        ({"candidate": "1" * 40}, "bound to the exact commit"),
+        ({"baseline": OLD}, "bound to the exact commit"),
+    ],
+)
+def test_exact_commit_playwright_dispatch_refuses_other_runs(
+    monkeypatch, tmp_path, changes, message
+):
+    _dispatch_fixture(monkeypatch, **changes)
+    with pytest.raises(RuntimeError, match=message):
+        deployer.verify_commit_playwright_run(
+            "70001", commit=PR_MERGE, directory=tmp_path, trusted_baseline=OLD
+        )
+
+
+def test_ci_acceptance_chain_uses_exact_commit_evidence_without_pr_runs(
+    monkeypatch, tmp_path
+):
+    selection = _ci_plan(playwright=["area:browser-harness"])
+    monkeypatch.setattr(
+        deployer, "first_parent_commits", lambda *_args, **_kwargs: [PR_MERGE]
+    )
+    monkeypatch.setattr(deployer, "run", lambda *_args, **_kwargs: json.dumps(selection))
+    monkeypatch.setattr(
+        deployer, "verify_pr_ci_supplement",
+        lambda *_a, **_k: pytest.fail("no PR evidence is used"),
+    )
+    evidence = {"source": "github-actions-commit-playwright", "run_id": 70001}
+    monkeypatch.setattr(
+        deployer, "verify_commit_playwright_run", lambda run_id, **_k: evidence
+    )
+    seen = []
+
+    def verify_main(*_args, supplemental_playwright=None, commit_playwright=None, **_k):
+        seen.append((supplemental_playwright, commit_playwright))
+        return {**_ci_run_receipt(60003, PR_MERGE, OLD),
+                "commit_playwright_evidence": commit_playwright}
+
+    monkeypatch.setattr(deployer, "verify_ci_acceptance", verify_main)
+    accepted = deployer.verify_ci_acceptance_chain(
+        ["60003"], previous=OLD, sha=PR_MERGE, directory=tmp_path,
+        commit_playwright_run_ids={PR_MERGE: "70001"},
+    )
+    assert seen == [(None, evidence)]
+    assert accepted["commit_playwright_evidence"] == evidence
+    # Evidence for a commit that selects no browser checks is refused.
+    monkeypatch.setattr(
+        deployer, "run",
+        lambda *_args, **_kwargs: json.dumps(_ci_plan(playwright=[])),
+    )
+    with pytest.raises(RuntimeError, match="without browser checks"):
+        deployer.verify_ci_acceptance_chain(
+            ["60003"], previous=OLD, sha=PR_MERGE, directory=tmp_path,
+            commit_playwright_run_ids={PR_MERGE: "70001"},
+        )

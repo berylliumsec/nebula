@@ -136,25 +136,40 @@ def test_discovery_finds_merged_pr_runs_for_playwright_commits(monkeypatch, pare
 
     assert deployer.discover_pr_supplement_run_ids(
         Path("."), previous=OLD, sha=NEW
-    ) == (["45"], ["51"])
+    ) == (["45"], ["51"], {})
 
 
-def test_discovery_names_a_playwright_commit_without_pr_browser_evidence(monkeypatch):
+def test_discovery_falls_back_to_a_run_dispatched_on_the_exact_commit(monkeypatch):
+    """A PR whose own runs failed (a stale selection, say) leaves the merged
+    commit to be proven by a Playwright run dispatched on it."""
     _selections(monkeypatch, playwright={NEW: ["area:memory-budgets"]})
     monkeypatch.setattr(deployer, "commit_parents", lambda _directory, sha: [MID])
     monkeypatch.setattr(
-        deployer, "squash_merged_pr_head", lambda _directory, sha: (PR_HEAD, 1236)
+        deployer, "squash_merged_pr_head", lambda _directory, sha: (PR_HEAD, 1223)
     )
-    monkeypatch.setattr(
-        deployer,
-        "github_json",
-        _pr_runs({"ci.yml": [_pr_run(45)], "playwright-impact.yml": []}),
-    )
+    dispatched = []
 
+    def github_json(path: str):
+        if "event=workflow_dispatch" in path:
+            assert f"head_sha={NEW}" in path
+            return {"workflow_runs": dispatched}
+        return _pr_runs({"ci.yml": [_pr_run(45, "failure")],
+                         "playwright-impact.yml": [_pr_run(51, "failure")]})(path)
+
+    monkeypatch.setattr(deployer, "github_json", github_json)
     with pytest.raises(deployer.CiEvidenceUnavailable) as caught:
         deployer.discover_pr_supplement_run_ids(Path("."), previous=OLD, sha=NEW)
-    assert NEW[:12] in str(caught.value)
-    assert "playwright-impact.yml" in str(caught.value)
+    assert NEW[:12] in str(caught.value) and "dispatched" in str(caught.value)
+
+    dispatched.extend([
+        {"id": 71, "head_sha": NEW, "event": "workflow_dispatch",
+         "status": "completed", "conclusion": "success"},
+        {"id": 72, "head_sha": NEW, "event": "workflow_dispatch",
+         "status": "completed", "conclusion": "failure"},
+    ])
+    assert deployer.discover_pr_supplement_run_ids(
+        Path("."), previous=OLD, sha=NEW
+    ) == ([], [], {NEW: "71"})
 
 
 class _Stop(Exception):
@@ -192,7 +207,7 @@ def _prepare_until_acceptance(tmp_path, monkeypatch, discovered):
     monkeypatch.setattr(
         deployer,
         "discover_pr_supplement_run_ids",
-        lambda directory, *, previous, sha: (["61"], ["62"]),
+        lambda directory, *, previous, sha: (["61"], ["62"], {}),
     )
     monkeypatch.setattr(deployer, "verify_ci_acceptance_chain", chain)
     monkeypatch.setattr(deployer, "selected_plan", plan)

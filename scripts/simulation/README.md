@@ -116,8 +116,15 @@ the one PR GitHub records as merged into that commit, fetched from
 parent and have the identical tree, so it tested exactly what main received.
 Matrix jobs are matched to selected entries by GitHub's displayed job name, which
 is cut at 100 characters; entries that truncate to the same name each still need
-their own successful job. A Playwright-selected commit without such PR evidence
-stops preparation. Other pull request or workflow dispatch runs are not accepted.
+their own successful job. If that PR's own runs did not both succeed (for
+example, its CI refused a stale selection), the commit is proven instead by a
+successful `playwright-impact.yml` run dispatched on exactly that commit (push a
+branch at the commit and dispatch with the commit's selectors and a review
+reason). Its plan must equal the trusted selector's plan for the commit's
+committed selection, with no baseline, and every entry needs its own successful
+job; the receipt records it as `commit_playwright_evidence`, never as PR
+evidence. A Playwright-selected commit with neither stops preparation. Other pull
+request or workflow dispatch runs are not accepted.
 
 CI-only acceptance also requires the workflow files, local action definitions,
 and `scripts/test_selection.py` to match the original live baseline for every

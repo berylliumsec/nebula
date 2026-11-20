@@ -1204,10 +1204,16 @@ def expected_pr_playwright_plan(
     selection: dict[str, Any],
     *,
     head_sha: str,
-    base_sha: str,
+    base_sha: str | None,
     directory: Path,
     trusted_baseline: str,
+    review_reason: str | None = None,
 ) -> tuple[dict[str, Any], str]:
+    """The trusted selector's plan for a reviewed browser selection.
+
+    A pull request run selects against its base; a run dispatched on an
+    exact main commit has no baseline and carries its operator's reason.
+    """
     with tempfile.TemporaryDirectory(prefix="nebula-pr-playwright-") as temporary:
         temporary_path = Path(temporary)
         script = temporary_path / "playwright_impact.py"
@@ -1234,7 +1240,11 @@ def expected_pr_playwright_plan(
         )
         output = temporary_path / "expected-plan.json"
         receipt = temporary_path / "expected-receipt.md"
-        reviewed_reason = f"{selection.get('reason', '')} Exclusions: {selection.get('exclusions', '')}"
+        reviewed_reason = (
+            review_reason
+            if review_reason is not None
+            else f"{selection.get('reason', '')} Exclusions: {selection.get('exclusions', '')}"
+        )
         selectors = [
             item
             if item.startswith(("area:", "entry:", "project:"))
@@ -1247,8 +1257,6 @@ def expected_pr_playwright_plan(
             "select",
             "--manifest",
             str(manifest),
-            "--baseline",
-            base_sha,
             "--candidate",
             head_sha,
             "--scope",
@@ -1260,6 +1268,8 @@ def expected_pr_playwright_plan(
             "--receipt",
             str(receipt),
         ]
+        if base_sha is not None:
+            args.extend(("--baseline", base_sha))
         for selector in selectors or ["none"]:
             args.extend(("--selection", selector))
         run(*args, cwd=directory)
@@ -1345,6 +1355,116 @@ def verify_pr_playwright_supplement(
     }
 
 
+def verify_commit_playwright_run(
+    run_id: str, *, commit: str, directory: Path, trusted_baseline: str
+) -> dict[str, Any]:
+    """Accept a Playwright run dispatched on exactly ``commit``.
+
+    For a squash merge whose pull request never ran its reviewed browser
+    selection, a successful ``playwright-impact.yml`` dispatch on the merged
+    commit itself is direct evidence. Its plan must equal the trusted
+    selector's plan for the commit's committed selection, and every selected
+    entry needs its own successful job.
+    """
+    if not CI_RUN_ID.fullmatch(run_id):
+        raise RuntimeError("Commit Playwright run id must be a positive decimal identifier")
+    run_info = github_json(f"actions/runs/{run_id}")
+    repository = run_info.get("repository")
+    if not isinstance(repository, dict):
+        repository = {}
+    if (
+        run_info.get("head_sha") != commit
+        or run_info.get("event") != "workflow_dispatch"
+        or run_info.get("status") != "completed"
+        or run_info.get("conclusion") != "success"
+        or str(repository.get("full_name", "")).lower() != GITHUB_REPOSITORY
+        or type(run_info.get("run_attempt")) is not int
+        or run_info.get("run_attempt") < 1
+        or run_info.get("html_url")
+        != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+    ):
+        raise RuntimeError(
+            "Commit Playwright run is not a successful dispatch on the exact commit"
+        )
+    workflow_id = run_info.get("workflow_id")
+    if type(workflow_id) is not int or workflow_id < 1:
+        raise RuntimeError("Commit Playwright run has no valid workflow identity")
+    workflow = github_json(f"actions/workflows/{workflow_id}")
+    if (
+        workflow.get("path") != ".github/workflows/playwright-impact.yml"
+        or workflow.get("state") != "active"
+    ):
+        raise RuntimeError("Commit Playwright run did not use the pinned active workflow")
+    verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=commit)
+    files, artifact, artifact_digest = supplemental_artifact_files(
+        int(run_id),
+        "playwright-impact-receipt",
+        {"playwright-impact-plan.json", "playwright-impact-receipt.md"},
+    )
+    try:
+        received_plan = json.loads(files["playwright-impact-plan.json"])
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("Commit Playwright artifact contains invalid JSON") from error
+    if (
+        not isinstance(received_plan, dict)
+        or received_plan.get("candidate_sha") != commit
+        or received_plan.get("baseline_sha") is not None
+        or not isinstance(received_plan.get("review_reason"), str)
+        or not received_plan["review_reason"].strip()
+    ):
+        raise RuntimeError("Commit Playwright plan is not bound to the exact commit")
+    selection = json.loads(
+        run(
+            "git",
+            "-C",
+            str(directory),
+            "show",
+            f"{commit}:.github/test-selection.json",
+            capture=True,
+        )
+    )
+    if not isinstance(selection.get("playwright"), list) or not selection["playwright"]:
+        raise RuntimeError("Commit has no reviewed browser selection to prove")
+    expected_plan, expected_receipt = expected_pr_playwright_plan(
+        selection,
+        head_sha=commit,
+        base_sha=None,
+        directory=directory,
+        trusted_baseline=trusted_baseline,
+        review_reason=received_plan["review_reason"],
+    )
+    if (
+        expected_plan.get("coverage_review_required")
+        or not expected_plan.get("include")
+        or received_plan != expected_plan
+        or files["playwright-impact-receipt.md"].decode("utf-8") != expected_receipt
+    ):
+        raise RuntimeError(
+            "Commit Playwright artifact differs from the pinned selector result"
+        )
+    selected_jobs = validate_playwright_matrix_jobs(
+        github_run_jobs(int(run_id)), expected_plan["include"]
+    )
+    if artifact.get("expired") is not False:
+        raise RuntimeError("Commit Playwright artifact is expired")
+    return {
+        "source": "github-actions-commit-playwright",
+        "run_id": int(run_id),
+        "run_url": run_info["html_url"],
+        "run_attempt": run_info["run_attempt"],
+        "workflow_path": ".github/workflows/playwright-impact.yml",
+        "commit": commit,
+        "review_reason": received_plan["review_reason"],
+        "playwright_plan_sha256": hashlib.sha256(
+            json.dumps(expected_plan, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "artifact_sha256": artifact_digest,
+        "artifact_expires_at": artifact["expires_at"],
+        "selected_entries": expected_plan["include"],
+        "selected_jobs": selected_jobs,
+    }
+
+
 def verify_ci_acceptance(
     run_id: str,
     *,
@@ -1353,9 +1473,13 @@ def verify_ci_acceptance(
     directory: Path,
     trusted_baseline: str | None = None,
     supplemental_playwright: dict[str, Any] | None = None,
+    commit_playwright: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not CI_RUN_ID.fullmatch(run_id):
         raise RuntimeError("CI run id must be a positive decimal identifier")
+    if supplemental_playwright is not None and commit_playwright is not None:
+        raise RuntimeError("A commit's browser evidence has exactly one source")
+    browser_proven = supplemental_playwright is not None or commit_playwright is not None
     trusted_baseline = trusted_baseline or previous
     verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=sha)
     first_parent = run(
@@ -1410,14 +1534,13 @@ def verify_ci_acceptance(
         directory=directory,
         trusted_baseline=trusted_baseline,
     )
-    if bool(selection.get("playwright")) != (supplemental_playwright is not None):
+    if bool(selection.get("playwright")) != browser_proven:
         raise RuntimeError(
-            "Selected Playwright checks require exact merged-PR supplemental evidence"
+            "Selected Playwright checks require exact merged-PR or exact-commit evidence"
         )
     jobs = github_run_jobs(int(run_id))
     required_jobs = selected_ci_jobs(
-        selection,
-        supplemental_playwright_verified=supplemental_playwright is not None,
+        selection, supplemental_playwright_verified=browser_proven
     )
     selected_conclusions = require_ci_jobs(jobs, required_jobs)
     receipt = {
@@ -1435,6 +1558,8 @@ def verify_ci_acceptance(
     }
     if supplemental_playwright is not None:
         receipt["supplemental_pr_evidence"] = supplemental_playwright
+    if commit_playwright is not None:
+        receipt["commit_playwright_evidence"] = commit_playwright
     return receipt
 
 
@@ -1472,19 +1597,41 @@ def _newest_successful_pr_run(workflow: str, head_sha: str, label: str) -> str:
     return str(max(succeeded, key=lambda item: int(item.get("id", 0)))["id"])
 
 
+def _newest_successful_commit_playwright_run(commit: str) -> str | None:
+    listing = github_json(
+        "actions/workflows/playwright-impact.yml/runs?"
+        f"head_sha={commit}&event=workflow_dispatch&per_page=50"
+    )
+    succeeded = [
+        item
+        for item in listing.get("workflow_runs", [])
+        if isinstance(item, dict)
+        and item.get("head_sha") == commit
+        and item.get("event") == "workflow_dispatch"
+        and item.get("status") == "completed"
+        and item.get("conclusion") == "success"
+    ]
+    if not succeeded:
+        return None
+    return str(max(succeeded, key=lambda item: int(item.get("id", 0)))["id"])
+
+
 def discover_pr_supplement_run_ids(
     directory: Path, *, previous: str, sha: str
-) -> tuple[list[str], list[str]]:
-    """Find each Playwright-selected commit's merged-PR CI and Playwright runs.
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """Find browser evidence for each Playwright-selected commit.
 
-    Push CI does not run browser checks, so they come from the PR whose head
-    tested exactly the tree main received: a merge commit's second parent, or
-    the head of the PR squash-merged as the commit. Acceptance re-verifies the
-    shape, trees, selections and every selected job.
+    Push CI does not run browser checks. They come from the PR whose head
+    tested exactly the tree main received (a merge commit's second parent, or
+    the head of the PR squash-merged as the commit), when both its CI and
+    Playwright runs succeeded. Otherwise they come from a successful
+    ``playwright-impact.yml`` run dispatched on the exact commit. Acceptance
+    re-verifies shapes, trees, plans and every selected job.
     """
 
     pr_ci: list[str] = []
     pr_playwright: list[str] = []
+    commit_runs: dict[str, str] = {}
     for commit in first_parent_commits(directory, previous=previous, sha=sha):
         committed = json.loads(
             run(
@@ -1508,11 +1655,23 @@ def discover_pr_supplement_run_ids(
                 f"{commit[:12]} selects Playwright checks but is neither a merge "
                 "nor a squash commit, so no pull request runs can prove them"
             )
-        pr_ci.append(_newest_successful_pr_run("ci.yml", head_sha, commit[:12]))
-        pr_playwright.append(
-            _newest_successful_pr_run("playwright-impact.yml", head_sha, commit[:12])
-        )
-    return pr_ci, pr_playwright
+        try:
+            ci_run = _newest_successful_pr_run("ci.yml", head_sha, commit[:12])
+            playwright_run = _newest_successful_pr_run(
+                "playwright-impact.yml", head_sha, commit[:12]
+            )
+        except CiEvidenceUnavailable as missing:
+            dispatched = _newest_successful_commit_playwright_run(commit)
+            if dispatched is None:
+                raise CiEvidenceUnavailable(
+                    f"{missing}; nor is there a successful playwright-impact.yml "
+                    f"run dispatched on {commit[:12]} itself"
+                ) from missing
+            commit_runs[commit] = dispatched
+            continue
+        pr_ci.append(ci_run)
+        pr_playwright.append(playwright_run)
+    return pr_ci, pr_playwright, commit_runs
 
 
 def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str]:
@@ -1569,8 +1728,10 @@ def verify_ci_acceptance_chain(
     directory: Path,
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
+    commit_playwright_run_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     commits = first_parent_commits(directory, previous=previous, sha=sha)
+    commit_playwright_run_ids = dict(commit_playwright_run_ids or {})
     if len(run_ids) != len(commits):
         raise RuntimeError(
             "CI acceptance requires exactly one run for each first-parent commit"
@@ -1580,12 +1741,9 @@ def verify_ci_acceptance_chain(
 
     pr_ci_run_ids = pr_ci_run_ids or []
     pr_playwright_run_ids = pr_playwright_run_ids or []
-    if (
-        len(set(pr_ci_run_ids)) != len(pr_ci_run_ids)
-        or len(set(pr_playwright_run_ids)) != len(pr_playwright_run_ids)
-        or len(set((*run_ids, *pr_ci_run_ids, *pr_playwright_run_ids)))
-        != len(run_ids) + len(pr_ci_run_ids) + len(pr_playwright_run_ids)
-    ):
+    dispatch_ids = list(commit_playwright_run_ids.values())
+    every_id = (*run_ids, *pr_ci_run_ids, *pr_playwright_run_ids, *dispatch_ids)
+    if len(set(every_id)) != len(every_id):
         raise RuntimeError("CI acceptance run IDs must be unique")
     playwright_commits = []
     for commit in commits:
@@ -1602,8 +1760,14 @@ def verify_ci_acceptance_chain(
         selected = committed.get("playwright")
         if not isinstance(selected, list):
             raise RuntimeError("Committed Playwright selection is malformed")
-        if selected:
+        if selected and commit not in commit_playwright_run_ids:
             playwright_commits.append(commit)
+        elif not selected and commit in commit_playwright_run_ids:
+            raise RuntimeError(
+                "Exact-commit Playwright evidence names a commit without browser checks"
+            )
+    if set(commit_playwright_run_ids) - set(commits):
+        raise RuntimeError("Exact-commit Playwright evidence names an unknown commit")
     if len(pr_ci_run_ids) != len(playwright_commits) or len(
         pr_playwright_run_ids
     ) != len(playwright_commits):
@@ -1669,6 +1833,16 @@ def verify_ci_acceptance_chain(
                 )
             supplemental = {"pull_request_ci": pr_ci, "playwright": pr_playwright}
             supplemental_index += 1
+        commit_playwright = (
+            verify_commit_playwright_run(
+                commit_playwright_run_ids[commit],
+                commit=commit,
+                directory=directory,
+                trusted_baseline=previous,
+            )
+            if commit in commit_playwright_run_ids
+            else None
+        )
         receipt = verify_ci_acceptance(
             run_id,
             previous=baseline,
@@ -1676,6 +1850,7 @@ def verify_ci_acceptance_chain(
             directory=directory,
             trusted_baseline=previous,
             supplemental_playwright=supplemental,
+            commit_playwright=commit_playwright,
         )
         if receipt.get("baseline") != baseline or receipt.get("commit") != commit:
             raise RuntimeError(
@@ -1701,6 +1876,25 @@ def verify_ci_acceptance_chain(
         "commit": sha,
         "receipts": receipts,
     }
+
+
+def expected_matrix_job_record(entries: list[Any]) -> dict[str, str]:
+    """The job conclusions an accepted Playwright matrix record must hold."""
+    expected_jobs = {"plan": "success", "gate": "success"}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("release CI Playwright record is invalid")
+        signature = tuple(
+            entry.get(field) for field in ("area", "grep", "project", "runtime", "shard")
+        )
+        if any(not isinstance(value, str) or not value for value in signature):
+            raise RuntimeError("release CI Playwright record is invalid")
+        label = json.dumps(signature, separators=(",", ":"))
+        index = 1
+        while f"playwright:{label}:{index}" in expected_jobs:
+            index += 1
+        expected_jobs[f"playwright:{label}:{index}"] = "success"
+    return expected_jobs
 
 
 def validate_ci_acceptance_record(
@@ -1788,25 +1982,7 @@ def validate_ci_acceptance_record(
             or pr_ci["selection_plan_sha256"] != playwright["selection_plan_sha256"]
         ):
             raise RuntimeError("release CI supplemental Playwright record is invalid")
-        expected_jobs = {"plan": "success", "gate": "success"}
-        for entry in playwright["selected_entries"]:
-            if not isinstance(entry, dict):
-                raise RuntimeError(
-                    "release CI supplemental Playwright record is invalid"
-                )
-            signature = tuple(
-                entry.get(field)
-                for field in ("area", "grep", "project", "runtime", "shard")
-            )
-            if any(not isinstance(value, str) or not value for value in signature):
-                raise RuntimeError(
-                    "release CI supplemental Playwright record is invalid"
-                )
-            label = json.dumps(signature, separators=(",", ":"))
-            index = 1
-            while f"playwright:{label}:{index}" in expected_jobs:
-                index += 1
-            expected_jobs[f"playwright:{label}:{index}"] = "success"
+        expected_jobs = expected_matrix_job_record(playwright["selected_entries"])
         if playwright.get("selected_jobs") != expected_jobs:
             raise RuntimeError(
                 "release CI supplemental Playwright shard record is invalid"
@@ -1857,6 +2033,35 @@ def validate_ci_acceptance_record(
             raise RuntimeError("release CI acceptance run IDs are duplicated")
         accepted_run_ids.add(run_id)
         supplemental = item.get("supplemental_pr_evidence")
+        commit_evidence = item.get("commit_playwright_evidence")
+        if supplemental is not None and commit_evidence is not None:
+            raise RuntimeError("release CI browser evidence has two sources")
+        if commit_evidence is not None:
+            if (
+                not isinstance(commit_evidence, dict)
+                or commit_evidence.get("source") != "github-actions-commit-playwright"
+                or commit_evidence.get("workflow_path")
+                != ".github/workflows/playwright-impact.yml"
+                or commit_evidence.get("commit") != commit
+                or type(commit_evidence.get("run_id")) is not int
+                or commit_evidence["run_id"] < 1
+                or commit_evidence.get("run_url")
+                != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{commit_evidence['run_id']}"
+                or not isinstance(commit_evidence.get("review_reason"), str)
+                or not commit_evidence["review_reason"].strip()
+                or not SHA256.fullmatch(
+                    str(commit_evidence.get("playwright_plan_sha256", ""))
+                )
+                or not SHA256.fullmatch(str(commit_evidence.get("artifact_sha256", "")))
+                or not isinstance(commit_evidence.get("selected_entries"), list)
+                or not commit_evidence["selected_entries"]
+                or commit_evidence.get("selected_jobs")
+                != expected_matrix_job_record(commit_evidence["selected_entries"])
+            ):
+                raise RuntimeError("release exact-commit Playwright record is invalid")
+            if commit_evidence["run_id"] in accepted_run_ids:
+                raise RuntimeError("release CI acceptance run IDs are duplicated")
+            accepted_run_ids.add(commit_evidence["run_id"])
         if supplemental is not None:
             if not isinstance(supplemental, dict):
                 raise RuntimeError("release CI supplemental PR evidence is invalid")
@@ -1884,20 +2089,33 @@ def validate_ci_acceptance_record(
                     capture=True,
                 )
             )
-            if bool(selection.get("playwright")) != (supplemental is not None):
+            browser_proven = supplemental is not None or commit_evidence is not None
+            if bool(selection.get("playwright")) != browser_proven:
                 raise RuntimeError(
                     "release CI record does not cover its Playwright selection"
                 )
             expected_main_jobs = {
                 name: "success"
                 for name in selected_ci_jobs(
-                    selection,
-                    supplemental_playwright_verified=supplemental is not None,
+                    selection, supplemental_playwright_verified=browser_proven
                 )
             }
             if not recorded_ci_jobs_match(item["selected_jobs"], expected_main_jobs):
                 raise RuntimeError("release CI selected-job record is incomplete")
             verify_ci_trust_inputs(directory, trusted_baseline=previous, sha=commit)
+            if commit_evidence is not None:
+                expected_plan, _ = expected_pr_playwright_plan(
+                    selection,
+                    head_sha=commit,
+                    base_sha=None,
+                    directory=directory,
+                    trusted_baseline=previous,
+                    review_reason=commit_evidence["review_reason"],
+                )
+                if commit_evidence["selected_entries"] != expected_plan.get("include"):
+                    raise RuntimeError(
+                        "release exact-commit Playwright entries differ from the trusted selector"
+                    )
             if supplemental is not None:
                 pr_ci = supplemental["pull_request_ci"]
                 playwright = supplemental["playwright"]
@@ -2125,9 +2343,13 @@ def _prepare(
     timings.begin("ci_evidence")
     if ci_run_ids is None:
         ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
-        pr_ci_run_ids, pr_playwright_run_ids = discover_pr_supplement_run_ids(
-            directory, previous=previous, sha=sha
-        )
+        (
+            pr_ci_run_ids,
+            pr_playwright_run_ids,
+            commit_playwright_run_ids,
+        ) = discover_pr_supplement_run_ids(directory, previous=previous, sha=sha)
+    else:
+        commit_playwright_run_ids = {}
     ci_acceptance = verify_ci_acceptance_chain(
         ci_run_ids,
         previous=previous,
@@ -2135,6 +2357,7 @@ def _prepare(
         directory=directory,
         pr_ci_run_ids=pr_ci_run_ids,
         pr_playwright_run_ids=pr_playwright_run_ids,
+        commit_playwright_run_ids=commit_playwright_run_ids,
     )
     plan = selected_plan(directory, previous)
     reviewed = plan.get("reviewed_commits", [])
