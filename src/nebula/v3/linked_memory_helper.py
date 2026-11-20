@@ -142,9 +142,14 @@ def build_prompt(
     for index, entry in enumerate(entries):
         ref = f"e{index + 1}"
         role = entry.get("role", "agent")
+        if role == "core":
+            # Core's fixed goal prompt states no project fact.
+            continue
         label = role
         if role == "tool":
             label = f"tool {entry.get('tool_name') or 'result'}"
+            if entry.get("denied"):
+                label += " DENIED by project policy"
         limit = per_entry if role != "tool" else min(per_entry, 900)
         text = _clip(str(entry.get("text") or ""), limit)
         if not text:
@@ -166,6 +171,12 @@ def build_prompt(
         "lessons learned, and open questions. Skip greetings, progress "
         "chatter, plans that were not carried out, speculation, and anything "
         "an existing card already says.\n"
+        "Entries are labelled by author: operator (the person running the "
+        "project), instruction (Core or a delegating agent, never the "
+        "operator), agent, or tool. A tool call DENIED by project policy (a "
+        "hook, approval or access rule) is that policy working as intended: "
+        "never propose a card about the denial, or one that suggests another "
+        "tool, route, host or retry to get around it.\n"
         "Each card needs: kind (one of "
         + ", ".join(CARD_KINDS)
         + "), title (at most 120 characters), summary (at most 400 characters, "
@@ -236,7 +247,27 @@ def _authority_for(entry: dict[str, Any]) -> tuple[str, bool]:
         return "operator_statement", False
     if role == "tool":
         return "tool_result", is_open_world_tool(entry.get("tool_name"))
+    # An agent's words and an instruction from Core or a delegating agent.
     return "agent_inference", False
+
+
+# A card that pairs a refusal with a way past it teaches an agent to evade a
+# project's hook, approval or access rule. It is kept for review, never shown.
+_REFUSAL = re.compile(
+    r"\b(?:hooks?|guards?|denied|denials?|blocked|forbidden|refused|"
+    r"not (?:permitted|allowed)|approvals?)\b"
+)
+_EVASION = re.compile(
+    r"\b(?:instead|alternat\w*|routes?|reroute\w*|routing|bypass\w*|around|"
+    r"workarounds?|circumvent\w*|(?:other|another|different) tool)\b"
+)
+
+
+def evades_refusal(card: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(card.get(field) or "") for field in ("title", "summary", "applies_when")
+    ).casefold()
+    return bool(_REFUSAL.search(text) and _EVASION.search(text))
 
 
 def _find_quote(
@@ -268,8 +299,10 @@ def verify_proposals(
     """Keep only proposals whose quote appears in the chunk.
 
     Authority comes from the entry the quote was found in, never from the
-    model. A card whose only evidence is open-world tool output is
-    quarantined. Links may target only the existing cards shown in the
+    model, and only the operator's own words carry operator authority. A
+    call denied by project policy is not evidence. A card whose only
+    evidence is open-world tool output, or that pairs a refusal with a way
+    around it, is quarantined. Links may target only the existing cards shown in the
     prompt; ``supersedes`` needs equal or stronger authority, otherwise it
     becomes a proposed ``contradicts``.
     """
@@ -306,6 +339,11 @@ def verify_proposals(
         if index is None:
             rejected.append({"title": title[:80], "reason": "quote_not_found"})
             continue
+        if entries[index].get("denied"):
+            # A refusal is the project's policy, already enforced on every
+            # call; it is not a fact to remember or a problem to route around.
+            rejected.append({"title": title[:80], "reason": "policy_denial"})
+            continue
         content_hash = card_content_hash(kind, title[:120], summary[:400])
         if content_hash in seen:
             rejected.append({"title": title[:80], "reason": "duplicate"})
@@ -313,6 +351,9 @@ def verify_proposals(
         seen.add(content_hash)
         entry = entries[index]
         authority, open_world = _authority_for(entry)
+        evasive = evades_refusal(
+            {"title": title, "summary": summary, "applies_when": applies_when}
+        )
         key = f"n{number}"
         cards.append(
             {
@@ -322,7 +363,7 @@ def verify_proposals(
                 "summary": summary[:400],
                 "applies_when": applies_when[:300] if applies_when else None,
                 "authority": authority,
-                "quarantined": open_world,
+                "quarantined": open_world or evasive,
                 "content_hash": content_hash,
                 "source": {
                     "kind": "turn_step"
@@ -350,7 +391,7 @@ def verify_proposals(
             basis = "same_subject"
             if link_type == "supersedes":
                 old = by_id.get(target)
-                if open_world or (
+                if open_world or evasive or (
                     old is not None
                     and authority_rank(authority) > authority_rank(old["authority"])
                 ):
