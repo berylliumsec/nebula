@@ -1229,12 +1229,17 @@ class StagedDeployer:
 
         # Move one project at a time. The next target is not prepared until the
         # current source has become ownerless, retired, and disappeared from
-        # fresh ownership status.
+        # fresh ownership status. A pass that only skips projects changes
+        # nothing, so it reuses one status read: deployment status lists every
+        # project, and reading it once per project made a pass over a thousand
+        # projects take minutes.
+        fresh: dict | None = None
         for original in projects:
             project_id = original.get("project_id")
             if not project_id:
                 continue
-            status = self._status()
+            status = fresh if fresh is not None else self._status()
+            fresh = status
             project = next(
                 (
                     row
@@ -1298,6 +1303,8 @@ class StagedDeployer:
                     ],
                     pinned,
                 )
+            # From here this iteration acts on Core; the next one reads it again.
+            fresh = None
 
             source_id = project["runtime_id"]
             source_projects = [

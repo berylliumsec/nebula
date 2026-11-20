@@ -793,3 +793,37 @@ def test_promotion_retires_unowned_workers_of_older_versions():
     retired = [values["runtime_id"] for action, values in host.calls if action == "retire"]
     assert "spare-old" in retired
     assert host.state["resident_versions"] == ["v2"]
+
+
+def _status_reads_with_moved_projects(count):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    for index in range(count):
+        runtime_id = f"moved-{index}"
+        host.state["projects"].append(
+            {
+                "project_id": f"moved-{index}",
+                "runtime_id": runtime_id,
+                "runtime_version": "v2",
+                "fencing_token": 2,
+                "phase": "verified",
+            }
+        )
+        host.live_runtimes[runtime_id] = "v2"
+    reads = []
+    get = host.get
+
+    def counting_get(path):
+        reads.append(path)
+        return get(path)
+
+    deployer = host.deployer(record)
+    deployer.get = counting_get
+    assert deployer.promote("v2")["status"] == "promoted"
+    return len(reads)
+
+
+def test_projects_already_moved_share_one_status_read_per_pass():
+    # Deployment status lists every project; one read per skipped project made
+    # a pass over a thousand projects take minutes.
+    # The move of the first project ends with one fresh read for the rest.
+    assert _status_reads_with_moved_projects(200) <= _status_reads_with_moved_projects(0) + 1
