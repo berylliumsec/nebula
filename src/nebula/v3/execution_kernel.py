@@ -12074,6 +12074,14 @@ def create_execution_kernel(
         dependencies=[Depends(require_auth)],
     )
 
+    from .butler_board import butler_board_router
+
+    app.include_router(
+        butler_board_router(store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
     @app.get(
         f"{API_PREFIX}/chat/session-activity",
         response_model=list[ChatSessionActivity],

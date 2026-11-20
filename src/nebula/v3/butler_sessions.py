@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import Field, model_validator
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from .advisory_keys import per_id_key
 from .chat import ChatConfigurationError
@@ -37,6 +37,10 @@ class ButlerSessionReservation(NebulaModel):
         Literal["automatic", "standard", "daybreakBlue", "daybreakRed"] | None
     ) = None
     allow_cloud_tool_results: bool = False
+    # Butler mode: start a separate Butler conversation that runs alongside
+    # the project's current one instead of returning it.
+    thread: bool = False
+    title: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def runtime_is_coherent(self) -> "ButlerSessionReservation":
@@ -56,6 +60,8 @@ class ButlerSessionReservation(NebulaModel):
                 )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError("harness Butler sessions require only harness_profile_id")
+        if self.title is not None and not self.thread:
+            raise ValueError("only a Butler thread takes a title")
         return self
 
 
@@ -113,12 +119,24 @@ async def reserve_butler_session(
                 .is_(None),
                 # Butler's own subagents run in Butler mode in child chats.
                 EntityRow.payload["metadata"]["subagent_id"].as_string().is_(None),
+                # Butler mode threads run beside the current conversation.
+                func.coalesce(
+                    EntityRow.payload["metadata"]["butler_thread"].as_boolean(),
+                    False,
+                ).is_(False),
             )
             .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
             .limit(1)
         )
-        if row is not None:
+        if row is not None and not request.thread:
             return ChatSession.model_validate(row.payload)
+        title = (request.title or "Butler thread") if request.thread else "Butler"
+        # A thread keeps the operator's question as its name.
+        thread_metadata = (
+            {"butler_thread": True, "initial_title_state": "operator"}
+            if request.thread
+            else {}
+        )
 
         if request.backend == ChatBackend.PROVIDER:
             assert request.provider_id is not None
@@ -145,13 +163,14 @@ async def reserve_butler_session(
                 )
             chat = ChatSession(
                 engagement_id=request.engagement_id,
-                title="Butler",
+                title=title,
                 backend=ChatBackend.PROVIDER,
                 provider_profile_id=provider_profile.id,
                 model=model,
                 metadata={
                     "control_assistant": True,
                     "mcp_server_ids": list(request.mcp_server_ids),
+                    **thread_metadata,
                 },
             )
         else:
@@ -184,7 +203,7 @@ async def reserve_butler_session(
             )
             chat = ChatSession(
                 engagement_id=request.engagement_id,
-                title="Butler",
+                title=title,
                 backend=ChatBackend.HARNESS,
                 harness_profile_id=harness_profile.id,
                 harness_session_id=session.id,
@@ -197,6 +216,7 @@ async def reserve_butler_session(
                     "harness_runtime_options": session.metadata.get(
                         "runtime_options", {}
                     ),
+                    **thread_metadata,
                 },
             )
         (await transaction.add(chat))
