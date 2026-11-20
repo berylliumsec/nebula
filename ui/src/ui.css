@@ -392,3 +392,6 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
   .chat-message.assistant header strong + span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat-message.assistant header .chat-message-time { flex: 0 0 auto; white-space: nowrap; }
 }
+
+/* A held project keeps the draft; Send waits for the hold's release. */
+.chat-composer-hold-note { margin: 0; padding: 2px 16px 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
