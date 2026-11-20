@@ -52,6 +52,7 @@ from .domain import (
     ApprovalStatus,
     AssistantDefaults,
     BrowserIdentity,
+    ButlerAuthorityPolicy,
     BrowserSession,
     BrowserSessionStatus,
     ChatBackend,
@@ -655,6 +656,21 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
         "subagent_reasoning_effort": {"type": "string"},
     },
     "required": ["objective", "completion_criteria"],
+}
+PROPOSE_GOAL_CHAT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **START_GOAL_CONVERSATION_SCHEMA["properties"],
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "reports_to_session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "A listed main chat this goal chat reports to. Omit to report to this Butler conversation.",
+        },
+    },
+    "required": ["title", "objective", "completion_criteria"],
 }
 UPDATE_GOAL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1908,6 +1924,17 @@ class ControlAssistantWork:
     async def create_goal_conversation(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        body = await self._goal_conversation_body(
+            project_id, arguments, butler_initiated=True
+        )
+        result = await self._request(
+            "POST", "/api/v1/chat/goal-conversations", body.model_dump(mode="json")
+        )
+        return await self.goal_detail(project_id, result["session"]["id"])
+
+    async def _goal_conversation_body(
+        self, project_id: str, arguments: dict[str, Any], **extra: Any
+    ) -> GoalConversationCreate:
         (await self._project(project_id))
         backend, profile_id, model = await self._runtime(arguments)
         fields = {
@@ -1926,7 +1953,7 @@ class ControlAssistantWork:
             harness_profile_id=profile_id if backend == "harness" else None,
             model=model,
             tools_enabled=enabled,
-            butler_initiated=True,
+            **extra,
             **{
                 key: value
                 for key, value in arguments.items()
@@ -1949,10 +1976,174 @@ class ControlAssistantWork:
             },
             **goal.model_dump(),
         )
-        result = await self._request(
+        return body
+
+    async def _butler_may_start_goals(self, project_id: str) -> bool:
+        """Whether the project's standing Butler grant covers starting goal chats.
+
+        Delegate and Act authority let Butler start the goal chat it proposes;
+        Watch and Steer leave the draft for the operator to start.
+        """
+
+        policy = await self.store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", project_id
+        )
+        return policy is not None and policy.authority in {"delegate", "act"}
+
+    async def propose_goal_chat(
+        self,
+        project_id: str,
+        arguments: dict[str, Any],
+        *,
+        caller_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a Butler-proposed goal chat as a draft, or start it if delegated.
+
+        The draft is an ordinary goal conversation, so it survives reloads and
+        shows on every device. The operator starts, edits or deletes it with
+        the existing goal and chat routes. Under Delegate or Act authority,
+        Butler starts it immediately and reports that it started.
+        """
+
+        title = _text(arguments.get("title"), "title", 300)
+        reports_to: ChatSession | None = None
+        if arguments.get("reports_to_session_id") is not None:
+            reports_to = await self._chat(
+                project_id, arguments.get("reports_to_session_id")
+            )
+        butler_session: ChatSession | None = None
+        if caller_session_id:
+            caller = await self.store.get(ChatSession, caller_session_id)
+            if (
+                caller.engagement_id == project_id
+                and caller.metadata.get("control_assistant") is True
+            ):
+                butler_session = caller
+        delegated = await self._butler_may_start_goals(project_id)
+        body = await self._goal_conversation_body(
+            project_id,
+            {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"title", "reports_to_session_id"}
+            },
+            butler_initiated=delegated,
+            title=title,
+            proposed_by_butler=True,
+            butler_session_id=butler_session.id if butler_session else None,
+            reports_to_session_id=reports_to.id if reports_to else None,
+        )
+        created = await self._request(
             "POST", "/api/v1/chat/goal-conversations", body.model_dump(mode="json")
         )
-        return await self.goal_detail(project_id, result["session"]["id"])
+        session_id = str(created["session"]["id"])
+        start_error: str | None = None
+        if delegated:
+            try:
+                await self._request(
+                    "POST",
+                    f"/api/v1/chat/sessions/{quote(session_id, safe='')}/goal/actions",
+                    GoalWrite(
+                        expected_revision=int(created["goal"]["revision"]),
+                        action="start",
+                    ).model_dump(mode="json"),
+                )
+            except ValueError as exc:
+                # diagnostic-expected: Core refused the delegated start (a
+                # project hold, say); the saved draft stays for the operator
+                # and the receipt reports the refusal.
+                start_error = str(exc)[:500]
+                draft = await self.store.get(ChatSession, session_id)
+                await self.store.update(
+                    ChatSession,
+                    draft.id,
+                    {
+                        "metadata": {
+                            key: value
+                            for key, value in draft.metadata.items()
+                            if key != "butler_initiated"
+                        }
+                    },
+                    expected_revision=draft.revision,
+                )
+        started = delegated and start_error is None
+        session = await self.store.get(ChatSession, session_id)
+        goal = await self.goals.get(session_id)
+        mcp_names = {
+            item.id: item.name
+            for item in await self.store.find_entities(McpServerProfile, {}, limit=None)
+            if item.id in body.mcp_server_ids
+        }
+        client_action = {
+            "kind": "goal_chat_started" if started else "goal_chat_proposal",
+            "sessionId": session.id,
+            "projectId": project_id,
+            "title": session.title,
+            "objective": goal.objective,
+            "completionCriteria": list(goal.completion_criteria),
+            "plan": list(goal.plan),
+            "runtime": {
+                "backend": body.backend.value,
+                "profileId": body.provider_id or body.harness_profile_id,
+                "model": body.model,
+                "reasoningEffort": (
+                    body.harness_reasoning_effort
+                    if body.backend == ChatBackend.HARNESS
+                    else body.reasoning_effort
+                ),
+            },
+            "limits": {
+                "timeBudgetSeconds": goal.time_budget_seconds,
+                "tokenBudget": goal.token_budget,
+                "stepBudget": goal.step_budget,
+                "allowSubagents": body.allow_subagents,
+                "maxActiveSubagents": body.max_active_subagents,
+            },
+            "toolsEnabled": body.tools_enabled,
+            "tools": [
+                {"id": item_id, "name": mcp_names.get(item_id, item_id)}
+                for item_id in body.mcp_server_ids
+            ],
+            "reportsTo": (
+                {
+                    "sessionId": reports_to.id,
+                    "title": reports_to.title,
+                    "kind": "chat",
+                }
+                if reports_to
+                else {
+                    "sessionId": butler_session.id,
+                    "title": butler_session.title,
+                    "kind": "butler",
+                }
+                if butler_session
+                else None
+            ),
+            "goalStatus": goal.status.value,
+            "goalRevision": goal.revision,
+            "sessionRevision": session.revision,
+            "url": _chat_url(project_id, session.id),
+        }
+        if started:
+            return {
+                "state": "started",
+                "operator_confirmation_required": False,
+                "client_action": client_action,
+                "result": (
+                    "Started under this project's standing Butler authority; "
+                    "tell the operator it started and where to follow it."
+                ),
+            }
+        return {
+            "state": "proposed",
+            "operator_confirmation_required": True,
+            "client_action": client_action,
+            "result": (
+                "Saved as a draft goal chat. Nothing runs until the operator "
+                "presses Start; they can also edit or cancel it."
+            ),
+            **({"start_error": start_error} if start_error else {}),
+        }
 
     async def update_goal(
         self, project_id: str, arguments: dict[str, Any]
@@ -3863,6 +4054,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.propose_goal_chat",
+        "Propose a new goal chat when the operator asks for work to be spun up: title, listed runtime and model (harness_reasoning_effort for a harness, reasoning_effort for a provider), objective, completion_criteria, MCP tools, and limits (time_budget_seconds, token_budget, step_budget, subagents). Core saves it as a durable draft the operator starts, edits or cancels; state=proposed means nothing runs yet, so tell the operator to press Start. Under this project's Delegate or Act authority Core starts it at once and returns state=started; report that it started. Prefer this over create_goal_conversation for operator requests.",
+        PROPOSE_GOAL_CHAT_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.update_goal",
         "Edit objective, criteria, plan, resume instruction, or limits on a listed nonterminal goal after explicit operator instruction. Read goal first and pass its revision; omitted fields stay unchanged.",
         UPDATE_GOAL_SCHEMA,
@@ -4136,7 +4333,12 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
 
 
 async def dispatch_work_tool(
-    work: ControlAssistantWork, project_id: str, name: str, arguments: dict[str, Any]
+    work: ControlAssistantWork,
+    project_id: str,
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    caller_session_id: str | None = None,
 ) -> dict[str, Any]:
     if name == "nebula.work.catalog":
         return await work.catalog(project_id, arguments.get("operation"))
@@ -4147,7 +4349,9 @@ async def dispatch_work_tool(
         payload = arguments.get("arguments")
         if not isinstance(payload, dict):
             raise ValueError("provide arguments for the managed operation")
-        return await dispatch_work_tool(work, project_id, operation, payload)
+        return await dispatch_work_tool(
+            work, project_id, operation, payload, caller_session_id=caller_session_id
+        )
     if name == "nebula.work.overview":
         return await work.overview(project_id)
     if name == "nebula.work.host_load":
@@ -4194,6 +4398,10 @@ async def dispatch_work_tool(
         return await work.create_goal(project_id, arguments)
     if name == "nebula.work.create_goal_conversation":
         return await work.create_goal_conversation(project_id, arguments)
+    if name == "nebula.work.propose_goal_chat":
+        return await work.propose_goal_chat(
+            project_id, arguments, caller_session_id=caller_session_id
+        )
     if name == "nebula.work.update_goal":
         return await work.update_goal(project_id, arguments)
     if name == "nebula.work.goal_action":

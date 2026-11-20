@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
+import { useButlerPanelBridge } from "../state/ButlerPanelBridge";
 import { startingProject } from "../test/projectRuntimeStarting";
 
 vi.mock("../state/WorkspaceContext", () => ({
@@ -733,9 +735,20 @@ describe("NebulaControlAssistant", () => {
     let workspace = {api: undefined as typeof api | undefined, engagement: undefined as {id: string; name: string} | undefined,
       providers: [], harnesses: [] as unknown[]};
     vi.mocked(useWorkspace).mockImplementation(() => workspace as unknown as ReturnType<typeof useWorkspace>);
-    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>;
+    const onNavigate = vi.fn();
+    // Butler mode's Settings tab lends the panel a place to show Butler's settings.
+    const host = document.createElement("div");
+    document.body.append(host);
+    function SettingsTab() {
+      const bridge = useButlerPanelBridge();
+      useLayoutEffect(() => { bridge?.embed({host, view: "more"}); }, [bridge?.embed]);
+      return null;
+    }
+    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}><SettingsTab /></NebulaControlAssistant></ThemeProvider></DialogProvider>;
     const view = render(assistant());
     act(() => {window.dispatchEvent(new Event("nebula:open-butler-settings"));});
+    expect(onNavigate).toHaveBeenCalledWith("/butler?section=settings");
+    expect(within(host).getByRole("region", {name: "Butler settings"})).toBeInTheDocument();
     expect(screen.getByRole("button", {name: "Save"})).toBeDisabled();
     expect(screen.getByText("Connect to Core to load Butler settings.")).toBeVisible();
 
@@ -884,19 +897,18 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByRole("link", { name: "Open chat" })).toHaveAttribute("href", url);
   });
 
-  it("keeps one conversation behind the shell launcher without a floating overlay", async () => {
+  it("opens Butler mode from the launcher instead of a floating panel", async () => {
     const user = userEvent.setup();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}>
       <header><NebulaAssistantLauncherButton /></header>
     </NebulaControlAssistant></ThemeProvider></DialogProvider>);
     const launcher = screen.getByRole("button", { name: "Open Butler" });
     expect(launcher.closest("header")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open Butler" })).toHaveLength(1);
     await user.click(launcher);
-    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me find a setting");
-    await user.click(screen.getByRole("button", { name: "Hide Butler" }));
-    await user.click(screen.getByRole("button", { name: "Show Butler" }));
-    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me find a setting");
+    expect(onNavigate).toHaveBeenCalledWith("/butler");
+    expect(screen.queryByRole("dialog", { name: "Butler" })).not.toBeInTheDocument();
   });
 
   it("checks the selected project's incidents before Butler opens and clears its cue on project switch", async () => {

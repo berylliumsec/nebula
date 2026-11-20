@@ -316,13 +316,10 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), research);
       await pairBrowser(page, core, "Butler mode LAN browser");
       await page.goto(`${core.origin}/projects/${research}/workbench?view=chat`);
-      // Entry: the Butler panel opens Butler mode.
+      // Entry: the Butler launcher opens Butler mode.
       await openButler(page);
-      const panel = page.getByRole("dialog", {name: "Butler", exact: true});
-      await expect(panel.getByText("Research fixture", {exact: true})).toBeVisible({timeout: 60_000});
-      await panel.getByRole("button", {name: "Open Butler mode"}).click();
       await expect(page).toHaveURL(`${core.origin}/butler?project=${research}`);
-      await expect(page.getByRole("heading", {name: "Butler mode"})).toBeVisible();
+      await expect(page.getByRole("heading", {name: "Butler", exact: true})).toBeVisible();
       // Every top-bar control stays inside the viewport, down to 320 px.
       const width = page.viewportSize()!.width;
       for (const control of [page.getByRole("searchbox", {name: "Search chats and projects"}), page.getByRole("button", {name: "Exit Butler mode"})]) {
@@ -364,11 +361,22 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const current = await (await api.get(`chat/control-assistant/session?engagement_id=${research}`)).json() as {id: string; metadata: Record<string, unknown>};
       expect(current.metadata.butler_thread).toBeUndefined();
 
-      // Ask Butler about a card: the thread runs in the card's project.
+      // A card opens the chat's brief; its transcript opens over Butler mode and closes with Esc.
       await showBoard(page);
       await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
-      await expect(card.getByRole("button", {name: new RegExp(titlePattern)})).toHaveAttribute("aria-expanded", "true");
-      await card.getByRole("button", {name: "Ask Butler about this"}).click();
+      const brief = page.getByRole("region", {name: `Chat brief: ${workTitle}`});
+      await expect(brief).toBeVisible({timeout: 60_000});
+      expect(new URL(page.url()).searchParams.get("chat")).toBe(workId);
+      await brief.getByRole("button", {name: "Open full chat"}).click();
+      const popup = page.getByRole("dialog", {name: `Chat: ${workTitle}`});
+      await expect(popup.getByRole("log")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(popup).toHaveCount(0);
+      await expect(brief).toBeVisible();
+      await page.screenshot({path: testInfo.outputPath("butler-mode-brief.png")});
+
+      // Ask Butler about a card: the thread runs in the card's project.
+      await brief.getByRole("button", {name: "Ask Butler about this"}).click();
       await expect(page.getByRole("combobox", {name: "Project for the new thread"})).toHaveValue(bounty);
       await page.screenshot({path: testInfo.outputPath("butler-mode-ask-about.png")});
       const composer = page.getByRole("textbox", {name: "Message Butler"});
@@ -379,16 +387,30 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const aboutThread = (await (await api.get("butler/threads")).json() as Threads).items.find(item => item.title === PROMPTS.about);
       expect(aboutThread?.project.id).toBe(bounty);
 
-      // Stop from the card; the board shows the change only after Core reports it.
+      // Stop from the brief; the board shows the change only after Core reports it.
       await showBoard(page);
-      const summary = card.getByRole("button", {name: new RegExp(titlePattern)});
-      await expect(summary).toBeVisible();
-      if (await summary.getAttribute("aria-expanded") !== "true") await summary.click();
-      await card.getByRole("button", {name: "Stop"}).click();
+      if (!await brief.isVisible()) await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
+      await brief.getByRole("button", {name: "Stop"}).click();
       await page.getByRole("dialog").getByRole("button", {name: "Stop response"}).click();
+      await brief.getByRole("button", {name: "Back to board"}).click();
       await expect(board.getByRole("article", {name: new RegExp(`^${titlePattern}:`)})).toHaveCount(0, {timeout: 90_000});
       await expect.poll(async () => ((await (await api.get(`chat/session-activity?engagement_id=${bounty}`)).json()) as Activity)
         .find(item => item.session_id === workId)?.state, {timeout: 60_000}).toBe("idle");
+
+      // Butler's own places: Oversight and Settings tabs, and the project's ongoing thread.
+      const sections = page.getByRole("navigation", {name: "Butler sections"});
+      if (await sections.isVisible()) {
+        await sections.getByRole("button", {name: "Oversight"}).click();
+        await expect(page.getByRole("region", {name: "Oversight", exact: true})).toBeVisible();
+        await sections.getByRole("button", {name: "Settings"}).click();
+        await expect(page.getByRole("region", {name: "Butler configuration"}).getByRole("region", {name: "Butler settings"})).toBeVisible({timeout: 60_000});
+        await sections.getByRole("button", {name: "Board"}).click();
+      }
+      await showThreads(page);
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
+      await page.getByRole("list", {name: "Project threads"}).getByRole("button", {name: /Research fixture/}).click();
+      await expect(page.getByRole("region", {name: "Butler in Research fixture"}).getByRole("textbox", {name: "Ask Butler a question"})).toBeVisible({timeout: 60_000});
+      if (await page.getByRole("button", {name: "Back to threads"}).isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
 
       // The held thread finishes on its own and shows Butler's answer.
       releaseThread();
@@ -407,7 +429,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler panel opened Butler mode; the board listed another project's running chat; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the held thread then showed its answer."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }

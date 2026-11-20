@@ -12082,6 +12082,14 @@ def create_execution_kernel(
         dependencies=[Depends(require_auth)],
     )
 
+    from .file_attribution import file_attribution_router
+
+    app.include_router(
+        file_attribution_router(store, artifact_store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
     @app.get(
         f"{API_PREFIX}/chat/session-activity",
         response_model=list[ChatSessionActivity],

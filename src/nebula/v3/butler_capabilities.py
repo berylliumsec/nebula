@@ -114,6 +114,7 @@ _BACKGROUND_CHANGES = frozenset(
     {
         "nebula.work.create_goal",
         "nebula.work.create_goal_conversation",
+        "nebula.work.propose_goal_chat",
         "nebula.work.handoff_goal",
         "nebula.work.create_goal_child",
         "nebula.work.stop_subagent",
@@ -354,6 +355,11 @@ class ButlerCapabilities:
                 all_work=True,
             )
         }
+        proposal = self._actions.get("nebula.work.propose_goal_chat")
+        if work is not None and isinstance(proposal, AnalysisTool):
+            self._actions[proposal.spec.name] = AnalysisTool(
+                proposal.spec, self._propose_goal_chat
+            )
         if background_case_id is None:
             from .butler_administration import ButlerAdministration
             from .butler_chat_export import ButlerChatExport
@@ -552,6 +558,19 @@ class ButlerCapabilities:
                         ).plugins()
                     }
                 )
+
+    async def _propose_goal_chat(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Propose a goal chat that names this Butler conversation as its source."""
+
+        assert self._work is not None
+        caller_session_id: str | None = None
+        if self._operator_turn_id:
+            turn = await self._store.get(ChatTurn, self._operator_turn_id)
+            if turn.engagement_id == self._project_id:
+                caller_session_id = turn.session_id
+        return await self._work.propose_goal_chat(
+            self._project_id, arguments, caller_session_id=caller_session_id
+        )
 
     async def _background_case(self) -> ButlerRecoveryCase:
         if self._background_case_id is None:

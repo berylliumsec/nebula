@@ -62,6 +62,7 @@ import { ButlerSubagentActivity, butlerActivityRows, hasUnreadReport } from "./B
 import { useChatQueue } from "../pages/useChatQueue";
 import { ButlerQueue } from "./ButlerQueue";
 import styles from "./NebulaControlAssistant.module.css";
+import { ButlerPanelBridgeContext, butlerModePath, type ButlerPanelEmbed } from "../state/ButlerPanelBridge";
 
 function readActionOutcomes(key: string): Record<string, string> {
   try {
@@ -151,6 +152,13 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [view, setView] = useState<"chat" | "work" | "more">("chat");
+  // Butler mode can lend the panel a place on its page (a project thread or Settings).
+  const [embed, setEmbed] = useState<ButlerPanelEmbed>();
+  // Voice started from Butler mode returns there, not to the floating panel.
+  const voiceFromButlerMode = useRef(false);
+  // A settings or oversight link opens Butler mode, unless the small panel is already in front of the operator.
+  const floatingVisible = useRef(false);
+  floatingVisible.current = open && !hidden && !embed;
   const [query, setQuery] = useState("");
   const [destinationQuery, setDestinationQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -190,6 +198,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [voiceSettingsError, setVoiceSettingsError] = useState("");
   const [voiceSettingsStatus, setVoiceSettingsStatus] = useState("");
   const [effortDraft, setEffortDraft] = useState("");
+  // Butler's model, as "kind:profile:model"; empty keeps the saved one.
+  const [runtimeDraft, setRuntimeDraft] = useState("");
   const [cyberDraft, setCyberDraft] = useState<ChatAssistantConfig["harnessCyberAccessProgram"]>("automatic");
   const [subagentsDraft, setSubagentsDraft] = useState(false);
   const [subagentLimitDraft, setSubagentLimitDraft] = useState<number>();
@@ -553,9 +563,17 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     });
   };
 
-  const selectedSettingsRuntime = sessionConfig
+  const savedSettingsRuntime = sessionConfig
     ? { kind: sessionConfig.backend, id: sessionConfig.profileId, model: sessionConfig.model }
     : runtime;
+  const runtimeKey = (value: { kind: string; id: string; model: string } | undefined) => value ? `${value.kind}\u0000${value.id}\u0000${value.model}` : "";
+  const runtimeChoices = [
+    ...providers.filter((item) => item.enabled && item.models.length).flatMap((item) => item.models.map((model) => ({ kind: "provider" as const, id: item.id, model, label: `${item.name} · ${model}` }))),
+    ...harnesses.filter((item) => item.enabled).flatMap((item) => (item.models.length ? item.models : item.defaultModel ? [item.defaultModel] : []).map((model) => ({ kind: "harness" as const, id: item.id, model, label: `${item.name} · ${model}` }))),
+  ];
+  const draftRuntime = runtimeDraft ? runtimeChoices.find((item) => runtimeKey(item) === runtimeDraft) : undefined;
+  const selectedSettingsRuntime = draftRuntime ?? savedSettingsRuntime;
+  const runtimeChanged = Boolean(draftRuntime && runtimeKey(draftRuntime) !== runtimeKey(savedSettingsRuntime));
   const selectedHarness = selectedSettingsRuntime?.kind === "harness"
     ? harnesses.find((item) => item.id === selectedSettingsRuntime.id) : undefined;
   const selectedModelOptions = selectedHarness?.modelOptions?.find((item) => item.model === selectedSettingsRuntime?.model);
@@ -648,6 +666,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         const config = saved?.settings;
         if (restored) setSessionId(restored.id);
         setSessionConfig(config);
+        setRuntimeDraft("");
         setSettingsRevision(saved?.revision);
         setEffortDraft(config?.backend === "provider" ? config.reasoningEffort ?? "" : config?.harnessReasoningEffort ?? "");
         setCyberDraft(config?.harnessCyberAccessProgram ?? "automatic");
@@ -667,6 +686,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   useEffect(() => {
     const openVoiceSettings = () => {
+      if (!nativeShell && !floatingVisible.current) { onNavigate(butlerModePath(undefined, "settings")); return; }
       setOpen(true);
       setHidden(false);
       setView("more");
@@ -679,6 +699,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
 
   useEffect(() => {
     const openOversight = () => {
+      if (!nativeShell && !floatingVisible.current) { onNavigate(butlerModePath(undefined, "oversight")); return; }
       setOpen(true);
       setHidden(false);
       setView("work");
@@ -686,7 +707,16 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     };
     window.addEventListener("nebula:open-butler-oversight", openOversight);
     return () => window.removeEventListener("nebula:open-butler-oversight", openOversight);
-  }, []);
+  }, [nativeShell, onNavigate]);
+
+  // An embedded panel shows only the view Butler mode asked for; Settings opens Butler's own settings.
+  useEffect(() => {
+    if (!embed) return;
+    setView(embed.view);
+    if (embed.view === "more" && !settingsOpen) openSettings();
+    // openSettings toggles; run only when the embed changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embed]);
 
   const saveSettings = async () => {
     if (!api || !selectedSettingsRuntime || settingsBusy || busy) return;
@@ -704,13 +734,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         : harnessSubagentDraft.enabled
           ? { allowSubagents: true, subagentProviderId: harnessSubagentDraft.providerId, subagentModel: harnessSubagentDraft.model, maxActiveSubagents: harnessSubagentDraft.limit ?? null, subagentReasoningEffort: harnessSubagentDraft.reasoningEffort ?? null }
           : { allowSubagents: false };
+      const model = runtimeChanged ? { backend: selectedSettingsRuntime.kind, profileId: selectedSettingsRuntime.id, model: selectedSettingsRuntime.model } : {};
       const patch = selectedSettingsRuntime.kind === "provider"
-        ? { reasoningEffort: effortDraft || null, ...subagents }
-        : { harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}), ...subagents };
+        ? { ...model, reasoningEffort: effortDraft || null, ...subagents }
+        : { ...model, harnessReasoningEffort: effortDraft || null, ...(cyberChoices.length ? { harnessCyberAccessProgram: cyberDraft } : {}), ...subagents };
       await api.updateChatAssistantConfig(targetSessionId, current.revision, patch);
       const saved = await api.getChatAssistantConfig(targetSessionId);
       setSessionConfig(saved.settings);
       setSettingsRevision(saved.revision);
+      setRuntimeDraft("");
       setEffortDraft(saved.settings.backend === "provider" ? saved.settings.reasoningEffort ?? "" : saved.settings.harnessReasoningEffort ?? "");
       setCyberDraft(saved.settings.harnessCyberAccessProgram ?? "automatic");
       applySubagentDrafts(saved.settings);
@@ -2643,6 +2675,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setHidden(true);
   };
 
+  const startVoiceFromButlerMode = () => {
+    voiceFromButlerMode.current = true;
+    const wasOpen = open;
+    startVoice();
+    // Butler mode keeps the floating panel closed when Voice ends.
+    if (!wasOpen) setOpen(false);
+  };
+
   const delegateVoice = async (prompt: string): Promise<string | undefined> => {
     if (!api || !engagement || !runtime) throw new Error("Choose a project and a healthy model runtime to direct work.");
     const saved = await getSavedSessionForTurn();
@@ -2777,10 +2817,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const destinationMatches = destinationQuery.trim() ? assistantDestinations.filter((entry) =>
     [entry.label, ...entry.aliases].join(" ").toLowerCase().includes(destinationQuery.toLowerCase())) : assistantDestinations;
   const directSettingIds = new Set(["settings.appearance", "settings.providers", "settings.harnesses", "settings.follow-up", "settings.network-scope", "settings.automation-runtime"]);
-  const panelContent = open ? <>
-    {!nativeShell && <button className={styles.backdrop} type="button" aria-label="Dismiss Butler panel" title="Dismiss Butler panel" hidden={hidden} onClick={() => setHidden(true)} />}
-    <div ref={panel} id="nebula-assistant-panel" className={`${styles.panel}${nativeShell ? ` ${styles.shellPanel}` : ""}${docked ? ` ${styles.dockedPanel}` : ""}`} role="dialog" aria-label="Butler" aria-modal={nativeShell ? true : undefined} tabIndex={nativeShell ? -1 : undefined} data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={hidden}>
-    <div className={styles.header}>
+  const panelContent = open || embed ? <>
+    {!nativeShell && !embed && <button className={styles.backdrop} type="button" aria-label="Dismiss Butler panel" title="Dismiss Butler panel" hidden={hidden} onClick={() => setHidden(true)} />}
+    <div ref={panel} id="nebula-assistant-panel" className={`${styles.panel}${nativeShell ? ` ${styles.shellPanel}` : ""}${docked ? ` ${styles.dockedPanel}` : ""}${embed ? ` ${styles.embeddedPanel}` : ""}`} role={embed ? "region" : "dialog"} aria-label={embed ? (embed.view === "more" ? "Butler configuration" : `Butler in ${engagement?.name ?? "this project"}`) : "Butler"} aria-modal={nativeShell && !embed ? true : undefined} tabIndex={nativeShell ? -1 : undefined} data-selection-recipient="butler" style={{ "--panel-left": `${position.x}px`, "--panel-top": `${position.y}px` } as CSSProperties} hidden={embed ? false : hidden} data-embed-view={embed?.view}>
+    <div className={`${styles.header}${embed ? ` ${styles.embedHidden}` : ""}`}>
       <button className={`icon-button subtle ${styles.dragButton}`} type="button" aria-label="Move Butler" title="Drag to move · arrow keys to reposition" onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }} onPointerMove={(event) => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }} onPointerUp={() => { drag.current = undefined; }} onKeyDown={(event) => { const step: Record<string, [number, number]> = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }; const offset = step[event.key]; if (offset) { event.preventDefault(); move(position.x + offset[0], position.y + offset[1]); } }}><GripHorizontal size={18} /></button>
       <div className={styles.identity}><strong>Butler</strong>{docked && engagements.length > 0
         ? <select className={styles.projectSelect} aria-label="Butler project" value={engagement?.id ?? ""} onChange={(event) => onNavigate(`/projects/${encodeURIComponent(event.target.value)}/butler`)}>{!engagement && <option value="" disabled>Choose a project</option>}{engagements.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
@@ -2791,7 +2831,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       <button className={`icon-button subtle ${styles.hideButton}`} type="button" aria-label="Hide Butler" title="Hide Butler" onClick={() => setHidden(true)}><Minimize2 size={18} aria-hidden="true" /></button>
       <button className={`icon-button subtle ${styles.closeButton}`} type="button" aria-label="Close Butler" title="Close Butler; keep history" onClick={() => { setOpen(false); setHidden(false); setView("chat"); setSettingsOpen(false); setPendingCheckedSessionId(undefined); }}><X size={18} /></button>
     </div>
-    <nav className={styles.viewTabs} aria-label="Butler views">
+    <nav className={`${styles.viewTabs}${embed ? ` ${styles.embedHidden}` : ""}`} aria-label="Butler views">
       <button id="butler-tab-chat" type="button" className={styles.viewTab} aria-current={view === "chat" ? "page" : undefined} aria-controls="butler-view-chat" onClick={() => setView("chat")}>Chat</button>
       <button id="butler-tab-work" type="button" className={styles.viewTab} aria-current={view === "work" ? "page" : undefined} aria-controls="butler-view-work" onClick={() => setView("work")}>Work{workAttentionCount > 0 && <span className={styles.workCount} aria-label={`${workAttentionCount} need attention`}>{workAttentionCount}</span>}</button>
       <button id="butler-tab-more" type="button" className={styles.viewTab} aria-current={view === "more" ? "page" : undefined} aria-controls="butler-view-more" onClick={() => setView("more")}>More</button>
@@ -2827,6 +2867,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {settingsOpen && <section id="butler-settings" className={styles.ownSettings} aria-label="Butler settings">
         <div className={styles.settingsHeading}><strong>Butler settings</strong><span>{selectedSettingsRuntime?.model ?? ""}</span></div>
         <form onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
+          {runtimeChoices.length > 0 && <label>Model<select aria-label="Butler model" value={runtimeDraft || runtimeKey(savedSettingsRuntime)} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => { setRuntimeDraft(event.target.value); setEffortDraft(""); setCyberDraft("automatic"); }}>
+            {savedSettingsRuntime && !runtimeChoices.some((item) => runtimeKey(item) === runtimeKey(savedSettingsRuntime)) && <option value={runtimeKey(savedSettingsRuntime)}>{savedSettingsRuntime.model} · saved</option>}
+            {runtimeChoices.map((item) => <option key={runtimeKey(item)} value={runtimeKey(item)}>{item.label}</option>)}
+          </select><small>Every Butler thread in this project uses it, from the next message.</small></label>}
           {selectedSettingsRuntime?.kind === "provider" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option key={item} value={item}>{item === "none" ? "None" : item}</option>)}</select></label>}
           {selectedSettingsRuntime?.kind === "harness" && <label>Effort<select aria-label="Butler effort" value={effortDraft} disabled={settingsBusy || Boolean(settingsError) || !selectedModelOptions?.reasoningEfforts.length} onChange={(event) => setEffortDraft(event.target.value)}><option value="">Harness default</option>{effortDraft && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === effortDraft) && <option value={effortDraft}>{effortDraft} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option key={item.id} value={item.id} title={item.description || undefined}>{item.label}</option>)}</select></label>}
           {cyberChoices.length > 0 && <label>Cyber access<select aria-label="Butler cyber access" value={cyberDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setCyberDraft(event.target.value as ChatAssistantConfig["harnessCyberAccessProgram"])}><option value="automatic">Codex automatic</option>{cyberChoices.map((choice) => <option key={choice} value={choice}>{choice === "standard" ? "Standard" : choice === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label>}
@@ -2852,7 +2896,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           {voiceSettingsError && <p role="alert">{voiceSettingsError}</p>}
         </div>
       </section>}
-        {engagement && <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />}
+        {engagement && !embed && <ButlerMemory api={api} projectId={engagement.id} coreState={coreState} refreshRevision={memoryRefreshRevision} />}
       <details ref={destinationCatalogRef} className={styles.catalog}><summary>Places I can open</summary><input aria-label="Find a place" placeholder="Find a place" value={destinationQuery} onChange={(event) => setDestinationQuery(event.target.value)} />
         <div className={styles.settingList}>{destinationMatches.length ? destinationMatches.map((entry) => <button key={entry.id} className="button quiet" type="button" onClick={() => { const confirmation = openDestination(entry); setMessages((current) => [...current, { role: "assistant", content: confirmation }]); }}><span>{entry.label}</span><small>{entry.path.includes("{project_id}") ? "Selected project" : "Open page"}</small></button>) : <p>No place found.</p>}</div>
       </details>
@@ -3026,11 +3070,14 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   </> : null;
 
   const attentionLabel = `${attentionCount} open incident${attentionCount === 1 ? "" : "s"} ${attentionCount === 1 ? "needs" : "need"} attention in the selected project`;
-  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, attentionCount, toggle: () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } } }}>
+  const toggleFloating = () => { if (open) setHidden((value) => !value); else { setOpen(true); setHidden(false); } };
+  return <NebulaAssistantLauncherContext.Provider value={{ opened: open, visible: open && !hidden, attentionCount, toggle: nativeShell ? toggleFloating : () => { setHidden(true); onNavigate(butlerModePath(engagement?.id)); } }}>
+    <ButlerPanelBridgeContext.Provider value={{ embed: setEmbed, startVoice: startVoiceFromButlerMode, voiceAvailable: Boolean(api && engagement && runtime && !busy && !loadingHistory), attentionCount }}>
     {children}
+    </ButlerPanelBridgeContext.Provider>
     {!children && (!open || hidden) ? <button className={styles.launcher} type="button" aria-label={`${hidden ? "Show Butler" : "Open Butler"}${attentionCount ? `; ${attentionLabel}` : ""}`} title={attentionCount ? attentionLabel : "Butler"} onClick={() => { setOpen(true); setHidden(false); }}><img src="/nebula-logo.svg" width="22" height="36" alt="" aria-hidden="true" />{attentionCount > 0 && <span className={styles.launcherAttention} aria-hidden="true" />}</button> : null}
-    {panelContent && createPortal(panelContent, document.body)}
-    {voiceStart && api && engagement && createPortal(<NebulaVoice api={api} project={{ id: engagement.id, name: engagement.name }} initialMicrophone={voiceStart.microphone} onDelegate={delegateVoice} onExit={() => { setVoiceStart(undefined); setHidden(false); }} />, document.body)}
+    {panelContent && createPortal(panelContent, embed?.host ?? document.body)}
+    {voiceStart && api && engagement && createPortal(<NebulaVoice api={api} project={{ id: engagement.id, name: engagement.name }} initialMicrophone={voiceStart.microphone} onDelegate={delegateVoice} onExit={() => { setVoiceStart(undefined); if (voiceFromButlerMode.current) voiceFromButlerMode.current = false; else setHidden(false); }} />, document.body)}
     {pendingReportTransform?.sourceMessageId && api && engagement?.id === pendingReportTransform.projectId && createPortal(<AIWritingDialog
       api={api}
       engagementId={pendingReportTransform.projectId}

@@ -168,6 +168,8 @@ class GoalProgressReport(NebulaModel):
     next_step: str = Field(min_length=1, max_length=500)
     blockers: list[str] = Field(default_factory=list, max_length=8)
     evidence_refs: list[ReportEvidenceRef] = Field(default_factory=list, max_length=8)
+    # The goal plan entry (0-based) the agent is now working on.
+    plan_index: int | None = Field(default=None, ge=0, le=199)
 
     @field_validator("evidence_gained", "blockers")
     @classmethod
@@ -651,6 +653,9 @@ async def ingest_agent_report(
     )
     report_id = _stable_id("butler-report", f"{turn_id}\0{idempotency_key}")
     details = body.model_dump(mode="json")
+    if details.get("plan_index", 0) is None:
+        # Reports written before the field existed replay with equal details.
+        del details["plan_index"]
     async with store.transaction(immediate=True) as transaction:
         turn = await _entity_in_transaction(transaction, ChatTurn, turn_id)
         if turn is None or turn.goal_id is None:
@@ -733,6 +738,12 @@ async def ingest_agent_report(
             raise ConflictError("agent report requires an active goal")
         if report_type == "progress" and goal.status != ChatGoalStatus.RUNNING:
             raise ConflictError("progress reports require a running goal")
+        plan_index = body.plan_index if isinstance(body, GoalProgressReport) else None
+        if plan_index is not None and plan_index >= len(goal.plan):
+            raise ConflictError(
+                f"plan_index {plan_index} is outside the goal plan of "
+                f"{len(goal.plan)} steps"
+            )
         now = utc_now()
         evidence_refs = await _report_evidence(
             transaction,
@@ -782,6 +793,15 @@ async def ingest_agent_report(
                     now=now,
                 )
             )
+            if plan_index is not None and plan_index != goal.active_plan_index:
+                (
+                    await transaction.update(
+                        ChatGoal,
+                        goal.id,
+                        {"active_plan_index": plan_index},
+                        expected_revision=goal.revision,
+                    )
+                )
         else:
             (
                 await transaction.update(

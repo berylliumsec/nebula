@@ -344,3 +344,75 @@ async def turn_header(
         return None
     headers = await _resolve(database, [(row.id, row.revision, row.created_at)])
     return headers[0] if headers else None
+
+
+async def session_turn_page(
+    database: AsyncSession,
+    session_id: str,
+    *,
+    before: int | None,
+    limit: int,
+) -> tuple[list[ChatTurnHeader], int, int]:
+    """One page of a conversation's turns, oldest first, by 1-based index.
+
+    Returns the headers of the turns numbered below ``before`` (every turn when
+    it is None), at most ``limit`` of the newest of them, the index of the
+    first one returned and the conversation's turn count. Only the index
+    columns of earlier turns are read; payloads are parsed for the page alone.
+    """
+
+    versions = [
+        (row.id, row.revision, row.created_at)
+        for row in (
+            await database.execute(
+                select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
+                .where(
+                    EntityRow.kind == ChatTurn.entity_kind,
+                    EntityRow.chat_session_id == session_id,
+                )
+                .order_by(EntityRow.created_at, EntityRow.id)
+            )
+        )
+    ]
+    total = len(versions)
+    end = total if before is None else max(0, min(total, before - 1))
+    start = max(0, end - limit)
+    return await _resolve(database, versions[start:end]), start + 1, total
+
+
+async def pending_session_turn_headers(
+    database: AsyncSession,
+    session_id: str,
+    engagement_id: str,
+    *,
+    statuses: Sequence[str],
+) -> list[ChatTurnHeader]:
+    """One conversation's pending turns, as the project-wide scan selects them."""
+
+    versions = [
+        (row.id, row.revision, row.created_at)
+        for row in await database.execute(
+            select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
+            .where(
+                EntityRow.kind == ChatTurn.entity_kind,
+                EntityRow.chat_session_id == session_id,
+                EntityRow.engagement_id == engagement_id,
+                or_(
+                    EntityRow.chat_turn_status.is_(None),
+                    and_(
+                        EntityRow.chat_turn_status.in_(statuses),
+                        or_(
+                            EntityRow.chat_turn_status != "interrupted",
+                            EntityRow.chat_turn_recovery_visible.is_not(False),
+                        ),
+                    ),
+                ),
+            )
+            .order_by(EntityRow.created_at, EntityRow.id)
+        )
+    ]
+    return [
+        header
+        for header in await _resolve(database, versions)
+        if header.status in statuses
+    ]

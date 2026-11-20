@@ -99,6 +99,17 @@ class GoalWrite(BaseModel):
 
 class GoalUpdate(GoalCreate):
     expected_revision: int = Field(ge=1)
+    # The plan entry now being worked on (0-based). Sent as null it clears the
+    # marker; left out it is kept while it still names an entry of the plan.
+    active_plan_index: int | None = Field(default=None, ge=0, le=199)
+
+    @model_validator(mode="after")
+    def active_plan_index_names_a_step(self) -> "GoalUpdate":
+        if self.active_plan_index is not None and self.active_plan_index >= len(
+            self.plan
+        ):
+            raise ValueError("active_plan_index must name an entry of the plan")
+        return self
 
 
 class GoalSkillWrite(BaseModel):
@@ -143,6 +154,35 @@ class GoalConversationCreate(GoalCreate):
         default=None, min_length=1, max_length=200
     )
     butler_initiated: bool = False
+    # A name for the chat; without one the objective names it.
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    # A draft Butler proposed for the operator to start, edit or cancel.
+    proposed_by_butler: bool = False
+    butler_session_id: str | None = Field(default=None, min_length=1, max_length=200)
+    reports_to_session_id: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+
+    def session_title(self) -> str:
+        return (
+            " ".join((self.title or "").split())[:300]
+            or " ".join(self.objective.split())[:300]
+            or "Goal conversation"
+        )
+
+    def proposal_metadata(self) -> dict[str, object]:
+        """Session metadata naming who proposed the draft and who it reports to."""
+
+        metadata: dict[str, object] = {}
+        if self.title and self.title.strip():
+            metadata["initial_title_state"] = "operator"
+        if self.proposed_by_butler:
+            metadata["proposed_by"] = "butler"
+            if self.butler_session_id:
+                metadata["butler_session_id"] = self.butler_session_id
+        if self.reports_to_session_id:
+            metadata["reports_to_session_id"] = self.reports_to_session_id
+        return metadata
 
     @model_validator(mode="after")
     def selections_are_unique(self) -> "GoalConversationCreate":
@@ -338,6 +378,12 @@ class ChatGoalService:
         """Persist an empty conversation and its goal draft as one unit."""
 
         (await self.store.get(Engagement, body.engagement_id))
+        for linked_id in (body.butler_session_id, body.reports_to_session_id):
+            if linked_id is None:
+                continue
+            linked = await self.store.get(ChatSession, linked_id)
+            if linked.engagement_id != body.engagement_id:
+                raise ConflictError("a linked chat belongs to another project")
         recovery_metadata: dict[str, str] = {}
         if body.butler_recovery_case_id:
             case = await self.store.get(
@@ -405,7 +451,7 @@ class ChatGoalService:
                 session = ChatSession(
                     id=str(uuid4()),
                     engagement_id=body.engagement_id,
-                    title=" ".join(body.objective.split())[:300] or "Goal conversation",
+                    title=body.session_title(),
                     backend=ChatBackend.HARNESS,
                     harness_profile_id=profile.id,
                     harness_session_id=harness_session.id,
@@ -436,6 +482,7 @@ class ChatGoalService:
                             if body.butler_initiated or body.butler_recovery_case_id
                             else {}
                         ),
+                        **body.proposal_metadata(),
                     },
                 )
                 goal = ChatGoal(
@@ -497,7 +544,7 @@ class ChatGoalService:
                     f"MCP server {mcp_profile.name!r} is disabled and cannot be selected"
                 )
         session_id = str(uuid4())
-        title = " ".join(body.objective.split())[:300] or "Goal conversation"
+        title = body.session_title()
         session = ChatSession(
             id=session_id,
             engagement_id=body.engagement_id,
@@ -540,6 +587,7 @@ class ChatGoalService:
                 "last_sequence": 0,
                 "initial_title_state": "goal",
                 **({"butler_initiated": True} if body.butler_initiated else {}),
+                **body.proposal_metadata(),
             },
         )
         goal = ChatGoal(
@@ -1134,6 +1182,14 @@ class ChatGoalService:
                     "objective": body.objective,
                     "completion_criteria": body.completion_criteria,
                     "plan": body.plan,
+                    "active_plan_index": (
+                        body.active_plan_index
+                        if "active_plan_index" in body.model_fields_set
+                        else goal.active_plan_index
+                        if goal.active_plan_index is not None
+                        and goal.active_plan_index < len(body.plan)
+                        else None
+                    ),
                     **(
                         {"resume_instruction": body.resume_instruction}
                         if body.resume_instruction is not None

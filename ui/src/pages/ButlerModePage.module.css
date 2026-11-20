@@ -706,3 +706,181 @@
 @media (prefers-reduced-motion: reduce) {
   .mode * { transition: none !important; }
 }
+
+/* Sections: the right side switches; Butler's threads stay on the left. */
+.sections {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--canvas);
+}
+
+.sectionTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--type-secondary);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sectionTab:hover { color: var(--text); }
+.sectionTab[aria-current="page"] { background: var(--surface-raised); color: var(--text); font-weight: var(--weight-semibold); }
+
+.badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--orange);
+  color: var(--canvas);
+  font-size: var(--type-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.badge[data-state="failed"] { background: var(--red); }
+.spacer { flex: 1; }
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px 24px;
+}
+
+.paneHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.paneHead h2 {
+  margin: 0;
+  font-size: var(--type-title-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.paneHead .projectPick { margin-left: auto; }
+
+/* The Butler panel's conversation or settings, lent to this page. */
+.embedHost {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.codeBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.contextPack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--type-secondary);
+}
+
+.sheetLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 83;
+  display: flex;
+  align-items: flex-end;
+}
+
+.sheetScrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgb(0 0 0 / 55%);
+}
+
+.sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 10px 16px max(20px, env(safe-area-inset-bottom));
+  border-radius: 20px 20px 0 0;
+  background: var(--surface);
+}
+
+.sheetRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sheetRow:last-child { border-bottom: 0; }
+
+@media (max-width: 1180px) {
+  .pulse { display: none; }
+}
+.mode[data-compact="true"] .pane { flex: 1; padding: 8px 16px 16px; }
+.mode[data-compact="true"] .tabs button { font-size: var(--type-secondary); }
+
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--blue);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  font-size: var(--type-secondary);
+}
+
+.proposal[data-kind="goal_chat_started"] { border-color: var(--border); }
+
+.proposal header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.proposal header strong { flex: 1; min-width: 0; font-size: var(--type-control); }
+
+.proposal dl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.proposal dl div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.proposal dt { color: var(--muted); }
+.proposal dd { margin: 0; overflow-wrap: anywhere; }

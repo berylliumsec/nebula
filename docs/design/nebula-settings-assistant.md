@@ -329,7 +329,9 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.chat`, `nebula.work.mission`, `nebula.work.browser_sessions`, `nebula.work.start_chat`,
 `nebula.work.message_chat`, `nebula.work.stop_chat`,
 `nebula.work.start_mission`, `nebula.work.steer_mission`, and
-`nebula.work.stop_mission`. These typed tools are bound to the selected project
+`nebula.work.stop_mission`. With `nebula.work.browser_sessions` and
+`nebula.work.start_mission` Butler can start a scoped browser automation
+mission for the project. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
 For the selected project's Work board, Butler discovers
@@ -1209,10 +1211,33 @@ places or releases it; the deployer and the hold API do.
 
 ## Butler mode
 
-**Butler mode** (route `/butler`) is a full-screen view for talking to Butler
-while watching every project's chats. Open it with the **Open Butler mode**
-button in the Butler panel header, or ask Butler to "open Butler mode". **Esc**
-or **Exit Butler mode** returns to the project.
+**Butler mode** (route `/butler`) is the one place for Butler: talking to it,
+seeing every running chat across projects and what needs you, and Butler's
+oversight, memory and settings. The
+**Butler** launcher in the top bar opens Butler mode (the iPhone app keeps its
+docked Butler); the small panel's **Open Butler mode** button and asking Butler
+to "open Butler mode" do too. **Esc** or **Exit Butler mode** returns to the page
+the operator came from. There is no separate floating Butler panel on the web or
+desktop.
+
+Butler's threads stay on the left. The top bar's sections switch the right
+side: **Board** (the status board), **Code & files**, **Oversight** (incidents,
+authority, watched goals, decisions and resources; `?section=oversight`),
+**Memory** and **Settings** (Butler's model, effort, cyber access, subagents,
+Voice timeout, appearance, and "find a setting or place"; `?section=settings`).
+Oversight, Memory and Settings follow the project chosen in their **Project**
+picker. Links to Butler settings or oversight from elsewhere open these
+sections; while the small panel is open they open inside it instead. On a phone
+the sections are **Board**, **Threads**, **Oversight** and **More** (Code &
+files, Memory, Settings, Open full Nebula). **Start Butler Voice** is in the top
+bar.
+
+The rail's **Projects** list holds each project's one ongoing Butler
+conversation (the same conversation the small panel shows), with its request
+cards for uploads, credentials, Library adds and linked folders. Parallel
+**Threads** follow below. Text added to Butler from the selection menu while in
+Butler mode joins the composer's **selected context** and is sent with the next
+message; remove an item with its ×.
 
 The **status board** reads one Core-owned list of chats across all projects
 that are not archived. Chats that need the operator (a pending approval, a
@@ -1226,12 +1251,38 @@ one that needs the operator always shows). Search matches chat titles, models
 and project names. The grouping choice is remembered on this device only.
 
 Each card shows the chat's status, project, model, how long its current
-response has run and one line of what it is doing or waiting for. Expanding a
-card shows its goal and, for a pending approval, the exact request with
-**Approve** and **Deny**; **Stop** stops a working chat's response after
-confirmation; **Open chat** opens the conversation; **Ask Butler about this**
-starts a Butler thread about that chat in its project. A decision or stop is
-reported only after the next board read from Core shows the change.
+response has run, one line of what it is doing or waiting for, and "Started by
+Butler" or "Proposed by Butler" when Butler created it. Clicking a card opens
+its brief (below); ↑ and ↓ move between chats while a brief is open and Esc
+returns to the board. In the brief, **Approve** and **Deny** answer a pending
+approval with the exact request shown; **Stop** stops a working chat's response
+after confirmation; **Pause goal** and **Resume goal** change its goal; **Ask
+Butler about this** starts a Butler thread about that chat in its project; and
+**Open full chat** shows the transcript in a pop-up over Butler mode (scroll
+it, then click outside or press Esc to return; **Open in workbench** leaves for
+the full chat). The pop-up reads the newest messages and older ones on request,
+and re-reads only while the chat runs. A decision or stop is reported only
+after the next board read from Core shows the change.
+
+Click a board card in Butler mode to open its **brief**, which Core serves as
+`GET /api/v1/butler/sessions/{session_id}/brief` (Butler's own conversations,
+side chats and archived chats or projects are not found). The brief shows the
+chat's state, model, turn count, billed cost when the route reported it,
+subagent count, its goal with the plan step the agent is on, what needs the
+operator (for an approval, the exact command), the chat's turns as one line
+each and its 50 most recently changed files. Each turn's line is derived
+without a model: the first sentence of its answer, else a phrase from its
+tool calls (for example "Ran 3 commands · edited fuzz.c"), else its failure.
+Each turn also shows command, edit, approval and tool counts and the files it
+changed. Turns come 30 at a time (at most 100), newest last; `before` and
+`older_before` page back. Files come from Core's workspace observations and
+from the paths of file-editing tool calls, so a runtime that reports neither
+shows none. The active plan step is reported by the agent: `report_progress`
+takes an optional 0-based `plan_index`, and the goal's
+`PATCH /api/v1/chat/sessions/{session_id}/goal` accepts `active_plan_index`
+(null clears it). It is an agent claim, separate from `current_step`, which
+counts turns. A turn's plan step is the last one reported in it, else the one
+in effect when it started.
 
 **Threads** run Butler conversations in parallel. Each message starts a new
 thread by default, in the project chosen beside the composer, and Butler
@@ -1246,6 +1297,25 @@ browser (for example a picker or opening a setting) shows a note to finish it
 in the Butler panel. The open thread and the phone tab are in the URL
 (`?thread=` and `?tab=`), so reload and back return to them. On a phone,
 **Board** and **Threads** tabs share one composer.
+
+### Butler-proposed goal chats
+
+Asked in plain words to spin up work ("triage the crash logs with Claude until
+there is a deduplicated report"), Butler calls `nebula.work.propose_goal_chat`
+with a title, a listed runtime, model and effort, objective, completion
+criteria, MCP tools and limits (time, tokens, steps, subagents). Core saves a
+durable draft goal conversation marked `proposed_by: butler`, visible after
+reload and on every device. The receipt has `state: proposed`,
+`operator_confirmation_required: true` and a `goal_chat_proposal` client
+action: nothing runs until the operator chooses **Start**. **Edit** changes the
+draft goal; **Cancel** deletes the empty draft. The status board lists each
+proposal as waiting with attention kind `proposal`.
+
+Under Delegate or Act authority Core begins the goal chat at once and returns
+`state: started` with a `goal_chat_started` action, which Butler reports. If
+Core refuses (for example a hold), the draft stays and the receipt says why.
+Board cards carry `started_by: butler` for chats Butler began. Watch and Steer
+always leave the draft for the operator.
 
 ## Closing the desktop and shutting down Core
 
@@ -1293,6 +1363,25 @@ read-back rather than the request. Moving to `inject` requires
 `confirm_inject` after the operator explicitly confirms it. Goals that
 completed before the first enable are never curated. See
 [Linked memory](../LINKED_MEMORY.md).
+
+## File attribution in Butler mode
+
+Butler mode's **Code & files** section shows which chat last changed each
+workspace file: a dot in the file list (orange for a chat that needs the
+operator, blue for one running), bars beside changed lines (green added, orange
+changed) and a **Who changed this file** list with **Open brief** for each
+chat. It has no setting. Core reads `GET /api/v1/projects/{project_id}/files/attribution`
+(each path's most recent change in the last 7 days by default, at most 500
+paths, newest first, with the chat's board state) and
+`.../files/attribution/history?path=` (up to 50 changes to one path, newest
+first). Paths are relative to the project workspace, as the file browser shows
+them. Attribution comes from two records: a turn or tool observation written
+when a project native lifecycle hook runs (path level only, so provider chats
+in projects without hooks show nothing), and harness file-change activity
+(Codex patches and Claude Write or Edit calls, with line counts and changed
+line ranges where a patch was recorded). A change seen while other turns ran in
+the same workspace is marked uncertain; Butler reports it as possible, never as
+proof that a chat made the edit.
 
 # Project tool approval policy
 

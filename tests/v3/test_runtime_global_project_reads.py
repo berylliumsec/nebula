@@ -419,7 +419,9 @@ async def test_butler_board_lists_every_project_needing_you_first(project_reads)
         "status": "draft",
         "current_step": 1,
         "plan_length": 3,
+        "revision": 1,
     }
+    assert second["started_by"] is None
     assert third["now"] == "Download timed out"
     assert body["truncated"] is False
 
