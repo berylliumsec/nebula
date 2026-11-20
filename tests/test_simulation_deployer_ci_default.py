@@ -111,8 +111,14 @@ def _pr_runs(by_workflow: dict[str, list[dict]]):
 
 
 def _pr_run(run_id: int, conclusion: str = "success", **overrides):
-    return {"id": run_id, "head_sha": PR_HEAD, "event": "pull_request",
-            "status": "completed", "conclusion": conclusion, **overrides}
+    return {
+        "id": run_id,
+        "head_sha": PR_HEAD,
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": conclusion,
+        **overrides,
+    }
 
 
 @pytest.mark.parametrize("parents", [[MID, PR_HEAD], [MID]])
@@ -128,10 +134,12 @@ def test_discovery_finds_merged_pr_runs_for_playwright_commits(monkeypatch, pare
     monkeypatch.setattr(
         deployer,
         "github_json",
-        _pr_runs({
-            "ci.yml": [_pr_run(41), _pr_run(45), _pr_run(49, "failure")],
-            "playwright-impact.yml": [_pr_run(51), _pr_run(52, event="push")],
-        }),
+        _pr_runs(
+            {
+                "ci.yml": [_pr_run(41), _pr_run(45), _pr_run(49, "failure")],
+                "playwright-impact.yml": [_pr_run(51), _pr_run(52, event="push")],
+            }
+        ),
     )
 
     assert deployer.discover_pr_supplement_run_ids(
@@ -153,20 +161,36 @@ def test_discovery_falls_back_to_a_run_dispatched_on_the_exact_commit(monkeypatc
         if "event=workflow_dispatch" in path:
             assert f"head_sha={NEW}" in path
             return {"workflow_runs": dispatched}
-        return _pr_runs({"ci.yml": [_pr_run(45, "failure")],
-                         "playwright-impact.yml": [_pr_run(51, "failure")]})(path)
+        return _pr_runs(
+            {
+                "ci.yml": [_pr_run(45, "failure")],
+                "playwright-impact.yml": [_pr_run(51, "failure")],
+            }
+        )(path)
 
     monkeypatch.setattr(deployer, "github_json", github_json)
     with pytest.raises(deployer.CiEvidenceUnavailable) as caught:
         deployer.discover_pr_supplement_run_ids(Path("."), previous=OLD, sha=NEW)
     assert NEW[:12] in str(caught.value) and "dispatched" in str(caught.value)
 
-    dispatched.extend([
-        {"id": 71, "head_sha": NEW, "event": "workflow_dispatch",
-         "status": "completed", "conclusion": "success"},
-        {"id": 72, "head_sha": NEW, "event": "workflow_dispatch",
-         "status": "completed", "conclusion": "failure"},
-    ])
+    dispatched.extend(
+        [
+            {
+                "id": 71,
+                "head_sha": NEW,
+                "event": "workflow_dispatch",
+                "status": "completed",
+                "conclusion": "success",
+            },
+            {
+                "id": 72,
+                "head_sha": NEW,
+                "event": "workflow_dispatch",
+                "status": "completed",
+                "conclusion": "failure",
+            },
+        ]
+    )
     assert deployer.discover_pr_supplement_run_ids(
         Path("."), previous=OLD, sha=NEW
     ) == ([], [], {NEW: "71"})
@@ -196,7 +220,10 @@ def _prepare_until_acceptance(tmp_path, monkeypatch, discovered):
 
     def chain(run_ids, **kwargs):
         calls["chain"] = run_ids
-        calls["supplements"] = (kwargs["pr_ci_run_ids"], kwargs["pr_playwright_run_ids"])
+        calls["supplements"] = (
+            kwargs["pr_ci_run_ids"],
+            kwargs["pr_playwright_run_ids"],
+        )
         raise _Stop
 
     def plan(directory, previous):
@@ -214,10 +241,21 @@ def _prepare_until_acceptance(tmp_path, monkeypatch, discovered):
     return calls, candidate
 
 
-def test_prepare_accepts_discovered_ci_evidence_by_default(tmp_path, monkeypatch):
-    calls, candidate = _prepare_until_acceptance(tmp_path, monkeypatch, ["15", "21"])
+def test_prepare_skips_ci_evidence_by_default(tmp_path, monkeypatch):
+    """Pull requests merge only after their CI passes, so prepare does not
+    re-check main push runs: it goes straight from checkout to the build."""
+    calls, _candidate = _prepare_until_acceptance(tmp_path, monkeypatch, ["15"])
     with pytest.raises(_Stop):
         deployer.prepare()
+    assert "discovered" not in calls
+    assert "chain" not in calls
+    assert calls["local_plan"] is True
+
+
+def test_prepare_accepts_discovered_ci_evidence_when_required(tmp_path, monkeypatch):
+    calls, candidate = _prepare_until_acceptance(tmp_path, monkeypatch, ["15", "21"])
+    with pytest.raises(_Stop):
+        deployer.prepare(require_ci_evidence=True)
     assert calls["discovered"] == (candidate, OLD, NEW)
     assert calls["chain"] == ["15", "21"]
     assert calls["supplements"] == (["61"], ["62"])
@@ -235,7 +273,7 @@ def test_prepare_has_no_local_test_mode(tmp_path, monkeypatch):
 
     monkeypatch.setattr(deployer, "discover_ci_run_ids", missing)
     with pytest.raises(deployer.CiEvidenceUnavailable):
-        deployer.prepare()
+        deployer.prepare(require_ci_evidence=True)
     assert "local_plan" not in calls
 
 
@@ -245,12 +283,30 @@ def test_overlapping_selections_need_no_cumulative_review(tmp_path, monkeypatch)
     directory = tmp_path / "candidate"
     (directory / "build").mkdir(parents=True)
     selections = {
-        MID: {"python": ["tests/test_a.py"], "frontend": [], "native": [],
-              "playwright": [], "expected_tests": {"python": 3, "frontend": 0,
-              "native": 0, "playwright": 0}},
-        NEW: {"python": ["tests/test_a.py", "tests/test_b.py"], "frontend": [],
-              "native": [], "playwright": [], "expected_tests": {"python": 5,
-              "frontend": 0, "native": 0, "playwright": 0}},
+        MID: {
+            "python": ["tests/test_a.py"],
+            "frontend": [],
+            "native": [],
+            "playwright": [],
+            "expected_tests": {
+                "python": 3,
+                "frontend": 0,
+                "native": 0,
+                "playwright": 0,
+            },
+        },
+        NEW: {
+            "python": ["tests/test_a.py", "tests/test_b.py"],
+            "frontend": [],
+            "native": [],
+            "playwright": [],
+            "expected_tests": {
+                "python": 5,
+                "frontend": 0,
+                "native": 0,
+                "playwright": 0,
+            },
+        },
     }
 
     def run(*args, capture=False, cwd=None, **_kwargs):
