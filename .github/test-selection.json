@@ -1,34 +1,40 @@
 {
-  "change_digest": "43d5fff07ab605a9a3957619a1b8511fd4530aca50cb3794f85abdd66596eca9",
-  "reviewed_by": "Claude Code, removing Butler's overdue goal check-in at the operator's request",
-  "reason": "Live Core showed Butler opening a new recovery chat for every goal.progress_overdue event (about 120 a day) and most ended needs_attention because provider agents cannot take a message mid-turn. The operator asked to remove the overdue check-in. Core no longer schedules progress deadlines or emits goal.progress_overdue; review, recovery, authority and memory ignore already-queued overdue events; request_parent_status is no longer an effective action; the report tool drops next_checkpoint_at; the oversight view drops 'Next checkpoint due' and its authority copy now describes plan reassessment. Selected: the Butler oversight, authority, review, pivotal-memory and handoff-action suites (authority and handoff tests now use the plan-change trigger that still exists), the two Butler oversight frontend suites, and the real-Core Butler oversight journey at desktop and 390 px.",
-  "exclusions": "tests/v3/test_universal_agent_tools.py references report_progress but 17 of its tests fail identically on unmodified origin/main locally, so it is not selected. The two PostgreSQL cases in tests/v3/test_handoff_butler_actions.py skip without NEBULA_TEST_POSTGRES_URL; they passed locally against a disposable postgres:16 container. Broader auto-impact areas (core-api shards, interface layouts, other Butler settings areas) do not touch the changed oversight code.",
+  "change_digest": "b769aa7608692920a3efb5cfa1f735b304b27dce227b1d65a8ff726bcc97f79c",
+  "reviewed_by": "Claude Code, expanding Butler mode into Butler's one place at the operator's request",
+  "reason": "The Butler launcher now opens Butler mode, which gains Board, Code & files, Oversight, Memory and Settings sections, project threads (the Butler panel lent through ButlerPanelBridge), a Butler model picker, chat briefs from a new Core brief read, a transcript pop-up, Butler goal-chat proposals (new nebula.work.propose_goal_chat, board proposal items) and file attribution reads. Selected: the new Core suites for the brief, file attribution, active plan step and proposals; the global project reads, oversight (progress report plan_index) and generic CRUD exposure suites the change touches; the Butler panel, Butler board, brief/proposal/attribution mapping and Butler thread frontend suites; and the real-Core Butler mode journey at desktop, compact and 390 px in Chromium and WebKit, all of which passed locally.",
+  "exclusions": "tests/v3/test_product_knowledge.py (test_product_search_finds_headless_core_and_paired_butler_cli) and tests/v3/test_settings_assistant_tools.py (test_provider_tools_are_bounded_to_catalog_and_project) each have one test that fails identically on origin/main; their other tests passed locally with this change. tests/v3/test_butler_workflow_registry.py fails on origin/main for two unlinked useProjectViewLease calls; the registry check otherwise passes. ui/src/components/CompactSettingsList.test.tsx fails on its Host commands glyph, which this change does not touch. PostgreSQL cases skip without NEBULA_TEST_POSTGRES_URL.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 65,
-    "frontend": 32,
+    "python": 85,
+    "frontend": 86,
     "native": 0,
-    "playwright": 2
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_butler_authority.py",
-    "tests/v3/test_butler_memory_pivotal.py",
+    "tests/v3/test_butler_goal_chat_proposals.py",
     "tests/v3/test_butler_oversight.py",
-    "tests/v3/test_butler_review.py",
-    "tests/v3/test_handoff_butler_actions.py"
+    "tests/v3/test_chat_brief.py",
+    "tests/v3/test_file_attribution.py",
+    "tests/v3/test_generic_crud_exposure.py",
+    "tests/v3/test_goal_active_plan_step.py",
+    "tests/v3/test_runtime_global_project_reads.py"
   ],
   "frontend": [
-    "ui/src/api/butlerOverview.test.ts",
-    "ui/src/components/ButlerOversight.test.tsx"
+    "ui/src/api/butlerBoard.test.ts",
+    "ui/src/api/butlerModeExpansion.test.ts",
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/pages/butlerThreads.test.ts"
   ],
   "native": [],
   "playwright": [
-    "butler-oversight/assistant-real-desktop",
-    "butler-oversight/assistant-real-chromium-390"
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
   ],
   "checks": []
 }
