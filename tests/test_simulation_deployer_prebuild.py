@@ -67,7 +67,7 @@ def test_prepare_reports_the_step_it_stopped_in(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(deployer, "discover_ci_run_ids", missing)
     with pytest.raises(deployer.CiEvidenceUnavailable):
-        deployer.prepare()
+        deployer.prepare(require_ci_evidence=True)
     err = capsys.readouterr().err
     assert "prepare: fetch took" in err
     assert "prepare: checkout took" in err

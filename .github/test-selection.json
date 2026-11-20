@@ -1,22 +1,23 @@
 {
-  "change_digest": "a688a58b5f0213d4e70537d93ea3370c2c96e64a2fa5def91c9c5f4a7836f640",
-  "reviewed_by": "Claude Code, PR 2b of the Butler home worker design at the operator's request",
-  "reason": "Follows #1241 and #1242 (merged). Re-run of only the tests that failed in CI run 44788459239 (job 136469625509) on this change: the two product-guidance tests in tests/v3/test_runtime_host_services.py, on SQLite and PostgreSQL. They failed with FileNotFoundError because CI built the generated product knowledge index only for UI-journey selections; ci.yml now builds and verifies it whenever test_runtime_host_services.py is selected. The other 478 selected tests (Butler home action, session and scope suites; runtime delivery, coordination, orphan recovery, execution worker; host services and host search; worker features, bundle, mixed release; Butler sessions; provider tools-context) passed in that same run on identical product code; this commit adds only the CI step and this receipt. Selection narrowed to the failed tests at the operator's request.",
-  "exclusions": "Every other test in the earlier selection passed in run 44788459239 on the same product code, so it is not re-run, per the operator's request to run only the failed tests. test_butler_capabilities.py and test_settings_assistant_tools.py each contain a case red on origin/main 8fb8023 (#1240). No UI change; LAN validation does not apply. The four selected tests passed locally after build_product_knowledge.py and --verify, on SQLite and the staging postgres:16.",
+  "change_digest": "8d6bd5aac5dd449b6fe125149acd1aee6b88d1b16478456c7cc80f0b361b51ce",
+  "reviewed_by": "Claude Code, at the operator's request to drop the deployer's CI evidence requirement",
+  "reason": "The deployer's prepare required a successful main push CI run for every commit since the live release. Pull requests already merge only after their CI passes, and main push runs share a cancel-in-progress group, so back-to-back merges cancelled each other's evidence and blocked deploys. prepare now skips CI lookups by default (receipt ci_acceptance null with a reason) and --require-ci-evidence or --ci-run-id restores the check. Selected: the deployer CI-default and prebuild suites (updated for the new default plus a test pinning it) and the deployer protocol suite (CLI).",
+  "exclusions": "Only scripts/simulation/nebula_deployer.py and its tests change; no Core, UI or workflow code, so frontend, native and Playwright selections are empty and LAN validation does not apply.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 61,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_host_services.py::test_guidance_mirror_failure_is_reported_while_packaged_help_remains_available",
-    "tests/v3/test_runtime_host_services.py::test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart"
+    "tests/test_deployer_protocol.py",
+    "tests/test_simulation_deployer_ci_default.py",
+    "tests/test_simulation_deployer_prebuild.py"
   ],
   "frontend": [],
   "native": [],

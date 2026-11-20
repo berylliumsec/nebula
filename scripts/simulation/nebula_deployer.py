@@ -885,8 +885,13 @@ def require_pr_merge_shape(
     elif parents == [base_sha]:
         try:
             run(
-                "git", "-C", str(directory), "merge-base", "--is-ancestor",
-                base_sha, head_sha,
+                "git",
+                "-C",
+                str(directory),
+                "merge-base",
+                "--is-ancestor",
+                base_sha,
+                head_sha,
             )
         except RuntimeError as error:
             raise RuntimeError(
@@ -909,7 +914,12 @@ def ensure_pr_head(directory: Path, head_sha: str, pull_number: int) -> None:
         # diagnostic-expected: absent locally; fetched from the PR ref below.
         pass
     run(
-        "git", "-C", str(directory), "fetch", "--no-tags", "origin",
+        "git",
+        "-C",
+        str(directory),
+        "fetch",
+        "--no-tags",
+        "origin",
         f"refs/pull/{pull_number}/head",
     )
     run("git", "-C", str(directory), "cat-file", "-e", f"{head_sha}^{{commit}}")
@@ -1109,7 +1119,11 @@ def validate_playwright_matrix_jobs(
         # name it carries. When truncation leaves several entries with the
         # same name, as many successful jobs as entries are still required.
         match = next(
-            (index for index, entry in enumerate(remaining) if name in names(lane, entry)),
+            (
+                index
+                for index, entry in enumerate(remaining)
+                if name in names(lane, entry)
+            ),
             None,
         )
         if match is None:
@@ -1367,7 +1381,9 @@ def verify_commit_playwright_run(
     entry needs its own successful job.
     """
     if not CI_RUN_ID.fullmatch(run_id):
-        raise RuntimeError("Commit Playwright run id must be a positive decimal identifier")
+        raise RuntimeError(
+            "Commit Playwright run id must be a positive decimal identifier"
+        )
     run_info = github_json(f"actions/runs/{run_id}")
     repository = run_info.get("repository")
     if not isinstance(repository, dict):
@@ -1394,7 +1410,9 @@ def verify_commit_playwright_run(
         workflow.get("path") != ".github/workflows/playwright-impact.yml"
         or workflow.get("state") != "active"
     ):
-        raise RuntimeError("Commit Playwright run did not use the pinned active workflow")
+        raise RuntimeError(
+            "Commit Playwright run did not use the pinned active workflow"
+        )
     verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=commit)
     files, artifact, artifact_digest = supplemental_artifact_files(
         int(run_id),
@@ -1404,7 +1422,9 @@ def verify_commit_playwright_run(
     try:
         received_plan = json.loads(files["playwright-impact-plan.json"])
     except (UnicodeError, json.JSONDecodeError) as error:
-        raise RuntimeError("Commit Playwright artifact contains invalid JSON") from error
+        raise RuntimeError(
+            "Commit Playwright artifact contains invalid JSON"
+        ) from error
     if (
         not isinstance(received_plan, dict)
         or received_plan.get("candidate_sha") != commit
@@ -1479,7 +1499,9 @@ def verify_ci_acceptance(
         raise RuntimeError("CI run id must be a positive decimal identifier")
     if supplemental_playwright is not None and commit_playwright is not None:
         raise RuntimeError("A commit's browser evidence has exactly one source")
-    browser_proven = supplemental_playwright is not None or commit_playwright is not None
+    browser_proven = (
+        supplemental_playwright is not None or commit_playwright is not None
+    )
     trusted_baseline = trusted_baseline or previous
     verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=sha)
     first_parent = run(
@@ -1885,7 +1907,8 @@ def expected_matrix_job_record(entries: list[Any]) -> dict[str, str]:
         if not isinstance(entry, dict):
             raise RuntimeError("release CI Playwright record is invalid")
         signature = tuple(
-            entry.get(field) for field in ("area", "grep", "project", "runtime", "shard")
+            entry.get(field)
+            for field in ("area", "grep", "project", "runtime", "shard")
         )
         if any(not isinstance(value, str) or not value for value in signature):
             raise RuntimeError("release CI Playwright record is invalid")
@@ -2127,9 +2150,7 @@ def validate_ci_acceptance_record(
                         selection, supplemental_playwright_verified=True
                     )
                 }
-                if not recorded_ci_jobs_match(
-                    pr_ci["selected_jobs"], expected_pr_jobs
-                ):
+                if not recorded_ci_jobs_match(pr_ci["selected_jobs"], expected_pr_jobs):
                     raise RuntimeError("release PR CI job record is incomplete")
                 expected_plan, _ = expected_pr_playwright_plan(
                     selection,
@@ -2257,19 +2278,24 @@ def prepare(
     ci_run_ids: list[str] | None = None,
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
+    require_ci_evidence: bool = False,
 ) -> dict[str, Any]:
     """Build and accept origin/main for this Core host.
 
-    The candidate is accepted on the CI evidence for every commit since the
-    live release (discovered automatically, or named run IDs). Tests run in
-    CI only; this host builds, lints and verifies the release. Each step's
-    duration is reported as it ends and kept in the receipt.
+    Every pull request merges only after its own CI passes, so by default the
+    candidate is not re-checked against CI runs here: main push runs share a
+    cancel-in-progress group, and back-to-back merges cancel each other's
+    evidence. ``require_ci_evidence`` (or named run IDs) restores the check
+    for every commit since the live release. Tests never run on this host; it
+    builds, lints and verifies the release. Each step's duration is reported
+    as it ends and kept in the receipt.
     """
     with StepTimings("prepare").run() as timings:
         return _prepare(
             ci_run_ids=ci_run_ids,
             pr_ci_run_ids=pr_ci_run_ids,
             pr_playwright_run_ids=pr_playwright_run_ids,
+            require_ci_evidence=require_ci_evidence,
             timings=timings,
         )
 
@@ -2279,8 +2305,10 @@ def _prepare(
     ci_run_ids: list[str] | None,
     pr_ci_run_ids: list[str] | None,
     pr_playwright_run_ids: list[str] | None,
+    require_ci_evidence: bool = False,
     timings: StepTimings,
 ) -> dict[str, Any]:
+    check_ci = require_ci_evidence or ci_run_ids is not None
     if ci_run_ids is None and (
         pr_ci_run_ids is not None or pr_playwright_run_ids is not None
     ):
@@ -2340,40 +2368,43 @@ def _prepare(
         return receipt
     timings.begin("checkout")
     directory = candidate(sha)
-    timings.begin("ci_evidence")
-    if ci_run_ids is None:
-        ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
-        (
-            pr_ci_run_ids,
-            pr_playwright_run_ids,
-            commit_playwright_run_ids,
-        ) = discover_pr_supplement_run_ids(directory, previous=previous, sha=sha)
-    else:
-        commit_playwright_run_ids = {}
-    ci_acceptance = verify_ci_acceptance_chain(
-        ci_run_ids,
-        previous=previous,
-        sha=sha,
-        directory=directory,
-        pr_ci_run_ids=pr_ci_run_ids,
-        pr_playwright_run_ids=pr_playwright_run_ids,
-        commit_playwright_run_ids=commit_playwright_run_ids,
-    )
-    plan = selected_plan(directory, previous)
-    reviewed = plan.get("reviewed_commits", [])
-    receipts = ci_acceptance_receipts(ci_acceptance)
-    accepted_commits = [
-        {
-            "commit": item["commit"],
-            "baseline": item["baseline"],
-            "change_digest": item["selection_change_digest"],
-        }
-        for item in receipts
-    ]
-    if reviewed != accepted_commits:
-        raise RuntimeError(
-            "deployer selection does not match the ordered CI receipt chain"
+    ci_acceptance: dict[str, Any] | None = None
+    if check_ci:
+        timings.begin("ci_evidence")
+        if ci_run_ids is None:
+            ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
+            (
+                pr_ci_run_ids,
+                pr_playwright_run_ids,
+                commit_playwright_run_ids,
+            ) = discover_pr_supplement_run_ids(directory, previous=previous, sha=sha)
+        else:
+            commit_playwright_run_ids = {}
+        ci_acceptance = verify_ci_acceptance_chain(
+            ci_run_ids,
+            previous=previous,
+            sha=sha,
+            directory=directory,
+            pr_ci_run_ids=pr_ci_run_ids,
+            pr_playwright_run_ids=pr_playwright_run_ids,
+            commit_playwright_run_ids=commit_playwright_run_ids,
         )
+    plan = selected_plan(directory, previous)
+    if ci_acceptance is not None:
+        reviewed = plan.get("reviewed_commits", [])
+        receipts = ci_acceptance_receipts(ci_acceptance)
+        accepted_commits = [
+            {
+                "commit": item["commit"],
+                "baseline": item["baseline"],
+                "change_digest": item["selection_change_digest"],
+            }
+            for item in receipts
+        ]
+        if reviewed != accepted_commits:
+            raise RuntimeError(
+                "deployer selection does not match the ordered CI receipt chain"
+            )
     timings.begin("python_dependencies")
     run(POETRY, "check", cwd=directory)
     run(POETRY, "install", "--with", "dev", "--no-interaction", cwd=directory)
@@ -2484,6 +2515,11 @@ def _prepare(
         "runtime_manifest_sha256": runtime_digest,
     }
     receipt["ci_acceptance"] = ci_acceptance
+    if ci_acceptance is None:
+        receipt["ci_acceptance_skipped"] = (
+            "Pull requests merge only after their CI passes; the deployer does "
+            "not re-check main CI runs unless --require-ci-evidence is given."
+        )
     receipt["timings"] = timings.record()
     atomic_json(staging / "simulation-acceptance.json", receipt)
     os.replace(staging, release)
@@ -4036,19 +4072,38 @@ def _exact_uuid(value: Any) -> bool:
 def _readonly_postgres_rows(query: str) -> list[str]:
     settings = configured_postgres(TOKEN_FILE)
     if settings is None:
-        raise RuntimeError("Dead-worker acceptance requires the configured PostgreSQL deployment")
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+        raise RuntimeError(
+            "Dead-worker acceptance requires the configured PostgreSQL deployment"
+        )
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("PG")
+    }
     if "PGPASSFILE" in os.environ:
         environment["PGPASSFILE"] = os.environ["PGPASSFILE"]
     result = subprocess.run(
-        ["psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set=ON_ERROR_STOP=1",
-         "--command", "BEGIN READ ONLY; " + query + "; COMMIT;"],
-        env={**environment, **settings}, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, timeout=20, check=False,
+        [
+            "psql",
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "--set=ON_ERROR_STOP=1",
+            "--command",
+            "BEGIN READ ONLY; " + query + "; COMMIT;",
+        ],
+        env={**environment, **settings},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=20,
+        check=False,
     )
     if result.returncode:
         raise RuntimeError("Dead-worker readback failed; inspect PostgreSQL access")
-    return [line for line in result.stdout.splitlines() if line not in {"", "BEGIN", "COMMIT"}]
+    return [
+        line
+        for line in result.stdout.splitlines()
+        if line not in {"", "BEGIN", "COMMIT"}
+    ]
 
 
 def load_dead_owner_acceptance(path: Path) -> dict[str, Any]:
@@ -4056,25 +4111,35 @@ def load_dead_owner_acceptance(path: Path) -> dict[str, Any]:
         raise RuntimeError("Dead-worker acceptance must be a regular file")
     value = json.loads(path.read_text())
     if not isinstance(value, dict) or set(value) != {
-        "project_id", "runtime_id", "fencing_token", "turn_ids",
-        "failed_turn_ids", "effect_call_ids", "acceptance"
+        "project_id",
+        "runtime_id",
+        "fencing_token",
+        "turn_ids",
+        "failed_turn_ids",
+        "effect_call_ids",
+        "acceptance",
     }:
         raise RuntimeError("Dead-worker acceptance has an invalid shape")
     turns, failed, effects = (
-        value["turn_ids"], value["failed_turn_ids"], value["effect_call_ids"]
+        value["turn_ids"],
+        value["failed_turn_ids"],
+        value["effect_call_ids"],
     )
     if (
         not _exact_uuid(value["project_id"])
         or not _exact_uuid(value["runtime_id"])
         or type(value["fencing_token"]) is not int
         or value["fencing_token"] < 1
-        or not isinstance(turns, list) or not turns
+        or not isinstance(turns, list)
+        or not turns
         or not all(_exact_uuid(item) for item in turns)
         or len(turns) != len(set(turns))
-        or not isinstance(failed, list) or not failed
+        or not isinstance(failed, list)
+        or not failed
         or not all(_exact_uuid(item) for item in failed)
         or len(failed) != len(set(failed))
-        or not isinstance(effects, list) or not effects
+        or not isinstance(effects, list)
+        or not effects
         or not all(_exact_uuid(item) for item in effects)
         or len(effects) != len(set(effects))
         or value["acceptance"] != "accept unconfirmed effects without replay"
@@ -4114,8 +4179,13 @@ def prove_dead_owner(accepted: dict[str, Any]) -> dict[str, Any]:
         "AND payload->>'status' NOT IN ('complete','denied','cancelled') "
         "AND NOT (payload->>'status' = 'failed' AND payload->>'risk_class' = 'local_read')"
     )
-    observed = {parts[0] for row in effects if len(parts := row.split("|")) == 3
-                and parts[1] == "failed" and parts[2] == "workspace_write"}
+    observed = {
+        parts[0]
+        for row in effects
+        if len(parts := row.split("|")) == 3
+        and parts[1] == "failed"
+        and parts[2] == "workspace_write"
+    }
     if observed != set(accepted["effect_call_ids"]):
         raise RuntimeError("The accepted failed write-call identities changed")
     return {"pid": pid, "process_birth": birth}
@@ -4369,9 +4439,10 @@ def wait_supervisor_host_ready(
             ):
                 # The replaced API worker reports degraded while it drains;
                 # wait for ready within this bound instead of failing the run.
-                last_problem = "deployment status is degraded: " + str(
-                    status.get("detail", "")
-                )[:300]
+                last_problem = (
+                    "deployment status is degraded: "
+                    + str(status.get("detail", ""))[:300]
+                )
                 time.sleep(2)
                 continue
             snapshot = host_status_snapshot(
@@ -4464,7 +4535,8 @@ def _restart_boundary_activity(client: CoreClient) -> dict[str, dict[str, Any]]:
                     }
                 ),
                 "unidentified_turns": sum(
-                    1 for item in pending
+                    1
+                    for item in pending
                     if not isinstance(item, dict)
                     or not isinstance(item.get("turn_id"), str)
                     or not item.get("turn_id")
@@ -4558,8 +4630,13 @@ def _unavailable_owner_blocker(
 def _includes_host_reconnect(version: str) -> bool:
     try:
         run(
-            "git", "-C", str(REPO), "merge-base", "--is-ancestor",
-            HOST_RECONNECT_COMMIT, version,
+            "git",
+            "-C",
+            str(REPO),
+            "merge-base",
+            "--is-ancestor",
+            HOST_RECONNECT_COMMIT,
+            version,
         )
     except (RuntimeError, OSError, subprocess.SubprocessError):
         return False
@@ -4622,7 +4699,9 @@ def _saved_holds() -> dict[str, Any]:
         return {}
     holds = json.loads(path.read_text())
     if not isinstance(holds, dict):
-        raise RuntimeError("Saved project holds are malformed; inspect them before releasing")
+        raise RuntimeError(
+            "Saved project holds are malformed; inspect them before releasing"
+        )
     return holds
 
 
@@ -4661,9 +4740,7 @@ def place_project_hold(
             idempotency_key=f"project-hold:{deployment_id}:{project_id}",
         )
     except HTTPError as error:
-        if error.code == 405 or (
-            error.code == 404 and _unrouted(error)
-        ):
+        if error.code == 405 or (error.code == 404 and _unrouted(error)):
             # The route itself is missing: this Core predates project holds.
             return None
         raise
@@ -4884,15 +4961,22 @@ def wait_quiet_restart_boundary(
                 == set(accepted_dead_owner["turn_ids"])
                 and busy[project_id].get("unidentified_turns", 0) == 0
                 and project_id in stuck
-                and stuck[project_id]["runtime_id"]
-                == accepted_dead_owner["runtime_id"]
+                and stuck[project_id]["runtime_id"] == accepted_dead_owner["runtime_id"]
             ):
                 status = client.get("deployment/status")
                 owner = next(
-                    (item for item in status["projects"]
-                     if item.get("project_id") == project_id), None
+                    (
+                        item
+                        for item in status["projects"]
+                        if item.get("project_id") == project_id
+                    ),
+                    None,
                 )
-                if owner is not None and owner.get("fencing_token") == accepted_dead_owner["fencing_token"]:
+                if (
+                    owner is not None
+                    and owner.get("fencing_token")
+                    == accepted_dead_owner["fencing_token"]
+                ):
                     return {
                         "quiet_after_seconds": round(time.monotonic() - started, 1),
                         "accepted_dead_owner": accepted_dead_owner,
@@ -5226,7 +5310,10 @@ def _activate_supervisor_host(
     existing = record.get("host_activation")
     if isinstance(existing, dict) and existing.get("version") == version:
         recorded_dead_owner = existing.get("accepted_dead_owner")
-        if accepted_dead_owner is not None and accepted_dead_owner != recorded_dead_owner:
+        if (
+            accepted_dead_owner is not None
+            and accepted_dead_owner != recorded_dead_owner
+        ):
             raise RuntimeError("A retry cannot change the accepted dead owner")
         accepted_dead_owner = recorded_dead_owner
         recorded_allow_degraded = existing.get("allow_degraded_workers") is True
@@ -5445,7 +5532,9 @@ def _activate_supervisor_host(
                     raise RuntimeError(
                         "Previous supervisor does not match the interrupted activation journal"
                     )
-            existing["restart_boundary"] = wait_quiet_restart_boundary(accepted_dead_owner)
+            existing["restart_boundary"] = wait_quiet_restart_boundary(
+                accepted_dead_owner
+            )
             readback = _switch_supervisor_host(
                 version,
                 release=release,
@@ -5630,7 +5719,8 @@ def _activate_supervisor_host(
 
 
 def activate_host(
-    *, allow_degraded_workers: bool = False,
+    *,
+    allow_degraded_workers: bool = False,
     accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = state()
@@ -5640,7 +5730,9 @@ def activate_host(
             "No accepted pending candidate is available for host activation"
         )
     return activate_supervisor_host(
-        record, pending, allow_degraded_workers=allow_degraded_workers,
+        record,
+        pending,
+        allow_degraded_workers=allow_degraded_workers,
         accepted_dead_owner=accepted_dead_owner,
     )
 
@@ -6843,6 +6935,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--require-ci-evidence",
+        action="store_true",
+        help=(
+            "prepare: also require a successful main CI run for every commit "
+            "since the live release (off by default: pull requests merge only "
+            "after their CI passes)"
+        ),
+    )
+    parser.add_argument(
         "--ci-pr-run-id",
         action="append",
         help=(
@@ -6922,6 +7023,8 @@ def main() -> int:
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
         raise RuntimeError("--ci-run-id is supported only with prepare")
+    if args.require_ci_evidence and args.action != "prepare":
+        raise RuntimeError("--require-ci-evidence is supported only with prepare")
     if args.backup and args.action not in {"promote", "cycle"}:
         raise RuntimeError("--backup is supported only with promote or cycle")
     if (
@@ -7003,14 +7106,13 @@ def main() -> int:
             if args.action == "status"
             else hold_command(args.project, args.reason, args.grace_seconds)
             if args.action == "hold"
-            else release_project_holds(
-                reason=args.reason or "Released by the operator"
-            )
+            else release_project_holds(reason=args.reason or "Released by the operator")
             if args.action == "release-holds"
             else prepare(
                 ci_run_ids=args.ci_run_id,
                 pr_ci_run_ids=args.ci_pr_run_id,
                 pr_playwright_run_ids=args.ci_playwright_run_id,
+                require_ci_evidence=args.require_ci_evidence,
             )
             if args.action == "prepare"
             else reconcile_runtime_deployment(args.deployment_id)
@@ -7030,7 +7132,8 @@ def main() -> int:
                 allow_degraded_workers=args.allow_degraded_workers,
                 accepted_dead_owner=(
                     load_dead_owner_acceptance(args.accepted_dead_owner_file)
-                    if args.accepted_dead_owner_file is not None else None
+                    if args.accepted_dead_owner_file is not None
+                    else None
                 ),
             )
             if args.action == "activate-host"
