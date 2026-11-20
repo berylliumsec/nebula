@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .project_hold_gate import ProjectHoldConflict, active_hold, held_detail
 from .async_utils import MaybeAsync, call_async
 
 from typing import AsyncIterator
@@ -876,6 +877,11 @@ class MissionService:
             )
         if not run.supervisor_provider_id:
             raise MissionStateError("approval run has no provider profile")
+        hold = await active_hold(self.store, run.engagement_id)
+        if hold is not None:
+            # The decision stays recorded; posting it again after the hold
+            # is released resumes the Mission.
+            raise ProjectHoldConflict(held_detail(hold))
         if await self._approval_resume_recorded(run.id, approval.id):
             raise MissionStateError(
                 f"approval {approval.id} already resumed run {run.id}"

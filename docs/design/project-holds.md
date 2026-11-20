@@ -42,6 +42,10 @@ and then pausing them one by one. It did not hold:
 | Core restart auto-resume, handoff restore | The turn stays interrupted or parked until a pass after release. |
 | Butler oversight for the project | No deadlines, reviews, authority actions or recovery cases. |
 | Global Butler actions on the project | Refused as a tool error. |
+| Harness analysis turns, harness Missions starting now | Refused (`ProjectHeld`, 409). |
+| A scheduled harness Mission that comes due | Waits, still queued, and starts after release. |
+| Delegated Mission synthesis | Waits for release instead of ending the Mission. |
+| Mission resume after an approval decision | Refused (409). The decision stays recorded; posting it again after release resumes the Mission. |
 
 ## Limits
 
@@ -50,5 +54,4 @@ and then pausing them one by one. It did not hold:
   period ends.
 - Stopped turns and subagents are not restarted on release. Their goals
   resume, and each goal decides its next step from its durable progress.
-- Mission synthesis turns and harness analysis or mission turns are not yet
-  covered by the gate.
+- A Mission's duration budget keeps counting while its project is held.

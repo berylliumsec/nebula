@@ -1,35 +1,24 @@
 {
-  "change_digest": "03b4e1c7f1ea6a1a8b35d628523c4b7625b05a77636552a87fbef87e2cfce469",
-  "reviewed_by": "Claude Code, building Core-owned project holds after the 2026-11-20 deployment wind-down failed",
-  "reason": "A deployment wind-down asked Butler to pause goals; pauses lost revision races on busy goals, subagent reports kept starting parent turns, and Butler's periodic checks resumed the paused goals, so the project never went quiet and nothing durable recorded what was paused. This adds a durable ProjectHold entity and API (place, read, release). Placing a hold pauses every running goal with the hold's mark; while held, provider and harness turn creation and resume refuse with ProjectHeld (409, code project_held), goal start/resume refuse for everyone but the hold's release, and background producers defer instead of failing work: subagent report wake-ups, chat queue dispatch, schedules, process callbacks, restart auto-resume, handoff restore, Butler oversight and global Butler actions. Core's 15 s chat pass stops turns still active after the grace period and marks the hold held; release resumes exactly the marked goals and wakes deferred subagent deliveries and queues. Selected: the new hold suite (incl. a full-app API case) plus every suite for the producers it gates.",
-  "exclusions": "No UI or settings change in this PR: the hold is an API/deployer control; the held-project banner (with its Figma mockup and settings-assistant entry) and deployer/AGENTS.md integration are follow-ups. Mission synthesis and harness analysis/mission turns are not gated yet (documented in docs/design/project-holds.md). PostgreSQL-only execution-scope cases skip locally and run in CI. No disposable LAN Core run yet; a staging replay follows before merge.",
+  "change_digest": "9322039939c9b5d4b55df6c70a46041c7da7d52040cea7404b2e72d006cd1767",
+  "reviewed_by": "Claude Code, closing the project hold's documented gaps for Missions and harness analysis",
+  "reason": "Project holds (#1232) refused chat turns but not harness analysis turns or harness Missions, and a delegated Mission's synthesis or a due scheduled harness Mission would fail or start instead of waiting for the release. Now analyze_structured and a harness Mission starting now refuse with ProjectHeld; a future occurrence is saved and its due execution waits while held; delegated Mission synthesis waits instead of ending the run; a Mission's resume after an approval decision refuses with 409 while the decision stays recorded and can be posted again after release. Selected: new mission hold suite, the hold suite, the Mission suite and the harness turn lifecycle suite.",
+  "exclusions": "tests/v3/test_harnesses.py passes locally except two catalog-refresh cases (test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_browser_attachment_refreshes_catalog_without_replacing_native_thread) that also fail on unmodified main here; it is not selected. No UI change.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 373,
+    "python": 57,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_project_hold_missions.py",
     "tests/v3/test_project_holds.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_chat_schedules.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_subagent_delivery.py",
-    "tests/v3/test_subagent_resume_race.py",
-    "tests/v3/test_goal_revision_races.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_butler_oversight.py",
-    "tests/v3/test_butler_subagents.py",
-    "tests/v3/test_butler_authority.py",
-    "tests/v3/test_execution_scope.py"
+    "tests/v3/test_missions.py",
+    "tests/v3/test_harness_turn_lifecycle.py"
   ],
   "frontend": [],
   "native": [],
