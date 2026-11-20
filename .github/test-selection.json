@@ -1,26 +1,33 @@
 {
-  "change_digest": "b1dffe19c8835e1c06269c827ddc40df7046cee7f4e693d3207ceaf9e4516bbd",
-  "reviewed_by": "Claude Code, fixing the narrow-window Quiet Lens top menu found while repairing #1224",
-  "reason": "TopBar's Quiet Lens handle revealed on hover and on pointer focus at any width, and its blur handler closed the menu when the phone-width layout hid the focused handle. At 390px with a mouse the menu could not be opened. Hover now uses the side handle's wide-layout query, focus reveals only for :focus-visible, and a self-hide blur is ignored. Selected: TopBar unit tests (new cases fail on main) and the quiet-lens area, which now includes narrow.",
-  "exclusions": "host-startup-default also maps TopBar.tsx but only checks first-run startup on a real Core; the TopBar layout and startup copy are unchanged. phone-shell, critical-workspaces and the Zero shell journey passed locally on desktop, compact, narrow and all six mobile projects, and a disposable LAN Core run covered narrow mouse, narrow keyboard, desktop hover, and Pixel and iPhone tap.",
+  "change_digest": "791305163f02ec43fed03a830e34c0c749cd08235f7bc4f3bf4a995bf00216eb",
+  "reviewed_by": "Claude Code, fixing the linked-memory defects found in the 2026-11-19 production card audit",
+  "reason": "Linked memory gave Core's goal kickoff operator authority, curated lessons that route around a required project hook, injected off-topic cards (a word and its stem both counted, and Nebula's own words and the project ID matched), and stalled 16.5 h because any background goal turn paused curation (an active turn now records its capacity lane so a queued goal turn is not mistaken for an operator's). Fixes are in linked_memory_curator/helper/rules/store. The fixed goal instruction texts moved to domain.py so the curator can recognise them. Selected: all linked-memory tests (6 new ones fail on main), product-knowledge freshness and linked-memory search (docs changed), the real worker-process kernel test (the curator runs in workers), and the goal start, resume, continuation and subagent-reports continuation paths whose instruction texts moved.",
+  "exclusions": "No frontend, native or Playwright tests: nothing under ui/ changes and linked memory has no operator interface. chat.py, chat_goals.py and chat_subagents.py change only where the fixed instruction texts come from (byte-identical strings), so their suites beyond the selected start, resume, continuation and subagent-report nodes are excluded. The migration head and settings-assistant catalog are unchanged. A disposable LAN Core on 192.168.1.155 with the local Qwen3.5-2B and a slow stub model validated curation alongside a busy goal, the operator-turn pause, authority, entry matching and the saved-card re-check.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 21,
+    "python": 41,
+    "frontend": 0,
     "native": 0,
-    "playwright": 11
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/TopBar.test.tsx"
+  "python": [
+    "tests/v3/test_linked_memory.py",
+    "tests/v3/test_linked_memory_api.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_linked_memory_and_its_butler_actions",
+    "tests/v3/test_execution_worker_process.py::test_real_kernel_grant_delivery_and_supervisor_replacement",
+    "tests/v3/test_chat_goals.py::test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
+    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
+    "tests/v3/test_chat_subagent_lifecycle.py::test_goal_continuation_after_reports_keeps_the_operators_turn_settings",
+    "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:quiet-lens"
-  ],
+  "playwright": [],
   "checks": []
 }
