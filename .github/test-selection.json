@@ -1,27 +1,35 @@
 {
-  "change_digest": "7534048a78cb2b427b9ff68424bcedb9293310d1bb02184af3168614e33c13bf",
-  "reviewed_by": "Claude Code, closing the project hold's documented gaps for Missions and harness analysis",
-  "reason": "Project holds (#1232) refused chat turns but not harness analysis turns or harness Missions, and a delegated Mission's synthesis or a due scheduled harness Mission would fail or start instead of waiting for the release. Now analyze_structured and a harness Mission starting now refuse with ProjectHeld; a future occurrence is saved and its due execution waits while held; delegated Mission synthesis waits instead of ending the run; a Mission's resume after an approval decision refuses with 409 while the decision stays recorded and can be posted again after release. Selected: new mission hold suite, the hold suite, the Mission suite and the harness turn lifecycle suite.",
-  "exclusions": "tests/v3/test_harnesses.py passes locally except two catalog-refresh cases (test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_browser_attachment_refreshes_catalog_without_replacing_native_thread) that also fail on unmodified main here; it is not selected. No UI change.",
+  "change_digest": "0a6faf3e8628d2893146d58f0fbb5b1b4c536d714730a3b10f11abde1610b573",
+  "reviewed_by": "Claude Code, building the approved held-project banner (Figma page Project hold, 172:2)",
+  "reason": "Core project holds (#1232) had no interface. A shared ProjectHoldWatch on ApiClient polls the open project's hold (30 s, 5 s while held, refreshed at once when Core refuses work with project_held, stopped on a Core without the route). ProjectHoldNotice shows 'Pausing work in this project' with the grace countdown, then 'Work in this project is paused' with a bordered Release control (icon-only at phone width) behind a confirmation. The composer keeps the draft, disables Send and says when sending works again; the goal panel shows 'paused by update' and hides Resume for goals the hold paused. The assistant contract gains a 'Projects paused for a Core update' section. Selected: new unit suites and the goal panel, runtime notice and chat page suites; the bundled-guidance discovery test; a new real-Core acceptance (area:project-hold, 8 browser projects) that places a hold through Core, checks the banner, disabled Send with kept draft, axe and no horizontal overflow, Keep paused, Release, and Core's released readback; composer-draft-continuity and critical-workspaces mocked areas for composer and workspace layout regressions.",
+  "exclusions": "No settings destination: a hold is not a setting (documented in the assistant contract). Release uses the pack's CirclePlay icon because the curated icon pack has no unlocked-lock glyph; the approved mockup's lock icon is otherwise matched. area:assistant is not selected: its real-core.spec.ts lanes carry known unrelated rot; the composer change is covered by composer-draft-continuity and the real-Core hold acceptance. tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters fails on unmodified main (ios-shell-real-core.spec.ts) and is not selected. Real-Core acceptance passed locally on model-desktop, model-chromium-320 and model-webkit-390.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 58,
-    "frontend": 0,
+    "python": 1,
+    "frontend": 42,
     "native": 0,
-    "playwright": 0
+    "playwright": 34
   },
   "python": [
-    "tests/v3/test_project_hold_missions.py",
-    "tests/v3/test_project_holds.py",
-    "tests/v3/test_missions.py",
-    "tests/v3/test_harness_turn_lifecycle.py"
+    "tests/v3/test_project_hold_knowledge.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/projectHold.test.ts",
+    "ui/src/components/ProjectHoldNotice.test.tsx",
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/components/ProjectRuntimeNotice.test.tsx",
+    "ui/src/pages/chatMobileDrawerRestore.test.tsx",
+    "ui/src/pages/chatDraftNavigation.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:project-hold",
+    "area:composer-draft-continuity",
+    "area:critical-workspaces"
+  ],
   "checks": []
 }

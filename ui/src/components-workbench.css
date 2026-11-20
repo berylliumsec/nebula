@@ -179,6 +179,14 @@ body {
 .workspace-state-banner.project-runtime-notice { justify-content: flex-start; gap: 10px; }
 .project-runtime-notice > svg { flex: 0 0 auto; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .project-runtime-notice > .spin { animation: none; } }
+.project-hold-notice > span { flex: 1 1 auto; min-width: 0; }
+.project-hold-notice.held > svg { color: var(--orange); }
+.project-hold-notice .button.project-hold-release { flex: 0 0 auto; align-self: center; height: auto; min-height: 32px; gap: 6px; white-space: nowrap; border: 1px solid var(--border); }
+.project-hold-error { color: var(--red); }
+@media (max-width: 640px) {
+  .project-hold-release-label { display: none; }
+  .project-hold-notice .button.project-hold-release { padding-inline: 7px; min-width: 44px; justify-content: center; }
+}
 .update-banner-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .update-banner-actions .button { white-space: nowrap; }
 
