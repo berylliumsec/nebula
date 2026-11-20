@@ -1048,7 +1048,10 @@
         "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
         "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged",
         "ui/src/api/butlerBoard.ts::requestIfChanged",
-        "ui/src/pages/ButlerModePage.tsx::listChatMessages"
+        "ui/src/pages/ButlerModePage.tsx::listChatMessages",
+        "ui/src/api/butlerBrief.ts::request::GET `butler/sessions/${encodeURIComponent(sessionId)}/brief?before=${before}`",
+        "ui/src/api/butlerBrief.ts::requestIfChanged",
+        "ui/src/pages/ButlerChatPopup.tsx::listChatMessages"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1091,7 +1094,7 @@
     },
     {
       "id": "chat.goal_lifecycle",
-      "entry_point": "Workbench goals: create a draft conversation, revise or transition its Core goal, and create a linked child",
+      "entry_point": "Workbench goals: create a draft conversation, revise or transition its Core goal, and create a linked child; Butler mode starts, edits (through Butler) or cancels goal chats Butler proposed, and pauses or resumes a goal from a chat's brief",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::createChatGoalConversation",
         "ui/src/pages/SessionsPage.tsx::getChatGoal",
@@ -1101,13 +1104,18 @@
         "ui/src/components/ProviderGoalPanel.tsx::updateChatGoal",
         "ui/src/components/ProviderGoalPanel.tsx::writeChatGoal",
         "ui/src/components/ProviderGoalChildren.tsx::listGoalChildren",
-        "ui/src/components/ProviderGoalChildren.tsx::startGoalChild"
+        "ui/src/components/ProviderGoalChildren.tsx::startGoalChild",
+        "ui/src/api/butlerBoard.ts::getChatGoal",
+        "ui/src/api/butlerBoard.ts::writeChatGoal",
+        "ui/src/api/butlerBoard.ts::request::\"DELETE\" `chat-sessions/${encodeURIComponent(sessionId)}`",
+        "ui/src/pages/ButlerChatBrief.tsx::getChatGoal",
+        "ui/src/pages/ButlerChatBrief.tsx::writeChatGoal"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
         "discover": "nebula.work.chats and nebula.work.goals",
         "read": "nebula.work.goal",
-        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.update_goal, nebula.work.goal_action and nebula.work.create_goal_child"
+        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.propose_goal_chat, nebula.work.update_goal, nebula.work.goal_action and nebula.work.create_goal_child"
       },
       "authority": "Selected project, current goal revision, existing Core goal transition guards and child lineage; creating a draft does not start a turn",
       "observed_result_test": "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
@@ -1217,7 +1225,6 @@
         "ui/src/pages/SessionsPage.tsx::getApproval",
         "ui/src/state/WorkspaceContext.tsx::listApprovals",
         "ui/src/state/WorkspaceContext.tsx::decideApproval",
-        "ui/src/pages/ButlerModePage.tsx::getApproval",
         "ui/src/pages/ButlerModePage.tsx::decideApproval"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
@@ -2945,10 +2952,12 @@
     },
     {
       "id": "workspace.git_inspection",
-      "entry_point": "workspace git inspection",
+      "entry_point": "workspace git inspection; Butler mode's Code & files marks files and lines chats changed and lists who changed the open file",
       "ui_calls": [
         "ui/src/components/EditorSourceControl.tsx::sourceControlStatus",
-        "ui/src/components/EditorSourceControl.tsx::sourceControlDiff"
+        "ui/src/components/EditorSourceControl.tsx::sourceControlDiff",
+        "ui/src/api/fileAttribution.ts::request::GET `${projectPath(projectId)}/history?path=${encodeURIComponent(path)}`",
+        "ui/src/api/fileAttribution.ts::requestIfChanged"
       ],
       "core_owner": "WorkspaceService bounded Git inspection with external diff/textconv disabled",
       "butler": {
@@ -3658,8 +3667,28 @@
   ],
   "ui_api_calls": [
     {
+      "key": "ui/src/api/butlerBoard.ts::getChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerBoard.ts::request::\"DELETE\" `chat-sessions/${encodeURIComponent(sessionId)}`",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/butlerBoard.ts::requestIfChanged",
       "count": 2
+    },
+    {
+      "key": "ui/src/api/butlerBoard.ts::writeChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerBrief.ts::request::GET `butler/sessions/${encodeURIComponent(sessionId)}/brief?before=${before}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerBrief.ts::requestIfChanged",
+      "count": 1
     },
     {
       "key": "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/check-interval\"",
@@ -3707,6 +3736,14 @@
     },
     {
       "key": "ui/src/api/butlerOverview.ts::request::GET `engagements/${encodeURIComponent(projectId)}/butler/overview${query.size ? `?${query}` : \"\"}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/fileAttribution.ts::request::GET `${projectPath(projectId)}/history?path=${encodeURIComponent(path)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/fileAttribution.ts::requestIfChanged",
       "count": 1
     },
     {
@@ -5378,16 +5415,24 @@
       "count": 1
     },
     {
+      "key": "ui/src/pages/ButlerChatBrief.tsx::getChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerChatBrief.tsx::writeChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerChatPopup.tsx::listChatMessages",
+      "count": 2
+    },
+    {
       "key": "ui/src/pages/ButlerModePage.tsx::cancelChatTurn",
       "count": 1
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::decideApproval",
-      "count": 1
-    },
-    {
-      "key": "ui/src/pages/ButlerModePage.tsx::getApproval",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig",

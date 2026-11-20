@@ -19,8 +19,13 @@ export interface ButlerBoardItem {
   updatedAt: string;
   /** One line from Core: what the chat is doing or waiting for. */
   now?: string;
-  attention?: { kind: "approval" | "question" | "recovery"; actionId?: string; summary: string; requestedAt?: string };
-  goal?: { objective: string; status: string; currentStep: number; planLength: number };
+  attention?: { kind: "approval" | "question" | "recovery" | "proposal"; actionId?: string; summary: string; requestedAt?: string };
+  goal?: { objective: string; status: string; currentStep: number; planLength: number; revision?: number };
+  /** "butler" when Butler started this chat on its own authority. */
+  startedBy?: "butler";
+  /** "butler" when Butler proposed this chat; a draft until the operator starts it. */
+  proposedBy?: "butler";
+  sessionRevision?: number;
 }
 
 export interface ButlerBoard {
@@ -47,8 +52,11 @@ interface WireItem {
   turn_started_at?: string | null;
   updated_at: string;
   now?: string | null;
-  attention?: { kind: "approval" | "question" | "recovery"; action_id?: string | null; summary: string; requested_at?: string | null } | null;
-  goal?: { objective: string; status: string; current_step: number; plan_length: number } | null;
+  attention?: { kind: "approval" | "question" | "recovery" | "proposal"; action_id?: string | null; summary: string; requested_at?: string | null } | null;
+  goal?: { objective: string; status: string; current_step: number; plan_length: number; revision?: number | null } | null;
+  started_by?: string | null;
+  proposed_by?: string | null;
+  session_revision?: number | null;
 }
 
 interface WireBoard {
@@ -86,7 +94,11 @@ function mapItem(item: WireItem): ButlerBoardItem {
       status: item.goal.status,
       currentStep: item.goal.current_step,
       planLength: item.goal.plan_length,
+      revision: item.goal.revision ?? undefined,
     } : undefined,
+    startedBy: item.started_by === "butler" ? "butler" : undefined,
+    proposedBy: item.proposed_by === "butler" ? "butler" : undefined,
+    sessionRevision: item.session_revision ?? undefined,
   };
 }
 
@@ -201,5 +213,53 @@ export async function listButlerThreadsIfChanged(api: ApiClient, etag: string | 
       updatedAt: item.updated_at,
     })),
     etag: answer.etag,
+  };
+}
+
+/** Start a chat Butler proposed: its draft goal starts with the revision Core last showed. */
+export async function startProposedGoalChat(api: ApiClient, sessionId: string): Promise<void> {
+  const goal = await api.getChatGoal(sessionId);
+  await api.writeChatGoal(sessionId, { expectedRevision: goal.revision, action: "start" });
+}
+
+/** Cancel a chat Butler proposed: Core removes the draft chat and its goal. */
+export async function cancelProposedGoalChat(api: ApiClient, sessionId: string, sessionRevision: number | undefined): Promise<void> {
+  await api.request<void>(`chat-sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    headers: sessionRevision !== undefined ? { "If-Match": String(sessionRevision) } : undefined,
+  });
+}
+
+/** A goal chat Butler proposed or started, from its tool receipt. */
+export interface GoalChatProposal {
+  kind: "goal_chat_proposal" | "goal_chat_started";
+  sessionId: string;
+  projectId: string;
+  title: string;
+  objective: string;
+  completionCriteria: string[];
+  runtime?: { backend?: string; profileId?: string; model?: string; reasoningEffort?: string };
+  limits?: { timeBudgetSeconds?: number | null; tokenBudget?: number | null; stepBudget?: number | null; allowSubagents?: boolean; maxActiveSubagents?: number | null };
+  tools: string[];
+  reportsTo?: { sessionId: string; title: string; kind: "butler" | "chat" };
+  startError?: string;
+}
+
+export function goalChatProposalFromReceipt(receipt: Record<string, unknown> | undefined | null): GoalChatProposal | undefined {
+  const action = receipt?.client_action as Record<string, any> | undefined;
+  if (!action || (action.kind !== "goal_chat_proposal" && action.kind !== "goal_chat_started") || typeof action.sessionId !== "string") return undefined;
+  const criteria = action.completionCriteria;
+  return {
+    kind: action.kind,
+    sessionId: action.sessionId,
+    projectId: String(action.projectId ?? ""),
+    title: String(action.title ?? "Goal chat"),
+    objective: String(action.objective ?? ""),
+    completionCriteria: Array.isArray(criteria) ? criteria.map(String) : criteria ? [String(criteria)] : [],
+    runtime: action.runtime ?? undefined,
+    limits: action.limits ?? undefined,
+    tools: Array.isArray(action.tools) ? action.tools.map((tool: { name?: unknown; id?: unknown }) => String(tool?.name ?? tool?.id ?? "")).filter(Boolean) : [],
+    reportsTo: action.reportsTo ?? undefined,
+    startError: typeof receipt?.start_error === "string" ? receipt.start_error : undefined,
   };
 }

@@ -1,0 +1,115 @@
+.section {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.editor {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.activity {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-left: 1px solid var(--border-soft);
+  background: var(--surface);
+  font-size: var(--type-secondary);
+}
+
+.activity h2 {
+  margin: 0;
+  font-size: var(--type-control);
+  font-weight: var(--weight-semibold);
+}
+
+.activity p { margin: 0; }
+.muted { color: var(--muted); }
+
+.error {
+  padding: 8px 10px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-control);
+  color: var(--red);
+}
+
+.events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-panel);
+  background: var(--canvas);
+}
+
+.eventHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.eventHead strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--orange);
+}
+
+.dot[data-kind="created"] { background: var(--green); }
+.dot[data-kind="deleted"] { background: var(--red); }
+
+.link,
+.ask {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.ask {
+  align-self: stretch;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  text-align: left;
+}
+
+@media (max-width: 760px) {
+  .section { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .activity { max-height: 40vh; border-left: 0; border-top: 1px solid var(--border-soft); }
+}

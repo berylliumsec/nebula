@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, ExternalLink, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, ExternalLink, Minimize2, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { boardElapsed, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerThread } from "../api/butlerBoard";
+import { boardElapsed, cancelProposedGoalChat, goalChatProposalFromReceipt, startProposedGoalChat, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerThread } from "../api/butlerBoard";
 import type { ChatMessage, ChatStreamEvent } from "../api/types";
 import { startVisiblePoll } from "../api/visiblePoll";
 import ReactMarkdown from "react-markdown";
@@ -14,6 +14,17 @@ import { readStorage, writeStorage } from "../state/browserStorage";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle } from "./butlerThreads";
 import styles from "./ButlerModePage.module.css";
+// Already in the main bundle with the Butler panel.
+import { MicrophoneIcon } from "../components/NebulaVoice";
+import { ButlerOversight } from "../components/ButlerOversight";
+import { ButlerMemory } from "../components/ButlerMemory";
+import { useButlerPanelBridge } from "../state/ButlerPanelBridge";
+import { useOptionalWorkbenchDrafts } from "../state/WorkbenchDraftContext";
+import type { ButlerBrief } from "../api/butlerBrief";
+// Loaded when first opened, so the board itself stays as light as before.
+const ButlerChatBrief = lazy(() => import("./ButlerChatBrief").then((module) => ({ default: module.ButlerChatBrief })));
+const ButlerCodeSection = lazy(() => import("./ButlerCodeSection").then((module) => ({ default: module.ButlerCodeSection })));
+const ButlerChatPopup = lazy(() => import("./ButlerChatPopup").then((module) => ({ default: module.ButlerChatPopup })));
 
 type Approval = Awaited<ReturnType<ApiClient["getApproval"]>>;
 type LiveTurn = { prompt: string; text: string; browserAction?: boolean; error?: string; done?: boolean };
@@ -23,8 +34,33 @@ const SUBAGENTS_KEY = "nebula.butler-mode.subagents";
 const STATE_LABEL = { waiting: "Needs you", working: "Working", failed: "Failed", idle: "Idle" } as const;
 const THREAD_STATE_LABEL = { waiting: "Needs you", working: "Working", idle: "Answered" } as const;
 
-function chatPath(projectId: string, sessionId: string): string {
-  return `/projects/${encodeURIComponent(projectId)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}`;
+type Section = "board" | "code" | "oversight" | "memory" | "settings";
+const SECTIONS: Array<{ id: Section; label: string }> = [
+  { id: "board", label: "Board" },
+  { id: "code", label: "Code & files" },
+  { id: "oversight", label: "Oversight" },
+  { id: "memory", label: "Memory" },
+  { id: "settings", label: "Settings" },
+];
+
+function isSection(value: string | null): value is Section {
+  return SECTIONS.some((item) => item.id === value);
+}
+
+/** A board item for a chat known only from its brief (an idle chat, say). */
+function itemFromBrief(brief: ButlerBrief): ButlerBoardItem {
+  return { sessionId: brief.sessionId, title: brief.title, project: brief.project, state: brief.state, backend: brief.backend, model: brief.model, isSubagent: Boolean(brief.parentSessionId), updatedAt: brief.updatedAt, now: brief.attention?.summary };
+}
+
+/** Selected text added to Butler, sent ahead of the operator's words. */
+function withSelectedContext(prompt: string, drafts: Array<{ text: string; source: { label: string }; truncated?: boolean }>): string {
+  if (!drafts.length) return prompt;
+  const blocks = drafts.map((draft) => `Context from ${draft.source.label}${draft.truncated ? " (shortened)" : ""}:\n"""\n${draft.text}\n"""`);
+  return `${blocks.join("\n\n")}\n\n${prompt}`;
+}
+
+function chatPath(projectId: string, sessionId: string, turnId?: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}${turnId ? `&turn=${encodeURIComponent(turnId)}` : ""}`;
 }
 
 function approvalDetail(approval: Approval | undefined): string | undefined {
@@ -43,13 +79,23 @@ function approvalDetail(approval: Approval | undefined): string | undefined {
  * board is grouped.
  */
 export function ButlerModePage() {
-  const { api, coreState, engagement, engagements, providers, harnesses } = useWorkspace();
+  const { api, coreState, engagement, engagements, providers, harnesses, selectEngagement } = useWorkspace();
+  const bridge = useButlerPanelBridge();
+  const drafts = useOptionalWorkbenchDrafts();
+  const butlerDrafts = drafts?.butlerDrafts ?? [];
   const navigate = useNavigate();
   const confirm = useConfirmation();
   const compact = useCompactLayout();
   const [params, setParams] = useSearchParams();
   const openThreadId = params.get("thread") ?? undefined;
   const phoneTab = params.get("tab") === "threads" ? "threads" : "board";
+  const sectionParam = params.get("section");
+  const section: Section = isSection(sectionParam) ? sectionParam : "board";
+  // The chat whose brief is open, a project's ongoing Butler thread, and a file to open in Code & files.
+  const briefId = params.get("chat") ?? undefined;
+  const projectThreadId = params.get("pthread") ?? undefined;
+  const openFilePath = params.get("file") ?? undefined;
+  const [moreOpen, setMoreOpen] = useState(false);
   // The project Butler mode was opened from: new threads start there and Exit returns there.
   const originProject = params.get("project") ?? engagement?.id;
 
@@ -62,8 +108,9 @@ export function ButlerModePage() {
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [idle, setIdle] = useState<{ open: boolean; items: ButlerBoardItem[]; nextOffset?: number; loading: boolean; error?: string }>({ open: false, items: [], loading: false });
-  const [expanded, setExpanded] = useState<string>();
-  const [approval, setApproval] = useState<{ id: string; value?: Approval; error?: string }>();
+  // Cards open the chat brief; the inline expansion stays for its approval controls.
+  const [expanded] = useState<string>();
+  const [approval] = useState<{ id: string; value?: Approval; error?: string }>();
   const [deciding, setDeciding] = useState<string>();
   const [actionNote, setActionNote] = useState<Record<string, string>>({});
 
@@ -72,6 +119,8 @@ export function ButlerModePage() {
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
   const [threadError, setThreadError] = useState<Record<string, string>>({});
   const [live, setLive] = useState<Record<string, LiveTurn>>({});
+  // Goal chats Butler proposed or started in a thread on this device; the board keeps them durably.
+  const [threadProposals, setThreadProposals] = useState<Record<string, GoalChatProposal[]>>({});
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<"new" | "reply">("new");
   const [about, setAbout] = useState<ButlerBoardItem>();
@@ -179,6 +228,7 @@ export function ButlerModePage() {
     setParams((current) => {
       const next = new URLSearchParams(current);
       if (sessionId) { next.set("thread", sessionId); next.set("tab", "threads"); } else next.delete("thread");
+      next.delete("pthread");
       return next;
     }, { replace: false });
     setTarget(sessionId ? "reply" : "new");
@@ -186,14 +236,52 @@ export function ButlerModePage() {
 
   const setPhoneTab = (tab: "board" | "threads") => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); if (tab === "board") next.delete("thread"); return next; });
 
+  const updateParams = useCallback((change: (next: URLSearchParams) => void) => setParams((current) => { const next = new URLSearchParams(current); change(next); return next; }), [setParams]);
+  const setSection = (value: Section) => { setMoreOpen(false); updateParams((next) => {
+    if (value === "board") next.delete("section"); else next.set("section", value);
+    next.delete("chat");
+    if (value !== "code") next.delete("file");
+    // Settings borrows the Butler panel, which can show one place at a time.
+    if (value === "settings") next.delete("pthread");
+    next.set("tab", "board");
+  }); };
+  const openBrief = useCallback((sessionId: string) => updateParams((next) => { next.set("chat", sessionId); next.delete("section"); next.delete("file"); next.set("tab", "board"); }), [updateParams]);
+  const closeBrief = useCallback(() => updateParams((next) => next.delete("chat")), [updateParams]);
+  const openProjectThread = (projectId: string) => {
+    selectEngagement(projectId);
+    updateParams((next) => { next.set("pthread", projectId); next.delete("thread"); if (next.get("section") === "settings") next.delete("section"); next.set("tab", "threads"); });
+  };
+  const openFile = (path: string, projectId: string) => {
+    selectEngagement(projectId);
+    updateParams((next) => { next.set("section", "code"); next.set("file", path); next.delete("chat"); next.set("tab", "board"); });
+  };
+
+  // A project thread and Butler's settings belong to the selected project.
+  useEffect(() => { if (projectThreadId && engagement?.id !== projectThreadId && engagements.some((item) => item.id === projectThreadId)) selectEngagement(projectThreadId); }, [projectThreadId, engagement?.id, engagements, selectEngagement]);
+
+  // Lend the Butler panel a place: Settings shows Butler's own settings; a project thread shows its conversation.
+  const [chatHost, setChatHost] = useState<HTMLElement | null>(null);
+  const [settingsHost, setSettingsHost] = useState<HTMLElement | null>(null);
+  const embedPanel = bridge?.embed;
+  useLayoutEffect(() => {
+    if (!embedPanel) return;
+    if (section === "settings" && settingsHost) embedPanel({ host: settingsHost, view: "more" });
+    else if (projectThreadId && chatHost) embedPanel({ host: chatHost, view: "chat" });
+    else embedPanel(undefined);
+  }, [embedPanel, section, settingsHost, projectThreadId, chatHost]);
+  useEffect(() => () => embedPanel?.(undefined), [embedPanel]);
+
   const exit = () => navigate(originProject ? `/projects/${encodeURIComponent(originProject)}/workbench` : "/");
+  const compactPanel = () => { bridge?.openCompact(); exit(); };
 
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (organizeOpen) { setOrganizeOpen(false); return; }
+      if (moreOpen) { setMoreOpen(false); return; }
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.closest("[role=dialog]")) return;
+      if (briefId) { closeBrief(); return; }
       exit();
     };
     window.addEventListener("keydown", onKey);
@@ -220,23 +308,6 @@ export function ButlerModePage() {
     }
   };
   useEffect(() => { setIdle({ open: false, items: [], loading: false }); }, [query]);
-
-  const expand = async (item: ButlerBoardItem) => {
-    if (expanded === item.sessionId) { setExpanded(undefined); return; }
-    setExpanded(item.sessionId);
-    setApproval(undefined);
-    if (api && item.attention?.kind === "approval" && item.attention.actionId) {
-      const id = item.attention.actionId;
-      setApproval({ id });
-      try {
-        const value = await api.getApproval(id);
-        setApproval((current) => current?.id === id ? { id, value } : current);
-      } catch (caught) {
-        void logCaughtDiagnostic("interface.butler_mode.approval_read_failed", "Butler mode could not read an approval.", caught, "butler_mode");
-        setApproval((current) => current?.id === id ? { id, error: caught instanceof Error ? caught.message : "Core could not read this approval." } : current);
-      }
-    }
-  };
 
   const decide = async (item: ButlerBoardItem, decision: "approve" | "reject") => {
     if (!api || !item.attention?.actionId) return;
@@ -270,7 +341,79 @@ export function ButlerModePage() {
     }
   };
 
+  // A chat's transcript opens over Butler mode; clicking outside returns to the board.
+  const [popup, setPopup] = useState<{ sessionId: string; title: string; projectId: string }>();
+  const openPopup = (sessionId: string, title: string, projectId: string) => setPopup({ sessionId, title, projectId });
+
+  const decideAction = async (sessionId: string, actionId: string, decision: "approve" | "reject") => {
+    if (!api) return;
+    setDeciding(sessionId);
+    try {
+      await api.decideApproval(actionId, { decision });
+      setActionNote((current) => ({ ...current, [sessionId]: decision === "approve" ? "Approval sent. Waiting for Core to resume the chat…" : "Denied. Waiting for Core to update the chat…" }));
+      boardEtag.current = undefined;
+      boardPoll.current?.poke();
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.approval_failed", "Butler mode could not record an approval decision.", caught, "butler_mode");
+      setActionNote((current) => ({ ...current, [sessionId]: `${caught instanceof Error ? caught.message : "Core could not record the decision."} Retry, or open the chat.` }));
+    } finally {
+      setDeciding(undefined);
+    }
+  };
+
+  const [proposalBusy, setProposalBusy] = useState<string>();
+  const startProposal = async (sessionId: string) => {
+    if (!api) return;
+    setProposalBusy(sessionId);
+    try {
+      await startProposedGoalChat(api, sessionId);
+      setActionNote((current) => ({ ...current, [sessionId]: "Started. Butler watches it and brings it back when it needs you." }));
+      setThreadProposals((current) => Object.fromEntries(Object.entries(current).map(([key, list]) => [key, list.map((item) => item.sessionId === sessionId ? { ...item, kind: "goal_chat_started" as const } : item)])));
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.proposal_start_failed", "Butler mode could not start a proposed goal chat.", caught, "butler_mode");
+      setActionNote((current) => ({ ...current, [sessionId]: `${caught instanceof Error ? caught.message : "Core could not start the chat."} Retry, or ask Butler to change it.` }));
+    } finally {
+      setProposalBusy(undefined);
+      boardEtag.current = undefined;
+      boardPoll.current?.poke();
+    }
+  };
+  const cancelProposal = async (sessionId: string, title: string) => {
+    if (!api) return;
+    const approved = await confirm({ title: `Cancel "${title}"?`, message: "Core removes the proposed chat and its goal. Nothing has run yet.", confirmLabel: "Cancel proposal", tone: "danger" });
+    if (!approved) return;
+    setProposalBusy(sessionId);
+    try {
+      await cancelProposedGoalChat(api, sessionId, allItemsRef.current.find((item) => item.sessionId === sessionId)?.sessionRevision);
+      setThreadProposals((current) => Object.fromEntries(Object.entries(current).map(([key, list]) => [key, list.filter((item) => item.sessionId !== sessionId)])));
+      if (briefIdRef.current === sessionId) closeBrief();
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.proposal_cancel_failed", "Butler mode could not cancel a proposed goal chat.", caught, "butler_mode");
+      setActionNote((current) => ({ ...current, [sessionId]: `${caught instanceof Error ? caught.message : "Core could not cancel the proposal."} Reload the board and retry.` }));
+    } finally {
+      setProposalBusy(undefined);
+      boardEtag.current = undefined;
+      boardPoll.current?.poke();
+    }
+  };
+  const editProposal = (title: string) => {
+    if (projectThreadId) updateParams((next) => next.delete("pthread"));
+    setTarget(openThreadId ? "reply" : "new");
+    setDraft(`Change the proposed goal chat "${title}": `);
+    if (compact) setPhoneTab("threads");
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  };
+  const proposalActions = (sessionId: string, title: string) => <>
+    <button type="button" className={styles.primary} disabled={proposalBusy === sessionId} onClick={() => void startProposal(sessionId)}>Start chat</button>
+    <button type="button" className={styles.secondary} disabled={proposalBusy === sessionId} onClick={() => editProposal(title)}>Edit</button>
+    <button type="button" className={styles.secondary} disabled={proposalBusy === sessionId} onClick={() => void cancelProposal(sessionId, title)}>Cancel</button>
+  </>;
+  const allItemsRef = useRef<ButlerBoardItem[]>([]);
+  const briefIdRef = useRef(briefId);
+  briefIdRef.current = briefId;
+
   const askAbout = (item: ButlerBoardItem) => {
+    if (projectThreadId) updateParams((next) => next.delete("pthread"));
     setAbout(item);
     setTarget("new");
     setNewThreadProject(item.project.id);
@@ -288,6 +431,12 @@ export function ButlerModePage() {
       await api.streamChat(butlerThreadRequest(projectId, sessionId, runtime, harnesses, content), (event: ChatStreamEvent) => {
         if (event.type === "delta" || event.type === "message_delta") {
           setLive((current) => current[sessionId] ? { ...current, [sessionId]: { ...current[sessionId], text: current[sessionId].text + event.delta } } : current);
+        }
+        const proposal = event.type === "tool_completed" ? goalChatProposalFromReceipt(event.receipt) : undefined;
+        if (proposal) {
+          setThreadProposals((current) => ({ ...current, [sessionId]: [...(current[sessionId] ?? []).filter((item) => item.sessionId !== proposal.sessionId), proposal] }));
+          boardEtag.current = undefined;
+          boardPoll.current?.poke();
         }
         if (event.type === "tool_completed" && event.receipt?.state === "pending_browser_apply") {
           setLive((current) => current[sessionId] ? { ...current, [sessionId]: { ...current[sessionId], browserAction: true } } : current);
@@ -323,10 +472,12 @@ export function ButlerModePage() {
       const config = current ? (await api.getChatAssistantConfig(current.id)).settings : undefined;
       const runtime = butlerThreadRuntime(config, providers, harnesses);
       if (!runtime.ok) { setComposerError(runtime.error); return; }
-      const content = replyThread ? prompt : butlerQuestionAbout(about?.project.id === projectId ? about : undefined, prompt);
+      const sentDrafts = [...butlerDrafts];
+      const content = withSelectedContext(replyThread ? prompt : butlerQuestionAbout(about?.project.id === projectId ? about : undefined, prompt), sentDrafts);
       const sessionId = replyThread?.sessionId ?? (await api.getOrCreateControlAssistantSession(butlerThreadReservation(projectId, runtime, butlerThreadTitle(prompt)))).id;
       setDraft("");
       setAbout(undefined);
+      if (sentDrafts.length) drafts?.consumeButlerDrafts(sentDrafts);
       if (!replyThread) {
         const project = engagements.find((item) => item.id === projectId);
         setThreads((existing) => [{ sessionId, title: butlerThreadTitle(prompt), project: { id: projectId, name: project?.name ?? "" }, state: "working", updatedAt: new Date().toISOString() }, ...existing.filter((item) => item.sessionId !== sessionId)]);
@@ -385,7 +536,7 @@ export function ButlerModePage() {
             {group.counts.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{group.counts.failed} failed</span>}
           </span>}
         </button>
-        {open && <div className={styles.cards}>{group.items.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => void expand(item)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => navigate(chatPath(item.project.id, item.sessionId))} showProject={grouping !== "project"} />)}</div>}
+        {open && <div className={styles.cards}>{group.items.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} />)}</div>}
       </div>;
     })}
     {counts && counts.idle > 0 && <div className={styles.group}>
@@ -395,14 +546,36 @@ export function ButlerModePage() {
       </button>
       {idle.open && <>
         {idle.error && <div className={styles.error} role="alert">{idle.error} <button type="button" className={styles.link} onClick={() => void loadIdle(idle.items.length)}>Retry</button></div>}
-        <div className={styles.cards}>{idle.items.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={false} onToggle={() => void expand(item)} onDecide={() => undefined} onStop={() => undefined} onAsk={() => askAbout(item)} onOpen={() => navigate(chatPath(item.project.id, item.sessionId))} showProject />)}</div>
+        <div className={styles.cards}>{idle.items.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={false} onToggle={() => openBrief(item.sessionId)} onDecide={() => undefined} onStop={() => undefined} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject />)}</div>
         {idle.loading && <p className={styles.muted}>Loading idle chats…</p>}
         {idle.nextOffset !== undefined && !idle.loading && <button type="button" className={styles.link} onClick={() => void loadIdle(idle.nextOffset!)}>Show more idle chats</button>}
       </>}
     </div>}
   </section>;
 
+  const projectCounts = useMemo(() => {
+    const counts = new Map<string, { waiting: number; working: number }>();
+    for (const item of board?.items ?? []) {
+      const entry = counts.get(item.project.id) ?? { waiting: 0, working: 0 };
+      if (item.state === "waiting") entry.waiting += 1;
+      if (item.state === "working") entry.working += 1;
+      counts.set(item.project.id, entry);
+    }
+    return counts;
+  }, [board]);
+
   const threadsRail = <nav className={styles.rail} aria-label="Butler threads">
+    <div className={styles.railHead}><h2>Projects</h2><span className={styles.muted}>one ongoing thread each</span></div>
+    <ul className={styles.threadList} aria-label="Project threads">{visibleProjects.map((project) => {
+      const counts = projectCounts.get(project.id);
+      const state = counts?.waiting ? "waiting" : counts?.working ? "working" : "done";
+      return <li key={project.id}>
+        <button type="button" className={styles.thread} aria-current={projectThreadId === project.id ? "true" : undefined} onClick={() => openProjectThread(project.id)}>
+          <span className={styles.threadHead}><i className={styles.dot} data-state={state} aria-hidden="true" /><span className={styles.threadTitle}>{project.name}</span></span>
+          <span className={styles.muted}>{counts?.waiting ? `${counts.waiting} need you` : counts?.working ? `${counts.working} working` : "Quiet"}</span>
+        </button>
+      </li>;
+    })}</ul>
     <div className={styles.railHead}>
       <h2>Threads</h2>
       {runningThreads > 0 && <span className={styles.muted}>{runningThreads} running</span>}
@@ -437,11 +610,16 @@ export function ButlerModePage() {
       </div>)}
       {openLive && !threadMessages.some((message) => message.role === "user" && message.content.endsWith(openLive.prompt)) && <div className={styles.question}>{openLive.prompt}</div>}
       {openLive && (openLive.text ? <div className={styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{openLive.text}</ReactMarkdown></div> : !openLive.error && <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Butler is working on this…</p>)}
+      {openThreadId && threadProposals[openThreadId]?.map((proposal) => <ProposalCard key={proposal.sessionId} proposal={proposal} note={actionNote[proposal.sessionId]} actions={proposal.kind === "goal_chat_proposal" ? proposalActions(proposal.sessionId, proposal.title) : null} onOpenBrief={() => openBrief(proposal.sessionId)} />)}
       {openLive?.browserAction && <p className={styles.note}>Butler asked this device to finish a step in the browser (for example a picker or setting). Open the Butler panel to complete it there.</p>}
       {openLive?.error && <div className={styles.error} role="alert">{openLive.error}</div>}
       {openThreadSummary && !openLive && openThreadSummary.state !== "idle" && <p className={styles.working}><i className={styles.dot} data-state={openThreadSummary.state} aria-hidden="true" /> {openThreadSummary.state === "waiting" ? "Butler's answer is waiting for you. Open its conversation to approve or answer." : "Butler is working on this thread…"}</p>}
     </div>
     <form className={styles.composer} onSubmit={(event) => void send(event)}>
+      {butlerDrafts.length > 0 && <div className={styles.contextPack} role="group" aria-label="Selected context for Butler">
+        {butlerDrafts.map((item, index) => <span key={`${item.source.kind}:${item.source.id ?? ""}:${index}`} className={styles.chip} title={item.text.slice(0, 400)}>{item.source.label}{item.truncated ? " · shortened" : ""}<button type="button" className={styles.chipClose} aria-label={`Remove ${item.source.label} from Butler context`} title="Remove" onClick={() => drafts?.removeButlerDraft(index)}><X size={12} aria-hidden="true" /></button></span>)}
+        <span className={styles.muted}>Sent with your next message</span>
+      </div>}
       {about && <div className={styles.about}><span className={styles.muted}>About</span><span className={styles.chip}><i className={styles.dot} data-state={about.state} aria-hidden="true" />{about.title}<button type="button" className={styles.chipClose} aria-label={`Stop asking about ${about.title}`} title="Remove" onClick={() => setAbout(undefined)}><X size={12} aria-hidden="true" /></button></span></div>}
       {composerError && <div className={styles.error} role="alert">{composerError}</div>}
       <div className={styles.inputRow}>
@@ -460,28 +638,130 @@ export function ButlerModePage() {
     </form>
   </section>;
 
-  return <div className={styles.mode} data-compact={compact ? "true" : "false"}>
+  // ↑ and ↓ step through the board's chats while a brief is open.
+  const boardOrder = useMemo(() => [...groups.flatMap((group) => group.items), ...(idle.open ? idle.items : [])].map((item) => item.sessionId), [groups, idle]);
+  useEffect(() => {
+    if (!briefId) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if ((event.key !== "ArrowUp" && event.key !== "ArrowDown") || event.defaultPrevented || popup) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.closest("input, textarea, select, [contenteditable=true], [role=log]"))) return;
+      const index = boardOrder.indexOf(briefId);
+      const next = boardOrder[index + (event.key === "ArrowDown" ? 1 : -1)];
+      if (index < 0 || !next) return;
+      event.preventDefault();
+      updateParams((params) => params.set("chat", next));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [briefId, boardOrder, popup, updateParams]);
+
+  const allItems = [...(board?.items ?? []), ...idle.items];
+  allItemsRef.current = allItems;
+  const briefItem = briefId ? allItems.find((item) => item.sessionId === briefId) : undefined;
+  const briefIndex = briefId ? boardOrder.indexOf(briefId) : -1;
+  const scopeProject = engagement?.id ?? originProject;
+  const loading = <p className={styles.muted} role="status">Loading…</p>;
+
+  const brief = briefId && api ? <Suspense fallback={<section className={styles.board}>{loading}</section>}><ButlerChatBrief api={api} sessionId={briefId} turnId={briefItem?.turnId}
+    position={briefIndex >= 0 ? `${briefIndex + 1} of ${boardOrder.length}` : undefined}
+    onBack={closeBrief}
+    onAsk={(value) => askAbout(briefItem ?? itemFromBrief(value))}
+    onOpenChat={(projectId) => openPopup(briefId, briefItem?.title ?? "Chat", projectId)}
+    onOpenTurn={(projectId) => openPopup(briefId, briefItem?.title ?? "Chat", projectId)}
+    onOpenFile={openFile}
+    onDecide={(actionId, decision) => void decideAction(briefId, actionId, decision)}
+    deciding={deciding === briefId}
+    note={actionNote[briefId]}
+    onStop={briefItem?.turnId ? () => void stopChat(briefItem) : undefined}
+    proposalActions={briefItem?.attention?.kind === "proposal" ? proposalActions(briefId, briefItem.title) : undefined} /></Suspense> : null;
+
+  const projectPicker = <label className={styles.projectPick}><span className={styles.muted}>Project</span>
+    <select value={scopeProject ?? ""} onChange={(event) => selectEngagement(event.target.value)} aria-label="Project">
+      {!scopeProject && <option value="" disabled>Choose a project</option>}
+      {visibleProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+    </select>
+  </label>;
+  const noProject = <p className={styles.empty}>Create or restore a project to use this.</p>;
+
+  const workspace = section === "oversight" ? <section className={styles.pane} aria-label="Oversight">
+      <div className={styles.paneHead}><h2>Oversight</h2>{projectPicker}</div>
+      {scopeProject ? <ButlerOversight key={scopeProject} api={api} projectId={scopeProject} coreState={coreState} onNavigate={(path) => navigate(path)} /> : noProject}
+    </section>
+    : section === "memory" ? <section className={styles.pane} aria-label="Memory">
+      <div className={styles.paneHead}><h2>Memory</h2>{projectPicker}</div>
+      {scopeProject ? <ButlerMemory api={api} projectId={scopeProject} coreState={coreState} /> : noProject}
+    </section>
+    : section === "settings" ? <section className={styles.pane} aria-label="Butler settings for this project">
+      <div className={styles.paneHead}><h2>Settings</h2>{projectPicker}</div>
+      {scopeProject ? <div ref={setSettingsHost} className={styles.embedHost} /> : noProject}
+      {!bridge && <p className={styles.muted}>Butler's settings are unavailable here.</p>}
+    </section>
+    : brief ?? boardView;
+
+  const projectThread = projectThreadId ? <section className={styles.conversation} aria-label={`Project thread: ${visibleProjects.find((item) => item.id === projectThreadId)?.name ?? "project"}`}>
+    <div className={styles.threadBar}>
+      {compact && <button type="button" className={styles.iconButton} aria-label="Back to threads" title="Back to threads" onClick={() => updateParams((next) => next.delete("pthread"))}><ArrowLeft size={16} aria-hidden="true" /></button>}
+      <h2>{visibleProjects.find((item) => item.id === projectThreadId)?.name ?? "Project"}</h2>
+      <span className={styles.muted}>project thread</span>
+    </div>
+    {engagement?.id === projectThreadId ? <div ref={setChatHost} className={styles.embedHost} /> : loading}
+  </section> : null;
+
+  const codeSection = api && scopeProject ? <Suspense fallback={loading}><ButlerCodeSection api={api} projectId={scopeProject} openPath={openFilePath}
+    onOpenBrief={openBrief}
+    onAskAbout={(path) => { setDraft((current) => current || `About ${path}: `); updateParams((next) => { next.delete("section"); next.delete("pthread"); next.set("tab", "threads"); }); window.setTimeout(() => composerRef.current?.focus(), 0); }} /></Suspense> : noProject;
+
+  const sectionTabs = <nav className={styles.sections} aria-label="Butler sections">
+    {SECTIONS.map((item) => <button key={item.id} type="button" className={styles.sectionTab} aria-current={section === item.id ? "page" : undefined} onClick={() => setSection(item.id)}>
+      {item.label}
+      {item.id === "board" && counts?.waiting ? <span className={styles.badge} data-state="waiting">{counts.waiting}</span> : null}
+      {item.id === "oversight" && bridge?.attentionCount ? <span className={styles.badge} data-state="failed">{bridge.attentionCount}</span> : null}
+    </button>)}
+  </nav>;
+
+  const leftColumn = projectThread ?? conversation;
+  const phoneThreads = projectThread ?? (openThreadId || about || draft ? conversation : <>{threadsRail}{conversation}</>);
+
+  return <div className={styles.mode} data-compact={compact ? "true" : "false"} data-selection-recipient="butler">
     <header className={styles.topBar}>
-      <h1>Butler mode</h1>
-      <label className={styles.search}>
+      <h1>Butler</h1>
+      {!compact && sectionTabs}
+      {section === "board" && <label className={styles.search}>
         <Search size={15} aria-hidden="true" />
         <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats and projects" aria-label="Search chats and projects" />
-      </label>
-      {counts && <div className={styles.pulse} aria-label="Chat status across projects">
+      </label>}
+      {section !== "board" && <span className={styles.spacer} />}
+      {counts && !compact && <div className={styles.pulse} aria-label="Chat status across projects">
         <span><i className={styles.dot} data-state="waiting" aria-hidden="true" />{counts.waiting} need you</span>
         <span><i className={styles.dot} data-state="working" aria-hidden="true" />{counts.working} working</span>
         {counts.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{counts.failed} failed</span>}
       </div>}
+      {bridge && <button type="button" className={styles.iconButton} aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!bridge.voiceAvailable} onClick={bridge.startVoice}><MicrophoneIcon size={17} /></button>}
+      {bridge && !compact && <button type="button" className={styles.iconButton} aria-label="Compact Butler" title="Compact: the small Butler panel over the page you came from" onClick={compactPanel}><Minimize2 size={17} aria-hidden="true" /></button>}
       <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>
     </header>
     {coreState !== "online" && <div className={styles.error} role="alert">Core is unavailable. Butler mode reconnects and reads the board again when Core answers.</div>}
     {compact ? <>
       <div className={styles.tabs} role="tablist" aria-label="Butler mode">
-        <button type="button" role="tab" aria-selected={phoneTab === "board"} onClick={() => setPhoneTab("board")}>Board{counts?.waiting ? <span className={styles.tabCount} data-state="waiting">{counts.waiting} need you</span> : null}</button>
-        <button type="button" role="tab" aria-selected={phoneTab === "threads"} onClick={() => setPhoneTab("threads")}>Threads{runningThreads ? <span className={styles.tabCount} data-state="working">{runningThreads} running</span> : null}</button>
+        <button type="button" role="tab" aria-selected={phoneTab === "board" && section === "board"} onClick={() => setSection("board")}>Board{counts?.waiting ? <span className={styles.tabCount} data-state="waiting">{counts.waiting}</span> : null}</button>
+        <button type="button" role="tab" aria-selected={phoneTab === "threads"} onClick={() => setPhoneTab("threads")}>Threads{runningThreads ? <span className={styles.tabCount} data-state="working">{runningThreads}</span> : null}</button>
+        <button type="button" role="tab" aria-selected={phoneTab === "board" && section === "oversight"} onClick={() => setSection("oversight")}>Oversight{bridge?.attentionCount ? <span className={styles.tabCount} data-state="failed">{bridge.attentionCount}</span> : null}</button>
+        <button type="button" role="tab" aria-selected={phoneTab === "board" && (section === "code" || section === "memory" || section === "settings")} aria-haspopup="dialog" aria-expanded={moreOpen} onClick={() => setMoreOpen(true)}><MoreHorizontal size={16} aria-hidden="true" /> More</button>
       </div>
-      <div className={styles.phoneBody}>{phoneTab === "board" ? boardView : openThreadId || about || draft ? conversation : <>{threadsRail}{conversation}</>}</div>
-    </> : <div className={styles.body}>{threadsRail}{conversation}{boardView}</div>}
+      <div className={styles.phoneBody}>{phoneTab === "threads" ? phoneThreads : section === "code" ? codeSection : workspace}</div>
+      {moreOpen && <div className={styles.sheetLayer}>
+        <button type="button" className={styles.sheetScrim} aria-label="Close" tabIndex={-1} onClick={() => setMoreOpen(false)} />
+        <div className={styles.sheet} role="dialog" aria-label="More in Butler">
+          {(["code", "memory", "settings"] as const).map((value) => <button key={value} type="button" className={styles.sheetRow} onClick={() => setSection(value)}>{SECTIONS.find((item) => item.id === value)?.label}<ChevronRight size={16} aria-hidden="true" /></button>)}
+          <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>
+        </div>
+      </div>}
+    </> : section === "code" ? <div className={styles.codeBody}>{codeSection}</div> : <div className={styles.body}>{threadsRail}{leftColumn}{workspace}</div>}
+    {popup && api && <Suspense fallback={null}><ButlerChatPopup api={api} sessionId={popup.sessionId} title={popup.title}
+      live={allItems.some((item) => item.sessionId === popup.sessionId && (item.state === "working" || item.state === "waiting"))}
+      onClose={() => setPopup(undefined)}
+      onOpenFull={() => { const target = popup; setPopup(undefined); navigate(chatPath(target.projectId, target.sessionId)); }} /></Suspense>}
   </div>;
 }
 
@@ -500,7 +780,7 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
   showProject: boolean;
 }) {
   const elapsed = boardElapsed(item.state === "idle" || item.state === "failed" ? item.updatedAt : item.turnStartedAt ?? item.updatedAt, clock);
-  const runtime = [showProject ? item.project.name : undefined, item.model, item.isSubagent ? "Subagent" : undefined].filter(Boolean).join(" · ");
+  const runtime = [showProject ? item.project.name : undefined, item.model, item.isSubagent ? "Subagent" : undefined, item.proposedBy ? "Proposed by Butler" : item.startedBy ? "Started by Butler" : undefined].filter(Boolean).join(" · ");
   const goal = item.goal ? `Goal ${Math.min(item.goal.currentStep + 1, Math.max(item.goal.planLength, 1))}/${Math.max(item.goal.planLength, 1)} · ${item.goal.status}` : undefined;
   const pendingApproval = item.attention?.kind === "approval" && approval?.id === item.attention.actionId ? approval : undefined;
   return <article className={styles.card} data-state={item.state} data-expanded={expanded ? "true" : "false"} aria-label={`${item.title}: ${STATE_LABEL[item.state]}`}>
@@ -530,5 +810,26 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
         {item.state === "working" && item.turnId && <button type="button" className={styles.secondary} onClick={onStop}>Stop</button>}
       </div>
     </div>}
+  </article>;
+}
+
+/** A goal chat Butler proposed (Start / Edit / Cancel) or started on its own authority. */
+function ProposalCard({ proposal, note, actions, onOpenBrief }: { proposal: GoalChatProposal; note?: string; actions: React.ReactNode; onOpenBrief: () => void }) {
+  const runtime = [proposal.runtime?.model, proposal.runtime?.reasoningEffort ? `${proposal.runtime.reasoningEffort} effort` : undefined].filter(Boolean).join(" · ");
+  const limits = proposal.limits ? [proposal.limits.timeBudgetSeconds ? `${Math.round(proposal.limits.timeBudgetSeconds / 60)} min` : undefined, proposal.limits.tokenBudget ? `${proposal.limits.tokenBudget.toLocaleString()} tokens` : undefined, proposal.limits.stepBudget ? `${proposal.limits.stepBudget} steps` : undefined, proposal.limits.allowSubagents ? `up to ${proposal.limits.maxActiveSubagents ?? "unlimited"} subagents` : undefined].filter(Boolean).join(" · ") : "";
+  const rows: Array<[string, string]> = [
+    ["Goal", proposal.objective],
+    ["Done when", proposal.completionCriteria.join("; ")],
+    ["Runtime", runtime],
+    ["Tools", proposal.tools.join(" · ")],
+    ["Limits", limits],
+    ["Reports to", proposal.reportsTo?.title ?? ""],
+  ];
+  return <article className={styles.proposal} data-kind={proposal.kind} aria-label={`${proposal.kind === "goal_chat_started" ? "Started" : "Proposed"} goal chat: ${proposal.title}`}>
+    <header><i className={styles.dot} data-state={proposal.kind === "goal_chat_started" ? "working" : "waiting"} aria-hidden="true" /><strong>{proposal.title}</strong><span className={styles.muted}>{proposal.kind === "goal_chat_started" ? "Started by Butler" : "Proposed"}</span></header>
+    <dl>{rows.filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    {proposal.startError && <p className={styles.errorText}>{proposal.startError}</p>}
+    {note && <p className={styles.note} role="status">{note}</p>}
+    <div className={styles.actions}>{actions}<button type="button" className={styles.link} onClick={onOpenBrief}>Open brief</button></div>
   </article>;
 }
