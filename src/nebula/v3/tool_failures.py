@@ -586,6 +586,16 @@ def _model_text(value: str, maximum_bytes: int) -> str:
     )
 
 
+def _model_tail_text(value: str, maximum_bytes: int) -> str:
+    safe = sanitize_display_text(redact_text(value))
+    encoded = safe.encode("utf-8")
+    return (
+        safe
+        if len(encoded) <= maximum_bytes
+        else "…" + encoded[-maximum_bytes:].decode("utf-8", "ignore")
+    )
+
+
 def _fit_failure(result: dict[str, Any]) -> dict[str, Any]:
     """Keep guidance and identifiers in the model's 8 KiB result bound."""
 
@@ -667,7 +677,13 @@ def with_failed_result_receipt(
             {
                 "kind": item.get("kind"),
                 "artifact_id": item.get("artifact_id"),
-                "text": _model_text(item["text"], 400),
+                # A partial preview ends with the stream's tail, where a
+                # failure usually reports itself.
+                **(
+                    {"text": _model_tail_text(item["text"], 400), "partial": True}
+                    if item.get("partial") is True
+                    else {"text": _model_text(item["text"], 400)}
+                ),
                 "trust": "untrusted tool output",
             }
             for item in previews[:2]

@@ -1841,9 +1841,11 @@ _CHAT_TOOL_INSTRUCTIONS = (
 are needed, and include helpful prose when appropriate. Request several
 independent functions in the same response; keep a call that needs an earlier
 result for a later response. Nebula runs a batch one call at a time and replays
-every result. A response without tool calls ends the turn. A complete, redacted
-small command output may already be in output_preview; use it directly. Inspect
-larger or missing output with tool_output.search and tool_output.read."""
+every result. A response without tool calls ends the turn. A command's redacted
+output may already be in output_preview; use it directly. A partial preview
+shows only the head and tail; read its omitted lines with tool_output.read only
+when you need them. Inspect missing output with tool_output.search and
+tool_output.read."""
     + BROWSER_MODEL_WORKFLOW
 )
 
