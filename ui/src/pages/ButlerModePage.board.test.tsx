@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ButlerModePage } from "./ButlerModePage";
 
@@ -16,7 +16,8 @@ vi.mock("../state/WorkspaceContext", () => ({
 }));
 vi.mock("../state/ButlerPanelBridge", () => ({ useButlerPanelBridge: () => null }));
 vi.mock("../components/DialogSystem", () => ({ useConfirmation: () => confirm }));
-vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => false }));
+const layout = vi.hoisted(() => ({ compact: false }));
+vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => layout.compact }));
 vi.mock("../components/NebulaVoice", () => ({ MicrophoneIcon: () => null }));
 vi.mock("../components/ButlerOversight", () => ({ ButlerOversight: () => null }));
 vi.mock("../components/ButlerMemory", () => ({ ButlerMemory: () => null }));
@@ -60,6 +61,7 @@ const completedPage = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  layout.compact = false;
   localStorage.clear();
   requestIfChanged.mockImplementation(async (path: string) => {
     if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
@@ -234,4 +236,29 @@ describe("asking about a chat while the open thread is answering", () => {
     expect(reply).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "true");
   }, 15_000);
+});
+
+describe("the All projects link", () => {
+  const mountWithProjects = () => render(<MemoryRouter initialEntries={["/butler"]}><Routes>
+    <Route path="/butler" element={<ButlerModePage />} />
+    <Route path="/projects" element={<h1>Projects page</h1>} />
+  </Routes></MemoryRouter>);
+
+  it("opens All projects from the top bar", async () => {
+    mountWithProjects();
+    const link = await screen.findByRole("link", { name: "All projects" });
+    expect(link).toHaveAttribute("href", "/projects");
+    await userEvent.click(link);
+    expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
+  });
+
+  it("opens All projects from More on a phone", async () => {
+    layout.compact = true;
+    mountWithProjects();
+    expect(screen.queryByRole("link", { name: "All projects" })).toBeNull();
+    await userEvent.click(await screen.findByRole("tab", { name: /More/ }));
+    const sheet = screen.getByRole("dialog", { name: "More in Butler" });
+    await userEvent.click(within(sheet).getByRole("link", { name: "All projects" }));
+    expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
+  });
 });

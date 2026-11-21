@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, Square, ChevronRight, ExternalLink, MoreHorizontal, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft, ArrowUp, ChevronDown, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { ALL_PROJECTS, SECTION_LABEL, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSection, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
@@ -997,6 +997,7 @@ export function ButlerModePage() {
         <span><i className={styles.dot} data-state="working" aria-hidden="true" />{states.working} working</span>
         {states.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{states.failed} failed</span>}
       </div>}
+      {!compact && <Link className={styles.projectsLink} to="/projects" title="Every project's stages and work"><Columns3 size={15} aria-hidden="true" />All projects</Link>}
       {bridge && <button type="button" className={styles.iconButton} aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!bridge.voiceAvailable} onClick={bridge.startVoice}><MicrophoneIcon size={17} /></button>}
       <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>
     </header>
@@ -1013,6 +1014,7 @@ export function ButlerModePage() {
         <button type="button" className={styles.sheetScrim} aria-label="Close" tabIndex={-1} onClick={() => setMoreOpen(false)} />
         <div className={styles.sheet} role="dialog" aria-label="More in Butler">
           {(["code", "memory", "settings"] as const).map((value) => <button key={value} type="button" className={styles.sheetRow} onClick={() => setSection(value)}>{SECTIONS.find((item) => item.id === value)?.label}<ChevronRight size={16} aria-hidden="true" /></button>)}
+          <Link className={styles.sheetRow} to="/projects">All projects<ChevronRight size={16} aria-hidden="true" /></Link>
           <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>
         </div>
       </div>}
