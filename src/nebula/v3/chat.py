@@ -4208,9 +4208,10 @@ class ChatService:
                     # The hook may have committed its result after the scan.
                     # Keep the old unknown ID; read repair uses its new state.
                     pass
-        requires_review = cause == "Project runtime stopped" and bool(
-            unknown or unknown_hooks
-        )
+        # A stopped or crashed project worker is recovered like a Core restart:
+        # unknown effects are carried forward as outcome-unknown and the turn
+        # resumes without replaying them. Only an existing goal hold waits for
+        # the operator (and an unmatched callback, which its caller marks).
         goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
         preserve_hold = (
             cause == "Project runtime stopped"
@@ -4218,10 +4219,7 @@ class ChatService:
             and goal.status != ChatGoalStatus.RUNNING
         )
         detail = (
-            f"{cause} while an effect outcome was unknown. Review and reconcile "
-            "the interrupted response before resuming; no effect has been retried."
-            if requires_review
-            else f"{cause} before this response completed. The existing goal hold "
+            f"{cause} before this response completed. The existing goal hold "
             "is preserved; review the interrupted response before resuming."
             if preserve_hold
             else f"{cause} while an effect outcome was unknown. Core will carry the "
@@ -4243,7 +4241,7 @@ class ChatService:
                 "required": True,
                 "cause": (
                     "runtime_loss"
-                    if requires_review or preserve_hold
+                    if preserve_hold
                     else "core_shutdown"
                     if cause == "Core stopped"
                     else "core_restart"
