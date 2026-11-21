@@ -408,3 +408,104 @@ test("work hub stages: subprojects inherit the parent's stages", async ({ page }
     await stopCore(core);
   }
 });
+
+test("work hub board layout keeps readable columns below the toolbar beside an open item", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startCore();
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    await waitForCoreApi(api);
+    const imported = await coreMutation(api, "post", "work/import", { source: "sample-tracker", projects: [
+      { external_id: "bounty", name: "Layout bounty", status: "active", items: [
+        { external_id: "lanes", title: "Lanes", status: "ready", stage: "recon" },
+        { external_id: "candidates", title: "Candidates", status: "blocked", stage: "triage" },
+        { external_id: "recon", title: "Recon", status: "done", stage: "recon" },
+      ] },
+    ] });
+    expect(imported.ok(), await imported.text()).toBe(true);
+    const result = await imported.json() as { projects: Array<{ engagement_id: string; items: Array<{ item_id: string }> }> };
+    const projectId = result.projects[0].engagement_id;
+    const candidatesId = result.projects[0].items[1].item_id;
+    const project = await (await api.get(`engagements/${projectId}`)).json() as { revision: number };
+    const stages = await coreMutation(api, "patch", `engagements/${projectId}/work/stages`, { expected_revision: project.revision, stages: ["Recon", "Triage", "Report", "Submit", "Paid"].map((label) => ({ key: label.toLowerCase(), label, flag_when_empty: false })) });
+    expect(stages.ok(), await stages.text()).toBe(true);
+
+    await pairBrowser(page, core, "Work board layout browser");
+    // The narrowest board column must still fit a heading, its count and a short title.
+    const minimumColumn = 120;
+    type Box = { x: number; y: number; width: number; height: number };
+    const measure = async (boardName: string) => page.evaluate((name) => {
+      const box = (element: Element | null): Box | null => { if (!element) return null; const rect = element.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; };
+      const board = document.querySelector(`section[aria-label="${name}"]`);
+      return {
+        tools: box(document.querySelector(".work-board-tools")),
+        board: box(board),
+        detail: box(document.querySelector(".work-detail")),
+        layout: box(document.querySelector(".work-project-layout")),
+        columns: [...(board?.querySelectorAll(":scope > .work-column") ?? [])].map((column) => box(column) as Box),
+        headings: [...(board?.querySelectorAll(":scope > .work-column h2") ?? [])].map((heading) => heading.scrollWidth <= heading.clientWidth + 1),
+        pageFits: document.documentElement.scrollWidth <= window.innerWidth + 1,
+      };
+    }, boardName);
+    const expectReadable = async (boardName: string, label: string) => {
+      await expect(page.getByRole("region", { name: boardName })).toBeVisible();
+      await expect(page.locator(".work-board-tools")).toBeVisible();
+      const geometry = await measure(boardName);
+      const viewport = page.viewportSize()!;
+      expect(geometry.pageFits, `${label}: page scrolls sideways`).toBe(true);
+      expect(geometry.tools && geometry.board && geometry.layout, `${label}: layout rendered`).toBeTruthy();
+      // The toolbar spans the layout and the board starts below it, at the layout's left edge.
+      expect(Math.abs(geometry.tools!.x - geometry.layout!.x), `${label}: toolbar starts at layout edge`).toBeLessThanOrEqual(1);
+      expect(Math.abs(geometry.tools!.width - geometry.layout!.width), `${label}: toolbar spans layout`).toBeLessThanOrEqual(1);
+      expect(geometry.board!.y, `${label}: board sits below toolbar`).toBeGreaterThanOrEqual(geometry.tools!.y + geometry.tools!.height);
+      expect(Math.abs(geometry.board!.x - geometry.layout!.x), `${label}: board starts at layout edge`).toBeLessThanOrEqual(1);
+      for (const column of geometry.columns) expect(column.width, `${label}: column width`).toBeGreaterThanOrEqual(minimumColumn);
+      expect(geometry.headings.every(Boolean), `${label}: column headings fit`).toBe(true);
+      if (geometry.detail) {
+        if (viewport.width > 1100) {
+          // Beside the board, aligned with it, not under it.
+          expect(geometry.detail.x, `${label}: detail beside board`).toBeGreaterThanOrEqual(geometry.board!.x + geometry.board!.width);
+          expect(Math.abs(geometry.detail.y - geometry.board!.y), `${label}: detail aligned with board`).toBeLessThanOrEqual(1);
+          expect(geometry.board!.width, `${label}: board keeps most of the width`).toBeGreaterThanOrEqual(geometry.layout!.width - geometry.detail.width - 20);
+        } else {
+          expect(geometry.detail.y, `${label}: detail below board`).toBeGreaterThanOrEqual(geometry.board!.y + geometry.board!.height);
+          expect(Math.abs(geometry.detail.width - geometry.layout!.width), `${label}: detail spans layout`).toBeLessThanOrEqual(1);
+        }
+      }
+    };
+    const projectWidth = testInfo.project.use.viewport?.width ?? 1440;
+    // Desktop projects also check a wide (2000 px) window, where the regression was reported.
+    const widths = projectWidth <= 500 ? [projectWidth] : projectWidth >= 1440 ? [2000, projectWidth] : [projectWidth];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: width <= 500 ? 844 : 1000 });
+      // WebKit can still be finishing the post-pairing reload; that interrupts the first navigation.
+      await expect(async () => { await page.goto(`${core.origin}/projects/${projectId}/work`); }).toPass({ timeout: 20_000 });
+      const board = page.getByRole("region", { name: "Project board" });
+      await expect(board.getByRole("link", { name: /Candidates/ })).toBeVisible({ timeout: 20_000 });
+      await expectReadable("Project board", `status ${width}`);
+      await testInfo.attach(`status-board-${width}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+
+      await board.getByRole("link", { name: /Candidates/ }).click();
+      await expect(page).toHaveURL(new RegExp(`/work/${candidatesId}$`));
+      await expect(page.getByRole("heading", { name: "Candidates", level: 2 })).toBeVisible();
+      await expectReadable("Project board", `status detail ${width}`);
+      await testInfo.attach(`status-detail-${width}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+
+      await page.getByRole("button", { name: "Stage", exact: true }).click();
+      const stageBoard = page.getByRole("region", { name: "Project board by stage" });
+      await expect(stageBoard.getByRole("heading", { name: "Paid" })).toBeVisible();
+      await expectReadable("Project board by stage", `stage detail ${width}`);
+      await testInfo.attach(`stage-detail-${width}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+
+      await page.getByRole("link", { name: "Close item" }).click();
+      await expect(page.locator(".work-detail")).toHaveCount(0);
+      await expectReadable("Project board by stage", `stage ${width}`);
+      await testInfo.attach(`stage-board-${width}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    }
+    expect((await new AxeBuilder({ page }).include(".work-page").analyze()).violations).toEqual([]);
+    await testInfo.attach("work-board-layout", { body: JSON.stringify({ origin: core.origin, build: "production", widths, projectId }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopCore(core);
+  }
+});

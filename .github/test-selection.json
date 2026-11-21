@@ -1,8 +1,8 @@
 {
-  "change_digest": "dd5405adf714df8691f78cb27f3496b4d170d0312f47af2e8d782d52de92d4d9",
-  "reviewed_by": "Claude Code, fixing the operator-reported repeated lifecycle hook rows in the chat area",
-  "reason": "Defect: a turn's Lifecycle hooks list showed one bare row per hook run (a tool.before hook on a 9-tool turn gave 9 identical lines), centered by the one-line status-pill class .chat-action-status, with the hook name and 'tool before' run together. Root cause (validated by a separate subagent and by reading SessionsPage.tsx): the list maps every NativeHookExecution 1:1 since per-tool-call hooks (12589f9), its container reused .chat-action-status (flex, centered, green 11px), and <strong>/<small> were adjacent inline elements. Fix: a HookOutcomes component groups clean runs (complete/reconciled, no error or reconciliation detail) by hook, event, status and side effects into one row with a count; failed, timed-out, interrupted, running and reconciled-with-detail runs keep their own rows with their error and late outcome. Events read 'Before tool'/'After tool'. The container gets its own left-aligned .chat-hook-outcomes list styling with wrapping rows and a gap between name and detail. The summary text is unchanged. Selected: HookOutcomes.test.tsx (labels, grouping, rendering), guides.test.tsx (the hook-outcomes guide anchor is kept), and Playwright area chat-tools-paths (desktop, compact, mobile-webkit-small), whose mocked lifecycle-hooks test now returns three runs and checks the grouped row, left alignment, the name/detail gap and Axe.",
-  "exclusions": "Real-Core LAN: provider-native-hooks-core (real-core.spec.ts 'provider selections survive reload and restart reconciliation') showed 'Lifecycle hooks \u00b7 2/2 completed' on load, reload and after hook removal with this change, then failed at line 3693 (pending-turn poll for restart reconciliation); the same test fails at the same line on origin/main, so the area is not selected. App.test.tsx 'refreshes operator revisions after activation' timed out once under host load ~9 and passes alone with and without this change; App.test.tsx is not selected. No Core, setting or catalog change.",
+  "change_digest": "1ee12e4a3576feeaab13b7d7c36c2aa5fa78bab5f1f9b5126dbc1a3f1b1ff9d9",
+  "reviewed_by": "Claude Code (operator screenshot of live Project work page: board crammed beside the Status/Stage toolbar)",
+  "reason": "Root cause: #1276 added .work-board-tools as the first child of .work-project-layout. With an item open (.has-detail) that layout is a two-column grid (board | 300-320 px detail), so the toolbar took the board's column, the board fell into the 320 px detail column (about 60 px per status column) and the Work item panel wrapped below. Fix: the toolbar spans every grid column, and beside an open item the board keeps 130 px minimum columns and scrolls inside itself instead of shrinking columns to zero. Selected: the new real-Core 'work hub board layout' Playwright test (area work-board-layout) on the production bundle, which seeds the screenshot's shape (Ready, Blocked, Done items plus five stages), and measures toolbar span, board position, minimum column width, unclipped column headings, detail placement and no page-level horizontal scroll in Status and Stage views with and without an open item, at 2000 and 1440 (desktop Chromium and a new desktop WebKit project), 1024, and 320/390/430 phone widths in Chromium and WebKit, plus axe on the page. It fails on origin/main at 2000 px with the item open. Frontend: WorkPage.test.tsx and workStages.test.ts for the touched page.",
+  "exclusions": "No Core, API or settings change, so no Python tests, settings-assistant catalog entry or knowledge index update. tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters fails identically on origin/main (ios-shell-real-core.spec.ts uncatalogued) and is not selected. Other work-import tests (import, stages) exercise unrelated flows and are not re-run; the stages flow uses the same layout and its geometry is covered by the new test.",
   "python_versions": [
     "3.12"
   ],
@@ -10,18 +10,18 @@
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 18,
+    "frontend": 31,
     "native": 0,
-    "playwright": 8
+    "playwright": 9
   },
   "python": [],
   "frontend": [
-    "ui/src/components/HookOutcomes.test.tsx",
-    "ui/src/guides/guides.test.tsx"
+    "ui/src/pages/WorkPage.test.tsx",
+    "ui/src/pages/workStages.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:chat-tools-paths"
+    "area:work-board-layout"
   ],
   "checks": []
 }
