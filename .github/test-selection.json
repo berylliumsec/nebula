@@ -1,23 +1,23 @@
 {
-  "change_digest": "ee1c72291f01663411b9beb88a651755b5480b279a5c7dbb9af77e2a5990f328",
-  "reviewed_by": "Claude Code, after an independent subagent review of the diff (5 findings fixed, each with a regression test that fails without its fix)",
-  "reason": "Socket-held supervisor host swaps in the simulation deployer, plus Core's GET /api/v1/deployment/operations listing of in-flight operations. Selected: test_simulation_host_restart.py (real-process host switch with an emulated KillMode=process unit, new socket-activation emulator: release selected before the stop, start-limit socket restore, unit-config refusals, time spans, running-operation wait/refusal/older-Core/auth, code-only rollback never reading the failed release, resume from release_selected for activation and rollback-host), test_simulation_host_activation.py and test_simulation_deploy_resume.py (activation journals and promotion resume through the changed switch path, with legacy no-socket defaults), and tests/v3/test_runtime_management.py (the new listing route: auth, in-flight entry, cleared after completion).",
-  "exclusions": "tests/test_staged_deployer.py and tests/test_deployer_protocol.py do not reach host activation (both pass locally). Locally, test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop and test_host_switch_frees_an_orphan_left_by_a_stop_timeout fail identically on pristine origin/main because this sandbox lacks verified pidfd signaling (both pass in CI). test_host_process_identity_accepts_verified_onefile_child was broken on main since #1167 (it read the real /srv/apple-sim); this PR repairs it. No UI, setting or chat journey changed, so no frontend, Playwright or LAN-instance journey applies; the listener behavior was instead rehearsed with real user systemd (see PR).",
+  "change_digest": "279206666f40eab3381449a6eeb48061fb27167bc763bcafbd44c322a80a7c63",
+  "reviewed_by": "Claude Code, after an independent subagent review of the roller (7 findings, fixed with regression tests) and a scratch-Core rehearsal",
+  "reason": "Adds the in-Core project roller (runtime_project_roller.py), a compare-and-cancel withdraw_handoff and roll status in DeploymentCoordinator.status, and lets auto-admission ignore targets of unfinished handoffs. Selected: test_runtime_project_roller.py (new; K-parallel roll, retire after verify, pinned skip/withdraw/retry, held limit, restart mid-roll, operator deferral, withdraw racing transfer, prepare backoff, ledger steps and authenticated status; SQLite and PostgreSQL), test_admission_retry.py (auto-admission, plus the new handoff-target case), test_deployment_lifecycle.py (handoff, checkpoint and status the roller builds on), test_runtime_management.py (deployment operations ledger and status receipts; also enables the CI PostgreSQL runtime for the selection).",
+  "exclusions": "No UI, setting screen or operator chat workflow changed: the roller is configured by Core environment variables and reported only in authenticated /api/v1/deployment/status, which no UI reads, so no frontend, Playwright or settings-assistant change applies. The external deployer (scripts/simulation) is unchanged and its suites are not selected. Process-spawning supervisor suites (test_supervisor.py, test_execution_worker_process.py) do not exercise the roller, which reaches the supervisor only through RuntimeManagement.dispatch (covered by test_runtime_management.py). The real-Core evidence is the scratch-Core rehearsal recorded in docs/validation/rolling-core-releases.md.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 166,
+    "python": 114,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_host_restart.py",
-    "tests/test_simulation_host_activation.py",
-    "tests/test_simulation_deploy_resume.py",
+    "tests/v3/test_runtime_project_roller.py",
+    "tests/v3/test_admission_retry.py",
+    "tests/v3/test_deployment_lifecycle.py",
     "tests/v3/test_runtime_management.py"
   ],
   "frontend": [],
