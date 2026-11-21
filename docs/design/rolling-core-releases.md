@@ -528,16 +528,21 @@ automation sessions at the handoff boundary
 (`release_idle_sessions_for_handoff`), Butler actions in `dispatching` in the
 handoff inventory, and the in-Core roller.
 
-- **Production unit.**
-  - Add `nebula-core.socket` (`ListenStream=127.0.0.1:8000`) and make the
-    service `Requires=` it.
-  - Pass `--listen-fd 3` to `serve`, because `mercury-run` and the onefile
-    bootloader sit between systemd and Core.
-  - The deployer must switch `current` before restarting. It must watch the
-    socket unit's start limit and accept the socket-activated unit in its
-    activation readback.
-  - It must also refuse a host swap while a ledger operation is `running`; the
-    swap would wait for it.
+- **Production unit.** *(done in source; not yet installed on the live host)*
+  - `scripts/simulation/systemd/` ships `nebula-core.socket`
+    (`ListenStream=127.0.0.1:8000`) and a service drop-in with
+    `Requires=`, `KillMode=process`, `ExitType=main` and `TimeoutStopSec=90`.
+    The operator adds `--listen-fd 3` to `serve` (see
+    `scripts/simulation/README.md`).
+  - The deployer detects the socket, verifies that configuration, selects
+    `current` before stopping the old supervisor, restores a socket failed by
+    the start limit, and reports `socket_listening` in its readback.
+  - It waits up to 120 s for the live supervisor's in-flight deployment
+    operations (`GET /api/v1/deployment/operations`) and refuses the swap if
+    one is still running.
+  - Rehearsed with real user systemd and a forwarding wrapper: two swaps,
+    213 requests, 0 refused, worst queued request 5.6 s. Not yet rehearsed
+    with a frozen Core or on the live host.
 - **In-Core roller follow-ups.**
   - Teach the external deployer to hand the per-project loop to the roller:
     stop after `target_execution` and wait on `roll.state` instead of moving
@@ -567,7 +572,7 @@ handoff inventory, and the in-Core roller.
   - harness, goal, mission, approval, schedule and callback journeys during a
     roll;
   - packaged (frozen) bundles;
-  - the live socket unit.
+  - the live socket unit (source and deployer support are done).
 - **AGENTS.md.** Once the production unit and roller are live and rehearsed,
   replace the Butler ritual for supervisor-mode deploys with a pinned-project
   report. Keep the ritual for legacy and non-additive deploys.
