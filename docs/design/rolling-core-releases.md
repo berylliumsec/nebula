@@ -33,13 +33,34 @@ including:
 
 Three cases still need an operator decision:
 
-1. **Pinned projects.** These hold a live vendor (harness) connection, including
-   an idle one. They also include projects with a terminal, a notebook, a debug
-   or Docker automation session, a busy Host automation session, a running
-   mission or execution task, an unconfirmed callback or approval delivery, or a
-   charged compute job. The source closes an idle Host automation session at the
-   handoff boundary instead: its finished results are durable, and the owner's
-   next command opens a fresh session on the target.
+1. **Pinned projects.** These hold a busy vendor (harness) connection: a turn
+   active, connecting or reserved, or a goal dispatch preparing one. They also
+   include projects with a terminal, a notebook, a debug or Docker automation
+   session, a busy Host automation session, a running mission or execution
+   task, an unconfirmed callback or approval delivery, or a charged compute
+   job. Three idle kinds move instead:
+   - The source closes an idle Host automation session at the handoff
+     boundary: its finished results are durable, and the owner's next command
+     opens a fresh session on the target.
+   - The source detaches an idle vendor connection at the boundary. The
+     session row keeps its saved vendor thread (`external_session_id`), and
+     the conversation's next turn on the target resumes that thread with a
+     fresh vendor process, the same path as a vendor process that dropped
+     between turns. A turn sent during the detach waits for it and resumes
+     the same thread instead of forking. The adapter must also report that
+     the vendor runs nothing of its own (`handoff_detachable`):
+     - Claude: no open background task, no unread output and no queued
+       guidance.
+     - Codex: native shell off, since unified exec can leave background
+       terminals in the app-server; no goal turn pending.
+     - Grok: the runtime advertises `loadSession`.
+     Otherwise the connection stays and pins. Queued chat or analysis harness
+     turns also pin until a task picks them up.
+   - A scheduled Mission whose timer is still sleeping (native or harness)
+     does not pin: its queued run is durable, and the target's startup re-arms
+     it from SQL. Every source transaction is fenced after transfer, so a
+     source timer that wakes late cannot start the run; it starts once, on
+     the target.
    - Their work is never interrupted; the project simply stays on the old
      version.
    - A pause is needed only when that old version must go. That happens when a
@@ -114,9 +135,10 @@ Three cases still need an operator decision:
 | Streaming provider turn | Finishes on the source; new roots wait | Interrupted (`core_shutdown`), re-requested from the last saved step: partial text lost, second provider call |
 | Queued provider admission | Parked, restored on target | Re-queued |
 | Chat follow-up queue | Dispatched turns are parked; **a claim in flight was lost (E3, fixed here)** | Undispatched items survive; a mid-dispatch item goes to review |
-| Harness turn / idle harness session | Pins the project | Interrupted, not resumed |
+| Harness turn | Pins the project | Interrupted, not resumed |
+| Idle harness session | Detached; the target's next turn resumes the vendor thread | Resumed on the next turn |
 | Goal | Continues after its turn transfers | Paused and resumed with its turn (provider); harness goals stay paused |
-| Mission | Running mission pins | Resumes from checkpoint |
+| Mission | Running mission pins; a sleeping schedule is re-armed on the target | Resumes from checkpoint; schedules re-armed |
 | Approval awaiting operator | Transfers; unconfirmed delivery pins | Provider approvals survive; harness approvals are lost |
 | Background-command callback | Pins until the result arrives | Settles as `missing_callback`, effect unknown |
 | Schedule | Transfers; due occurrences fire once | Fires once after restart |
@@ -428,9 +450,10 @@ The review checked every kind of work against the design.
 | Streaming provider turn | Finishes on its original worker; viewer may be cut after 5 s at host swap and resumes by cursor | UI reconnect across a host swap not yet verified in a browser |
 | Queued provider admission | Waits at host swap (host pressure call is resent); parked then restored at handoff | Bounded by the 120 s host wait; a longer host outage still fails the turn |
 | Follow-up queue item | Waits at host swap; a dispatch in flight keeps the project finishing | Requires the #1017 `await` fix |
-| Harness turn / idle harness session | Project pinned on the old version, untouched | Needs a per-vendor idle-session detach adapter |
+| Harness turn | Project pinned on the old version, untouched | None new |
+| Idle harness session | Detached by the source; the target's next turn resumes the saved vendor thread | A vendor that lost the thread starts fresh with the saved conversation (existing recreate path) |
 | Goal | Continues on the target after its turn transfers | Harness goals pin |
-| Mission | Running or scheduled mission pins | Scheduled-only missions could be re-armed from SQL on the target |
+| Mission | Running mission pins; a sleeping schedule is re-armed from SQL on the target | A source timer waking after transfer fails on its fence and records a diagnostic |
 | Approval | Durable; unconfirmed delivery pins | None new |
 | Callback | Pins until the result is materialized | None new |
 | Schedule | Occurrence ledger prevents a double fire | Fires late while held |
@@ -555,10 +578,12 @@ handoff inventory, and the in-Core roller.
 - **Tolerant readers.** Entity decoding must tolerate unknown keys before two
   releases share rows.
 - **Pinned adapters:**
-  - Detach idle harness sessions and resume the vendor session on the target.
-  - Re-arm scheduled-only missions from SQL.
+  - Done: detach idle harness sessions and resume the vendor session on the
+    target; re-arm scheduled-only missions from SQL; close idle Host
+    automation sessions (no command in flight, running or holding a detached
+    group) before the inventory.
   - Remaining kinds (live terminals, notebooks, debug, Docker and busy Host
-    automation sessions,
+    automation sessions, busy harness sessions,
     running missions, unconfirmed callbacks or approval deliveries) stay
     pinned by design.
 - **Host-services socket ownership.** Hold the host-services socket in the
