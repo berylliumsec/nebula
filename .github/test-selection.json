@@ -1,8 +1,8 @@
 {
-  "change_digest": "1ee12e4a3576feeaab13b7d7c36c2aa5fa78bab5f1f9b5126dbc1a3f1b1ff9d9",
-  "reviewed_by": "Claude Code (operator screenshot of live Project work page: board crammed beside the Status/Stage toolbar)",
-  "reason": "Root cause: #1276 added .work-board-tools as the first child of .work-project-layout. With an item open (.has-detail) that layout is a two-column grid (board | 300-320 px detail), so the toolbar took the board's column, the board fell into the 320 px detail column (about 60 px per status column) and the Work item panel wrapped below. Fix: the toolbar spans every grid column, and beside an open item the board keeps 130 px minimum columns and scrolls inside itself instead of shrinking columns to zero. Selected: the new real-Core 'work hub board layout' Playwright test (area work-board-layout) on the production bundle, which seeds the screenshot's shape (Ready, Blocked, Done items plus five stages), and measures toolbar span, board position, minimum column width, unclipped column headings, detail placement and no page-level horizontal scroll in Status and Stage views with and without an open item, at 2000 and 1440 (desktop Chromium and a new desktop WebKit project), 1024, and 320/390/430 phone widths in Chromium and WebKit, plus axe on the page. It fails on origin/main at 2000 px with the item open. Frontend: WorkPage.test.tsx and workStages.test.ts for the touched page.",
-  "exclusions": "No Core, API or settings change, so no Python tests, settings-assistant catalog entry or knowledge index update. tests/test_playwright_impact.py::test_full_manifest_covers_every_product_browser_spec_without_filters fails identically on origin/main (ios-shell-real-core.spec.ts uncatalogued) and is not selected. Other work-import tests (import, stages) exercise unrelated flows and are not re-run; the stages flow uses the same layout and its geometry is covered by the new test.",
+  "change_digest": "2e720615ece0d0344a213999e55dabbc0f4cf7958b531ef1744badc044dbe821",
+  "reviewed_by": "Claude Code, after diagnosing the Butler mode send delay (root cause independently validated by a fresh subagent)",
+  "reason": "Butler mode's send waited for three serial Core requests (Butler session read, assistant-config read, thread reservation POST through the project worker) before clearing the composer or showing the message. It now shows the message with a 'Starting Butler's response' line at once and returns the text to the composer, after anything typed meanwhile is kept, if Core cannot start the thread. Selected: the new ButlerModePage.send.test.tsx (optimistic display, failure restore, typed-meanwhile merge), the existing Butler mode board and thread helper unit tests, and the butler-mode real-Core LAN journey in desktop, compact, mobile Chromium 390 and mobile WebKit 390, whose startThread helper now requires the message to appear within 5 s.",
+  "exclusions": "No Core, API, setting or settings-assistant surface changed, so no Python tests or settings catalog update apply. The Butler side panel (NebulaControlAssistant) already shows its message before awaiting Core and is unchanged.",
   "python_versions": [
     "3.12"
   ],
@@ -10,18 +10,22 @@
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 31,
+    "frontend": 23,
     "native": 0,
-    "playwright": 9
+    "playwright": 4
   },
   "python": [],
   "frontend": [
-    "ui/src/pages/WorkPage.test.tsx",
-    "ui/src/pages/workStages.test.ts"
+    "ui/src/pages/ButlerModePage.send.test.tsx",
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/pages/butlerThreads.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:work-board-layout"
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
   ],
   "checks": []
 }

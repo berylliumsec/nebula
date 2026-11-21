@@ -258,7 +258,9 @@ async function startThread(page: Page, prompt: string): Promise<void> {
   await composer.fill(prompt);
   await composer.press("End");
   await page.getByRole("button", {name: "Start thread"}).click();
-  await expect(composer).toHaveValue("", {timeout: 60_000});
+  // The message shows at once; Core reserves the thread behind it.
+  await expect(composer).toHaveValue("", {timeout: 5_000});
+  await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText(prompt, {exact: true})).toBeVisible({timeout: 5_000});
 }
 
 test("assistant upgrade Butler mode runs parallel threads beside every project's chats on production LAN Core", async ({page}, testInfo) => {
