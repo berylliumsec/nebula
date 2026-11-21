@@ -934,6 +934,28 @@ class WorkService:
                     raise
         raise ConflictError("work item changed concurrently; retry")
 
+    async def effective_stages(
+        self, engagement: Engagement
+    ) -> tuple[builtins.list[WorkStage], Engagement | None]:
+        """A project's own stages, else its nearest ancestor's and that ancestor."""
+
+        current: Engagement | None = engagement
+        seen: set[str] = set()
+        while current is not None and current.id not in seen:
+            seen.add(current.id)
+            if current.work_stages:
+                return current.work_stages, (
+                    None if current.id == engagement.id else current
+                )
+            if current.parent_engagement_id is None:
+                break
+            try:
+                current = await self.store.get(Engagement, current.parent_engagement_id)
+            except NotFoundError:
+                # diagnostic-expected: a removed parent leaves the project without stages.
+                break
+        return [], None
+
     async def set_stages(
         self,
         engagement_id: str,
@@ -1279,7 +1301,9 @@ class WorkBroker:
                 invocation.engagement_id,
                 list_request.project_name,
             )
-            stages = (await self.service.store.get(Engagement, target_id)).work_stages
+            stages, _ = await self.service.effective_stages(
+                await self.service.store.get(Engagement, target_id)
+            )
             return ToolExecutionResult(
                 output=(
                     await self.service.agent_list_page(

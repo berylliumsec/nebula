@@ -347,3 +347,64 @@ test("work hub stages: define, view gaps, group and move items, resync from impo
     await stopCore(core);
   }
 });
+
+test("work hub stages: subprojects inherit the parent's stages", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startCore();
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    await waitForCoreApi(api);
+    const parent = await coreMutation(api, "post", "work/import", { source: "sample-tracker", projects: [{ external_id: "portfolio", name: "Client portfolio", status: "active" }] });
+    expect(parent.ok(), await parent.text()).toBe(true);
+    const parentId = (await parent.json() as { projects: Array<{ engagement_id: string }> }).projects[0].engagement_id;
+    const children = await coreMutation(api, "post", "work/import", { source: "sample-tracker", projects: [
+      { external_id: "site", name: "Website refresh", status: "active", parent_engagement_id: parentId, items: [
+        { external_id: "copy", title: "Home page copy", status: "in_progress", stage: "draft" },
+      ] },
+      { external_id: "docs", name: "Docs cleanup", status: "active", parent_engagement_id: parentId },
+    ] });
+    expect(children.ok(), await children.text()).toBe(true);
+    const childIds = (await children.json() as { projects: Array<{ engagement_id: string; items: Array<{ item_id: string }> }> }).projects;
+    const siteId = childIds[0].engagement_id;
+    const copyId = childIds[0].items[0].item_id;
+
+    // Stages are saved once, on the parent.
+    await pairBrowser(page, core, "Work stage inheritance browser");
+    await page.goto(`${core.origin}/projects/${parentId}/work?stages=edit`);
+    const editor = page.getByRole("dialog", { name: "Work stages" });
+    await expect(editor).toBeVisible({ timeout: 20_000 });
+    for (const [index, name] of ["Draft", "Ship"].entries()) {
+      await editor.getByRole("button", { name: "Add stage" }).click();
+      await editor.getByRole("textbox", { name: `Stage ${index + 1} name` }).fill(name);
+    }
+    await editor.getByRole("checkbox").first().check();
+    await editor.getByRole("button", { name: "Save stages" }).click();
+    await expect(editor).toBeHidden({ timeout: 20_000 });
+
+    await page.goto(`${core.origin}/projects`);
+    await page.getByRole("button", { name: "Show subprojects of Client portfolio" }).click();
+    const site = page.getByRole("list", { name: "Website refresh stages" });
+    await expect(site.getByRole("link", { name: /^Draft: 1 open/ })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("list", { name: "Docs cleanup stages" }).getByRole("link", { name: "Draft: none yet" })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Client portfolio stages" })).toHaveCount(0);
+    await page.getByRole("button", { name: /Missing a stage/ }).click();
+    await expect(page.getByRole("list", { name: "Docs cleanup stages" })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Client portfolio stages" })).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".work-projects").analyze()).violations).toEqual([]);
+
+    // The subproject's board uses the parent's stages, and moving an item writes only the item.
+    await page.goto(`${core.origin}/projects/${siteId}/work/${copyId}?group=stage`);
+    const board = page.getByRole("region", { name: "Project board by stage" });
+    await expect(board.getByText("Using Client portfolio's stages.")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("combobox", { name: "Stage" }).selectOption("ship");
+    // A project read answers 503 "starting" while its worker restarts; keep reading.
+    await expect.poll(async () => (await (await api.get(`engagements/${siteId}/work/${copyId}`)).json() as { stage?: string }).stage, { timeout: 30_000 }).toBe("ship");
+    expect((await (await api.get(`engagements/${siteId}`)).json() as { work_stages: unknown[] }).work_stages).toEqual([]);
+    expect((await new AxeBuilder({ page }).include(".work-page").analyze()).violations).toEqual([]);
+    await testInfo.attach("work-stage-inheritance", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), parentId, siteId }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopCore(core);
+  }
+});
