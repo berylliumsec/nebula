@@ -47,7 +47,8 @@ def _client(monkeypatch, outcomes):
 
 def test_a_read_that_times_out_is_asked_again(monkeypatch):
     client, calls = _client(
-        monkeypatch, [TimeoutError("timed out"), URLError("refused"), b'{"health": "ready"}']
+        monkeypatch,
+        [TimeoutError("timed out"), URLError("refused"), b'{"health": "ready"}'],
     )
     assert client.get("deployment/status") == {"health": "ready"}
     assert calls == [gate.READ_TIMEOUT_SECONDS] * 3
@@ -68,4 +69,76 @@ def test_an_http_answer_is_not_asked_again(monkeypatch):
     client, calls = _client(monkeypatch, [error, b"{}"])
     with pytest.raises(HTTPError):
         client.get("engagements/x/hold")
+    assert len(calls) == 1
+
+
+def _transient_client(monkeypatch, outcomes):
+    """A client whose transient retries run on a fake clock."""
+    client, calls = _client(monkeypatch, outcomes)
+    clock, sleeps = [0.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    return client, calls, sleeps
+
+
+def _http(code):
+    return HTTPError("http://core", code, "answer", {}, None)
+
+
+def test_a_promotion_read_rides_out_a_busy_core(monkeypatch, capsys):
+    client, calls, sleeps = _transient_client(
+        monkeypatch, [_http(500), _http(500), b'{"revision": 7}']
+    )
+    assert client.read("deployment/status") == {"revision": 7}
+    assert len(calls) == 3
+    assert sleeps == [2.0, 4.0]
+    log = capsys.readouterr().err
+    assert log.count("Core read deployment/status failed (HTTP 500)") == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _http(502),
+        _http(503),
+        _http(504),
+        TimeoutError("timed out"),
+        URLError(ConnectionRefusedError("refused")),
+        ConnectionResetError("reset"),
+    ],
+)
+def test_a_promotion_read_retries_each_transient_failure(monkeypatch, failure):
+    client, calls, _sleeps = _transient_client(monkeypatch, [failure, b"{}"])
+    assert client.read("deployment/status") == {}
+    assert len(calls) == 2
+
+
+def test_a_persistent_500_fails_after_the_bound_with_the_resume_hint(monkeypatch):
+    client, calls, sleeps = _transient_client(monkeypatch, [_http(500)] * 50)
+    with pytest.raises(gate.CoreUnavailable, match="re-run `nebula_deployer promote`"):
+        client.read("deployment/status")
+    assert gate.TRANSIENT_BUDGET_SECONDS / 2 <= sum(sleeps)
+    assert sum(sleeps) <= gate.TRANSIENT_BUDGET_SECONDS
+    assert len(calls) == len(sleeps) + 1
+
+
+@pytest.mark.parametrize("code", [400, 401, 403, 404, 409, 422])
+def test_a_promotion_read_fails_at_once_on_a_4xx(monkeypatch, code):
+    client, calls, sleeps = _transient_client(monkeypatch, [_http(code), b"{}"])
+    with pytest.raises(HTTPError) as raised:
+        client.read("deployment/operations/x")
+    assert raised.value.code == code
+    assert len(calls) == 1 and sleeps == []
+
+
+def test_plain_get_still_answers_503_to_its_caller(monkeypatch):
+    # An ownerless project's workspace answers 503; ``get`` callers read it.
+    client, calls, _sleeps = _transient_client(monkeypatch, [_http(503), b"{}"])
+    with pytest.raises(HTTPError):
+        client.get("engagements/x/workspace/reset-status")
     assert len(calls) == 1

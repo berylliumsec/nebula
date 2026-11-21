@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from http.client import HTTPException
 from pathlib import Path
 import stat
+import sys
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -25,6 +27,18 @@ READ_TIMEOUT_SECONDS = 60
 READ_ATTEMPTS = 4
 READ_RETRY_DELAY_SECONDS = 5.0
 OWNER_READ_DELAY_SECONDS = 1.0
+# A promotion reads through a busy or restarting Core: a supervisor swap
+# refuses connections, and a big project's handoff can exhaust a Core process's
+# own database pool so that even status answers 500 for a few minutes. These
+# answers are retried with backoff for about this long, then the run stops; its
+# journal is saved, so the next ``promote`` resumes where it stopped.
+TRANSIENT_HTTP_STATUSES = frozenset({500, 502, 503, 504})
+TRANSIENT_BUDGET_SECONDS = 150.0
+TRANSIENT_FIRST_DELAY_SECONDS = 2.0
+TRANSIENT_MAX_DELAY_SECONDS = 20.0
+RESUME_HINT = (
+    "the deployment journal is saved; re-run `nebula_deployer promote` to resume"
+)
 ACTIVE_RUNS = {
     "queued",
     "planning",
@@ -52,6 +66,68 @@ def service_token(environment_file: Path) -> str:
     raise ValueError("Nebula service token is unavailable")
 
 
+class CoreUnavailable(RuntimeError):
+    """Core kept answering a transient failure past the retry bound."""
+
+
+def transient_reason(error: BaseException) -> str | None:
+    """Describe a failure a busy or restarting Core recovers from; else None.
+
+    4xx answers and other HTTP statuses are real answers and are never retried.
+    """
+    if isinstance(error, HTTPError):
+        if error.code in TRANSIENT_HTTP_STATUSES:
+            return f"HTTP {error.code}"
+        return None
+    if isinstance(error, (TimeoutError, URLError, ConnectionError, HTTPException)):
+        reason = getattr(error, "reason", None) or error
+        return f"{type(error).__name__}: {reason}"[:200]
+    return None
+
+
+def _log(message: str) -> None:
+    print(f"simulation Nebula deployer: {message}", file=sys.stderr, flush=True)
+
+
+def tolerate_transient(
+    call: Callable[[], Any],
+    description: str,
+    *,
+    budget_seconds: float | None = None,
+) -> Any:
+    """Run ``call``, retrying transient Core failures with bounded backoff.
+
+    Only callers whose request is safe to repeat use this: reads, and
+    deployment operations re-sent under their saved operation ID. A
+    non-transient failure is raised at once; a transient one that outlasts the
+    bound raises ``CoreUnavailable`` with the resume instruction.
+    """
+    budget = TRANSIENT_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    started = time.monotonic()
+    delay = TRANSIENT_FIRST_DELAY_SECONDS
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return call()
+        except (OSError, HTTPException) as error:
+            reason = transient_reason(error)
+            if reason is None:
+                raise
+            elapsed = time.monotonic() - started
+            if elapsed + delay > budget:
+                raise CoreUnavailable(
+                    f"{description} kept failing for {elapsed:.0f} s over "
+                    f"{attempt} attempts (last: {reason}); {RESUME_HINT}"
+                ) from error
+            _log(
+                f"{description} failed ({reason}); retrying in {delay:.0f} s "
+                f"(attempt {attempt}, {elapsed:.0f} of {budget:.0f} s)"
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, TRANSIENT_MAX_DELAY_SECONDS)
+
+
 class CoreClient:
     def __init__(self, origin: str, token: str) -> None:
         if origin not in {"http://127.0.0.1:8000", "http://127.0.0.1:18000"}:
@@ -66,19 +142,9 @@ class CoreClient:
         every project and can take tens of seconds while handoffs run; one slow
         read must not end a deployment that resumes from its journal anyway.
         """
-        query = f"?{urlencode(parameters)}" if parameters else ""
-        request = Request(
-            f"{self.origin}/api/v1/{path.lstrip('/')}{query}",
-            headers={"Authorization": f"Bearer {self.token}"},
-        )
         for attempt in range(1, READ_ATTEMPTS + 1):
             try:
-                with urlopen(request, timeout=READ_TIMEOUT_SECONDS) as response:
-                    if response.status != 200:
-                        raise ValueError(
-                            f"Core returned HTTP {response.status} for {path}"
-                        )
-                    return json.load(response)
+                return self._get_once(path, parameters)
             except HTTPError:
                 raise
             except (TimeoutError, URLError, ConnectionError):
@@ -87,6 +153,28 @@ class CoreClient:
                     raise
                 time.sleep(READ_RETRY_DELAY_SECONDS * attempt)
         raise AssertionError("unreachable")
+
+    def read(self, path: str, **parameters: object) -> Any:
+        """Read Core through transient failures, for a promotion in progress.
+
+        Unlike ``get``, HTTP 500, 502, 503 and 504 are asked again too, with
+        backoff, for about ``TRANSIENT_BUDGET_SECONDS``. Callers that read a
+        503 as an answer (an ownerless project, for example) use ``get``.
+        """
+        return tolerate_transient(
+            lambda: self._get_once(path, parameters), f"Core read {path}"
+        )
+
+    def _get_once(self, path: str, parameters: dict[str, object]) -> Any:
+        query = f"?{urlencode(parameters)}" if parameters else ""
+        request = Request(
+            f"{self.origin}/api/v1/{path.lstrip('/')}{query}",
+            headers={"Authorization": f"Bearer {self.token}"},
+        )
+        with urlopen(request, timeout=READ_TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                raise ValueError(f"Core returned HTTP {response.status} for {path}")
+            return json.load(response)
 
     def all_entities(self, path: str, **parameters: object) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -208,7 +296,14 @@ def main() -> int:
     return 0 if not reasons else 3
 
 
-__all__ = ["CoreClient", "blockers", "service_token"]
+__all__ = [
+    "CoreClient",
+    "CoreUnavailable",
+    "blockers",
+    "service_token",
+    "tolerate_transient",
+    "transient_reason",
+]
 
 
 if __name__ == "__main__":

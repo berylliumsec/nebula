@@ -37,8 +37,18 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from urllib.error import HTTPError
+from http.client import HTTPException
 
-from nebula_deploy_gate import CoreClient, blockers, service_token
+from nebula_deploy_gate import (
+    TRANSIENT_BUDGET_SECONDS,
+    TRANSIENT_FIRST_DELAY_SECONDS,
+    TRANSIENT_MAX_DELAY_SECONDS,
+    CoreClient,
+    blockers,
+    service_token,
+    tolerate_transient,
+    transient_reason,
+)
 from nebula_staged_deployer import StagedDeployer
 from nebula_postgres_backup import (
     BACKUP_FILES,
@@ -6477,7 +6487,62 @@ def deployment_post(path: str, payload: dict) -> dict:
     A stopping or busy supervisor answers 503 or 429 with Retry-After while
     the operation continues under its ID. Submitting the same operation ID
     again is idempotent and returns its saved receipt once one exists.
+
+    A new operation (``deployment/operations`` with its journaled
+    ``operation_id``) whose reply is lost, by a 500, 502, 503 or 504, a
+    timeout, or a reset or refused connection, is re-sent under the same ID
+    with bounded backoff. Core never dispatches a saved ID twice; it answers
+    with that operation's receipt, so a lost reply is read back, not applied
+    again. If that receipt still says ``running``, it is read until it
+    settles, within the same bound. Other POSTs, such as reconciliation, are
+    not re-sent.
     """
+    operation_id = payload.get("operation_id")
+    if path != "deployment/operations" or not isinstance(operation_id, str):
+        return _deployment_post_once(path, payload)
+    description = f"Deployment operation {operation_id} ({payload.get('action')})"
+    lost = False
+
+    def send() -> dict:
+        nonlocal lost
+        try:
+            return _deployment_post_once(path, payload)
+        except (OSError, HTTPException) as error:
+            if transient_reason(error) is not None:
+                lost = True
+            raise
+
+    receipt = tolerate_transient(send, description)
+    if lost and isinstance(receipt, dict) and receipt.get("state") == "running":
+        # The original request is still executing in Core; read its receipt
+        # until it settles. A receipt still running past the bound is
+        # returned as is, and the next run reads it again.
+        receipt = _settled_receipt(operation_id, receipt)
+    return receipt
+
+
+def _settled_receipt(operation_id: str, receipt: dict) -> dict:
+    started = time.monotonic()
+    delay = TRANSIENT_FIRST_DELAY_SECONDS
+    client = api()
+    while receipt.get("state") == "running":
+        if time.monotonic() - started + delay > TRANSIENT_BUDGET_SECONDS:
+            break
+        time.sleep(delay)
+        delay = min(delay * 2, TRANSIENT_MAX_DELAY_SECONDS)
+        observed = client.read("deployment/operations/" + operation_id)
+        if not isinstance(observed, dict) or observed.get("operation_id") != (
+            operation_id
+        ):
+            raise RuntimeError(
+                "Deployment operation readback identifies another request"
+            )
+        receipt = observed
+    return receipt
+
+
+def _deployment_post_once(path: str, payload: dict) -> dict:
+    """One submission, waiting out only answers that carry Retry-After."""
     client = api()
     body = json.dumps(payload, separators=(",", ":")).encode()
     for attempt in range(DEPLOYMENT_RETRY_ATTEMPTS):
@@ -6692,7 +6757,7 @@ def reconcile_operation(operation_id: str) -> dict[str, Any]:
             # (a target change has no durable outcome record, for example).
             # Its unchanged receipt lets the caller settle the step from
             # deployment status, or keep holding it; nothing is replayed.
-            receipt = api().get("deployment/operations/" + operation_id)
+            receipt = api().read("deployment/operations/" + operation_id)
             if (
                 not isinstance(receipt, dict)
                 or receipt.get("operation_id") != operation_id
@@ -6710,9 +6775,11 @@ def reconcile_operation(operation_id: str) -> dict[str, Any]:
 
 
 def staged_deployer(record: dict) -> StagedDeployer:
+    # Promotion reads ride out a busy or restarting Core (``CoreClient.read``);
+    # a read failing past its bound stops the run, which resumes from its journal.
     return StagedDeployer(
         record,
-        get=api().get,
+        get=api().read,
         post=deployment_post,
         save=lambda value: atomic_json(STATE, value),
         verify=runtime_release,
