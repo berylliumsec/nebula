@@ -43,9 +43,14 @@ def _inventory_id(lease, key):
 
 
 # These handles have no implemented restoration adapter. Their presence is a
-# concrete blocker, including idle vendor connections and background descendants.
-# The one exception is an idle Host automation session, which the source closes
-# at the boundary (release_idle_sessions_for_handoff) before this inventory.
+# concrete blocker, including busy vendor connections and background
+# descendants. The exceptions are released at the boundary before this
+# inventory: an idle Host automation session is closed
+# (release_idle_sessions_for_handoff) and an idle vendor connection is
+# detached, its saved vendor thread resumed by the next owner's next turn
+# (release_idle_connections_for_handoff). A participant's
+# ``restorable_handles()`` names entries a later owner rebuilds from SQL
+# (a scheduled Mission still sleeping), which never pin.
 _HANDLES = {
     "automation_runtime": ("_sessions", "_processes"),
     "notebooks": ("workers", "_drains"),
@@ -72,7 +77,11 @@ _LIVE_SQL = {
     # gave up on it, and a late results callback reaches whichever runtime
     # owns the project. It must not pin the project to this runtime forever.
     "command_executions": {"running"},
-    "harness_sessions": {"starting", "idle", "running", "waiting_approval"},
+    # A starting or idle session row is durable state: a new owner opens or
+    # resumes its vendor session on the next turn. A resident connection, a
+    # connecting or queued non-Mission turn, or a goal dispatch still pins
+    # through the harness service's handles and handoff_blockers().
+    "harness_sessions": {"running", "waiting_approval"},
     "harness_turns": {"running"},
     "native_hook_executions": {"running"},
     "tool_calls": {"running"},
@@ -288,6 +297,8 @@ class ProjectHandoffAgent:
                 raise CoordinationConflict(
                     "The handoff participant is unavailable: " + name
                 )
+            restorable_handles = getattr(participant, "restorable_handles", None)
+            restorable = restorable_handles() if restorable_handles else {}
             for attribute in attributes:
                 values = getattr(participant, attribute, None)
                 if not isinstance(values, dict):
@@ -297,11 +308,13 @@ class ProjectHandoffAgent:
                         + "."
                         + attribute
                     )
+                skip = restorable.get(attribute, ())
                 active = sum(
                     not value.done()
                     if isinstance(value, (asyncio.Task, asyncio.Future))
                     else bool(value)
-                    for value in values.values()
+                    for key, value in values.items()
+                    if key not in skip
                 )
                 if active:
                     found[name + "." + attribute] = (
@@ -373,7 +386,16 @@ class ProjectHandoffAgent:
         )
         if release is not None:
             await release(self.lease.project_id)
+        # An idle vendor connection is detached the same way: the session row
+        # keeps its saved vendor thread, which the next owner's turn resumes.
+        harness = getattr(self.app.state, "harness_runtime_service", None)
+        detach = getattr(harness, "release_idle_connections_for_handoff", None)
+        if detach is not None:
+            await detach(self.lease.project_id)
         found = self.handles()
+        harness_blockers = getattr(harness, "handoff_blockers", None)
+        if harness_blockers is not None:
+            found.update(await harness_blockers(self.lease.project_id))
         callback_blockers = getattr(self.chat, "handoff_callback_blockers", None)
         if callback_blockers is not None:
             found.update(await callback_blockers())

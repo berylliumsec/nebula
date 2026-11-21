@@ -50,6 +50,7 @@ from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
 
 _RECOVERY_ACTOR = "runtime-auto-recovery"
+_UNFINISHED_HANDOFF = ("requested", "finishing", "transferable", "transferred")
 # A failed project admission is retried after these delays, and at once when
 # the host or memory policy changes. After _ADMISSION_PERSISTENT failures in a
 # row the diagnostic says the failure is not transient.
@@ -657,7 +658,10 @@ class RuntimeAutoAdmission:
                     if runtime_id is None:
                         # Unknown unassigned processes may be manually prepared
                         # targets or a lost spawn response. Never steal/recreate
-                        # them; require explicit reconciliation instead.
+                        # them; require explicit reconciliation instead. The
+                        # target of an unfinished handoff is known: it waits
+                        # for its project, and a rolling release keeps one
+                        # in flight for most of the roll.
                         async with supervisor.coordinator.database.session() as session:
                             reserved = list(
                                 await session.scalars(
@@ -672,6 +676,15 @@ class RuntimeAutoAdmission:
                                             ).where(
                                                 ProjectOwnershipRow.runtime_id.is_not(
                                                     None
+                                                )
+                                            )
+                                        ),
+                                        ~RuntimeProcessRow.runtime_id.in_(
+                                            select(
+                                                ProjectHandoffRow.target_runtime_id
+                                            ).where(
+                                                ProjectHandoffRow.phase.in_(
+                                                    _UNFINISHED_HANDOFF
                                                 )
                                             )
                                         ),
