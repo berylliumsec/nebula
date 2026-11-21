@@ -1221,6 +1221,13 @@ def test_product_help_finds_butler_mode_board_and_parallel_threads(monkeypatch):
     ).lower()
     assert "/butler" in text
     assert "reply in this thread" in text
+    stages = search_product_knowledge(
+        "How do I get from Butler mode to every project's stages?"
+    )
+    assert any(
+        "All projects" in str(item["text"]) and "/projects" in str(item["text"])
+        for item in stages
+    )
 
 
 def test_product_help_explains_butler_board_goal_sections(monkeypatch):
