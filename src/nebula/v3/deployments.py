@@ -124,6 +124,9 @@ class DeploymentCoordinator:
     ):
         self.database, self.coordination = database, RuntimeCoordination(database)
         self.runtime_admission = runtime_admission
+        # The in-Core project roller attaches itself so deployment status can
+        # report its last pass; None where no roller runs.
+        self.roller = None
 
     async def _host(self, session):
         await self.coordination._insert_absent(
@@ -1665,6 +1668,49 @@ class DeploymentCoordinator:
                 },
             )
 
+    async def withdraw_handoff(
+        self, project_id: str, *, target_runtime_id: str, revision: int
+    ) -> bool:
+        """Cancel exactly this unfinished handoff before it can transfer.
+
+        Unlike a handoff to the current owner, this never starts a new one: it
+        cancels only while the row still names ``target_runtime_id`` at
+        ``revision``, is ``requested`` or ``finishing``, and the source still
+        owns the project. Locks are taken in ``transfer``'s order, so a
+        concurrent transfer either finds the row cancelled or makes this
+        return False with the project left to the transfer.
+        """
+        async with self.coordination._write() as session:
+            await self._host(session)
+            owner = await session.get(
+                ProjectOwnershipRow, project_id, with_for_update=True
+            )
+            row = await session.get(ProjectHandoffRow, project_id, with_for_update=True)
+            if (
+                owner is None
+                or row is None
+                or row.target_runtime_id != target_runtime_id
+                or row.revision != revision
+                or row.phase not in {HandoffPhase.REQUESTED, HandoffPhase.FINISHING}
+                or owner.runtime_id != row.source_runtime_id
+                or owner.fencing_token != row.source_fencing_token
+            ):
+                return False
+            row.phase, row.admission_held = HandoffPhase.VERIFIED, False
+            row.blockers, row.checkpoint = [], {"cancelled_before_transfer": True}
+            row.revision += 1
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            await self._receipt(
+                session,
+                "handoff.withdrawn",
+                {
+                    "project_id": project_id,
+                    "source_runtime_id": row.source_runtime_id,
+                    "target_runtime_id": target_runtime_id,
+                },
+            )
+            return True
+
     async def checkpoint(
         self, lease: ProjectLease, *, checkpoint: dict, blockers: list[str]
     ) -> HandoffPhase:
@@ -2887,6 +2933,7 @@ class DeploymentCoordinator:
                 projects=projects,
                 health="degraded" if degraded else "ready" if api else "starting",
                 detail=host.detail,
+                roll=self.roller.status() if self.roller is not None else None,
                 processes=[
                     ProcessDeploymentStatus(
                         runtime_id=row.runtime_id,

@@ -339,3 +339,53 @@ async def test_refused_third_version_target_keeps_new_projects_admitted(
         owner = await session.get(ProjectOwnershipRow, "one")
         process = await session.get(RuntimeProcessRow, owner.runtime_id)
     assert process.version == "v2"
+
+
+@pytest.mark.parametrize("handoff_phase", ["requested", "verified"])
+async def test_a_rolling_handoff_target_does_not_hold_back_a_cold_project(
+    admission, handoff_phase
+):
+    """The target of an unfinished handoff is known, not a stray worker.
+
+    A rolling release keeps such a target unassigned until its project
+    transfers; a cold project's admission must not wait for it. Once that
+    handoff is finished (or for any worker no handoff names) the existing
+    rule still holds: an unknown unassigned worker needs reconciliation.
+    """
+    from nebula.v3.database import ProjectHandoffRow
+
+    value = admission
+    await _ready_worker(value.coordinator, "source")
+    source = await value.coordinator.coordination.claim_project("two", "source")
+    await _ready_worker(value.coordinator, "rolling-target")
+    async with value.coordinator.database.session() as session:
+        session.add(
+            ProjectHandoffRow(
+                project_id="two",
+                revision=1,
+                source_runtime_id="source",
+                source_fencing_token=source.fencing_token,
+                target_runtime_id="rolling-target",
+                target_version="retry",
+                phase=handoff_phase,
+                admission_held=handoff_phase == "requested",
+                blockers=[],
+                checkpoint={},
+                admitted_turn_ids=[],
+                updated_at_ms=0,
+            )
+        )
+    await value.store.create(
+        ChatSession(
+            engagement_id="one",
+            title="Cold project chat",
+            provider_profile_id="synthetic-provider",
+            model="synthetic-model",
+        )
+    )
+    await value.automatic.reconcile()
+    if handoff_phase == "requested":
+        assert value.prepared == ["retry-worker-0"]
+        assert (await _owner(value, "one"))[0] == "retry-worker-0"
+    else:
+        assert value.prepared == []
