@@ -89,8 +89,9 @@
 .work-project-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; margin-bottom: 12px; }
 .work-project-layout.has-detail { grid-template-columns: minmax(0, 1fr) minmax(300px, 320px); }
 .work-board { display: grid; grid-template-columns: repeat(6, minmax(170px, 1fr)); gap: 9px; min-width: 0; overflow-x: auto; align-items: start; padding-bottom: 12px; }
-.work-project-layout.has-detail .work-board { grid-template-columns: repeat(6, minmax(0, 1fr)); overflow: visible; }
-.work-project-layout.has-detail .work-column { min-width: 0; }
+/* Beside an open item the board keeps readable columns and scrolls inside itself when they do not fit. */
+.work-project-layout.has-detail .work-board { grid-template-columns: repeat(6, minmax(130px, 1fr)); }
+.work-project-layout.has-detail .work-column { min-width: 130px; }
 .work-column { min-width: 170px; min-height: 250px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-panel); }
 .work-column > header { display: flex; align-items: center; justify-content: space-between; padding: 13px; border-bottom: 1px solid var(--border-soft); }
 .work-column h2 { color: var(--text-strong); font-size: 12px; font-weight: 650; margin: 0; }
@@ -201,7 +202,7 @@
 .work-project-list .work-stage-cell[data-state="empty"] strong { color: var(--muted); }
 .work-project-list .work-stage-define { display: inline-flex; gap: 6px; padding: 0 18px 14px; border: 0; color: var(--blue); font-size: 12px; }
 .work-project-list .work-stage-define:hover { background: transparent; color: var(--text-strong); }
-.work-board-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.work-board-tools { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .work-board-tools .button { min-height: 38px; }
 .work-stage-board { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .work-project-layout.has-detail .work-stage-board { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
