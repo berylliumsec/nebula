@@ -9712,6 +9712,50 @@ class HarnessRuntimeService:
                 )
             )
 
+    async def _expire_ended_turn_approvals(
+        self, turn: HarnessTurn, reason: str
+    ) -> None:
+        """Expire the pending approvals of a turn Core just ended, from the store.
+
+        ``_retire_turn_requests`` settles approvals through their in-memory
+        waiters, which do not survive a restart. A card left pending here would
+        outlive its turn: no decision can reach the harness any more, and a
+        late approval would record a delivery nobody can confirm.
+        """
+        owners = sorted(
+            {owner for owner in (turn.id, turn.run_id, turn.chat_turn_id) if owner}
+        )
+        for owner in owners:
+            pending = await self.store.find_entities(
+                Approval,
+                {"run_id": owner, "status": ApprovalStatus.PENDING.value},
+                engagement_id=turn.engagement_id,
+            )
+            for approval in pending:
+                self._approval_futures.pop(approval.id, None)
+                self._broker_approval_ids.discard(approval.id)
+                try:
+                    await self.store.update(
+                        Approval,
+                        approval.id,
+                        {
+                            "status": ApprovalStatus.EXPIRED,
+                            "decided_by": "system",
+                            "decided_at": utc_now(),
+                            "decision_note": reason[:1_000],
+                        },
+                        expected_revision=approval.revision,
+                    )
+                except ConflictError as caught_error:
+                    # diagnostic-expected: a decision recorded meanwhile wins; its own delivery path settles it.
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.ended_turn_approval_changed",
+                        "An approval changed while its ended turn was being settled.",
+                        caught_error,
+                        stage="harnesses",
+                    )
+
     async def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
         """Settle one harness turn whose producer died with the previous Core."""
 
@@ -9740,6 +9784,13 @@ class HarnessRuntimeService:
                 "error": "Nebula Core restarted while the harness outcome was uncertain",
             },
             expected_revision=turn.revision,
+        )
+        (
+            await self._expire_ended_turn_approvals(
+                interrupted_turn,
+                "Nebula Core restarted while this request was waiting; "
+                "no decision can reach the harness.",
+            )
         )
         (await self._interrupt_owner(turn))
         if turn.chat_session_id and turn.chat_turn_id:
@@ -9887,6 +9938,13 @@ class HarnessRuntimeService:
                             "error": "Nebula Core shut down during the turn",
                         },
                         expected_revision=turn.revision,
+                    )
+                )
+                (
+                    await self._expire_ended_turn_approvals(
+                        turn,
+                        "Nebula Core shut down while this request was waiting; "
+                        "no decision can reach the harness.",
                     )
                 )
                 (await self._interrupt_owner(turn))
@@ -15622,7 +15680,14 @@ class HarnessRuntimeService:
             )
         if future is None or future.done():
             if related_turn is not None:
-                (await self._fail_approval_delivery(approval, related_turn))
+                # No waiter means this decision was never handed to the
+                # adapter; a completed waiter may have been, so it stays
+                # unconfirmed until reconciled.
+                (
+                    await self._fail_approval_delivery(
+                        approval, related_turn, sent=future is not None
+                    )
+                )
                 return
             raise HarnessStateError("harness permission request is no longer active")
         if related_turn is not None and related_turn.status not in {
@@ -15754,10 +15819,14 @@ class HarnessRuntimeService:
             )
 
     async def _fail_approval_delivery(
-        self, approval: Approval, turn: HarnessTurn
+        self, approval: Approval, turn: HarnessTurn, *, sent: bool = True
     ) -> None:
         detail = "Decision recorded, but the original request is no longer connected. No work was replayed; start a new response."
-        (await record_delivery(self.store, approval.id, turn.id, "failed", detail))
+        (
+            await record_delivery(
+                self.store, approval.id, turn.id, "failed", detail, sent=sent
+            )
+        )
         if turn.status not in {
             HarnessTurnStatus.RUNNING,
             HarnessTurnStatus.WAITING_APPROVAL,
