@@ -6,6 +6,7 @@ same implementations, invocation ownership and policy as provider-chat tools.
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .async_utils import resolve_workspace
 
 import asyncio
@@ -131,11 +132,11 @@ async def core_components(
     )
     if runtime.tool_platform is not None:
         catalog_profiles = tuple(
-            McpServerProfile.model_validate(item)
+            decode_stored(McpServerProfile, item)
             for item in snapshot.get("mcp_catalog_snapshot", [])
         )
         ssh = tuple(
-            SshEnvironment.model_validate(item)
+            decode_stored(SshEnvironment, item)
             for item in snapshot.get("ssh_environment_snapshot", [])
         )
         extra = await runtime.tool_platform.chat_components(

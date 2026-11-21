@@ -23,6 +23,7 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .stored_entities import decode_stored
 from .advisory_keys import per_id_key
 from .database import (
     EntityRow,
@@ -338,7 +339,7 @@ class WorkspaceProvenanceService:
             return None
         if row.kind != WorkspaceProvenanceObservation.entity_kind:
             raise ConflictError(f"entity id belongs to {row.kind}: {identity}")
-        return WorkspaceProvenanceObservation.model_validate(row.payload)
+        return decode_stored(WorkspaceProvenanceObservation, row.payload)
 
     async def get(
         self,

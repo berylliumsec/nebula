@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import Field, SecretStr, ValidationError
 
+from .stored_entities import decode_stored
 from .credentials import CredentialError, CredentialStore, CredentialUnavailableError
 from .database import EntityRow
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
@@ -58,7 +59,7 @@ def register_integration_credentials(rpc, runtime_id, coordination, credentials)
                     row = await session.get(EntityRow, "typesafe")
                     if row is None or row.kind != ToolSuggestionSettings.entity_kind:
                         raise ValueError("TypeSafe settings are unavailable")
-                    settings = ToolSuggestionSettings.model_validate(row.payload)
+                    settings = decode_stored(ToolSuggestionSettings, row.payload)
                     if settings.secret_ref != request.reference:
                         raise ValueError("TypeSafe reference changed")
                     if request.operation == "resolve":
@@ -68,7 +69,7 @@ def register_integration_credentials(rpc, runtime_id, coordination, credentials)
                             or project_row.kind != Engagement.entity_kind
                         ):
                             raise ValueError("Project is unavailable")
-                        project = Engagement.model_validate(project_row.payload)
+                        project = decode_stored(Engagement, project_row.payload)
                         scope_row = (
                             await session.get(EntityRow, project.scope_policy_id)
                             if project.scope_policy_id
@@ -79,7 +80,7 @@ def register_integration_credentials(rpc, runtime_id, coordination, credentials)
                             or scope_row.kind != ScopePolicy.entity_kind
                         ):
                             raise ValueError("Project has no TypeSafe opt-in")
-                        scope = ScopePolicy.model_validate(scope_row.payload)
+                        scope = decode_stored(ScopePolicy, scope_row.payload)
                         if (
                             scope.engagement_id != lease.project_id
                             or not scope.tool_suggestions
@@ -94,7 +95,7 @@ def register_integration_credentials(rpc, runtime_id, coordination, credentials)
                     )
                     if row is None or row.kind != VpnProfile.entity_kind:
                         raise ValueError("VPN profile is unavailable")
-                    profile = VpnProfile.model_validate(row.payload)
+                    profile = decode_stored(VpnProfile, row.payload)
                     if profile.secret_ref != request.reference:
                         raise ValueError("VPN reference changed")
                     if request.operation == "resolve":
@@ -110,9 +111,7 @@ def register_integration_credentials(rpc, runtime_id, coordination, credentials)
                             or policy_row.kind != AutomationProjectPolicy.entity_kind
                         ):
                             raise ValueError("Project has no selected VPN")
-                        policy = AutomationProjectPolicy.model_validate(
-                            policy_row.payload
-                        )
+                        policy = decode_stored(AutomationProjectPolicy, policy_row.payload)
                         if (
                             policy.engagement_id != lease.project_id
                             or policy.vpn_profile_id != profile.id

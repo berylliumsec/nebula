@@ -8,6 +8,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import Field, SecretStr, ValidationError
 
+from .stored_entities import decode_stored
 from .domain import NebulaModel, ProviderProfile
 from .credentials import CredentialError
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
@@ -42,7 +43,7 @@ def register_session_credentials(rpc, runtime_id, coordination, credentials):
                 row = await session.get(EntityRow, request.provider_id)
                 if row is None or row.kind != ProviderProfile.entity_kind:
                     raise ValueError("Provider is unavailable")
-                profile = ProviderProfile.model_validate(row.payload)
+                profile = decode_stored(ProviderProfile, row.payload)
                 if not profile.enabled or profile.secret_ref != request.reference:
                     raise ValueError("Provider credential reference changed")
                 # Session lookup is a bounded in-memory read; never call the OS

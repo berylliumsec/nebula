@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .stored_entities import decode_stored
 from .butler_instructions import ButlerInstructionsError, MAX_INSTRUCTIONS_BYTES
 from .butler_recovery import DEFAULT_CHECK_INTERVAL_MINUTES, GLOBAL_STATE_ID
 from .database import EntityRow
@@ -248,7 +249,7 @@ def butler_instructions_router(data_root: Path, store: NebulaStore) -> APIRouter
     ) -> dict[str, Any]:
         async with store.transaction(immediate=True) as transaction:
             row = await transaction.session.get(EntityRow, GLOBAL_STATE_ID)
-            state = ButlerGlobalState.model_validate(row.payload) if row else None
+            state = decode_stored(ButlerGlobalState, row.payload) if row else None
             if (state.revision if state else 0) != request.expected_revision:
                 raise HTTPException(
                     status_code=409,

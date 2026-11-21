@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import aliased
 
+from .stored_entities import decode_stored
 from .butler_board import butler_board_router
 from .file_attribution import file_attribution_router
 from .chat_turn_headers import pending_engagement_turn_headers
@@ -366,7 +367,7 @@ def mount_global_project_reads(
         )
         async with store.database.session() as database:
             page = [
-                ChatMessage.model_validate(row.payload)
+                decode_stored(ChatMessage, row.payload)
                 for row in (await database.scalars(statement))
             ]
         has_more = len(page) > limit

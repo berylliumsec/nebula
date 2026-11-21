@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
+from .stored_entities import decode_stored
 from .chat_turn_headers import session_turn_headers
 from .database import EntityRow
 from .diagnostics import create_diagnostic_task
@@ -359,7 +360,7 @@ class RuntimeSwitchService:
                 raise ConflictError(
                     "Conversation changed; reload its runtime settings."
                 )
-            current = ChatSession.model_validate(row.payload)
+            current = decode_stored(ChatSession, row.payload)
             reason = await self.busy_reason(transaction.session, current)
             # Provider turn snapshots already protect an in-flight response from
             # same-provider model/effort changes, retaining that existing behavior.

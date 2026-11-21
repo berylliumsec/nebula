@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from .stored_entities import decode_stored
 from .butler_oversight import (
     ButlerEventPayload,
     ButlerEvidenceRef,
@@ -112,7 +113,7 @@ async def record_completed_provider_turn(
     )
     if len(rows) < 3:
         return False
-    calls = [ToolCall.model_validate(row.payload) for row in rows]
+    calls = [decode_stored(ToolCall, row.payload) for row in rows]
     if calls[0].chat_turn_id != completed_turn.id:
         return False
     turns: list[ChatTurn] = []

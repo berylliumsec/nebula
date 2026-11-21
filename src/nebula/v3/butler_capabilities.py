@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError
 
+from .stored_entities import decode_stored
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -678,7 +679,7 @@ class ButlerCapabilities:
             populate_existing=True,
         )
         return (
-            ButlerRecoveryCase.model_validate(row.payload) if row is not None else None
+            decode_stored(ButlerRecoveryCase, row.payload) if row is not None else None
         )
 
     async def _begin_background_step(

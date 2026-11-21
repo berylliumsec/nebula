@@ -7,6 +7,7 @@ from hashlib import sha256
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from .stored_entities import decode_stored
 from .database import EntityRow
 from .domain import (
     ChatReadCursor,
@@ -35,7 +36,7 @@ async def source_message(database, session, turn):
     if turn.final_message_id:
         row = await database.get(EntityRow, turn.final_message_id)
         if row and row.payload.get("session_id") == session.id:
-            return ChatMessage.model_validate(row.payload)
+            return decode_stored(ChatMessage, row.payload)
     row = await database.scalar(
         select(EntityRow)
         .where(
@@ -47,7 +48,7 @@ async def source_message(database, session, turn):
         .order_by(EntityRow.created_at)
         .limit(1)
     )
-    return ChatMessage.model_validate(row.payload) if row else None
+    return decode_stored(ChatMessage, row.payload) if row else None
 
 
 async def catchup_projection(store, session, cursor):
@@ -83,7 +84,7 @@ async def catchup_projection(store, session, cursor):
             )
         if cursor:
             candidates = [
-                ChatMessage.model_validate(row.payload)
+                decode_stored(ChatMessage, row.payload)
                 for row in (
                     await database.scalars(
                         select(EntityRow)
