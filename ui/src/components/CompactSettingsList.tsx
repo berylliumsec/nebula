@@ -6,6 +6,7 @@ import {
   Boxes,
   ChevronRight,
   Clock3,
+  Columns3,
   Cpu,
   Database,
   Globe,
@@ -33,6 +34,7 @@ const categoryOrder = ["Setup", "Models", "Automation", "Environments", "Integra
 /** Row glyph per catalog entry; every entry needs one so no row falls back to the generic terminal. */
 export const settingIcons: Record<string, LucideIcon> = {
   "settings.memory-budgets": Cpu,
+  "settings.host-commands": SquareTerminal,
   "settings.host-pressure": Activity,
   "settings.butler-instructions": BookOpen,
   "settings.butler-check-interval": Clock3,
@@ -54,6 +56,7 @@ export const settingIcons: Record<string, LucideIcon> = {
   "settings.vpn-egress": ShieldCheck,
   "settings.runners": Boxes,
   "settings.network-scope": Globe2,
+  "settings.work-stages": Columns3,
   "settings.operators": UserRound,
   "settings.typesafe": ShieldCheck,
   "settings.devices": Smartphone,

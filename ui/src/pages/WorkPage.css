@@ -171,3 +171,65 @@
 .work-agent-tools-switch[data-state="on"] .work-switch-track { border-color: transparent; background: var(--action-primary, var(--blue)); }
 .work-agent-tools-switch[data-state="on"] .work-switch-track::after { background: var(--action-primary-text, var(--surface)); transform: translateX(12px); }
 @media (prefers-reduced-motion: reduce) { .work-switch-track, .work-switch-track::after { transition: none; } }
+
+/* Work stages: project-defined stage strip, stage filters, stage board and editor. */
+.work-segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--surface-raised); }
+.work-segmented button { min-height: 32px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.work-segmented button[aria-pressed="true"] { background: var(--surface-hover); color: var(--text-strong); font-weight: 600; }
+.work-panel-head .work-segmented { margin-left: auto; }
+.work-stage-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 18px 0; }
+.work-stage-filters button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 11px; border: 1px solid var(--border-soft); border-radius: 999px; background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.work-stage-filters button[aria-pressed="true"] { background: var(--surface-hover); border-color: var(--border); color: var(--text-strong); }
+.work-stage-filters button span { color: var(--muted); }
+.work-stage-filters i { width: 7px; height: 7px; border-radius: 50%; }
+.work-stage-filters [data-tone="gap"] i { background: var(--orange); }
+.work-stage-filters [data-tone="blocked"] i { background: var(--red); }
+.work-stage-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 6px; list-style: none; margin: 0; padding: 0 18px 14px; }
+.work-project-list .work-stage-cell { display: grid; gap: 3px; min-height: 64px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-raised); color: inherit; text-decoration: none; }
+.work-project-list .work-stage-cell:hover, .work-project-list .work-stage-cell:focus-visible { background: var(--surface-hover); }
+.work-stage-cell-name { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-stage-cell-name i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.work-project-list .work-stage-cell strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.work-project-list .work-stage-cell small { margin-top: 0; min-height: 14px; }
+.work-stage-cell[data-state="active"] .work-stage-cell-name i { background: var(--blue); }
+.work-stage-cell[data-state="blocked"] .work-stage-cell-name i { background: var(--red); }
+.work-project-list .work-stage-cell[data-state="blocked"] small { color: var(--red); }
+.work-project-list .work-stage-cell[data-state="gap"] { border-color: color-mix(in srgb, var(--orange) 60%, var(--border-soft)); }
+.work-stage-cell[data-state="gap"] .work-stage-cell-name i { background: var(--orange); }
+.work-project-list .work-stage-cell[data-state="gap"] strong { color: var(--orange); }
+.work-stage-cell[data-state="empty"] .work-stage-cell-name i { visibility: hidden; }
+.work-project-list .work-stage-cell[data-state="empty"] strong { color: var(--muted); }
+.work-project-list .work-stage-define { display: inline-flex; gap: 6px; padding: 0 18px 14px; border: 0; color: var(--blue); font-size: 12px; }
+.work-project-list .work-stage-define:hover { background: transparent; color: var(--text-strong); }
+.work-board-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.work-board-tools .button { min-height: 38px; }
+.work-stage-board { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.work-project-layout.has-detail .work-stage-board { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.work-stage-board > .work-empty-inline { grid-column: 1 / -1; }
+.work-stage-board .work-column[data-focused] { border-color: var(--blue); }
+.work-stage-board .work-card .work-status { justify-self: start; font-size: 10px; padding: 2px 6px; }
+.work-column-done { color: var(--muted); font-size: 11px; text-align: center; margin: 0; padding: 4px 0 2px; }
+.work-fields select { min-height: 32px; max-width: 180px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 12px; }
+.work-stage-editor { width: min(560px, 100%); max-height: calc(100dvh - 32px); overflow: auto; }
+.work-stage-lede { color: var(--muted); font-size: 12px; margin: -6px 0 0; }
+.work-stage-rows { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.work-stage-rows li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.work-stage-order { display: flex; }
+.work-stage-rows .icon-button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+.work-stage-rows .icon-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-strong); }
+.work-stage-rows .icon-button:disabled { opacity: .35; cursor: default; }
+.work-dialog .work-stage-label { flex: 1; min-width: 0; }
+.work-dialog .work-stage-flag { display: flex; align-items: center; gap: 6px; color: var(--text); font-weight: 400; white-space: nowrap; }
+.work-dialog .work-stage-flag input { width: auto; }
+.work-stage-count { min-width: 44px; color: var(--muted); font-size: 11px; text-align: right; }
+.work-stage-add { justify-self: start; }
+@media (max-width: 720px) {
+  .work-stage-strip { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); padding: 0 12px 12px; }
+  .work-project-list .work-stage-cell { min-height: 54px; padding: 6px 7px; }
+  .work-project-list .work-stage-cell small { display: none; }
+  .work-stage-rows li { flex-wrap: wrap; }
+  .work-dialog .work-stage-label { flex-basis: calc(100% - 80px); }
+  .work-board-tools { flex-wrap: wrap; }
+  .work-segmented button, .work-stage-filters button { min-height: 44px; }
+  .work-stage-rows .icon-button { width: 44px; height: 44px; }
+}

@@ -1,13 +1,15 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, Columns3, ListTodo, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { readWhenProjectReady } from "../api/projectRuntime";
-import type { ChatSessionActivity } from "../api/types";
+import type { ChatSessionActivity, WorkStage } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { projectRoot, projectSurface, resourcePath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useOptionalChrome } from "../state/ChromeContext";
+import { WorkStageEditor } from "./WorkStageEditor";
+import { hasStageGap, stageCells, stageColumns, type StageCell } from "./workStages";
 import "./WorkPage.css";
 
 type Status = "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done";
@@ -16,6 +18,7 @@ type WorkItem = {
   id: string; engagement_id: string; title: string; description: string;
   status: Status; priority: Priority; assignee_session_id: string | null;
   source_kind: "chat" | "mission" | "manual" | "import"; source_id: string | null;
+  stage?: string | null;
   created_at: string; updated_at: string; last_update_at: string | null; revision: number;
 };
 type WorkUpdate = {
@@ -62,6 +65,17 @@ function ProjectStatusCounts({ counts }: { counts: ProjectStatusCountValues }) {
   return <span className="work-project-status">{active.map(([key, label], index) => <Fragment key={key}>{index > 0 && <span className="sr-only">, </span>}<span className={`work-project-count ${key}`}>{counts[key]} {label}</span></Fragment>)}</span>;
 }
 
+/** One project's stage cells on All projects; each opens that stage on the project's board. */
+function ProjectStageStrip({ projectId, projectName, cells }: { projectId: string; projectName: string; cells: StageCell[] }) {
+  return <ol className="work-stage-strip" aria-label={`${projectName} stages`}>{cells.map((cell) => <li key={cell.key}>
+    <Link className="work-stage-cell" data-state={cell.state} to={`${projectSurface(projectId, "work")}?group=stage&stage=${encodeURIComponent(cell.key)}`} aria-label={`${cell.label}: ${cell.state === "gap" ? "none yet" : `${cell.open} open`}${cell.detail && cell.state !== "gap" ? `, ${cell.detail}` : ""}`}>
+      <span className="work-stage-cell-name"><i aria-hidden="true" />{cell.label}</span>
+      <strong>{cell.state === "gap" ? "None yet" : cell.state === "empty" ? "—" : cell.open.toLocaleString()}</strong>
+      <small>{cell.state === "gap" ? "" : cell.detail}</small>
+    </Link>
+  </li>)}</ol>;
+}
+
 export function projectInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "").slice(0, 2);
@@ -73,6 +87,7 @@ export function WorkPage() {
   const chrome = useOptionalChrome();
   const { projectId, itemId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<WorkItem[]>([]);
   const [recent, setRecent] = useState<WorkUpdate[]>([]);
   const [itemUpdates, setItemUpdates] = useState<WorkUpdate[]>([]);
@@ -96,6 +111,8 @@ export function WorkPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [createProjectId, setCreateProjectId] = useState(engagement?.id ?? "");
+  const [createStage, setCreateStage] = useState("");
+  const [stageFilter, setStageFilter] = useState<"all" | "gap" | "blocked">("all");
   const [summary, setSummary] = useState("");
   const [nextStep, setNextStep] = useState("");
   const [blocker, setBlocker] = useState("");
@@ -118,6 +135,22 @@ export function WorkPage() {
     return children;
   }, [activeProjects, projectById]);
   const directChildren = childrenByParent.get(projectId ?? "") ?? [];
+  // The URL owns which grouping and stage are shown, so a stage link and reload land on the same view.
+  const projectStages: WorkStage[] = selectedProject?.workStages ?? [];
+  const groupByStage = searchParams.get("group") === "stage";
+  const focusedStage = searchParams.get("stage");
+  const editingStages = Boolean(projectId) && searchParams.get("stages") === "edit";
+  const anyStages = activeProjects.some((project) => (project.workStages ?? []).length > 0);
+  const projectsView: "stages" | "status" = anyStages && searchParams.get("view") !== "status" ? "stages" : "status";
+  useEffect(() => {
+    if (!groupByStage || !focusedStage || loading) return;
+    document.getElementById(`work-stage-column-${focusedStage}`)?.closest("section")?.scrollIntoView({ block: "nearest", inline: "start" });
+  }, [groupByStage, focusedStage, loading]);
+  const setParam = (name: string, value: string | null) => setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (value === null) next.delete(name); else next.set(name, value);
+    return next;
+  }, { replace: true });
   const selectedItem = items.find((item) => item.id === itemId);
   const chosenStatus = selectedItem && statusChoice?.itemId === selectedItem.id ? statusChoice.status : undefined;
   const nextStatus: Status = chosenStatus ?? selectedItem?.status ?? "in_progress";
@@ -308,12 +341,32 @@ export function WorkPage() {
     }
     return byProject;
   }, [items, activity, activityProjects, projectById]);
+  const itemsByProject = useMemo(() => {
+    const byProject = new Map<string, WorkItem[]>();
+    for (const item of items) byProject.set(item.engagement_id, [...(byProject.get(item.engagement_id) ?? []), item]);
+    return byProject;
+  }, [items]);
+  const cellsByProject = useMemo(() => new Map(activeProjects
+    .filter((project) => (project.workStages ?? []).length > 0)
+    .map((project) => [project.id, stageCells(project.workStages ?? [], itemsByProject.get(project.id) ?? [])])), [activeProjects, itemsByProject]);
+  const gapCount = useMemo(() => [...cellsByProject.values()].filter(hasStageGap).length, [cellsByProject]);
+  const blockedProjects = useMemo(() => new Set(items.filter((item) => item.status === "blocked").map((item) => item.engagement_id)), [items]);
   const visibleProjects = useMemo(() => {
     const roots = projectRows.rows.filter((row) => row.depth === 0).slice(0, visibleProjectLimit);
     const children = projectRows.rows.filter((row) => row.depth > 0).slice(0, visibleProjectLimit - roots.length);
     const visible = new Set([...roots, ...children].map((row) => row.project.id));
     return projectRows.rows.filter((row) => visible.has(row.project.id));
   }, [projectRows]);
+  // A stage filter lists the matching projects themselves, outside the project tree.
+  const listedProjects = useMemo(() => projectsView !== "stages" || stageFilter === "all" ? visibleProjects : activeProjects
+    .filter((project) => stageFilter === "gap" ? hasStageGap(cellsByProject.get(project.id) ?? []) : blockedProjects.has(project.id))
+    .filter((project) => project.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase()))
+    .slice(0, visibleProjectLimit)
+    .map((project) => ({ project, depth: 0 })), [projectsView, stageFilter, visibleProjects, activeProjects, cellsByProject, blockedProjects, projectQuery]);
+  const boardColumns = useMemo(() => stageColumns(projectStages, items), [projectStages, items]);
+  const stageLabel = (key: string | null | undefined) => key ? projectStages.find((stage) => stage.key === key)?.label ?? key : "No stage";
+  const createTarget = engagements.find((project) => project.id === (projectId ?? createProjectId));
+  const createStages = createTarget?.workStages ?? [];
   const activeItems = useMemo(() => items.filter((item) => item.status !== "done"), [items]);
   const agentEntries = useMemo(() => Object.entries(activity).filter(([, state]) => state === "working" || state === "waiting").map(([sessionId, state]) => ({
     sessionId,
@@ -399,9 +452,9 @@ export function WorkPage() {
     setBusy(true); setError(undefined);
     try {
       const item = await api.request<WorkItem>(`engagements/${encodeURIComponent(target)}/work`, {
-        method: "POST", body: JSON.stringify({ title: title.trim(), description: description.trim(), status: "ready" }),
+        method: "POST", body: JSON.stringify({ title: title.trim(), description: description.trim(), status: "ready", ...(createStage && createStages.some((stage) => stage.key === createStage) ? { stage: createStage } : {}) }),
       });
-      setTitle(""); setDescription(""); setShowCreate(false);
+      setTitle(""); setDescription(""); setCreateStage(""); setShowCreate(false);
       await refresh();
       navigate(projectSurface(target, "work", item.id));
     } catch (failure) {
@@ -428,6 +481,31 @@ export function WorkPage() {
       setError(errorText(failure));
     }
     finally { setBusy(false); }
+  };
+
+  const changeStage = async (stage: string) => {
+    if (!api || !projectId || !selectedItem) return;
+    setBusy(true); setError(undefined);
+    try {
+      await api.request<WorkItem>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}`, {
+        method: "PATCH", body: JSON.stringify({ stage: stage || null, expected_revision: selectedItem.revision }),
+      });
+      await refresh();
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.work_page.stage_failed", "A Work item's stage could not be changed.", failure, "work_page");
+      setError(failure instanceof ApiError && failure.status === 409 ? "This item changed. Its latest version is shown; choose the stage again." : errorText(failure));
+      await refresh();
+    } finally { setBusy(false); }
+  };
+
+  const saveStages = async (stages: WorkStage[], expectedRevision: number | undefined) => {
+    if (!api || !projectId) return;
+    await api.request(`engagements/${encodeURIComponent(projectId)}/work/stages`, {
+      method: "PATCH",
+      body: JSON.stringify({ stages: stages.map((stage) => ({ key: stage.key, label: stage.label, flag_when_empty: stage.flagWhenEmpty })), ...(expectedRevision ? { expected_revision: expectedRevision } : {}) }),
+    });
+    // The project list carries the stages, so reread it before closing.
+    await retryResource("projects");
   };
 
   const toggle = async () => {
@@ -498,19 +576,29 @@ export function WorkPage() {
             {!counts.blocked && !counts.review && !waitingAgents.length && <p className="work-empty-inline">Nothing needs attention right now.</p>}
           </section>
         </div>
-        <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{projectRows.count}</span></div>
+        <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{projectRows.count}</span>
+            {anyStages && <div className="work-segmented" role="group" aria-label="Project view"><button type="button" aria-pressed={projectsView === "stages"} onClick={() => setParam("view", null)}>Stages</button><button type="button" aria-pressed={projectsView === "status"} onClick={() => setParam("view", "status")}>Status</button></div>}</div>
+          {projectsView === "stages" && <div className="work-stage-filters" role="group" aria-label="Filter projects">
+            <button type="button" aria-pressed={stageFilter === "all"} onClick={() => setStageFilter("all")}>All</button>
+            <button type="button" aria-pressed={stageFilter === "gap"} data-tone="gap" onClick={() => setStageFilter("gap")}><i aria-hidden="true" />Missing a stage <span>{gapCount}</span></button>
+            <button type="button" aria-pressed={stageFilter === "blocked"} data-tone="blocked" onClick={() => setStageFilter("blocked")}><i aria-hidden="true" />Blocked <span>{blockedProjects.size}</span></button>
+          </div>}
           <div className="work-project-search"><input type="search" aria-label="Search projects" placeholder="Search projects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div>
-          <div className="work-project-list">{visibleProjects.map(({ project, depth }) => {
+          <div className="work-project-list">{listedProjects.map(({ project, depth }) => {
             const projectItems = projectCounts.get(project.id) ?? { working: 0, waiting: 0, inProgress: 0, blocked: 0, review: 0 };
             const latestUpdate = projectItems.latest && recent.find((update) => update.item_id === projectItems.latest?.id && update.created_at === projectItems.latest?.last_update_at);
             const childCount = childrenByParent.get(project.id)?.length ?? 0;
             const expanded = Boolean(projectQuery.trim()) || expandedProjects.has(project.id);
+            const cells = projectsView === "stages" ? cellsByProject.get(project.id) : undefined;
             return <div className={`work-project-row${depth ? " is-child" : ""}`} key={project.id} style={{ paddingLeft: Math.min(depth, 5) * 22 }}>
               {childCount > 0 ? <button type="button" aria-label={`${expanded ? "Hide" : "Show"} subprojects of ${project.name}`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(project.id)) next.delete(project.id); else next.add(project.id); return next; })}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="work-project-spacer" />}
               <div className="work-project-content"><Link className="work-project-primary" to={projectRoot(project.id)}><span className="work-project-initials" aria-hidden="true">{projectInitials(project.name)}</span><span className="work-project-main"><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}{projectItems.latest ? "" : " · No check-ins yet"}</small></span><ProjectStatusCounts counts={projectItems} /><ArrowRight size={16} /></Link>
+                {cells && <ProjectStageStrip projectId={project.id} projectName={project.name} cells={cells} />}
+                {projectsView === "stages" && !cells && <Link className="work-stage-define" to={`${projectSurface(project.id, "work")}?stages=edit`}><Columns3 size={14} aria-hidden="true" /> Define stages</Link>}
                 {projectItems.latest && <Link className="work-project-latest" to={projectSurface(projectItems.latest.engagement_id, "work", projectItems.latest.id)}><span><strong>Latest check-in: {projectItems.latest.title}</strong><small>{projectName(projectItems.latest.engagement_id)} · {time(projectItems.latest.last_update_at)}</small>{latestUpdate && <small>{latestUpdate.blocker ? `Blocked: ${latestUpdate.blocker}` : latestUpdate.next_step ? `Next: ${latestUpdate.next_step}` : latestUpdate.summary}</small>}</span><ArrowRight size={15} aria-hidden="true" /></Link>}</div>
             </div>;
           })}</div>
+          {stageFilter !== "all" && projectsView === "stages" && !listedProjects.length && <p className="work-empty-inline">{stageFilter === "gap" ? "No project is missing a flagged stage." : "No project has blocked items."}</p>}
           {projectRows.rows.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} rows. Search to narrow the list.</p>}
           {!projectRows.count && <div className="work-empty-inline">{activeProjects.length ? "No projects match your search." : <>No projects yet.{chrome?.openProjectPicker && <> <button className="button quiet" type="button" onClick={chrome.openProjectPicker}>Create a project</button></>}</>}</div>}
         </section>
@@ -520,7 +608,21 @@ export function WorkPage() {
         </section>
       </> : <>
         <div className={`work-project-layout${itemId ? " has-detail" : ""}`}>
-          <section className="work-board" aria-label="Project board">
+          <div className="work-board-tools">
+            <div className="work-segmented" role="group" aria-label="Group items"><button type="button" aria-pressed={!groupByStage} onClick={() => { setParam("group", null); setParam("stage", null); }}>Status</button><button type="button" aria-pressed={groupByStage} onClick={() => setParam("group", "stage")}>Stage</button></div>
+            <button type="button" className="button quiet" onClick={() => setParam("stages", "edit")}><Columns3 size={15} aria-hidden="true" /> Stages</button>
+          </div>
+          {groupByStage ? <section className="work-board work-stage-board" aria-label="Project board by stage">
+            {!projectStages.length && <p className="work-empty-inline">This project has no stages yet. <button type="button" className="button quiet" onClick={() => setParam("stages", "edit")}>Define stages</button></p>}
+            {boardColumns.map((column) => <section className="work-column" key={column.key} data-focused={focusedStage === column.key || undefined} aria-labelledby={`work-stage-column-${column.key}`}>
+              <header><h2 id={`work-stage-column-${column.key}`}>{column.label}</h2><span>{column.open.length}</span></header>
+              <div className="work-column-items">{column.open.map((item) => <Link key={item.id} className={`work-card${item.id === itemId ? " selected" : ""}`} to={`${projectSurface(projectId, "work", item.id)}?group=stage`}>
+                <span className={`work-status ${item.status}`}>{label(item.status)}</span><strong>{item.title}</strong>
+                <small>{assignee(item)}{item.assignee_session_id && activity[item.assignee_session_id] === "working" ? " · Working" : ""}</small>
+                <span className="work-card-time"><Clock3 size={13} /> {time(item.last_update_at)}</span>
+              </Link>)}{!column.open.length && <p className="work-column-empty">No open items</p>}{column.done > 0 && <p className="work-column-done">{column.done} done</p>}</div>
+            </section>)}
+          </section> : <section className="work-board" aria-label="Project board">
             {columns.map((column) => <section className="work-column" key={column.id} aria-labelledby={`work-column-${column.id}`}>
               <header><h2 id={`work-column-${column.id}`}>{column.label}</h2><span>{counts[column.id]}</span></header>
               <div className="work-column-items">{items.filter((item) => item.status === column.id).map((item) => <Link key={item.id} className={`work-card${item.id === itemId ? " selected" : ""}`} to={projectSurface(projectId, "work", item.id)}>
@@ -529,9 +631,9 @@ export function WorkPage() {
                 <span className="work-card-time"><Clock3 size={13} /> {time(item.last_update_at)}</span>
               </Link>)}{!counts[column.id] && <p className="work-column-empty">No items</p>}</div>
             </section>)}
-          </section>
+          </section>}
           {itemId && <aside className="work-detail" aria-labelledby="work-detail-title">
-            <div className="work-detail-top"><span>Work item</span><Link title="Close item" aria-label="Close item" to={projectSurface(projectId, "work")}><X size={17} /></Link></div>
+            <div className="work-detail-top"><span>Work item</span><Link title="Close item" aria-label="Close item" to={`${projectSurface(projectId, "work")}${groupByStage ? "?group=stage" : ""}`}><X size={17} /></Link></div>
             {selectedItem ? <>
               <h2 id="work-detail-title">{selectedItem.title}</h2><div className="work-detail-meta"><span className={`work-status ${selectedItem.status}`}>{label(selectedItem.status)}</span><span>{selectedItem.priority} priority</span></div>
               {latestUpdate && <section className="work-current-update" aria-labelledby="work-current-update-title">
@@ -541,7 +643,7 @@ export function WorkPage() {
               {selectedItem.description && (selectedItem.source_kind === "import" && latestUpdate
                 ? <details className="work-original-description"><summary>Original brief</summary><p className="work-description">{selectedItem.description}</p></details>
                 : <p className="work-description">{selectedItem.description}</p>)}
-              <dl className="work-fields"><div><dt>Assigned to</dt><dd>{selectedItem.assignee_session_id ? <Link to={resourcePath(projectId, "conversation", selectedItem.assignee_session_id)}>{assignee(selectedItem)}</Link> : "Unassigned"}</dd></div><div><dt>Last update</dt><dd>{time(selectedItem.last_update_at)}</dd></div></dl>
+              <dl className="work-fields">{(projectStages.length > 0 || selectedItem.stage) && <div><dt><label htmlFor="work-item-stage">Stage</label></dt><dd><select id="work-item-stage" value={selectedItem.stage ?? ""} disabled={busy} onChange={(event) => void changeStage(event.target.value)}><option value="">No stage</option>{projectStages.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}{selectedItem.stage && !projectStages.some((stage) => stage.key === selectedItem.stage) && <option value={selectedItem.stage}>{stageLabel(selectedItem.stage)} (not listed)</option>}</select></dd></div>}<div><dt>Assigned to</dt><dd>{selectedItem.assignee_session_id ? <Link to={resourcePath(projectId, "conversation", selectedItem.assignee_session_id)}>{assignee(selectedItem)}</Link> : "Unassigned"}</dd></div><div><dt>Last update</dt><dd>{time(selectedItem.last_update_at)}</dd></div></dl>
               {selectedUpdates.length !== 1 && <><h3>Earlier check-ins</h3><ol className="work-timeline">{selectedUpdates.slice(1).map((update) => <li key={update.id}><span className="work-timeline-dot" /><div><div className="work-timeline-top"><strong>{update.actor_kind === "agent" ? "Agent" : update.actor_kind === "import" ? "Imported" : "Operator"}</strong><time dateTime={update.created_at}>{time(update.created_at)}</time></div><WorkUpdateDetails update={update} projectId={selectedItem.engagement_id} /></div></li>)}{!selectedUpdates.length && <li className="work-no-updates">No check-ins yet.</li>}</ol></>}
               <form className="work-checkin-form" onSubmit={(event) => void checkIn(event)}><h3>Post an update</h3><label>Progress<textarea required maxLength={4000} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What changed?" /></label><label>Next step<input maxLength={2000} value={nextStep} onChange={(event) => setNextStep(event.target.value)} /></label><label>Blocker<input maxLength={2000} value={blocker} onChange={(event) => setBlocker(event.target.value)} /></label><label>Status<select value={checkInStatus} disabled={blocked} aria-describedby={blocked ? blockerHintId : undefined} onChange={(event) => setStatusChoice({ itemId: selectedItem.id, status: event.target.value as Status })}>{columns.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}</select>{blocked && <small id={blockerHintId} className="work-field-hint">A blocker saves this update as Blocked.</small>}</label><button className="button primary" type="submit" disabled={busy || !summary.trim()}>Save update</button></form>
             </> : <div role="alert" className="work-empty-inline">This item is unavailable. <Link to={projectSurface(projectId, "work")}>Return to board</Link></div>}
@@ -550,7 +652,8 @@ export function WorkPage() {
         {directChildren.length > 0 && <section className="work-panel work-subprojects" aria-labelledby="work-subprojects-title"><div className="work-panel-head"><h2 id="work-subprojects-title">Subprojects</h2><span>{directChildren.length}</span></div><div className="work-project-search"><input type="search" aria-label="Search subprojects" placeholder="Search subprojects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div><div className="work-project-list">{directChildren.filter((child) => child.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())).slice(0, visibleProjectLimit).map((child) => <div className="work-project-row" key={child.id}><span className="work-project-spacer" /><Link to={projectSurface(child.id, "work")}><span><strong>{child.name}</strong><small>{child.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><ArrowRight size={16} /></Link></div>)}</div>{directChildren.length > visibleProjectLimit && <p className="work-empty-inline">Showing up to {visibleProjectLimit} matches. Search to narrow the list.</p>}</section>}
       </>}
     </>}
-    {showCreate && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setShowCreate(false); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-create-title" onSubmit={(event) => void create(event)}><header><h2 id="work-create-title">New work item</h2><button className="work-dialog-close" type="button" aria-label="Close" disabled={busy} onClick={() => setShowCreate(false)}><X size={18} /></button></header>{!projectId && <label>Project<select required value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)}><option value="">Choose a project</option>{engagements.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label>Title<input autoFocus required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Description<textarea maxLength={20000} value={description} onChange={(event) => setDescription(event.target.value)} /></label><footer><button type="button" className="button quiet" disabled={busy} onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="button primary" aria-busy={busy} disabled={busy || !title.trim()}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <ListTodo size={16} />} Create item</button></footer></form></div>}
+    {editingStages && selectedProject && <WorkStageEditor key={selectedProject.id} project={selectedProject} itemCounts={Object.fromEntries(boardColumns.map((column) => [column.key, column.open.length]))} save={saveStages} close={() => setParam("stages", null)} />}
+    {showCreate && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setShowCreate(false); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-create-title" onSubmit={(event) => void create(event)}><header><h2 id="work-create-title">New work item</h2><button className="work-dialog-close" type="button" aria-label="Close" disabled={busy} onClick={() => setShowCreate(false)}><X size={18} /></button></header>{!projectId && <label>Project<select required value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)}><option value="">Choose a project</option>{engagements.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label>Title<input autoFocus required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} /></label>{createStages.length > 0 && <label>Stage<select value={createStage} onChange={(event) => setCreateStage(event.target.value)}><option value="">No stage</option>{createStages.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>}<label>Description<textarea maxLength={20000} value={description} onChange={(event) => setDescription(event.target.value)} /></label><footer><button type="button" className="button quiet" disabled={busy} onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="button primary" aria-busy={busy} disabled={busy || !title.trim()}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <ListTodo size={16} />} Create item</button></footer></form></div>}
     {trackingAgent && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setTrackingAgent(null); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-track-title" onSubmit={(event) => void trackWork(event)}><header><h2 id="work-track-title">Track conversation work</h2><button className="work-dialog-close" type="button" aria-label="Close" title="Close" disabled={busy} onClick={() => setTrackingAgent(null)}><X size={18} aria-hidden="true" /></button></header><p className="work-track-context">{projectName(trackingAgent.projectId)} · {trackingAgent.title}</p>
       {availableTrackItems.length > 0 && <><label>Find an existing item<input type="search" value={trackSearch} onChange={(event) => setTrackSearch(event.target.value)} placeholder="Search open items" /></label><label>Work item<select value={trackItemId} onChange={(event) => setTrackItemId(event.target.value)}><option value="">Create a new item</option>{visibleTrackItems.map((item) => <option key={item.id} value={item.id}>{item.title} · {label(item.status)}</option>)}</select></label></>}
       {!trackItemId && <label>Title<input autoFocus required maxLength={300} value={trackTitle} onChange={(event) => setTrackTitle(event.target.value)} /></label>}
