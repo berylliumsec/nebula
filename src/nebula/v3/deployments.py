@@ -1106,19 +1106,22 @@ class DeploymentCoordinator:
         return checkpoint_digest({"paused": [list(row) for row in rows]})
 
     async def prepare_shutdown(self, *, expected_revision: int) -> list[ProjectLease]:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             host = await self._host(session)
             if host.revision != expected_revision:
                 # Starting or retiring workers move the revision while this
                 # request waits for the host; nothing has changed yet.
                 raise DeploymentChanged("deployment changed before shutdown")
             owners = list(
-                await session.scalars(
-                    select(ProjectOwnershipRow)
-                    .where(ProjectOwnershipRow.runtime_id.is_not(None))
-                    .order_by(ProjectOwnershipRow.project_id)
-                    .with_for_update()
-                )
+                (
+                    await self.coordination.lock_owners_under_host(
+                        session,
+                        select(ProjectOwnershipRow)
+                        .where(ProjectOwnershipRow.runtime_id.is_not(None))
+                        .order_by(ProjectOwnershipRow.project_id)
+                        .with_for_update(),
+                    )
+                ).scalars()
             )
             blockers = await self._shutdown_blockers(session)
             if blockers:
@@ -1160,21 +1163,20 @@ class DeploymentCoordinator:
             host.detail = "New work is held while idle project controllers quiesce."
             return leases
 
+        return await self.coordination.write_after_owners(attempt)
+
     async def quiesce_checkpoint(
         self, lease: ProjectLease, *, local_blockers: list[str]
     ) -> dict:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             host = await session.get(
                 DeploymentHostRow,
                 "host",
                 with_for_update={"read": True},
                 populate_existing=True,
             )
-            owner = await session.get(
-                ProjectOwnershipRow,
-                lease.project_id,
-                with_for_update=True,
-                populate_existing=True,
+            owner = await self.coordination.lock_owner_under_host(
+                session, lease.project_id
             )
             project_retirement = bool(
                 owner is not None
@@ -1226,6 +1228,8 @@ class DeploymentCoordinator:
             }
             await self.coordination._check(session, lease, lock=False)
             return result
+
+        return await self.coordination.write_after_owners(attempt)
 
     @staticmethod
     async def _project_has_open_chat(session, project_id: str) -> bool:
@@ -1433,15 +1437,15 @@ class DeploymentCoordinator:
     async def release_quiesced_project(
         self, lease: ProjectLease, *, checkpoint: dict
     ) -> None:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             host = await session.get(
                 DeploymentHostRow,
                 "host",
                 with_for_update={"read": True},
                 populate_existing=True,
             )
-            owner = await session.get(
-                ProjectOwnershipRow, lease.project_id, with_for_update=True
+            owner = await self.coordination.lock_owner_under_host(
+                session, lease.project_id
             )
             if (
                 owner is not None
@@ -1509,6 +1513,8 @@ class DeploymentCoordinator:
                     ),
                 },
             )
+
+        return await self.coordination.write_after_owners(attempt)
 
     async def abort_shutdown(
         self,
@@ -1673,11 +1679,9 @@ class DeploymentCoordinator:
         return True
 
     async def request_handoff(self, project_id: str, target_runtime_id: str) -> None:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             await self._host(session)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             target = await session.get(RuntimeProcessRow, target_runtime_id)
             now = await self.coordination._clock_ms(session)
             if (
@@ -1760,6 +1764,8 @@ class DeploymentCoordinator:
                 },
             )
 
+        return await self.coordination.write_after_owners(attempt)
+
     async def withdraw_handoff(
         self, project_id: str, *, target_runtime_id: str, revision: int
     ) -> bool:
@@ -1772,11 +1778,10 @@ class DeploymentCoordinator:
         concurrent transfer either finds the row cancelled or makes this
         return False with the project left to the transfer.
         """
-        async with self.coordination._write() as session:
+
+        async def attempt(session):
             await self._host(session)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             row = await session.get(ProjectHandoffRow, project_id, with_for_update=True)
             if (
                 owner is None
@@ -1802,6 +1807,8 @@ class DeploymentCoordinator:
                 },
             )
             return True
+
+        return await self.coordination.write_after_owners(attempt)
 
     async def checkpoint(
         self, lease: ProjectLease, *, checkpoint: dict, blockers: list[str]
@@ -1923,11 +1930,10 @@ class DeploymentCoordinator:
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
         scanned, generation = await snapshot_project_checkpoint(self, project_id)
-        async with self.coordination._write() as session:
+
+        async def attempt(session):
             await self._host(session)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             handoff = await session.get(
                 ProjectHandoffRow, project_id, with_for_update=True
             )
@@ -2061,6 +2067,8 @@ class DeploymentCoordinator:
                 },
             )
             return lease
+
+        return await self.coordination.write_after_owners(attempt)
 
     async def verified(
         self, lease: ProjectLease, *, restored_checkpoint_digest: str
@@ -2211,12 +2219,11 @@ class DeploymentCoordinator:
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
         scanned, generation = await snapshot_project_checkpoint(self, project_id)
-        async with self.coordination._write() as session:
+
+        async def attempt(session):
             await self._host(session)
             prior = await session.get(RuntimeRecoveryRow, operation_id)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             if prior is not None:
                 if (
                     prior.project_id != project_id
@@ -2384,6 +2391,8 @@ class DeploymentCoordinator:
                 },
             )
             return ProjectLease(project_id, target_runtime_id, owner.fencing_token)
+
+        return await self.coordination.write_after_owners(attempt)
 
     async def recovery_status(self, project_id: str) -> dict | None:
         async with self.database.session() as session:
