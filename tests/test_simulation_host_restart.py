@@ -249,6 +249,7 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(deployer, "unit_state", lambda _name: unit.active())
     monkeypatch.setattr(deployer, "supervisor_service_identity", unit.identity)
     monkeypatch.setattr(deployer, "supervisor_service_configuration", lambda: {})
+    monkeypatch.setattr(deployer, "socket_activation", lambda: None)
     monkeypatch.setattr(deployer, "read_supervisor_health", unit.health)
     monkeypatch.setattr(deployer, "confirm_api_read", lambda *_args: None)
 
@@ -296,6 +297,8 @@ class QuietCore:
         return [{"id": "project-1"}]
 
     def get(self, path: str, **parameters):
+        if path == "deployment/operations":
+            return {"running": []}
         if path == "deployment/status":
             # The busy turn's owner is a live, verified worker.
             return {
@@ -912,3 +915,389 @@ def test_operator_hold_covers_live_projects_and_skips_host_work(
     released = deployer.release_project_holds(reason="Core is back")
     assert released["released"]["project-1"]["status"] == "released"
     assert deployer._saved_holds() == {}
+
+
+class HeldListener:
+    """`nebula-core.socket` in front of the emulated unit.
+
+    While the socket listens and the service is stopped, a queued connection
+    starts the service from `current` at once, as systemd socket activation
+    does. A start that fails trips the start limit and fails the socket too.
+    """
+
+    def __init__(self, unit: Unit) -> None:
+        self.unit = unit
+        self.state = "active"
+        self.events: list[str] = []
+        self.started_versions: list[str] = []
+        unit_stop, unit_start = unit.stop, unit.start
+
+        def stop() -> None:
+            unit_stop()
+            if self.state == "active" and unit.state == "inactive":
+                start()
+
+        def start() -> None:
+            was_active = unit.state == "active"
+            unit_start()
+            if unit.state == "active" and not was_active:
+                self.started_versions.append(unit.supervisor["version"])
+            elif unit.state == "failed" and self.fail_on_start_failure:
+                self.state = "failed"
+
+        self.fail_on_start_failure = False
+        unit.stop, unit.start = stop, start
+
+    def state_of(self, name: str) -> str:
+        return self.state if name == deployer.SOCKET else self.unit.active()
+
+    def __call__(self, action: str) -> None:
+        self.events.append(action)
+        if action == "reset-failed" and self.state == "failed":
+            self.state = "inactive"
+        elif action == "start":
+            self.state = "active"
+
+
+@pytest.fixture
+def held(host: Unit, monkeypatch: pytest.MonkeyPatch) -> HeldListener:
+    listener = HeldListener(host)
+    monkeypatch.setattr(
+        deployer,
+        "socket_activation",
+        lambda: {"socket": deployer.SOCKET, "listen": deployer.SOCKET_LISTEN},
+    )
+    monkeypatch.setattr(deployer, "unit_state", listener.state_of)
+    monkeypatch.setattr(deployer, "socket_unit", listener)
+    monkeypatch.setattr(deployer, "unit_property", lambda *_args: "")
+    return listener
+
+
+def switch(journal: dict | None = None) -> tuple[dict, dict]:
+    journal = journal or {"operation_id": "op-1", "version": NEW, "state": "prepared"}
+    readback = deployer._switch_supervisor_host(
+        NEW,
+        release=deployer.RELEASES / NEW,
+        expected_api_version=API,
+        prior_status=deployer.host_status_snapshot(status_for()),
+        journal=journal,
+        record={"deployment_mode": "supervisor"},
+    )
+    return readback, journal
+
+
+def test_held_listener_starts_only_the_selected_release_after_the_stop(
+    host: Unit, held: HeldListener
+) -> None:
+    """A connection queued on the held socket starts the stopped service at
+    once. The release is selected before the stop, so that start is the new
+    host, never the old one again."""
+    old = dict(host.supervisor)
+
+    readback, journal = switch()
+
+    assert not alive(old)
+    assert held.started_versions == [NEW]
+    assert readback["version"] == NEW and readback["socket_listening"] is True
+    assert journal["state"] == "complete"
+    assert journal["socket_activation"]["socket"] == deployer.SOCKET
+    assert host.supervisor["version"] == NEW and held.state == "active"
+
+
+def test_held_listener_is_restored_after_failed_starts_trip_its_limit(
+    host: Unit, held: HeldListener
+) -> None:
+    """A release that exits during startup fails the socket with the start
+    limit; connections would be refused even after a later start succeeds."""
+    held.fail_on_start_failure = True
+    host.start_failures[NEW] = 2
+
+    readback, _journal = switch()
+
+    assert readback["version"] == NEW and readback["socket_listening"] is True
+    assert held.events.count("reset-failed") == 2
+    assert held.state == "active" and host.supervisor["version"] == NEW
+
+
+def test_unconfigured_socket_keeps_the_stop_then_select_order(host: Unit) -> None:
+    """Without the socket unit nothing can start the service mid-switch, and
+    a stopped writer is still required before the release changes."""
+    old = dict(host.supervisor)
+
+    readback, journal = switch()
+
+    assert not alive(old)
+    assert journal["socket_activation"] is None and "socket" not in journal
+    assert "socket_listening" not in readback
+    assert host.supervisor["version"] == NEW
+
+
+class BusyOperations(QuietCore):
+    """A Core whose supervisor runs a deployment operation for `busy` reads."""
+
+    def __init__(self, busy: int, *, listing: bool = True, status: int = 503) -> None:
+        super().__init__()
+        self.busy, self.listing, self.operation_reads = busy, listing, 0
+        self.status = status
+
+    def get(self, path: str, **parameters):
+        if path != "deployment/operations":
+            return super().get(path, **parameters)
+        if not self.listing:
+            raise deployer.HTTPError(path, self.status, "Refused", {}, None)
+        self.operation_reads += 1
+        running = self.operation_reads <= self.busy
+        return {
+            "running": [{"operation_id": "stage-1", "action": "stage"}]
+            if running
+            else []
+        }
+
+
+def test_host_swap_waits_for_a_running_deployment_operation(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = BusyOperations(busy=3)
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(deployer, "HOST_OPERATION_POLL_SECONDS", 0.01)
+    record = promotion_record()
+
+    result = deployer.activate_supervisor_host(record, NEW)
+
+    assert result["status"] == "host_activated"
+    assert core.operation_reads == 4
+    assert record["host_activation"]["running_operations"]["supported"] is True
+    assert host.supervisor["version"] == NEW
+
+
+def test_host_swap_refuses_before_stopping_while_an_operation_keeps_running(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stop would wait for the operation and reach its grace, killing the
+    host mid-operation; the deployer refuses and the old host keeps running."""
+    old = dict(host.supervisor)
+    monkeypatch.setattr(deployer, "api", lambda: BusyOperations(busy=10_000))
+    monkeypatch.setattr(deployer, "HOST_OPERATION_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(deployer, "HOST_OPERATION_WAIT_SECONDS", 0.1)
+
+    with pytest.raises(RuntimeError, match="stage stage-1.*was not stopped"):
+        deployer.activate_supervisor_host(promotion_record(), NEW)
+
+    assert alive(old) and host.active() == "active"
+    assert deployer.current_release_version() == OLD
+    assert host.events == ["start"]
+
+
+@pytest.mark.parametrize("status", [404, 405, 503])
+def test_host_swap_proceeds_against_a_core_without_the_operation_listing(
+    host: Unit, monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """An older supervisor relays the read to its API worker: 503
+    "reconnecting" in practice, 404 or 405 from other releases."""
+    monkeypatch.setattr(
+        deployer, "api", lambda: BusyOperations(0, listing=False, status=status)
+    )
+    record = promotion_record()
+
+    deployer.activate_supervisor_host(record, NEW)
+
+    assert record["host_activation"]["running_operations"] == {
+        "supported": False,
+        "status": status,
+    }
+    assert host.supervisor["version"] == NEW
+
+
+def test_host_swap_refuses_when_the_listing_is_not_authorized(
+    host: Unit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = dict(host.supervisor)
+    monkeypatch.setattr(
+        deployer, "api", lambda: BusyOperations(0, listing=False, status=401)
+    )
+
+    with pytest.raises(deployer.HTTPError):
+        deployer.activate_supervisor_host(promotion_record(), NEW)
+
+    assert alive(old) and deployer.current_release_version() == OLD
+
+
+class UnreachableAfterFirstListing(BusyOperations):
+    """The new release never answers: any later listing read fails."""
+
+    def get(self, path: str, **parameters):
+        if path == "deployment/operations" and self.operation_reads >= 1:
+            raise deployer.HTTPError(path, 503, "Starting", {}, None)
+        return super().get(path, **parameters)
+
+
+def test_code_only_rollback_never_reads_the_failed_release(
+    host: Unit, held: HeldListener, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restoring the previous code must not depend on the broken candidate's
+    API: the operation listing is read once, before the forward stop only."""
+    core = UnreachableAfterFirstListing(busy=0)
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    host.start_failures[NEW] = 99
+    record = promotion_record()
+
+    with pytest.raises(RuntimeError, match="restored supervisor code to " + OLD):
+        deployer.activate_supervisor_host(record, NEW)
+
+    assert core.operation_reads == 1
+    assert record["host_activation"]["state"] == "rolled_back"
+    assert record["host_activation"]["rollback"]["state"] == "complete"
+    assert host.supervisor["version"] == OLD and host.active() == "active"
+
+
+def test_activation_resumes_a_release_selected_while_the_old_host_still_runs(
+    host: Unit, held: HeldListener, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Interrupted after selecting the release and before the stop: the old
+    host may still run turns, so the resume waits for operations and the
+    quiet boundary again before it stops it."""
+    old = dict(host.supervisor)
+    record = promotion_record()
+    record["host_activation"] = {
+        "operation_id": "deployment-1:host-activation",
+        "state": "release_selected",
+        "version": NEW,
+        "previous_version": OLD,
+        "prior_status": deployer.host_status_snapshot(status_for()),
+    }
+    deployer.atomic_json(deployer.STATE, record)
+    deployer.switch_to(deployer.RELEASES / NEW)
+    core = BusyOperations(busy=1)
+    monkeypatch.setattr(deployer, "api", lambda: core)
+    monkeypatch.setattr(deployer, "HOST_OPERATION_POLL_SECONDS", 0.01)
+
+    result = deployer.activate_supervisor_host(record, NEW)
+
+    assert result["status"] == "host_activated"
+    assert core.operation_reads == 2
+    assert "restart_boundary" in record["host_activation"]
+    assert not alive(old)
+    assert host.supervisor["version"] == NEW and held.started_versions == [NEW]
+
+
+def test_rollback_host_resumes_a_restore_interrupted_after_selecting_its_release(
+    host: Unit, held: HeldListener
+) -> None:
+    """A socket-held code-only rollback selects the previous release before
+    its stop; a crash there leaves the rollback journal at release_selected."""
+    host("stop")
+    deployer.switch_to(deployer.RELEASES / NEW)
+    host("start")
+    candidate = dict(host.supervisor)
+    deployer.switch_to(deployer.RELEASES / OLD)
+    prior = deployer.host_status_snapshot(status_for())
+    record = {
+        "deployment_mode": "supervisor",
+        "host_activation": {
+            "operation_id": "op-1",
+            "state": "needs_attention",
+            "version": NEW,
+            "previous_version": OLD,
+            "prior_status": prior,
+            "rollback": {
+                "operation_id": "op-1:rollback",
+                "state": "release_selected",
+                "version": OLD,
+                "previous_version": NEW,
+                "expected_api_version": API,
+                "prior_status": prior,
+                "code_only": True,
+            },
+        },
+    }
+    deployer.atomic_json(deployer.STATE, record)
+
+    result = deployer.rollback_host()
+
+    assert result["status"] == "host_rolled_back"
+    assert not alive(candidate)
+    assert host.supervisor["version"] == OLD and host.active() == "active"
+
+
+def unit_properties(**overrides: str):
+    values = {
+        ("nebula-core.service", "TriggeredBy"): "nebula-core.socket",
+        ("nebula-core.service", "Requires"): "basic.target nebula-core.socket",
+        ("nebula-core.socket", "Listen"): "127.0.0.1:8000 (Stream)",
+        ("nebula-core.socket", "Accept"): "no",
+        ("nebula-core.service", "TimeoutStopUSec"): "1min 30s",
+        ("nebula-core.service", "ExecStart"): (
+            "{ path=/usr/local/bin/mercury-run ; argv[]=/usr/local/bin/mercury-run "
+            "/srv/apple-sim/nebula/current/dist/nebula-core serve --port 8000 "
+            "--listen-fd 3 ; ignore_errors=no }"
+        ),
+    }
+    for key, value in overrides.items():
+        unit, name = key.split("__")
+        values[(f"nebula-core.{unit}", name)] = value
+    return lambda unit, name: values[(unit, name)]
+
+
+def test_socket_activation_reads_a_complete_held_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(deployer, "unit_property", unit_properties())
+    assert deployer.socket_activation() == {
+        "socket": "nebula-core.socket",
+        "listen": "127.0.0.1:8000 (Stream)",
+    }
+
+
+def test_socket_activation_is_absent_without_a_socket_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        deployer,
+        "unit_property",
+        unit_properties(service__TriggeredBy="", service__Requires="basic.target"),
+    )
+    assert deployer.socket_activation() is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"service__Requires": "basic.target"}, "Requires=nebula-core.socket"),
+        ({"socket__Listen": "0.0.0.0:8000 (Stream)"}, "listen only on 127.0.0.1:8000"),
+        (
+            {"socket__Listen": "127.0.0.1:8000 (Stream) [::1]:8000 (Stream)"},
+            "listen only",
+        ),
+        ({"socket__Accept": "yes"}, "Accept=no"),
+        ({"service__TimeoutStopUSec": "30s"}, "TimeoutStopSec above 40s"),
+        (
+            {"service__ExecStart": "{ argv[]=/x/nebula-core serve --listen-fd 4 }"},
+            "--listen-fd 3",
+        ),
+    ],
+)
+def test_socket_activation_refuses_an_unsafe_held_listener(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict, message: str
+) -> None:
+    monkeypatch.setattr(deployer, "unit_property", unit_properties(**overrides))
+    with pytest.raises(RuntimeError, match=message):
+        deployer.socket_activation()
+
+
+@pytest.mark.parametrize(
+    ("span", "seconds"),
+    [
+        ("1min 30s", 90.0),
+        ("45s", 45.0),
+        ("500ms", 0.5),
+        ("2h", 7200.0),
+        ("infinity", None),
+    ],
+)
+def test_systemd_time_spans(span: str, seconds: float | None) -> None:
+    assert deployer.systemd_seconds(span) == seconds
+
+
+def test_missing_time_span_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="no time span"):
+        deployer.systemd_seconds("")

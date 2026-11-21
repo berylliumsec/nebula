@@ -117,6 +117,65 @@ are identical on clean `main` and this branch: the two product-guidance mirror
 cases and the API-peer 404/401 case in `test_runtime_host_services.py`, each on
 both databases.
 
+## In-Core roller (November 21, 2026)
+
+**Setup.**
+- A disposable scratch Core on this host, in supervisor mode on its own
+  PostgreSQL 16 database.
+- It listened on the LAN address (`--host 192.168.1.155 --allow-remote`,
+  port 18560) with normal bearer authentication.
+- Four synthetic projects. The same slow stub: 40 chunks × 500 ms, about
+  21 s per reply.
+- Core environment: `NEBULA_ROLL_PROJECTS_AT_ONCE=2` and
+  `NEBULA_ROLL_OPERATOR_QUIET_SECONDS=5`, so the rehearsal does not wait
+  ten minutes after the operator operations.
+- The supervisor ran with the scratch-only host-pressure shim
+  (`NEBULA_SCRATCH_IGNORE_HOST_PRESSURE=1`); it is not product code. No
+  listener holder was used and the supervisor was not swapped: this
+  rehearses step 5 only.
+
+**Method.** Each run used `rehearse.py --followups 2` on all four projects.
+Its disruption was `roll.py <release> --only none-such`, which performs
+stage, migrate, `prepare_api`, `promote_api` and `target_execution` and
+requests no handoff. Every project move was therefore the roller's. A
+poller recorded `roll` from `/api/v1/deployment/status` every 500 ms. The
+verifier is the one described under Method above.
+
+| Run | Code | Roll | Messages passing | Observations |
+| --- | --- | --- | --- | --- |
+| R1 | First roller version | A→B, cold projects | 6/12 checked, 2 unchecked | `deferred` until 5 s after the last operator operation, then 2 projects at a time; 4/4 projects moved and 4/4 sources retired in 50 s. p1 and p2 were perfect. For p0 and p3 the harness read no session ID from the cold-start stream, so it queued no follow-ups. Their first turns completed with one provider request each |
+| R2 | First roller version | B→C, warm | 12/12 | 0 violations; roll complete 66 s after targeting. Found a defect: the B sources had been the roller's own R1 targets, so they were retired by the spare-target path as soon as they owned nothing, before verification |
+| R3 | After the review fixes; Core restarted on them | C→D | 9/9 checked, 1 unchecked | 4/4 sources retired through the verified path (`roll.source_retired` 4→8, `roll.target_retired` unchanged). p3 hit the same harness gap as R1 (first turn: one request, complete) |
+| R4 | After the review fixes | D→E | 12/12 | 0 violations, 0 error frames, 0 viewer reconnects, one provider request per message, every queue item complete. `deferred` for 17 s, then `rolling` with at most 2 moving (requested → finishing → transferable → transferred), each verified source retired; `complete` 61 s after targeting with only E resident |
+
+R3 also showed that `roll` describes the roller's last pass. Read right
+after `target_execution`, it can still say `complete` for the previous
+target. The poller now also requires `roll.target_version` to equal
+`target_execution_version`, and the design notes this.
+
+**Tests.** `tests/v3/test_runtime_project_roller.py` (12 cases, SQLite and
+PostgreSQL) covers:
+- a K-parallel roll and retirement after verification;
+- a pinned project skipped without a hold, then retried after its pin
+  clears;
+- a pin reported after the request: the handoff is withdrawn and the target
+  retargeted;
+- the held-limit release;
+- restarts mid-roll, including one after the prepare receipt was saved
+  (the operation-record fallback for a crash before that receipt is not
+  exercised);
+- deferral to operator operations, ignoring a stale `running` row, and
+  withdrawing while deferred;
+- a withdraw racing a transfer;
+- prepare backoff;
+- a previous roll's target retiring only after its next handoff verifies;
+- the disabled setting;
+- the ledger steps and authenticated status.
+
+`tests/v3/test_admission_retry.py` adds a case: a cold project is admitted
+while a handoff target is unassigned. That case fails without the
+auto-admission change.
+
 ## Not verified
 
 - The browser UI resuming viewer streams across a host swap, and a POST stream
@@ -125,4 +184,7 @@ both databases.
   roll.
 - Frozen onefile bundles, the systemd socket unit, `--listen-fd` under
   `mercury-run`, and the deployer's readback against a socket-activated unit.
-- More than four projects, parallel handoffs, and a third resident version.
+- More than four projects and a third resident version. Parallel handoffs
+  ran only in the roller rehearsal above (K = 2).
+- A roller roll with a pinned project, a harness session or a supervisor
+  swap on a real Core; these are covered only by the tests above.
