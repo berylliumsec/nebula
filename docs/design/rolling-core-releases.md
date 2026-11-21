@@ -506,28 +506,33 @@ are recorded in
 
 ## Remaining work
 
-- **Production unit.**
-  - Add `nebula-core.socket` (`ListenStream=127.0.0.1:8000`) and make the
-    service `Requires=` it.
-  - Pass `--listen-fd 3` to `serve`, because `mercury-run` and the onefile
-    bootloader sit between systemd and Core.
-  - The deployer must switch `current` before restarting. It must watch the
-    socket unit's start limit and accept the socket-activated unit in its
-    activation readback.
-  - It must also refuse a host swap while a ledger operation is `running`; the
-    swap would wait for it.
+- **Production unit.** *(done in source; not yet installed on the live host)*
+  - `scripts/simulation/systemd/` ships `nebula-core.socket`
+    (`ListenStream=127.0.0.1:8000`) and a service drop-in with
+    `Requires=`, `KillMode=process`, `ExitType=main` and `TimeoutStopSec=90`.
+    The operator adds `--listen-fd 3` to `serve` (see
+    `scripts/simulation/README.md`).
+  - The deployer detects the socket, verifies that configuration, selects
+    `current` before stopping the old supervisor, restores a socket failed by
+    the start limit, and reports `socket_listening` in its readback.
+  - It waits up to 120 s for the live supervisor's in-flight deployment
+    operations (`GET /api/v1/deployment/operations`) and refuses the swap if
+    one is still running.
+  - Rehearsed with real user systemd and a forwarding wrapper: two swaps,
+    213 requests, 0 refused, worst queued request 5.6 s. Not yet rehearsed
+    with a frozen Core or on the live host.
 - **In-Core roller.** Retire sources automatically after verified handoff.
   Retarget handoffs off pinned projects. Allow K projects in parallel.
-- **Third-version targeting.** Fix `target_execution`'s ignored compatibility
-  result (step 4).
-- **Tolerant readers.** Done for stored entities
-  ([Tolerant entity readers](#tolerant-entity-readers)). Still open: event
+- **Third-version targeting.** *(done: `_require_startable_target` refuses a
+  target or code rollback no worker could start as.)*
+- **Tolerant readers.** *(done for stored entities:
+  [Tolerant entity readers](#tolerant-entity-readers).)* Still open: event
   payloads and host-call request and response bodies.
 - **Pinned adapters:**
   - Detach idle harness sessions and resume the vendor session on the target.
   - Re-arm scheduled-only missions from SQL.
-  - Close idle Host automation sessions (no command in flight, running or
-    holding a detached group) before the inventory.
+  - *(done, #1225)* Close idle Host automation sessions (no command in
+    flight, running or holding a detached group) before the inventory.
   - Remaining kinds (live terminals, notebooks, debug, Docker and busy Host
     automation sessions,
     running missions, unconfirmed callbacks or approval deliveries) stay
@@ -536,8 +541,8 @@ are recorded in
   holder too, which makes the 120 s worker wait the exception rather than the
   path. The browser-bridge registration lives only in memory and is lost at a
   host swap.
-- **Inventory gaps.** Add Butler actions in `dispatching` to the handoff
-  inventory.
+- **Inventory gaps.** *(done: `dispatch_blockers` refuses while a Butler
+  action is dispatching.)*
 - **Cold chat starts.** Use `chat.accept/v1` for a cold project's chat start
   (see [Queued turns and chat-start commands](#queued-turns-and-chat-start-commands-across-a-release)).
 - **Evidence still missing:**
@@ -545,7 +550,7 @@ are recorded in
   - harness, goal, mission, approval, schedule and callback journeys during a
     roll;
   - packaged (frozen) bundles;
-  - the live socket unit.
+  - the live socket unit (source and deployer support are done).
 - **AGENTS.md.** Once the production unit and roller are live and rehearsed,
   replace the Butler ritual for supervisor-mode deploys with a pinned-project
   report. Keep the ritual for legacy and non-additive deploys.

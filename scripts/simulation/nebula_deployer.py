@@ -82,6 +82,10 @@ HELPER = "/home/simulation/.local/bin/simulation-git-credential"
 POETRY = "/home/simulation/.local/share/poetry-2.1.3/bin/poetry"
 PATH = "/home/simulation/.cargo/bin:/home/simulation/.local/bin:/usr/local/bin:/usr/bin:/bin"
 SERVICE = "nebula-core.service"
+# Holds the public listener across supervisor generations when installed.
+SOCKET = "nebula-core.socket"
+SOCKET_LISTEN = "127.0.0.1:8000 (Stream)"
+LISTEN_FD_ARGUMENT = re.compile(r"(?:^|\s)--listen-fd(?:=|\s+)3(?:\s|;|$)")
 EDGE = "nebula-lan-tls.service"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 GITHUB_REPOSITORY = "berylliumsec/nebula"
@@ -109,6 +113,10 @@ HANDOFF_RECOVERY_WAIT_SECONDS = 300
 HOST_START_ATTEMPTS = 16
 HOST_RESTART_DELAY_SECONDS = 5
 HOST_QUIET_WAIT_SECONDS = 300
+# How long a host swap waits for Core's in-flight deployment operations; the
+# supervisor's stop would otherwise wait for them, past its stop grace.
+HOST_OPERATION_WAIT_SECONDS = 120
+HOST_OPERATION_POLL_SECONDS = 2
 HOST_QUIET_POLL_SECONDS = 5
 # Workers built from this commit or later wait out a supervisor replacement
 # for host reads (#1023), so a turn may safely cross the host restart.
@@ -3618,6 +3626,161 @@ def service(action: str) -> None:
     run("systemctl", "--user", action, SERVICE, timeout=180)
 
 
+def socket_unit(action: str) -> None:
+    if action not in {"start", "reset-failed"}:
+        raise ValueError("unsupported socket action")
+    run("systemctl", "--user", action, SOCKET, timeout=60)
+
+
+def unit_property(unit: str, name: str) -> str:
+    return run("systemctl", "--user", "show", unit, "-p", name, "--value", capture=True)
+
+
+_SYSTEMD_SPAN = re.compile(r"(\d+(?:\.\d+)?)(us|ms|s|min|h|d|w|M|y)")
+_SYSTEMD_UNIT_SECONDS = {
+    "us": 1e-6,
+    "ms": 1e-3,
+    "s": 1.0,
+    "min": 60.0,
+    "h": 3600.0,
+    "d": 86400.0,
+    "w": 604800.0,
+    "M": 2629800.0,
+    "y": 31557600.0,
+}
+
+
+def systemd_seconds(value: str) -> float | None:
+    """Seconds in a `systemctl show` time span such as ``1min 30s``; None is infinity."""
+    text = value.strip()
+    if text == "infinity":
+        return None
+    if text == "0":
+        return 0.0
+    if not text:
+        raise RuntimeError("systemd reported no time span")
+    total = 0.0
+    for part in text.split():
+        match = _SYSTEMD_SPAN.fullmatch(part)
+        if match is None:
+            raise RuntimeError(f"Unrecognized systemd time span: {value!r}")
+        total += float(match[1]) * _SYSTEMD_UNIT_SECONDS[match[2]]
+    return total
+
+
+def socket_activation() -> dict[str, Any] | None:
+    """Describe the socket unit that holds Core's listener, or None without one.
+
+    With ``nebula-core.socket`` the kernel queues connections while one
+    supervisor generation exits and the next starts. A connection that arrives
+    while the service is stopped starts it from ``current``; host activation
+    therefore selects the release before it stops the old host. The service
+    must name the inherited descriptor explicitly, because ``mercury-run`` and
+    the onefile bootloader stand between systemd and Core.
+    """
+    triggered = unit_property(SERVICE, "TriggeredBy").split()
+    requires = unit_property(SERVICE, "Requires").split()
+    if SOCKET not in triggered and SOCKET not in requires:
+        return None
+    if SOCKET not in requires:
+        raise RuntimeError(f"{SERVICE} must declare Requires={SOCKET}")
+    listen = unit_property(SOCKET, "Listen").strip()
+    if listen != SOCKET_LISTEN:
+        raise RuntimeError(
+            f"{SOCKET} must listen only on {SOCKET_LISTEN}, not {listen or 'nothing'}"
+        )
+    accept = unit_property(SOCKET, "Accept").strip()
+    if accept != "no":
+        raise RuntimeError(f"{SOCKET} must use Accept=no")
+    # The deployer kills a supervisor that outlives its stop grace while the
+    # unit is still stopping. If systemd's own stop timeout fired first, it
+    # would kill only the bootloader, the unit would stop, and a queued
+    # connection would start a second supervisor beside the orphan.
+    stop_timeout = systemd_seconds(unit_property(SERVICE, "TimeoutStopUSec"))
+    if stop_timeout is not None and stop_timeout <= SUPERVISOR_STOP_GRACE_SECONDS + 10:
+        raise RuntimeError(
+            f"{SERVICE} needs TimeoutStopSec above {SUPERVISOR_STOP_GRACE_SECONDS + 10}s "
+            "so the deployer, not systemd, ends a supervisor that does not stop"
+        )
+    command = unit_property(SERVICE, "ExecStart")
+    if not LISTEN_FD_ARGUMENT.search(command):
+        raise RuntimeError(
+            f"{SERVICE} must pass --listen-fd 3 to serve so Core adopts the held listener"
+        )
+    return {"socket": SOCKET, "listen": listen}
+
+
+def ensure_socket_listening() -> dict[str, Any]:
+    """Keep the held listener up; restore it after a start-limit failure.
+
+    Repeated failed starts make systemd fail the socket too (``trigger-limit-hit``
+    or ``service-start-limit-hit``). Connections are then refused even though a
+    later start succeeds, so the socket is reset and started again.
+    """
+    state_name = unit_state(SOCKET)
+    if state_name == "active":
+        return {"state": "active", "restored": False}
+    result = unit_property(SOCKET, "Result").strip()
+    if state_name == "failed":
+        socket_unit("reset-failed")
+    socket_unit("start")
+    restored = unit_state(SOCKET)
+    if restored != "active":
+        raise RuntimeError(
+            f"{SOCKET} is {restored} after a restart (was {state_name}: {result})"
+        )
+    return {
+        "state": "active",
+        "restored": True,
+        "previous": state_name,
+        "result": result,
+    }
+
+
+def wait_no_running_operations() -> dict[str, Any]:
+    """Wait, bounded, until the live supervisor runs no deployment operation.
+
+    The supervisor joins its in-flight operations before it releases host
+    authority, so a stop that begins during one waits for it and can reach
+    the stop grace, which kills the host mid-operation and leaves the
+    operation uncertain. An older Core without the listing is not waited for.
+    """
+    started = time.monotonic()
+    deadline = started + HOST_OPERATION_WAIT_SECONDS
+    while True:
+        try:
+            listing = api().get("deployment/operations")
+        except HTTPError as error:
+            # A supervisor with the listing answers it itself, so only an
+            # authentication failure can refuse it. An older supervisor has
+            # no such route and relays the read to its API worker, which
+            # answers 404, 405 or 503 ("reconnecting"); its stop is not
+            # waited for, as before. Unreachable Cores raise (fail closed).
+            if error.code in {401, 403}:
+                raise
+            return {"supported": False, "status": error.code}
+        running = listing.get("running") if isinstance(listing, dict) else None
+        if not isinstance(running, list) or any(
+            not isinstance(item, dict) for item in running
+        ):
+            raise RuntimeError("Core returned an invalid deployment operation listing")
+        if not running:
+            return {
+                "supported": True,
+                "waited_seconds": round(time.monotonic() - started, 1),
+            }
+        if time.monotonic() >= deadline:
+            names = ", ".join(
+                f"{item.get('action')} {item.get('operation_id')}" for item in running
+            )
+            raise RuntimeError(
+                "Core is still running deployment operation(s) "
+                f"{names} after {HOST_OPERATION_WAIT_SECONDS}s; the host was not "
+                "stopped. Read each operation's receipt, then activate again."
+            )
+        time.sleep(HOST_OPERATION_POLL_SECONDS)
+
+
 def host_connection(*, allow_stale: bool = False) -> dict[str, Any] | None:
     """Read the authenticated runtime's private, process-qualified identity."""
     directory = DATA / "runtime"
@@ -4395,6 +4558,7 @@ def wait_supervisor_host_ready(
     degraded_baseline: bool = False,
     restart_exited: bool = False,
     accepted_dead_owner: dict[str, Any] | None = None,
+    socket_activation: dict[str, Any] | None = None,
     timeout: int = 480,
 ) -> dict[str, Any]:
     expected_package_version = runtime_package_version(version)
@@ -4413,6 +4577,8 @@ def wait_supervisor_host_ready(
                     time.sleep(HOST_RESTART_DELAY_SECONDS)
                     if unit == "failed":
                         service("reset-failed")
+                    if socket_activation is not None:
+                        ensure_socket_listening()
                     service("start")
                     starts += 1
                     continue
@@ -4473,7 +4639,10 @@ def wait_supervisor_host_ready(
                 if prior_status is not None
                 else {"retained": 0}
             )
+            if socket_activation is not None and unit_state(SOCKET) != "active":
+                ensure_socket_listening()
             return {
+                **({"socket_listening": True} if socket_activation is not None else {}),
                 "version": version,
                 "health_commit": health["commit"],
                 "recovery_version": health["recovery_version"],
@@ -5139,12 +5308,27 @@ def _switch_supervisor_host(
 
     if release.parent != RELEASES or release.name != version or release.is_symlink():
         raise RuntimeError("Host activation target is not the exact immutable release")
+    activation = socket_activation()
+    journal["socket_activation"] = activation
     persist()
     stop_started = time.monotonic()
+    if activation is not None:
+        # A connection may start the stopped service from `current` at once.
+        ensure_socket_listening()
+        if current_release_version() != version:
+            switch_to(release)
+        journal["state"] = "release_selected"
+        journal["current_release"] = str(release)
+        persist()
     journal["service_stop"] = stop_supervisor_service(host_connection(allow_stale=True))
-    require_stopped()
-    if current_release_version() != version:
-        switch_to(release)
+    if activation is None:
+        require_stopped()
+        if current_release_version() != version:
+            switch_to(release)
+    else:
+        # The service may already be running the selected release, started by
+        # a queued connection; stop_supervisor_service proved the old one exited.
+        journal["socket"] = ensure_socket_listening()
     journal["state"] = "service_stopped_release_selected"
     journal["current_release"] = str(release)
     persist()
@@ -5160,6 +5344,7 @@ def _switch_supervisor_host(
         degraded_baseline=prior_status.get("health") == "degraded",
         restart_exited=True,
         accepted_dead_owner=journal.get("accepted_dead_owner"),
+        socket_activation=activation,
     )
     journal["timings"] = {
         "stop_and_switch_seconds": round(start_issued - stop_started, 1),
@@ -5417,6 +5602,7 @@ def _activate_supervisor_host(
             }
         if existing.get("state") in {
             "prepared",
+            "release_selected",
             "service_stopped_release_selected",
             "service_started",
         }:
@@ -5464,6 +5650,18 @@ def _activate_supervisor_host(
                             **readback,
                         }
                 supervisor_service_configuration()
+                if (
+                    unit_state(SERVICE) == "active"
+                    and identity is not None
+                    and identity.get("package_version") == previous_package_version
+                ):
+                    # A socket-held swap selected the release before its stop
+                    # and was interrupted: the old host may still run turns.
+                    existing["running_operations"] = wait_no_running_operations()
+                    existing["restart_boundary"] = wait_quiet_restart_boundary(
+                        accepted_dead_owner
+                    )
+                    _save_host_activation(record, existing)
                 try:
                     readback = _switch_supervisor_host(
                         version,
@@ -5542,6 +5740,8 @@ def _activate_supervisor_host(
                     raise RuntimeError(
                         "Previous supervisor does not match the interrupted activation journal"
                     )
+            if unit_state(SERVICE) == "active":
+                existing["running_operations"] = wait_no_running_operations()
             existing["restart_boundary"] = wait_quiet_restart_boundary(
                 accepted_dead_owner
             )
@@ -5584,6 +5784,9 @@ def _activate_supervisor_host(
             "already_active": True,
             **readback,
         }
+    # The supervisor's stop would wait for its in-flight deployment
+    # operations; wait for them first, then take the quiet boundary last.
+    running_operations = wait_no_running_operations()
     restart_boundary = wait_quiet_restart_boundary(accepted_dead_owner)
     service_identity = supervisor_service_identity()
     prior_host = host_connection()
@@ -5642,6 +5845,7 @@ def _activate_supervisor_host(
         },
         "prior_service": service_identity,
         "operations": operations,
+        "running_operations": running_operations,
         "restart_boundary": restart_boundary,
         "accepted_dead_owner": accepted_dead_owner,
         "allow_degraded_workers": allow_degraded_workers,
@@ -5776,7 +5980,12 @@ def rollback_host() -> dict[str, Any]:
     if (
         isinstance(restore_operation, dict)
         and restore_operation.get("state")
-        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        in {
+            "rolling_back",
+            "release_selected",
+            "service_stopped_release_selected",
+            "service_started",
+        }
         and restore_operation.get("code_only") is True
         and restore_operation.get("version") == journal.get("version")
         and isinstance(restore_operation.get("operation_id"), str)
@@ -5826,7 +6035,12 @@ def rollback_host() -> dict[str, Any]:
     if (
         isinstance(prior_rollback, dict)
         and prior_rollback.get("state")
-        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        in {
+            "rolling_back",
+            "release_selected",
+            "service_stopped_release_selected",
+            "service_started",
+        }
         and prior_rollback.get("code_only") is True
         and prior_rollback.get("version") == journal.get("previous_version")
         and isinstance(prior_rollback.get("operation_id"), str)
