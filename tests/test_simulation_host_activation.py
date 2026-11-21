@@ -459,11 +459,17 @@ def test_host_process_identity_accepts_verified_onefile_child(
     executable.write_bytes(b"immutable runtime executable")
     deployer.atomic_json(
         release / "simulation-acceptance.json",
-        {"core_sha256": deployer.sha256(executable)},
+        {
+            "commit": version,
+            "status": "accepted_candidate",
+            "core_sha256": deployer.sha256(executable),
+        },
     )
     monkeypatch.setattr(
         deployer, "runtime_release", lambda _version: (release, "d" * 64)
     )
+    # release_core_sha256 (#1167) reads the receipt under RELEASES itself.
+    monkeypatch.setattr(deployer, "RELEASES", tmp_path)
 
     def snapshot(
         pid: int,
@@ -506,11 +512,11 @@ def test_host_process_identity_accepts_verified_onefile_child(
         deployer.require_runtime_process_in_service(service, runtime, version)
     runtime["process_birth"] = "core-birth"
     processes[434411]["executable"] = release / "different-core"
-    with pytest.raises(RuntimeError, match="does not match the accepted onefile executable"):
+    with pytest.raises(RuntimeError, match="does not match the expected executable"):
         deployer.require_runtime_process_in_service(service, runtime, version)
     processes[434411]["executable"] = executable
     processes[434314]["executable"] = release / "different-parent"
-    with pytest.raises(RuntimeError, match="does not match the accepted onefile executable"):
+    with pytest.raises(RuntimeError, match="does not match the expected executable"):
         deployer.require_runtime_process_in_service(service, runtime, version)
 
 
