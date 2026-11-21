@@ -356,6 +356,8 @@
 }
 
 .send:disabled { opacity: .45; cursor: default; }
+.stop { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); }
+.stop:hover:not(:disabled) { background: var(--surface-hover); }
 
 .targets {
   display: flex;
