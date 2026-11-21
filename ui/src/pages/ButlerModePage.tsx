@@ -15,7 +15,7 @@ import { logCaughtDiagnostic } from "../diagnostics";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { useWorkspace } from "../state/WorkspaceContext";
-import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, projectPickerGroups } from "./butlerThreads";
+import { askAboutTarget, butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, projectPickerGroups } from "./butlerThreads";
 import { ButlerProjectPicker } from "./ButlerProjectPicker";
 import styles from "./ButlerModePage.module.css";
 // Already in the main bundle with the Butler panel.
@@ -479,7 +479,10 @@ export function ButlerModePage() {
   const askAbout = (item: ButlerBoardItem) => {
     if (projectThreadId) updateParams((next) => next.delete("pthread"));
     setAbout(item);
-    setTarget("new");
+    // Quote into the open thread when it can take it; otherwise start one.
+    const open = threads.find((thread) => thread.sessionId === openThreadId);
+    const answering = Boolean(open && (streams.current.has(open.sessionId) || (live[open.sessionId] && !live[open.sessionId].error)));
+    setTarget(askAboutTarget(open, item, answering));
     setNewThreadProject(item.project.id);
     if (compact) setPhoneTab("threads");
     window.setTimeout(() => composerRef.current?.focus(), 0);
@@ -540,7 +543,8 @@ export function ButlerModePage() {
       const runtime = butlerThreadRuntime(config, providers, harnesses);
       if (!runtime.ok) { setComposerError(runtime.error); return; }
       const sentDrafts = [...butlerDrafts];
-      const content = withSelectedContext(replyThread ? prompt : butlerQuestionAbout(about?.project.id === projectId ? about : undefined, prompt), sentDrafts);
+      // The quoted chat goes with the question whether it starts a thread or replies in one.
+      const content = withSelectedContext(butlerQuestionAbout(about?.project.id === projectId ? about : undefined, prompt), sentDrafts);
       const sessionId = replyThread?.sessionId ?? (await api.getOrCreateControlAssistantSession(butlerThreadReservation(projectId, runtime, butlerThreadTitle(prompt)))).id;
       setDraft("");
       setAbout(undefined);

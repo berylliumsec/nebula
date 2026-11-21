@@ -1,27 +1,34 @@
 {
-  "change_digest": "6339209212d47a9d3ddb9501b79049c2c9d96994849b8295089ec0fd969b0700",
-  "reviewed_by": "Claude Code, at the operator's request after a deploy left a Butler thread interrupted",
-  "reason": "A deploy's planned stop (evict_execution) of a project worker interrupts its running turns. Core's dead-owner recovery labelled a turn 'runtime_loss' whenever it had a non-read tool call with an unknown outcome, and recoverable_after_core_restart only resumes core_restart/core_shutdown, so those turns stayed interrupted after every deploy until the operator asked again (live: Butler thread 153798ed, turn 966c16be, interrupted 00:08 on 2026-11-21 and reconciled at 00:12:04 but never resumed). The operator prefers automatic release and continuation over review holds, accepting a possibly repeated step. Now a stopped or crashed worker's turn is labelled like a Core restart: restart reconciliation carries the unknown effect forward as outcome-unknown in the provider history (never replayed, never recorded as not having happened) and Core resumes the turn. An existing paused or blocked goal hold and an unmatched callback still keep 'runtime_loss' and wait for the operator. Selected: the dead-owner recovery suite (test_unknown_tool_effect_is_recorded_and_resumes_like_a_restart replaces the old review assertion and fails without the change; the goal-hold and unmatched-callback runtime_loss tests are unchanged and pass), and the recovery reconciliation, runtime recovery and admission-cleanup suites.",
-  "exclusions": "test_recovery_controls.py's 3 PostgreSQL held-recovery cases and test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent fail identically on pristine origin/main and are not selected. test_butler_recovery.py::test_periodic_case_distinguishes_live_reads_from_changes_and_renews_lease failed once in a full-file run and passed 3/3 alone with this change and on main (order-dependent flake), so that file is not selected. No UI change.",
+  "change_digest": "9aa086e726e4be22c217125201cd72f42fc5ce138195a9de364c32f17f969aad",
+  "reviewed_by": "Claude Code, fixing the operator's report that quoting a chat in Butler mode starts a new thread instead of using the open one",
+  "reason": "In Butler mode, 'Ask Butler about this' always switched the composer to 'New thread' (askAbout set target 'new'), and a reply dropped the quoted chat because only new threads prefixed the message with butlerQuestionAbout. Now the quote goes into the open thread when that thread works in the chat's project and is not answering (a thread acts only inside its own project), otherwise a new thread in the chat's project; replies carry the quoted chat too. Selected: butlerThreads unit tests (new askAboutTarget cases), the real-Core Butler mode journey at desktop, compact and 390 px Chromium/WebKit (now asks about the same chat again, asserts 'Reply in this thread' is selected, that the model received the quoted chat with the reply, and that no second thread was created), and the product-knowledge tests for the updated guide sentence.",
+  "exclusions": "No Core change. The journey was not run locally; CI runs it. No new UI API calls (registry unchanged).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 169,
-    "frontend": 0,
+    "python": 4,
+    "frontend": 10,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_runtime_recovery.py"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/butlerThreads.test.ts"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
   "checks": []
 }

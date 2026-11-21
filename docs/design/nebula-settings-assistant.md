@@ -1264,7 +1264,8 @@ its brief (below); ↑ and ↓ move between chats while a brief is open and Esc
 returns to the board. In the brief, **Approve** and **Deny** answer a pending
 approval with the exact request shown; **Stop** stops a working chat's response
 after confirmation; **Pause goal** and **Resume goal** change its goal; **Ask
-Butler about this** starts a Butler thread about that chat in its project; and
+Butler about this** quotes that chat into the open idle thread of its project,
+or starts a new thread there; and
 **Open full chat** shows the transcript in a pop-up over Butler mode (scroll
 it, then click outside or press Esc to return; **Open in workbench** leaves for
 the full chat). The pop-up reads the newest messages and older ones on request,
