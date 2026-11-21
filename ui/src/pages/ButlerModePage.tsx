@@ -145,6 +145,8 @@ export function ButlerModePage() {
   const newThreadProject = projectChoice ?? originProject;
   const [composerError, setComposerError] = useState("");
   const [starting, setStarting] = useState(false);
+  // The message being sent while Core reads Butler's settings and reserves its thread: shown at once.
+  const [pendingSend, setPendingSend] = useState<{ prompt: string; threadId?: string }>();
   const [stopping, setStopping] = useState(false);
 
   const boardEtag = useRef<string | undefined>(undefined);
@@ -669,17 +671,29 @@ export function ButlerModePage() {
     const projectId = replyThread?.project.id ?? newThreadProject ?? engagement?.id;
     if (!projectId) { setComposerError("Choose the project Butler should work in."); return; }
     setStarting(true);
+    // Show the message now; Core's settings read and thread reservation follow.
+    const sentAbout = about;
+    let sent = false;
+    setDraft("");
+    setAbout(undefined);
+    if (!replyThread && openThreadId) openThread(undefined);
+    setPendingSend({ prompt, threadId: replyThread?.sessionId });
+    const restore = (message: string) => {
+      setComposerError(message);
+      // Anything typed meanwhile stays after the returned message.
+      setDraft((typed) => typed.trim() ? `${prompt}\n\n${typed}` : prompt);
+      setAbout((current) => current ?? sentAbout);
+    };
     try {
       const current = await api.getControlAssistantSession(projectId);
       const config = current ? (await api.getChatAssistantConfig(current.id)).settings : undefined;
       const runtime = butlerThreadRuntime(config, providers, harnesses);
-      if (!runtime.ok) { setComposerError(runtime.error); return; }
+      if (!runtime.ok) { restore(runtime.error); return; }
       const sentDrafts = [...butlerDrafts];
       // The quoted chat goes with the question whether it starts a thread or replies in one.
-      const content = withSelectedContext(butlerQuestionAbout(about?.project.id === projectId ? about : undefined, prompt), sentDrafts);
+      const content = withSelectedContext(butlerQuestionAbout(sentAbout?.project.id === projectId ? sentAbout : undefined, prompt), sentDrafts);
       const sessionId = replyThread?.sessionId ?? (await api.getOrCreateControlAssistantSession(butlerThreadReservation(projectId, runtime, butlerThreadTitle(prompt)))).id;
-      setDraft("");
-      setAbout(undefined);
+      sent = true;
       if (sentDrafts.length) drafts?.consumeButlerDrafts(sentDrafts);
       if (!replyThread) {
         const project = engagements.find((item) => item.id === projectId);
@@ -691,8 +705,10 @@ export function ButlerModePage() {
       void runTurn(projectId, sessionId, prompt, content, runtime);
     } catch (caught) {
       void logCaughtDiagnostic("interface.butler_mode.thread_start_failed", "Butler mode could not start a thread.", caught, "butler_mode");
-      setComposerError(`${caught instanceof Error ? caught.message : "Core could not start the thread."} Your message is still in the box; retry when Core answers.`);
+      if (!sent) restore(`${caught instanceof Error ? caught.message : "Core could not start the thread."} Your message is back in the box; retry when Core answers.`);
+      else setComposerError(caught instanceof Error ? caught.message : "Butler's thread could not open.");
     } finally {
+      setPendingSend(undefined);
       setStarting(false);
     }
   };
@@ -867,6 +883,10 @@ export function ButlerModePage() {
           {message.role === "user" ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
         </div>;
       })}
+      {pendingSend && (pendingSend.threadId ? pendingSend.threadId === openThreadId : !openThreadId) && <>
+        <div className={styles.question}>{pendingSend.prompt}</div>
+        <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Starting Butler’s response…</p>
+      </>}
       {openLive && !threadMessages.some((message) => message.role === "user" && message.content.endsWith(openLive.prompt)) && <div className={styles.question}>{openLive.prompt}</div>}
       {openThreadId && openActivity && <ActivityLedger model={activityLedgerFromNative("Butler's steps", ledgerStatus(openActivity), openActivity.cards)} liveStatus={openActivity.detail} />}
       {openLive && (openLive.text ? <div className={styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{openLive.text}</ReactMarkdown></div> : !openLive.error && !openActivity && <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Butler is working on this…</p>)}
