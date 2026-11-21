@@ -93,20 +93,11 @@ test("warm chat adopts acknowledged host mode without losing its conversation", 
   const cursor = await request.put(`${cursorPath}/read-cursor`, { headers, data: { device_id: deviceId, expected_revision: 0, through_at: "2000-01-01T00:00:00Z" } });
   expect(cursor.ok(), await cursor.text()).toBe(true);
   await page.goto(`/projects/${fixture.project}/workbench?view=chat&session=${catchChat}`);
-  const catchUp = page.getByRole("region", { name: "Catch up on this conversation" });
-  await expect(catchUp).toBeVisible();
-  const dismiss = catchUp.getByRole("button", { name: "Dismiss catch-up" });
-  await expect(dismiss).toHaveText("");
-  await expect(dismiss.locator("svg.lucide-x")).toHaveCount(1);
-  expect((await dismiss.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  const item = catchUp.locator("li button").first();
-  if (info.project.use.hasTouch) await item.tap();
-  else { await item.focus(); await item.press("Enter"); }
-  await expect(catchUp).toHaveCount(0);
-  const afterRead = await (await request.get(`${cursorPath}/catch-up?device_id=${encodeURIComponent(deviceId)}`, { headers })).json();
-  expect(afterRead.items).toEqual([]);
+  // The catch-up card was removed: unread updates open as the transcript only.
+  await expect(page.getByText("Harness answer for Catch-up fixture update", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Catch up on this conversation" })).toHaveCount(0);
   await page.reload();
   await expect(page.getByText("Harness answer for Catch-up fixture update", { exact: true })).toBeVisible();
-  await expect(catchUp).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Catch up on this conversation" })).toHaveCount(0);
 
 });

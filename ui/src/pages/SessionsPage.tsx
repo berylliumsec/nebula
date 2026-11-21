@@ -17,7 +17,6 @@ import "../side-chat.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { WorkingContextPanel, contextUsePercent } from "../components/WorkingContextPanel";
-import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ChatStudioRail } from "../components/ChatStudioRail";
 import { QuietLensHorizontalContour } from "../components/QuietLensHorizontalContour";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
@@ -731,7 +730,6 @@ interface TranscriptRowProps {
   harnessProgressDetail?: string;
   approval?: TranscriptRowApproval;
   /** Given only to a row holding an approval or question, whose card takes focus on Review. */
-  focusPendingAction?: (card: HTMLDivElement | null) => void;
 }
 
 const NO_REPLACEMENTS: ReplacedMessageGroup[] = [];
@@ -780,7 +778,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   message, messageNumber, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
   taskPlan, planDirective,
   historicalState, historicalError, subagentResult, bookmarked, interactions, answers, waitingLabel,
-  harnessProgressDetail, approval, focusPendingAction,
+  harnessProgressDetail, approval,
 }: TranscriptRowProps) {
   const agentMessage = message.role === "system" && message.metadata?.kind === "agent_message";
   const agentMessageSender = agentMessage && typeof message.metadata?.sender_title === "string"
@@ -937,7 +935,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {shared.api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={shared.api!} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void actions.loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
       {message.state !== "streaming" && message.state !== "waiting_approval" ? activityNode : null}
-      {interactions.map((interaction) => <div className="chat-approval-card harness-interaction" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Input required" key={interaction.id}>
+      {interactions.map((interaction) => <div className="chat-approval-card harness-interaction" tabIndex={-1} role="region" aria-label="Input required" key={interaction.id}>
         <strong>{interaction.prompt}</strong>
         {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {
           const questionId = typeof question.id === "string" ? question.id : String(index);
@@ -948,7 +946,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
         <div><button className="button secondary" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
       </div>)}
       {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {waitingLabel ?? (shared.runtimeKind === "harness" ? harnessProgressDetail ?? "Waiting for harness" : message.detail ?? "Waiting for provider")}</div>}
-      {message.state === "waiting_approval" && approval && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={approval.request} /><div>{approval.sshTarget && <button className="button quiet" type="button" disabled={approval.busy} title={`Stop asking before commands on ${approval.sshTarget.label}, then run this one`} onClick={() => void actions.alwaysAllowSshHost(approval.sshTarget!.alias)}>Always allow on this host</button>}<button className="button secondary" type="button" disabled={approval.busy} onClick={() => void actions.decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approval.busy} onClick={() => void actions.decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approval.busy} onClick={() => void actions.decideInlineApproval("approve")}>Approve</button></div></div>}
+      {message.state === "waiting_approval" && approval && <div className="chat-approval-card" tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={approval.request} /><div>{approval.sshTarget && <button className="button quiet" type="button" disabled={approval.busy} title={`Stop asking before commands on ${approval.sshTarget.label}, then run this one`} onClick={() => void actions.alwaysAllowSshHost(approval.sshTarget!.alias)}>Always allow on this host</button>}<button className="button secondary" type="button" disabled={approval.busy} onClick={() => void actions.decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approval.busy} onClick={() => void actions.decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approval.busy} onClick={() => void actions.decideInlineApproval("approve")}>Approve</button></div></div>}
       {message.state === "cancelled" && <small className="muted" role="status">Stopped{message.elapsedMs !== undefined ? ` · ${formatTurnElapsed(message.elapsedMs)}` : ""}</small>}
       {message.detail && message.state === "error" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
       {shared.runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.retryHarnessMessage(message)}>Retry as linked turn</button>}
@@ -6751,17 +6749,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     && !harnessControlBusy,
   );
   const queueMode = composerBusy && !canSteerCurrentHarness;
-  const [reviewPendingRequested, setReviewPendingRequested] = useState(false);
-  const focusPendingAction = (card: HTMLDivElement | null) => {
-    if (!card || !reviewPendingRequested || loadingHistory || reloadingConversation) return;
-    card.scrollIntoView({ block: "center", behavior: "instant" });
-    card.focus({ preventScroll: true });
-    setReviewPendingRequested(false);
-  };
-  const reviewPendingActions = async () => {
-    await reloadActiveConversation();
-    setReviewPendingRequested(true);
-  };
   const reloadActiveConversation = async () => {
     if (!sessionId || reloadingConversation) return;
     setReloadingConversation(true);
@@ -7065,7 +7052,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         : undefined}
       harnessProgressDetail={message.state === "streaming" && !message.content ? visibleHarnessProgress?.detail : undefined}
       approval={approvalHere}
-      focusPendingAction={approvalHere || interactions.length ? focusPendingAction : undefined}
     />;
   };
   const panelIdSuffix = embeddedSideChat ? "-side-chat" : "";
@@ -7246,7 +7232,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 onStop={() => { if (harnessControlBusy) return; setHarnessControlBusy(true); void stopCurrentResponse().then(stopped => { if (stopped) setResolvedApproval(undefined); }).finally(() => setHarnessControlBusy(false)); }} />}
               <div className="chat-operator-updates">
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
-              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} isShown={(messageId) => messages.some((message) => message.id === messageId)} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
               {waitingCallback && ((waitingCallback.kind !== "subagents" && waitingCallback.kind !== "reply")
                 || !messages.some(message => message.id === waitingCallback.assistantId && message.content.trim()))

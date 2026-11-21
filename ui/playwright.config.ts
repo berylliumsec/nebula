@@ -1,7 +1,6 @@
 import conversationOrder from "./playwright.conversation-order.config";
 import applicationModel from "./playwright.application-model.config";
 import applicationReopen from "./playwright.application-reopen.config";
-import catchUp from "./playwright.catch-up.config";
 import hostMode from "./playwright.host-mode.config";
 import projectDeletion from "./playwright.project-deletion.config";
 import workspaceQuota from "./playwright.workspace-quota.config";
@@ -34,7 +33,6 @@ const fixtureConfigs = {
   "tests/assistant-browser-viewer.spec.ts": applicationModel,
   "tests/working-knowledge.spec.ts": applicationModel,
   "tests/application-reopen.spec.ts": applicationReopen,
-  "tests/catch-up.spec.ts": catchUp,
   "tests/host-mode.spec.ts": hostMode,
   "tests/project-deletion.spec.ts": projectDeletion,
   "tests/workspace-quota.spec.ts": workspaceQuota,

@@ -223,9 +223,8 @@ until you start typing a search; after that Space is part of the search, so
 multi-word searches such as `Select all` work. Enter always toggles. A prompt
 that opens with a suggested answer puts the cursor at its end, so typing adds to it.
 
-Opening a conversation summarizes what changed since this terminal last read it,
-as the GUI's catch-up card does: new answers, results, failed responses and actions
-waiting for you. `/catchup` lists them; choosing one opens the answer or the failed
+Opening a conversation summarizes what changed since this terminal last read it:
+new answers, results, failed responses and actions waiting for you. `/catchup` lists them; choosing one opens the answer or the failed
 response's details, and `/catchup read` marks the conversation read on this device.
 Answers you watch arrive in an open conversation count as read, as at the bottom
 of the GUI's transcript; while a catch-up summary waits, they join it instead.
