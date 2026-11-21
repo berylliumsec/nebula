@@ -1,42 +1,27 @@
 {
-  "change_digest": "caf454e36603c7a42a22f7c0d793a201108fe9b8b182cb164b434a5641ac4198",
-  "reviewed_by": "Claude Code, building the operator-approved Butler goal board mockup (Figma tVEa0PXZaa7H4ZLflwgcb7, node 208:3)",
-  "reason": "The Butler mode status board now lists goal chats only, in Active, Idle and Completed sections per project. GET /butler/board selects chat_goals rows by kind and project, joins their chats by ID, returns exact section counts in total and per project, pages within a section (section=, project_id=; state=idle still pages Idle), reads pending turns from the status index and each Active chat's newest turn with one backward index step, and encodes its body once for the ETag and response. Selected: the board's real-Core API suites (test_runtime_global_project_reads.py, test_butler_goal_chat_proposals.py), the brief, file-attribution and polling-cost suites that share butler_board helpers, chat_turn_headers and conditional_reads, the Butler mode product-help tests by node ID including the new goal-sections check, the board's unit and component tests, and the butler-mode real-Core LAN journey in desktop, compact, Chromium 390 and WebKit 390.",
-  "exclusions": "tests/v3/test_product_knowledge.py is selected by node ID: test_product_search_finds_headless_core_and_paired_butler_cli already fails on pristine origin/main. No other surface reads /butler/board (git grep across ui/ and src/). The Butler workflow registry is unchanged: no UI API call signature changed (the check still reports the same 2 unreviewed signatures as main). Other butler-mode viewports (320, 430) and unrelated Playwright areas are not selected.",
+  "change_digest": "bf8936b3ff253908a0723b7228d934fb96a68ab6edff3bd2b77e24f7227f776d",
+  "reviewed_by": "Claude Code, at the operator's request: fix auto-resumed provider turns failing with 'problem' after a worker crash",
+  "reason": "Live Core 2c1c67c: 21 of ~44 turns auto-resumed after worker 332fadd7's LeaseLost failed with error 'problem' (str of KeyError). The ledger appends a step's started intent before the broker creates its ToolCall; a crash between the two leaves a 'running' step with no ToolCall, which crash recovery (built only from ToolCall rows) never settles. When the checkpoint later folds that step, _write_checkpoint deletes failure['problem'] after matching None == None and raises. Fix: restart recovery settles intent-only running steps (reads as rerunnable, others as outcome unknown, never as not having happened), _failure_facts classifies a folded running step as outcome_unknown, and the checkpoint only deletes a problem that exists. Selected: the restart recovery lifecycle suite (with two new regression tests that fail on origin/main with the live KeyError) and the checkpoint/compaction suites that exercise _write_checkpoint and _failure_facts.",
+  "exclusions": "Backend-only recovery and ledger change with no UI, settings or API shape change, so no frontend, Playwright, native or LAN Core run. The 20 restart/recovery tests in tests/v3/test_chat.py (-k 'restart or recover') passed locally; the file is not selected whole because test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] is already red on origin/main in CI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 55,
-    "frontend": 21,
+    "python": 49,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_global_project_reads.py",
-    "tests/v3/test_butler_goal_chat_proposals.py",
-    "tests/v3/test_chat_brief.py",
-    "tests/v3/test_file_attribution.py",
-    "tests/v3/test_chat_polling_cost.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_board_goal_sections",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_midturn_compaction.py",
+    "tests/v3/test_tool_history_memory.py",
+    "tests/v3/test_turn_prompt_cache.py"
   ],
-  "frontend": [
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/pages/butlerThreads.test.ts",
-    "ui/src/pages/ButlerModePage.board.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
-  ],
+  "playwright": [],
   "checks": []
 }
