@@ -1209,6 +1209,17 @@ def test_product_help_finds_butler_mode_board_and_parallel_threads(monkeypatch):
     assert "reply in this thread" in text
 
 
+def test_product_help_explains_butler_board_goal_sections(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where are paused and completed goal chats on the Butler mode board?"
+    )
+    assert any(item["heading"] == "Butler mode" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**Active**" in text and "**Idle**" in text and "**Completed**" in text
+    assert "chats without a goal are not listed" in text
+
+
 def test_product_help_explains_archiving_and_deleting_butler_threads(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("How do I archive or delete a Butler thread?")

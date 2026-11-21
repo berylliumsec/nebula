@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date, datetime
+from enum import Enum
 from typing import Any
 
 from fastapi import Request, Response
@@ -34,6 +36,36 @@ def content_etag(prefix: str, content: Any) -> str:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+    ).encode()
+    return f'"{prefix}-{hashlib.sha256(encoded).hexdigest()[:32]}"'
+
+
+def json_native(value: Any) -> Any:
+    """``value`` as JSON-native data, for bodies of plain dicts, lists and dates.
+
+    Much cheaper than ``jsonable_encoder`` on a large body; datetimes become
+    the same ISO strings, enums their values. Anything else goes through
+    ``jsonable_encoder``.
+    """
+
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value.value if isinstance(value, Enum) else value
+    if isinstance(value, dict):
+        return {str(key): json_native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_native(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return json_native(value.value)
+    return jsonable_encoder(value)
+
+
+def native_etag(prefix: str, content: Any) -> str:
+    """``content_etag`` of a body already made JSON-native by ``json_native``."""
+
+    encoded = json.dumps(
+        content, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode()
     return f'"{prefix}-{hashlib.sha256(encoded).hexdigest()[:32]}"'
 
