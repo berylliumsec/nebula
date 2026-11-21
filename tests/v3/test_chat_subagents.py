@@ -2585,6 +2585,139 @@ async def test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_lev
     (await scenario())
 
 
+async def test_running_goal_waits_for_its_subagents_instead_of_polling_them(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _response(text="Ready."),
+                _response(
+                    calls=[
+                        ToolCall(
+                            id="p1",
+                            name="start_subagent",
+                            arguments={
+                                "task": "Review the auth module.",
+                                "name": "Auth",
+                                "context": None,
+                            },
+                        ),
+                        ToolCall(
+                            id="p2",
+                            name="start_subagent",
+                            arguments={
+                                "task": "Review the session module.",
+                                "name": "Sessions",
+                                "context": None,
+                            },
+                        ),
+                    ]
+                ),
+                _finish("p3"),
+                _response(text="Started two reviews."),
+                _finish("p4"),
+                _response(text="Folded both reviews into the goal."),
+            ],
+            child=[
+                _response(text="Cookies lack SameSite."),
+                _response(text="Sessions never expire."),
+            ],
+        )
+        store, project, _, chat = await _setup(tmp_path, provider)
+        chat.artifact_store = ArtifactStore(tmp_path / "artifacts")
+        first = await chat.prepare_async(_request(project, content="Hello."))
+        await _drain(chat, await chat.start_provider_turn(first))
+        session_id = first.session.id
+
+        goals = ChatGoalService(store)
+        draft = await goals.create(
+            session_id,
+            GoalCreate(
+                objective="Review auth and sessions",
+                completion_criteria=["Findings are reported"],
+                # The delegating turn and the one that reads the reports.
+                step_budget=2,
+            ),
+        )
+        goal = await goals.write(
+            session_id, GoalWrite(expected_revision=draft.revision, action="start")
+        )
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(
+                project,
+                content="Delegate the reviews.",
+                session_id=session_id,
+                goal_id=goal.id,
+                allow_subagents=True,
+            )
+        )
+        parent_turn_id = await chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+
+        async def _both_running():
+            records = await store.list_entities(ChatSubagent)
+            return len(records) == 2 and all(
+                item.status == ChatSubagentStatus.RUNNING for item in records
+            )
+
+        await _until(_both_running)
+        assert (await store.get(ChatTurn, parent_turn_id)).status == (
+            ChatTurnStatus.COMPLETE
+        )
+        # The goal turn ended with its subagents still working: no turn starts
+        # just to poll them, and the goal stays running for their reports.
+        await asyncio.sleep(0.2)
+        assert await chat.pending_turn(session_id) is None
+        assert len(provider.parent_requests) == 4
+        assert (await goals.get(session_id)).status.value == "running"
+
+        # Both subagents finish at once; their reports continue the goal once.
+        provider.child_gate.set()
+
+        async def _reports_read():
+            return any(
+                "Subagent reports are ready" in str(request.messages[-1].content)
+                for request in provider.parent_requests
+            )
+
+        await _until(_reports_read)
+
+        async def _settled():
+            return await chat.pending_turn(session_id) is None and all(
+                turn.status == ChatTurnStatus.COMPLETE
+                for turn in await store.list_entities(ChatTurn)
+                if turn.session_id == session_id
+            )
+
+        await _until(_settled)
+        await asyncio.sleep(0.2)
+        await _until(_settled)
+        # Each turn opens with one routing request; its synthesis repeats the
+        # same last message with tool calling off.
+        openers = [
+            str(request.messages[-1].content)
+            for request in provider.parent_requests
+            if request.tool_choice != ToolChoice.NONE
+        ]
+        assert sum("Subagent reports are ready" in item for item in openers) == 1
+        assert not any(
+            "Review the active conversation goal" in item for item in openers
+        )
+        goal_turns = [
+            turn
+            for turn in await store.list_entities(ChatTurn)
+            if turn.goal_id == goal.id
+        ]
+        assert len(goal_turns) == 2
+        # With nothing left working, the next continuation met the step budget.
+        assert (await goals.get(session_id)).status.value == "paused"
+        await chat.shutdown()
+
+    (await scenario())
+
+
 async def test_restart_replays_only_subagents_with_unfinished_delivery(
     tmp_path, monkeypatch
 ):
