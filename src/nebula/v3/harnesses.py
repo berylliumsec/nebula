@@ -1868,6 +1868,17 @@ class HarnessConnection(ABC):
     @abstractmethod
     async def close(self) -> None: ...
 
+    def handoff_detachable(self) -> bool:
+        """Whether closing now loses nothing the saved vendor thread keeps.
+
+        Asked only between turns, at a project handoff. An adapter that cannot
+        tell whether the vendor still runs work of its own (background tasks,
+        terminals, a turn it started itself) keeps its connection, which pins
+        the project to this runtime.
+        """
+
+        return False
+
     async def stop_subagent(self, task_id: str) -> None:
         del task_id
         raise HarnessStateError("this harness does not expose subagent stopping")
@@ -2727,10 +2738,21 @@ class CodexAppServerConnection(HarnessConnection):
         self.active_turn_id: str | None = None
         self.last_turn_id: str | None = None
         self._awaiting_goal_turn = False
+        # Native shell (unified exec) can leave background terminals running in
+        # the app-server between turns, where Core cannot see them.
+        self.native_shell = True
         # Frames read while waiting for an operator decision, in arrival order.
         self._backlog: deque[dict[str, Any] | BaseException] = deque()
         # The turn a turn/interrupt already ended, so a second stop is a no-op.
         self._interrupted_turn_id: str | None = None
+
+    def handoff_detachable(self) -> bool:
+        return (
+            not self.native_shell
+            and self.active_turn_id is None
+            and not self._awaiting_goal_turn
+            and not self._backlog
+        )
 
     async def _answer_requests_left_between_turns(self) -> list[str]:
         """Clear frames no turn read, answering the server requests among them.
@@ -5021,7 +5043,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 and external_id != request.session.external_session_id
             ):
                 raise HarnessTransportError("Codex resumed a different thread")
-            return CodexAppServerConnection(
+            connection = CodexAppServerConnection(
                 rpc,
                 external_session_id=external_id,
                 permission_handler=request.permission_handler,
@@ -5035,6 +5057,12 @@ class CodexAppServerAdapter(HarnessAdapter):
                 ),
                 cyber_access_program=cyber_access_program,
             )
+            policy = _codex_feature_policy(
+                native_capabilities, core_planned=core_planned
+            )
+            # Background terminals and native subagents can outlive a turn.
+            connection.native_shell = policy["unified_exec"] or policy["multi_agent"]
+            return connection
         except (Exception, asyncio.CancelledError) as caught_error:
             record_caught_exception(
                 "harnesses",
@@ -5447,6 +5475,46 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         # Set when a stop could not settle the stream: its position is unknown.
         self._desynchronized = False
         self._closed = False
+        # Claude tasks (background commands, subagents) not yet seen to end.
+        # Closing the CLI would kill them without a result.
+        self._open_tasks: set[str] = set()
+
+    def _track_task(self, message: Any, class_name: str) -> HarnessEvent:
+        """Follow a task's lifetime from the raw SDK message.
+
+        Only a terminal status (TERMINAL_TASK_STATUSES in the SDK) ends a
+        task: an update that changes other fields carries no status and keeps
+        it open. A task without an id is kept open for the connection's life.
+        """
+
+        task_id = getattr(message, "task_id", None)
+        key = str(task_id) if task_id else f"unidentified-{id(message)}"
+        patch = getattr(message, "patch", None)
+        raw = getattr(message, "status", None) or (
+            patch.get("status") if isinstance(patch, dict) else None
+        )
+        if class_name == "TaskStartedMessage":
+            self._open_tasks.add(key)
+        elif task_id and raw in _CLAUDE_TERMINAL_TASK_STATUSES:
+            self._open_tasks.discard(key)
+        elif class_name != "TaskNotificationMessage" or not task_id:
+            # Progress or a non-terminal update: the task is (still) open.
+            self._open_tasks.add(key)
+        return _claude_task_event(message, class_name)
+
+    def handoff_detachable(self) -> bool:
+        return (
+            not self.active
+            and not self._closed
+            and not self._desynchronized
+            and not self._vendor_turn_open
+            and self._consumer_idle.is_set()
+            and not self._settle_lock.locked()
+            # Unread output may be a turn Claude started on its own.
+            and self._inbox.empty()
+            and not self._open_tasks
+            and not self._unacknowledged_steers
+        )
 
     @property
     def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
@@ -5710,7 +5778,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         )
                     continue
                 if class_name in CLAUDE_TASK_MESSAGES:
-                    yield _claude_task_event(message, class_name)
+                    yield self._track_task(message, class_name)
                     continue
                 if class_name == "HookEventMessage":
                     subtype = str(getattr(message, "subtype", "") or "")
@@ -6307,7 +6375,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 self._session_cost_growth(message)
                 events.append(_claude_background_result_event(message))
             elif class_name in CLAUDE_TASK_MESSAGES:
-                events.append(_claude_task_event(message, class_name))
+                events.append(self._track_task(message, class_name))
             elif deadline is None and (
                 class_name in {"StreamEvent", "AssistantMessage", "UserMessage"}
                 or (
@@ -6364,6 +6432,8 @@ def _claude_combined_usage(
     )
 
 
+# claude_agent_sdk TERMINAL_TASK_STATUSES: the only statuses that end a task.
+_CLAUDE_TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "killed", "stopped"})
 CLAUDE_TASK_MESSAGES = frozenset(
     {
         "TaskStartedMessage",
@@ -7298,11 +7368,14 @@ class GrokAcpConnection(HarnessConnection):
         permission_handler: PermissionHandler,
         developer_instructions: str = "",
         session_cost_usd: float | None = None,
+        load_session: bool = False,
     ) -> None:
         self.rpc = rpc
         self.external_session_id = external_session_id
         self.permission_handler = permission_handler
         self.developer_instructions = developer_instructions
+        # Without session/load a later process cannot resume this session.
+        self.load_session = load_session
         # Compatibility path for unmanaged ACP callers. Core-managed standing
         # snapshots require a verified durable channel before omitting this.
         self._instructions_delivered = False
@@ -7317,6 +7390,15 @@ class GrokAcpConnection(HarnessConnection):
         # Cumulative ACP session cost already reported; None when unknown (a
         # loaded session), so no per-turn cost is invented from it.
         self._session_cost_usd = session_cost_usd
+
+    def handoff_detachable(self) -> bool:
+        return (
+            self.load_session
+            and not self.active
+            and (self._prompt is None or self._prompt.done())
+            and self._stopped_prompt is None
+            and not self._open_permissions
+        )
 
     async def _finish_stopped_prompt(self) -> None:
         """Wait for Grok to answer an abandoned prompt before sending another."""
@@ -8719,6 +8801,8 @@ class GrokAcpAdapter(HarnessAdapter):
                 developer_instructions=""
                 if managed_instructions
                 else developer_instructions,
+                load_session=isinstance(initialize.get("agentCapabilities"), dict)
+                and initialize["agentCapabilities"].get("loadSession") is True,
             )
         except BaseException as error:
             # diagnostic-expected: joined probe cleanup may combine cancellation
@@ -9301,6 +9385,13 @@ class HarnessRuntimeService:
         self._interaction_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._scheduled_mission_tasks: dict[str, asyncio.Task[None]] = {}
+        # Scheduled Missions whose timer is still sleeping. Nothing has run:
+        # the queued run and its turns in SQL are the whole state, and a new
+        # project owner re-arms them at startup, so a handoff need not wait.
+        self._sleeping_mission_schedules: set[str] = set()
+        # Sessions whose idle connection a handoff is closing. A turn that
+        # arrives meanwhile waits for the close and resumes, not forks.
+        self._handoff_detaching: dict[str, asyncio.Event] = {}
         self._chat_turn_tasks: dict[str, asyncio.Task[None]] = {}
         # An explicit goal resume can spend longer than a recovery tick
         # preparing its harness session before it saves the next turn claim.
@@ -11273,6 +11364,137 @@ class HarnessRuntimeService:
             {"status": HarnessSessionStatus.CLOSED, "last_activity_at": utc_now()},
             expected_revision=session.revision,
         )
+
+    def restorable_handles(self) -> dict[str, set[str]]:
+        """Resident entries a later project owner restores from SQL alone.
+
+        A scheduled Mission still sleeping has run nothing: its queued run
+        and turns are durable and startup re-arms them on the new owner. If
+        the timer wakes on the source after transfer, every source
+        transaction is fenced, so only the new owner can start the run.
+        """
+
+        return {
+            "_scheduled_mission_tasks": {
+                run_id
+                for run_id in self._sleeping_mission_schedules
+                if run_id in self._scheduled_mission_tasks
+                and not self._scheduled_mission_tasks[run_id].done()
+            }
+        }
+
+    async def handoff_blockers(self, engagement_id: str) -> dict[str, str]:
+        """In-memory and queued work a session row alone does not show.
+
+        A session lock is held while a turn connects or a superseded session
+        closes, before either reaches ``_active``; a goal dispatch prepares
+        its session before it saves the next turn claim. A queued chat or
+        analysis turn can wait for host capacity with no handle at all; only
+        queued Mission stages are restored from SQL by the next owner.
+        """
+
+        found: dict[str, str] = {}
+        for session_id, lock in self._locks.items():
+            if lock.locked():
+                found["harness-session-lock/" + session_id] = (
+                    f"Harness session {session_id} is connecting or closing on this runtime"
+                )
+        if self._dispatching_goal_sessions:
+            found["harness-goal-dispatch"] = (
+                "A harness goal is preparing its next turn on this runtime"
+            )
+        queued = await self.store.find_entities(
+            HarnessTurn,
+            {"status": HarnessTurnStatus.QUEUED.value},
+            engagement_id=engagement_id,
+            limit=101,
+        )
+        for turn in queued:
+            if turn.origin != HarnessTurnOrigin.MISSION:
+                found["harness-queued/" + turn.id] = (
+                    f"Harness turn {turn.id} is queued on this runtime"
+                )
+        return found
+
+    async def _connection_idle_for_handoff(
+        self, session_id: str, connection: HarnessConnection, *, locked: bool = False
+    ) -> bool:
+        lock = self._locks.get(session_id)
+        if session_id in self._active or (
+            not locked and lock is not None and lock.locked()
+        ):
+            return False
+        if self._dispatching_goal_sessions or not connection.handoff_detachable():
+            return False
+        session = await self.store.get(HarnessSession, session_id)
+        if session.status != HarnessSessionStatus.IDLE:
+            return False
+        return not await self._session_has_reserved_turns(session_id)
+
+    async def release_idle_connections_for_handoff(
+        self, engagement_id: str
+    ) -> list[str]:
+        """Detach this project's idle vendor connections at a handoff boundary.
+
+        Idle means no turn active, connecting or reserved, no goal dispatch
+        preparing one, and the adapter reporting nothing of the vendor's own
+        still running (``handoff_detachable``). The vendor keeps its saved
+        thread: the session row stays ``idle`` with its external session id,
+        and the next turn on whichever runtime then owns the project resumes
+        it with a fresh vendor process, exactly as after a dropped connection.
+        Anything else keeps its connection and pins the project.
+        """
+
+        released: list[str] = []
+        for session_id, connection in list(self._connections.items()):
+            detaching: asyncio.Event | None = None
+            try:
+                session = await self.store.get(HarnessSession, session_id)
+                if session.engagement_id != engagement_id:
+                    continue
+                if not await self._connection_idle_for_handoff(
+                    session_id, connection
+                ):
+                    continue
+                lock = self._locks.setdefault(session_id, asyncio.Lock())
+                if lock.locked() or session_id in self._handoff_detaching:
+                    continue
+                # From here a turn arriving waits for this release instead of
+                # seeing the lock held and forking a parallel session.
+                detaching = asyncio.Event()
+                self._handoff_detaching[session_id] = detaching
+                async with lock:
+                    # Re-checked under the lock every turn takes to connect; a
+                    # turn queued meanwhile keeps the connection.
+                    if self._connections.get(
+                        session_id
+                    ) is not connection or not await self._connection_idle_for_handoff(
+                        session_id, connection, locked=True
+                    ):
+                        continue
+                    # The same path a dropped vendor process takes between
+                    # turns: the next turn resumes the saved external thread.
+                    await self._discard_connection(
+                        session_id, connection, reason="project_handoff"
+                    )
+            except Exception as caught_error:
+                # The connection stays and keeps pinning the project.
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.handoff_connection_release_failed",
+                    "An idle harness connection could not be detached for handoff.",
+                    caught_error,
+                    stage="project-handoff",
+                    metadata={"entity_type": "harness_session", "entity_id": session_id},
+                )
+                continue
+            finally:
+                if detaching is not None:
+                    detaching.set()
+                    if self._handoff_detaching.get(session_id) is detaching:
+                        self._handoff_detaching.pop(session_id, None)
+            released.append(session_id)
+        return released
 
     async def _assert_chat_turn_available(
         self, chat_session_id: str, *, database: AsyncSession | None = None
@@ -13622,6 +13844,10 @@ class HarnessRuntimeService:
             if turn.status != HarnessTurnStatus.QUEUED:
                 return
         session = await self.store.get(HarnessSession, turn.harness_session_id)
+        detaching = self._handoff_detaching.get(session.id)
+        if detaching is not None:
+            # A handoff is closing this idle connection; resume after it.
+            await detaching.wait()
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         if lock.locked() or session.id in self._active:
             previous_session_id = session.id
@@ -14880,7 +15106,13 @@ class HarnessRuntimeService:
         try:
             delay = max(0.0, (scheduled_for - utc_now()).total_seconds())
             if delay:
-                await asyncio.sleep(delay)
+                self._sleeping_mission_schedules.add(run_id)
+                try:
+                    await asyncio.sleep(delay)
+                finally:
+                    # Cleared before the first read after waking: from here
+                    # the timer may start the run and pins its project again.
+                    self._sleeping_mission_schedules.discard(run_id)
             if (
                 self._closed
                 or (await self.store.get(AgentRun, run_id)).status != RunStatus.QUEUED
