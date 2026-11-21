@@ -2611,6 +2611,61 @@ def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) 
     )
 
 
+def _intent_only_restart_entry(
+    intent: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Settle a step recorded as started whose ToolCall was never created.
+
+    Core restarted between the ledger intent and the broker's record, so
+    nothing says whether the call ran. A read changed nothing and can run
+    again; anything else is an unknown effect that must not be repeated.
+    Returns the settled entry and its ledger event type.
+    """
+
+    call_id = str(intent["tool_call_id"])
+    name = str(intent.get("name") or "unknown")
+    if name in RETRIEVAL_TOOL_NAMES:
+        observation = {
+            "schema": "nebula.restart-interrupted/v1",
+            "status": "interrupted",
+            "tool_call_id": call_id,
+            "tool_name": name,
+            "side_effects": "none",
+            "retry_safe": True,
+            "detail": (
+                "Core restarted before this read returned its result. It changed "
+                "nothing; call it again if you still need the result."
+            ),
+        }
+        return {
+            **intent,
+            "status": "failed",
+            "provider_result": serialize_model_result(observation),
+            "trusted_result": False,
+            "result_summary": "Interrupted by a Core restart; the read can run again.",
+            "recovered_from_restart_rerunnable": True,
+        }, "restart_rerunnable"
+    observation = {
+        "schema": "nebula.restart-uncertain/v1",
+        "status": "unknown",
+        "tool_call_id": call_id,
+        "tool_name": name,
+        "detail": (
+            "Core restarted after this invocation may have started, but no "
+            "trustworthy terminal receipt was recorded. Do not repeat the "
+            "same invocation. Inspect current state before any follow-up."
+        ),
+    }
+    return {
+        **intent,
+        "status": "failed",
+        "provider_result": serialize_model_result(observation),
+        "trusted_result": False,
+        "result_summary": "Outcome unknown after Core restart; identical replay is blocked.",
+        "recovered_from_restart_unknown": True,
+    }, "restart_unknown"
+
+
 def _projected_result_entry(
     history: Sequence[dict[str, Any]], tool_call_id: str
 ) -> dict[str, Any] | None:
@@ -4027,6 +4082,50 @@ class ChatService:
             unknown_tools = [
                 item for item in unknown_tools if item not in projected_tools
             ]
+            # A step whose started intent reached the ledger before the broker
+            # created its ToolCall has no record the interruption scan could
+            # classify. Settle it here too, or it stays "running" in provider
+            # history for the rest of the turn.
+            for item in list(history):
+                intent_call_id = item.get("tool_call_id")
+                if item.get("status") != "running" or not isinstance(
+                    intent_call_id, str
+                ):
+                    continue
+                try:
+                    await self.store.get(ToolCall, intent_call_id)
+                except NotFoundError:  # diagnostic-expected: intent before ToolCall
+                    pass
+                else:
+                    continue
+                entry, event_type = _intent_only_restart_entry(item)
+                history = [
+                    other
+                    for other in history
+                    if other.get("tool_call_id") != intent_call_id
+                ]
+                history.append(entry)
+                ledger_sequence = max(
+                    ledger_sequence,
+                    (
+                        await self.turn_ledger.append(
+                            turn.id,
+                            entry,
+                            idempotency_key=(
+                                f"{event_type.replace('_', '-')}:{intent_call_id}"
+                            ),
+                            event_type=event_type,
+                        )
+                    ),
+                )
+                step = item.get("step")
+                if isinstance(step, int) and not isinstance(step, bool):
+                    next_step = max(next_step, step + 1)
+                if event_type == "restart_rerunnable":
+                    rerun_tools.append(intent_call_id)
+                else:
+                    unknown_tools.append(intent_call_id)
+                    recorded_unknown.append(intent_call_id)
             # Missing ledger rows still cannot be replayed. Their IDs and every
             # uncertain hook remain in the durable audit metadata sent as an
             # instruction on resume.

@@ -1082,3 +1082,119 @@ async def test_idle_goal_reconciler_does_not_count_idle_time_as_active(tmp_path)
 
 
 pytestmark = pytest.mark.anyio
+
+
+def _intent_only_entry(step: int, call_id: str, name: str) -> dict:
+    """A started step whose ToolCall the broker never created before a crash."""
+
+    return {
+        "step": step,
+        "model_call_id": f"provider-{step}",
+        "tool_call_id": call_id,
+        "name": name,
+        "arguments": {"command": f"step {step}"},
+        "budget_class": "execution",
+        "status": "running",
+    }
+
+
+async def test_restart_settles_a_started_step_that_has_no_tool_call(tmp_path):
+    store, engagement, profile, session = await _conversation(tmp_path)
+    turn = await store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+            next_step=2,
+            queued_at=utc_now(),
+            request_snapshot={"model_request": _model_request(), "context_usage": {}},
+        )
+    )
+    service = ChatService(store)
+    command = _intent_only_entry(0, "command-intent-only", "run_command")
+    read = _intent_only_entry(1, "read-intent-only", "tool_output.read")
+    for entry in (command, read):
+        (await service.turn_ledger.append(turn.id, entry))
+
+    (await service.startup())
+
+    interrupted = await store.get(ChatTurn, turn.id)
+    assert interrupted.status == ChatTurnStatus.INTERRUPTED
+
+    async def prepare_resume(turn_id):
+        return turn_id
+
+    async def start_provider_turn(prepared, **_):
+        return prepared
+
+    service.prepare_resume = prepare_resume  # type: ignore[method-assign]
+    service.start_provider_turn = start_provider_turn  # type: ignore[method-assign]
+    assert (await service.resume_turns_stopped_by_core()) == [turn.id]
+
+    recovered = await store.get(ChatTurn, turn.id)
+    history = {
+        item["tool_call_id"]: item for item in (await service._turn_history(recovered))
+    }
+    # Neither step is left running for the rest of the turn.
+    assert {item["status"] for item in history.values()} == {"failed"}
+    assert history[command["tool_call_id"]]["recovered_from_restart_unknown"] is True
+    assert history[read["tool_call_id"]]["recovered_from_restart_rerunnable"] is True
+    recovery = recovered.request_snapshot["recovery"]
+    assert recovery["auto_continued_unknown_tool_call_ids"] == [command["tool_call_id"]]
+    assert recovery["auto_rerunnable_tool_call_ids"] == [read["tool_call_id"]]
+    assert chat_module._replays_restart_unknown(
+        list(history.values()),
+        ModelToolCall(id="again", name="run_command", arguments=command["arguments"]),
+    )
+    # A second pass finds nothing left to settle.
+    again = await service._auto_reconcile_restart_uncertainty(turn.id)
+    assert again.ledger_sequence == recovered.ledger_sequence
+
+
+async def test_checkpoint_folds_a_step_left_running_as_outcome_unknown(tmp_path):
+    store, engagement, profile, session = await _conversation(tmp_path)
+    turn = await store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+            next_step=2,
+            request_snapshot={"model_request": _model_request(), "context_usage": {}},
+        )
+    )
+    service = ChatService(store)
+    (
+        await service.turn_ledger.append(
+            turn.id, _intent_only_entry(0, "left-running", "run_command")
+        )
+    )
+    (
+        await service.turn_ledger.append(
+            turn.id,
+            {
+                **_intent_only_entry(1, "later", "run_command"),
+                "status": "complete",
+                "result_summary": "done",
+            },
+        )
+    )
+
+    # Folding a running step with no problem or summary used to raise
+    # KeyError('problem') and fail the whole turn.
+    checkpoint, replayed = await service.turn_ledger.compacted_history(
+        turn, advance=True, recent_groups=0
+    )
+
+    assert checkpoint is not None and replayed == []
+    fields = checkpoint.summary["step_fields"]
+    receipt = checkpoint.summary["steps"][0]
+    failure = receipt[fields.index("failure")]
+    assert failure["category"] == "outcome_unknown"
+    assert failure["retry_safe"] is False
+    assert "problem" not in failure

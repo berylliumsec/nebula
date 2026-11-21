@@ -224,6 +224,9 @@ def _failure_facts(entry: Mapping[str, Any]) -> dict[str, Any] | None:
     if (
         entry.get("recovered_from_restart_unknown") is True
         or result.get("schema") == _RESTART_UNKNOWN_SCHEMA
+        # A step folded while still marked running never recorded how it
+        # ended, so its effect is as uncertain as a restart-unknown one.
+        or entry.get("status") == "running"
     ):
         facts.update(
             {
@@ -890,7 +893,13 @@ class ChatTurnLedger:
             if item.get("result_artifact_id"):
                 references.insert(0, str(item["result_artifact_id"])[:120])
             failure = _failure_facts(item)
-            if failure and failure.get("problem") == item.get("result_summary"):
+            # Only a recorded problem repeats the summary; an entry with
+            # neither (a step left running) must not match on two Nones.
+            if (
+                failure
+                and "problem" in failure
+                and failure["problem"] == item.get("result_summary")
+            ):
                 del failure["problem"]
             # Trailing fields are left off; an empty placeholder keeps the
             # position of a later one.
