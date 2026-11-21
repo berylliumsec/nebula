@@ -239,7 +239,9 @@ async def test_busy_vendor_session_stays_attached_and_pins(harness):
     assert await source.handoff_blockers(engagement.id)
     adapter.gate.set()
     await asyncio.wait_for(task, 20)
-    assert (await store.get(HarnessTurn, second.id)).status == HarnessTurnStatus.COMPLETE
+    assert (
+        await store.get(HarnessTurn, second.id)
+    ).status == HarnessTurnStatus.COMPLETE
     assert await source.handoff_blockers(engagement.id) == {}
     assert await source.release_idle_connections_for_handoff(engagement.id) == [
         session_id
@@ -432,6 +434,7 @@ async def test_idle_harness_session_detaches_before_the_inventory(project, agent
         return []
 
     harness.release_idle_connections_for_handoff = detach
+
     async def harness_blockers(project_id):
         assert project_id == "one"
         return dict(blockers)
@@ -440,7 +443,9 @@ async def test_idle_harness_session_detaches_before_the_inventory(project, agent
     # A connection the service keeps (busy) still pins the project.
     harness.keep_open = True
     assert await agent.tick() == "finishing"
-    assert any("harness_runtime_service" in text for text in (await row(project)).blockers)
+    assert any(
+        "harness_runtime_service" in text for text in (await row(project)).blockers
+    )
     harness.keep_open = False
     # A connecting turn or goal dispatch still pins through handoff_blockers.
     blockers["harness-session-lock/idle-harness"] = "idle-harness is connecting"
@@ -452,7 +457,9 @@ async def test_idle_harness_session_detaches_before_the_inventory(project, agent
     assert calls == ["one", "one", "one"]
     await _entity(project, "busy-harness", "harness_sessions", "running")
     assert await agent.tick() == "finishing"
-    assert any("busy-harness remains running" in text for text in (await row(project)).blockers)
+    assert any(
+        "busy-harness remains running" in text for text in (await row(project)).blockers
+    )
 
 
 async def test_restorable_handles_do_not_pin_but_other_entries_do(project, agent):
@@ -464,7 +471,10 @@ async def test_restorable_handles_do_not_pin_but_other_entries_do(project, agent
     assert await agent.tick() == "transferable"
     missions._scheduled_tasks["starting"] = starting
     assert await agent.tick() == "finishing"
-    assert any("1 resident handle(s) in mission_service" in text for text in (await row(project)).blockers)
+    assert any(
+        "1 resident handle(s) in mission_service" in text
+        for text in (await row(project)).blockers
+    )
     sleeping.cancel()
     starting.cancel()
 
@@ -568,9 +578,7 @@ async def test_scheduled_mission_fires_exactly_once_after_handoff(
         # Both timers wake; only the owner of the project can start the run.
         source_timer = source._scheduled_tasks[run.id]
         clock.wake.set()
-        await asyncio.wait(
-            [source_timer, target._scheduled_tasks[run.id]], timeout=15
-        )
+        await asyncio.wait([source_timer, target._scheduled_tasks[run.id]], timeout=15)
         assert source_timer.done()
         for _ in range(100):
             if starts:

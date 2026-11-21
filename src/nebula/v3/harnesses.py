@@ -11452,9 +11452,7 @@ class HarnessRuntimeService:
                 session = await self.store.get(HarnessSession, session_id)
                 if session.engagement_id != engagement_id:
                     continue
-                if not await self._connection_idle_for_handoff(
-                    session_id, connection
-                ):
+                if not await self._connection_idle_for_handoff(session_id, connection):
                     continue
                 lock = self._locks.setdefault(session_id, asyncio.Lock())
                 if lock.locked() or session_id in self._handoff_detaching:
@@ -11485,7 +11483,10 @@ class HarnessRuntimeService:
                     "An idle harness connection could not be detached for handoff.",
                     caught_error,
                     stage="project-handoff",
-                    metadata={"entity_type": "harness_session", "entity_id": session_id},
+                    metadata={
+                        "entity_type": "harness_session",
+                        "entity_id": session_id,
+                    },
                 )
                 continue
             finally:
