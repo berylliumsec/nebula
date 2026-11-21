@@ -268,6 +268,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["host pressure", "threshold", "CPU", "memory", "runnable tasks", "load average", "Core I/O PSI", "backup disk", "some avg10", "80%", "100%", "turn off", "waiting for host pressure", "never starts", "queued", "admission", "nebula.work.host_pressure", "nebula.global.host_pressure"],
   },
   {
+    id: "settings.work-stages",
+    label: "Work stages",
+    description: "Define the ordered stages a project's Work items move through, flag a stage that should not stay empty, and see each project's stages on All projects",
+    category: "Project Policy",
+    scope: "Project",
+    target: "work-stages",
+    keywords: ["work stages", "project stages", "pipeline", "stage", "group by stage", "flag when empty", "missing a stage", "stage gap", "portfolio", "all projects stages", "stage columns", "move item to stage", "add a stage", "reorder stages", "nebula.work.work_stages", "nebula.work.set_work_stages"],
+  },
+  {
     id: "settings.setup",
     label: "Terminal and Core setup",
     description: "Choose a verified runtime, inspect host pressure, or explicitly shut down local Core on the desktop. Closing or updating the window keeps Core and work running",

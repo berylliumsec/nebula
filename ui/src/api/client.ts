@@ -478,6 +478,7 @@ interface WireEngagement extends WireEntity {
   status: EngagementSummary["status"];
   tags?: string[];
   work_enabled?: boolean;
+  work_stages?: Array<{ key: string; label: string; flag_when_empty?: boolean }>;
   parent_engagement_id?: string | null;
   workspace_path?: string | null;
   metadata?: JsonObject;
@@ -2148,6 +2149,8 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     status: value.status,
     tags: value.tags ?? [],
     workEnabled: value.work_enabled === true,
+    workStages: (value.work_stages ?? []).map((stage) => ({ key: stage.key, label: stage.label, flagWhenEmpty: stage.flag_when_empty === true })),
+    revision: typeof value.revision === "number" ? value.revision : undefined,
     parentEngagementId: value.parent_engagement_id ?? undefined,
     workspacePath: value.workspace_path ?? undefined,
     createdAt: value.created_at,

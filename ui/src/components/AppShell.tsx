@@ -107,8 +107,13 @@ export function AppShell() {
       window.dispatchEvent(new Event("nebula:open-butler-oversight"));
       return;
     }
+    if (entry.target === "work-stages") {
+      // Stages belong to a project's Work board; without a selected project, All projects lists them.
+      navigate(engagement ? `${projectSurface(engagement.id, "work")}?stages=edit` : "/projects");
+      return;
+    }
     setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null), refreshKey: 0 });
-  }, []);
+  }, [engagement, navigate]);
   const showSavedSetting = useCallback((entry: SettingCatalogEntry, status: string, mode?: "docker" | "host") => {
     setSettingLens((current) => current?.entry.id === entry.id
       ? { ...current, refreshKey: current.refreshKey + 1, status, statusMode: mode }
